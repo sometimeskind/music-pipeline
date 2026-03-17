@@ -6,7 +6,7 @@ RUN apt-get update && apt-get install -y \
     ffmpeg \
     jq \
     cron \
-    chromaprint-tools \
+    libchromaprint-tools \
     && rm -rf /var/lib/apt/lists/*
 
 # beets: audio library manager + tagger
