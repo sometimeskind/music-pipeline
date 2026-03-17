@@ -27,6 +27,25 @@ audio_files_in() {
     find "$1" -maxdepth "${2:-1}" -type f | grep -Ei "\.(mp3|flac|ogg|opus|m4a|aac|wav|wma|aiff|ape|mpc)$" || true
 }
 
+navidrome_rescan() {
+    [[ -z "${NAVIDROME_URL:-}" || -z "${NAVIDROME_API_KEY:-}" ]] && return 0
+    local user password
+    IFS=: read -r user password <<< "$NAVIDROME_API_KEY"
+    echo "==> Triggering Navidrome library rescan..."
+    local response
+    response=$(curl -sf \
+        "${NAVIDROME_URL}/rest/startScan?u=${user}&p=${password}&v=1.16.1&c=music-pipeline&f=json" \
+        2>&1) || { echo "WARNING: Navidrome rescan request failed" >&2; return 0; }
+    local status
+    status=$(echo "$response" | jq -r '."subsonic-response".status' 2>/dev/null || echo "unknown")
+    if [[ "$status" == "ok" ]]; then
+        echo "    Navidrome rescan triggered successfully."
+    else
+        echo "WARNING: Navidrome rescan returned unexpected status: $status" >&2
+        echo "    Response: $response" >&2
+    fi
+}
+
 # Remove beets source tags for tracks that were removed from a Spotify playlist.
 # Compares the .spotdl snapshot taken before sync to the updated file after sync.
 # Files are never deleted — only the source association is cleared.
@@ -96,3 +115,6 @@ music-import
 echo ""
 echo "==> Refreshing library metadata..."
 beet update 2>&1 || true
+
+echo ""
+navidrome_rescan

@@ -21,7 +21,11 @@ services:
       - SPOTIFY_CLIENT_SECRET=${SPOTIFY_CLIENT_SECRET}
       # Override with e.g. "0 2 * * *" to change sync schedule
       - CRON_SCHEDULE=${CRON_SCHEDULE:-0 3 * * *}
-    # Navidrome rescan: called from host-side `just rescan` recipe after ingest
+      # Optional: trigger Navidrome library rescan after ingestion
+      # NAVIDROME_URL: base URL, e.g. http://navidrome:4533
+      # NAVIDROME_API_KEY: credentials as user:password
+      - NAVIDROME_URL=${NAVIDROME_URL:-}
+      - NAVIDROME_API_KEY=${NAVIDROME_API_KEY:-}
 
 volumes:
   music-data:
