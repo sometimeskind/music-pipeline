@@ -23,7 +23,7 @@ paths:
   singleton: $albumartist/$album/$track - $title
   comp: Various Artists/$album/$track - $title
 
-plugins: fromfilename fetchart embedart scrub duplicates
+plugins: chroma fromfilename fetchart embedart scrub duplicates
 
 fetchart:
   auto: yes
