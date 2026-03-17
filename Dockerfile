@@ -6,11 +6,13 @@ RUN apt-get update && apt-get install -y \
     ffmpeg \
     jq \
     cron \
+    chromaprint-tools \
     && rm -rf /var/lib/apt/lists/*
 
 # beets: audio library manager + tagger
 # spotdl: Spotify-to-local downloader
-RUN pip install --no-cache-dir beets spotdl
+# pyacoustid: Python bindings for Chromaprint/AcoustID (beets chroma plugin)
+RUN pip install --no-cache-dir beets spotdl pyacoustid
 
 # Scripts go on PATH
 COPY scripts/ /usr/local/bin/
