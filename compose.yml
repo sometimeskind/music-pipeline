@@ -1,6 +1,6 @@
 services:
   pipeline:
-    build: .
+    image: ghcr.io/sometimeskind/music-pipeline:latest
     container_name: music-pipeline
     restart: unless-stopped
     volumes:
