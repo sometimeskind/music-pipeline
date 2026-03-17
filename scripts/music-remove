@@ -1,0 +1,49 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+SPOTDL_DIR=~/Music/inbox/spotdl
+PLAYLISTS=~/Music/playlists
+
+if [[ $# -ge 1 ]]; then
+    playlist_name=$1
+else
+    printf "Enter playlist name to remove: "
+    read -r playlist_name
+fi
+
+[[ -z "$playlist_name" ]] && { echo "Error: playlist name required" >&2; exit 1; }
+
+spotdl_file="$SPOTDL_DIR/$playlist_name.spotdl"
+download_dir="$SPOTDL_DIR/$playlist_name"
+m3u_file="$PLAYLISTS/$playlist_name.m3u"
+
+if [[ ! -f "$spotdl_file" && ! -d "$download_dir" && ! -f "$m3u_file" ]]; then
+    echo "Error: no playlist named '$playlist_name' found" >&2
+    exit 1
+fi
+
+echo "This will remove:"
+[[ -f "$spotdl_file"  ]] && echo "  $spotdl_file"
+[[ -d "$download_dir" ]] && echo "  $download_dir/"
+[[ -f "$m3u_file"     ]] && echo "  $m3u_file"
+echo "  beets source:$playlist_name tags"
+echo ""
+echo "Library files are kept."
+echo ""
+printf "Continue? [y/N] "
+read -r confirm
+[[ "$confirm" =~ ^[Yy]$ ]] || { echo "Aborted."; exit 0; }
+
+rm -f "$spotdl_file"
+rm -rf "$download_dir"
+rm -f "$m3u_file"
+
+echo "==> Clearing beets source tags for $playlist_name..."
+if beet ls "source:$playlist_name" 2>/dev/null | grep -q .; then
+    beet modify -y "source:$playlist_name" source=
+else
+    echo "  No beets entries found for source:$playlist_name"
+fi
+
+echo ""
+echo "Playlist '$playlist_name' removed. Run 'music-setup' to re-add it."

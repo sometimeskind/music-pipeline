@@ -1,0 +1,25 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+INBOX=~/Music/inbox
+QUARANTINE=~/Music/quarantine
+
+audio_files_in() {
+    find "$1" -maxdepth "${2:-1}" -type f | grep -Ei "\.(mp3|flac|ogg|opus|m4a|aac|wav|wma|aiff|ape|mpc)$" || true
+}
+
+pre_q=$(find "$QUARANTINE" -type f | wc -l)
+
+echo "==> Importing from inbox..."
+beet import --quiet "$INBOX" || true
+
+echo "==> Quarantining skipped files..."
+audio_files_in "$INBOX" 1 | while read -r f; do
+    mv "$f" "$QUARANTINE/"
+done
+
+post_q=$(find "$QUARANTINE" -type f | wc -l)
+quarantined=$((post_q - pre_q))
+
+echo "Quarantined : $quarantined file(s) → $QUARANTINE"
+echo "Log         : ~/.config/beets/import.log"

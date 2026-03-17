@@ -1,0 +1,7 @@
+# Secrets and credentials — never commit these
+.env
+cookies.txt
+*.spotdl
+
+# Docker build artifacts
+.dockerenv

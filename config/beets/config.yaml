@@ -1,0 +1,35 @@
+# Beets configuration for music-pipeline container.
+# Paths use absolute container paths (not ~/); volumes are mounted at these locations.
+directory: /root/Music/library
+library: /root/.config/beets/library.db
+
+ui:
+  color: yes
+
+import:
+  quiet: yes
+  move: yes
+  log: /root/.config/beets/import.log
+  duplicate_action: skip
+
+match:
+  # Distance threshold: lower = stricter (0 = perfect match).
+  # 0.05 accepts only very close MusicBrainz matches automatically.
+  # Raise to 0.10 if too many valid tracks land in quarantine.
+  strong_rec_thresh: 0.05
+
+paths:
+  default: $albumartist/$album/$track - $title
+  singleton: $albumartist/$album/$track - $title
+  comp: Various Artists/$album/$track - $title
+
+plugins: fromfilename fetchart embedart scrub duplicates
+
+fetchart:
+  auto: yes
+
+embedart:
+  auto: yes
+
+scrub:
+  auto: yes

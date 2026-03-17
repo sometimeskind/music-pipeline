@@ -1,0 +1,28 @@
+services:
+  pipeline:
+    build: .
+    container_name: music-pipeline
+    restart: unless-stopped
+    volumes:
+      # Music data: inbox, library, quarantine, playlists
+      - music-data:/root/Music
+      # Beets database and import log (SQLite — back this up)
+      - beets-data:/root/.config/beets
+      # Beets config (from this repo)
+      - ./config/beets/config.yaml:/root/.config/beets/config.yaml:ro
+      # spotdl config (from this repo)
+      - ./config/spotdl/config.json:/root/.config/spotdl/config.json:ro
+      # YouTube Premium cookies — NOT committed; export from browser and place here
+      # See README for export instructions. Expires periodically.
+      - ./cookies.txt:/root/.config/spotdl/cookies.txt:ro
+    environment:
+      # Inject Spotify credentials at runtime via: op run --env-file=.env.tpl -- docker compose up
+      - SPOTIFY_CLIENT_ID=${SPOTIFY_CLIENT_ID}
+      - SPOTIFY_CLIENT_SECRET=${SPOTIFY_CLIENT_SECRET}
+      # Override with e.g. "0 2 * * *" to change sync schedule
+      - CRON_SCHEDULE=${CRON_SCHEDULE:-0 3 * * *}
+    # Navidrome rescan: called from host-side `just rescan` recipe after ingest
+
+volumes:
+  music-data:
+  beets-data:

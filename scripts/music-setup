@@ -1,0 +1,51 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+COOKIE_FILE=~/.config/spotdl/cookies.txt
+
+if [[ ! -f "$COOKIE_FILE" ]]; then
+    echo "Error: YouTube Premium cookies not found at $COOKIE_FILE" >&2
+    echo "See README for export instructions." >&2
+    exit 1
+fi
+
+if [[ -z "${SPOTIFY_CLIENT_ID:-}" || -z "${SPOTIFY_CLIENT_SECRET:-}" ]]; then
+    echo "Error: SPOTIFY_CLIENT_ID and SPOTIFY_CLIENT_SECRET must be set" >&2
+    echo "Run via: op run --env-file=.env.tpl -- docker compose run --rm pipeline music-setup" >&2
+    exit 1
+fi
+
+echo "==> Creating Music directory structure..."
+mkdir -p ~/Music/inbox/spotdl ~/Music/library ~/Music/quarantine ~/Music/playlists
+
+printf "Enter a name for this playlist (slug, e.g. liked-songs): "
+read -r playlist_name
+
+[[ -z "$playlist_name" ]] && { echo "Error: playlist name required" >&2; exit 1; }
+
+printf "Enter the Spotify URL for '%s': " "$playlist_name"
+read -r playlist_url
+
+[[ -z "$playlist_url" ]] && { echo "Error: playlist URL required" >&2; exit 1; }
+
+SPOTDL_DIR=~/Music/inbox/spotdl
+SPOTDL_FILE="$SPOTDL_DIR/$playlist_name.spotdl"
+
+mkdir -p "$SPOTDL_DIR/$playlist_name"
+
+echo ""
+echo "==> Saving spotdl sync file for '$playlist_name'..."
+spotdl \
+    --cookie-file "$COOKIE_FILE" \
+    --client-id "$SPOTIFY_CLIENT_ID" \
+    --client-secret "$SPOTIFY_CLIENT_SECRET" \
+    save "$playlist_url" \
+    --save-file "$SPOTDL_FILE"
+
+echo ""
+echo "Setup complete."
+echo "  Playlist    : $playlist_name"
+echo "  Sync file   : $SPOTDL_FILE"
+echo "  Download dir: $SPOTDL_DIR/$playlist_name/"
+echo ""
+echo "Run 'music-ingest' to download and import all playlists."
