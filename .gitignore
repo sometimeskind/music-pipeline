@@ -5,3 +5,9 @@ cookies.txt
 
 # Docker build artifacts
 .dockerenv
+
+# Python build artifacts
+__pycache__/
+*.pyc
+*.egg-info/
+.pytest_cache/
