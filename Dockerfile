@@ -9,15 +9,15 @@ RUN apt-get update && apt-get install -y \
     libchromaprint-tools \
     && rm -rf /var/lib/apt/lists/*
 
-# beets: audio library manager + tagger
-# spotdl: Spotify-to-local downloader
-# pyacoustid: Python bindings for Chromaprint/AcoustID (beets chroma plugin)
-RUN pip install --no-cache-dir beets spotdl pyacoustid
+# Python dependencies: pinned in requirements.txt for Dependabot tracking
+COPY requirements.txt /requirements.txt
+RUN pip install --no-cache-dir -r /requirements.txt
 
 # Scripts go on PATH
 COPY scripts/ /usr/local/bin/
 RUN chmod +x \
     /usr/local/bin/music-setup \
+    /usr/local/bin/music-scan \
     /usr/local/bin/music-ingest \
     /usr/local/bin/music-import \
     /usr/local/bin/music-remove

@@ -1,5 +1,6 @@
 {
   "format": "m4a",
   "bitrate": "disable",
-  "ffmpeg": "ffmpeg"
+  "ffmpeg": "ffmpeg",
+  "retries": 3
 }

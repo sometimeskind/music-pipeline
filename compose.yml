@@ -19,9 +19,14 @@ services:
       # Inject Spotify credentials at runtime via: op run --env-file=.env.tpl -- docker compose up
       - SPOTIFY_CLIENT_ID=${SPOTIFY_CLIENT_ID}
       - SPOTIFY_CLIENT_SECRET=${SPOTIFY_CLIENT_SECRET}
-      # Override with e.g. "0 2 * * *" to change sync schedule
-      - CRON_SCHEDULE=${CRON_SCHEDULE:-0 3 * * *}
-      # Optional: trigger Navidrome library rescan after ingestion
+      # Cron schedules: fast local scan and daily network sync
+      - SCAN_CRON_SCHEDULE=${SCAN_CRON_SCHEDULE:-*/5 * * * *}
+      - SYNC_CRON_SCHEDULE=${SYNC_CRON_SCHEDULE:-0 3 * * *}
+      # Optional: random sleep up to N seconds before sync (reduces thundering herd in k8s)
+      - SYNC_JITTER_SECONDS=${SYNC_JITTER_SECONDS:-0}
+      # Optional: Prometheus Pushgateway URL for job metrics
+      - PUSHGATEWAY_URL=${PUSHGATEWAY_URL:-}
+      # Optional: trigger Navidrome library rescan after each scan
       # NAVIDROME_URL: base URL, e.g. http://navidrome:4533
       # NAVIDROME_API_KEY: credentials as user:password
       - NAVIDROME_URL=${NAVIDROME_URL:-}
