@@ -1,4 +1,4 @@
-FROM python:3.13-slim
+FROM python:3.13-slim AS prod
 
 # System dependencies: ffmpeg for audio processing, cron for scheduled ingest.
 # jq removed — JSON processing is now done in Python.
@@ -33,3 +33,12 @@ RUN mkdir -p \
 
 ENTRYPOINT ["/entrypoint.sh"]
 CMD ["cron", "-f"]
+
+# dev stage: prod + test deps; used by `just test`, never pushed to registry
+FROM prod AS dev
+COPY requirements-dev.txt /requirements-dev.txt
+RUN pip install --no-cache-dir -r /requirements-dev.txt
+COPY tests/ /app/tests/
+WORKDIR /app
+ENTRYPOINT []
+CMD ["pytest"]
