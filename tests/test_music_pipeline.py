@@ -152,7 +152,7 @@ def test_duplicate_action_all_spotdl_returns_remove() -> None:
 
     result = plugin.duplicate_action(MagicMock(), task, [_dup(source="jazz", via="spotdl")])
 
-    assert result is beets_importer.action.REMOVE
+    assert result is beets_importer.Action.REMOVE
 
 
 def test_duplicate_action_all_spotdl_inherits_source() -> None:
@@ -174,7 +174,7 @@ def test_duplicate_action_manual_dup_returns_skip() -> None:
     with patch("pipeline.music_pipeline.Path"):
         result = plugin.duplicate_action(MagicMock(), task, [_dup(via="")])
 
-    assert result is beets_importer.action.SKIP
+    assert result is beets_importer.Action.SKIP
 
 
 def test_duplicate_action_manual_dup_deletes_inbox_file() -> None:

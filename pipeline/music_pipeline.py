@@ -110,7 +110,7 @@ class MusicPipelinePlugin(BeetsPlugin):
                     self._log.warning(
                         "could not remove skipped inbox file {}: {}", path, exc
                     )
-            return beets_importer.action.SKIP
+            return beets_importer.Action.SKIP
 
         # All duplicates are spotdl-sourced — replace them.
         # Inherit source= (playlist membership) from the existing item so the
@@ -129,4 +129,4 @@ class MusicPipelinePlugin(BeetsPlugin):
                 inherited,
                 item.get("via") or "",
             )
-        return beets_importer.action.REMOVE
+        return beets_importer.Action.REMOVE
