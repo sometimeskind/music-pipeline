@@ -94,6 +94,8 @@ op run --env-file=.env.tpl -- docker compose up -d
 
 The container runs two cron jobs: `music-scan` every 5 minutes and `music-ingest` daily at 03:00 UTC. Override with `SCAN_CRON_SCHEDULE` and `SYNC_CRON_SCHEDULE` env vars.
 
+To avoid rate limiting on large playlists, set `SYNC_TRACK_LIMIT` to cap total new downloads per session across all playlists. The pipeline resumes where it left off on the next run.
+
 ---
 
 ## Host-side `just` recipes
@@ -211,6 +213,7 @@ All three ConfigMaps should be mounted `readOnly: true`.
 | `NAVIDROME_API_KEY` | Secret `music-pipeline-navidrome/api-key` | `""` | Format: `user:password` |
 | `PUSHGATEWAY_URL` | Plain value | `""` | e.g. `http://prometheus-pushgateway.monitoring:9091` |
 | `SYNC_JITTER_SECONDS` | Plain value | `"300"` | Random pre-sync sleep to stagger retries |
+| `SYNC_TRACK_LIMIT` | Plain value | `""` | Max new tracks downloaded across all playlists per session. Unset = no limit. Useful for large playlists (e.g. liked songs); the pipeline resumes where it left off next run. |
 
 `SCAN_CRON_SCHEDULE` and `SYNC_CRON_SCHEDULE` are only relevant to Docker Compose (written to `/etc/cron.d`). In k8s, the schedule is set on the `CronJob` spec directly.
 
@@ -305,6 +308,6 @@ kubectl attach -it job/music-remove
 - **`source` is single-value.** A track imported by two playlists only carries the source from whichever ran first.
 - **`beet update` does not prune deleted files.** Use `beet remove <query>` with a specific query. Never run `beet remove` without a query.
 - **Cookies expire.** Re-export from browser when downloads fail at quality.
-- **Spotify rate limits.** Always use your own app credentials — the spotdl defaults are shared and hit limits quickly.
+- **Spotify rate limits.** Always use your own app credentials — the spotdl defaults are shared and hit limits quickly. For large playlists, set `SYNC_TRACK_LIMIT` to cap new downloads per session (e.g. `50`); the pipeline picks up where it left off each run.
 - **MusicBrainz threshold.** `strong_rec_thresh: 0.05` is strict. Raise to `0.10` in `config/beets/config.yaml` if too many valid tracks land in quarantine.
-- **`.spotdl` files are the sync state.** Never delete them manually. They are backed by the PVC and also derivable from `config/playlists.conf` via `music-provision`.
+- **`.spotdl` files are the sync state.** Never delete them manually. They are backed by the PVC and also derivable from `config/playlists.conf` via `music-provision`. When `SYNC_TRACK_LIMIT` is active, the snapshot intentionally contains only downloaded tracks — deferred tracks are absent so they re-appear as new on the next run.
