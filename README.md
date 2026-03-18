@@ -75,13 +75,13 @@ This file is the authoritative registry of playlists. It enables PVC recovery an
 ### 5. Provision playlists (create .spotdl files)
 
 ```bash
-op run --env-file=.env.tpl -- docker compose run --rm -it pipeline music-provision
+just provision
 ```
 
 Or interactively add a single playlist:
 
 ```bash
-op run --env-file=.env.tpl -- docker compose run --rm -it pipeline music-setup
+just setup
 ```
 
 `music-setup` and `music-provision` are idempotent — they skip playlists whose `.spotdl` file already exists on the volume.
@@ -89,7 +89,7 @@ op run --env-file=.env.tpl -- docker compose run --rm -it pipeline music-setup
 ### 6. Start the service
 
 ```bash
-op run --env-file=.env.tpl -- docker compose up -d
+just up
 ```
 
 The container runs two cron jobs: `music-scan` every 5 minutes and `music-ingest` daily at 03:00 UTC. Override with `SCAN_CRON_SCHEDULE` and `SYNC_CRON_SCHEDULE` env vars.
@@ -98,21 +98,21 @@ To avoid rate limiting on large playlists, set `SYNC_TRACK_LIMIT` to cap total n
 
 ---
 
-## Host-side `just` recipes
+## `just` recipes
 
-These live in the dotfiles repo (`sometimeskind/dotfiles`) at `just/.justfile` → `~/.justfile`.
+A `justfile` lives in the repo root. Run these from the repo directory.
 
 | Recipe | What it does |
 |---|---|
-| `just sync` | Run full ingest now |
-| `just setup` | Add a new playlist (interactive) |
-| `just remove <name>` | Remove a playlist |
-| `just import` | Import files dropped into inbox |
-| `just rescan` | POST to Navidrome API to trigger library refresh |
-| `just logs` | Tail container logs |
 | `just up` | Start the container |
 | `just down` | Stop the container |
-| `just backup` | Dump beets DB + export JSON |
+| `just sync` | Run full ingest now |
+| `just setup` | Add a new playlist (interactive) |
+| `just provision` | Provision all playlists from `config/playlists.conf` (idempotent) |
+| `just remove <name>` | Remove a playlist |
+| `just import` | Import files dropped into inbox |
+| `just logs` | Tail container logs |
+| `just backup` | Dump beets DB + export JSON inside container |
 
 ---
 

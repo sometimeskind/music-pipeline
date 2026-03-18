@@ -4,7 +4,11 @@ sync:
 
 # Add a new playlist (interactive)
 setup:
-    op run --env-file .env.tpl -- docker compose exec -it pipeline music-setup
+    op run --env-file .env.tpl -- docker compose run --rm -it pipeline music-setup
+
+# Provision all playlists from config/playlists.conf (idempotent)
+provision:
+    op run --env-file .env.tpl -- docker compose run --rm -it pipeline music-provision
 
 # Remove a playlist: just remove <name>
 remove name:
@@ -13,11 +17,6 @@ remove name:
 # Import files dropped into inbox
 import:
     docker compose exec pipeline music-import
-
-# Trigger Navidrome library rescan
-# TODO: fill in Navidrome host, user, and password (store password in 1Password)
-# rescan:
-#     curl -s "http://<navidrome-host>/rest/startScan?u=<user>&p=<pass>&v=1.16.1&c=music-pipeline&f=json"
 
 # Tail container logs
 logs:
@@ -33,6 +32,5 @@ down:
 
 # Dump beets DB and export JSON from the container
 backup:
-    docker compose exec pipeline sh -c \
-        "beet export > /root/.config/beets/library-export.json && \
-         sqlite3 /root/.config/beets/library.db .dump > /root/.config/beets/library-dump.sql"
+    docker compose exec pipeline sh -c "beet export > /root/.config/beets/library-export.json"
+    docker compose exec pipeline sh -c "sqlite3 /root/.config/beets/library.db .dump > /root/.config/beets/library-dump.sql"

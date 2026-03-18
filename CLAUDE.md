@@ -13,23 +13,26 @@ Spotify playlists → spotdl sync → /root/Music/inbox/spotdl/<name>/ → beets
 
 ## Common Commands
 
-All commands require 1Password CLI (`op`) to inject Spotify credentials:
+Most commands are wrapped in `just` recipes (see `justfile` in the repo root). Build is the exception — it doesn't need credentials.
 
 ```bash
 # Build the container image
 docker compose build
 
 # Interactive: add a new playlist
-op run --env-file=.env.tpl -- docker compose run --rm -it pipeline music-setup
+just setup
+
+# Provision all playlists from config/playlists.conf (idempotent)
+just provision
 
 # Start the service (cron-based daily ingest)
-op run --env-file=.env.tpl -- docker compose up -d
+just up
 
 # Run a full ingest immediately
-op run --env-file=.env.tpl -- docker compose exec pipeline music-ingest
+just sync
 
 # Follow logs
-docker compose logs -f pipeline
+just logs
 ```
 
 There is no test suite. Shell script validation is manual.
