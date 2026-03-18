@@ -1,3 +1,12 @@
+# Run the test suite in a dev container (never pushed to registry)
+test:
+    docker build --target dev -t music-pipeline:dev .
+    docker run --rm music-pipeline:dev
+
+# Install git hooks (run once after cloning)
+hooks:
+    git config core.hooksPath .githooks
+
 # Run full ingest (download + import + M3U + quarantine)
 sync:
     op run --env-file .env.tpl -- docker compose exec pipeline music-ingest

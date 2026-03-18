@@ -13,10 +13,16 @@ Spotify playlists → spotdl sync → /root/Music/inbox/spotdl/<name>/ → beets
 
 ## Common Commands
 
-Most commands are wrapped in `just` recipes (see `justfile` in the repo root). Build is the exception — it doesn't need credentials.
+All commands are wrapped in `just` recipes (see `justfile` in the repo root).
 
 ```bash
-# Build the container image
+# One-time setup after cloning: install git hooks
+just hooks
+
+# Run the test suite (builds the dev container, runs pytest)
+just test
+
+# Build the production container image
 docker compose build
 
 # Interactive: add a new playlist
@@ -35,7 +41,21 @@ just sync
 just logs
 ```
 
-There is no test suite. Shell script validation is manual.
+**Do not run Python commands directly on the host.** All Python tooling (pytest, beet, spotdl) runs inside the container. Use `just test` to run tests.
+
+## Testing
+
+The test suite lives in `tests/` and runs inside a Docker container:
+
+```bash
+just test   # builds music-pipeline:dev, runs pytest
+```
+
+The Dockerfile uses a two-stage build:
+- **`prod` stage** — the image that runs in CI and is pushed to GHCR. Contains only runtime dependencies (ffmpeg, chromaprint, pip packages from `requirements.txt`).
+- **`dev` stage** — extends `prod` with `requirements-dev.txt` (pytest) and the `tests/` directory. Built locally by `just test`. Never pushed to the registry.
+
+A `pre-push` git hook runs `just test` automatically before every push. Install it once with `just hooks`.
 
 ## Architecture
 
