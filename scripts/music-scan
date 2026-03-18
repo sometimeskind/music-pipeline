@@ -8,15 +8,6 @@ START_TIME=$(date +%s)
 
 log() { echo "[$(date -Iseconds)] $*"; }
 
-# Push a metric line to the Pushgateway (no-op if PUSHGATEWAY_URL is unset).
-push_metric() {
-    [[ -z "${PUSHGATEWAY_URL:-}" ]] && return 0
-    local job=music_scan metric=$1 value=$2
-    printf '%s %s\n' "$metric" "$value" \
-        | curl -sf --data-binary @- "${PUSHGATEWAY_URL}/metrics/job/${job}" || true
-}
-
-# Push a batch of metrics at once.
 push_metrics() {
     [[ -z "${PUSHGATEWAY_URL:-}" ]] && return 0
     local body=$1
@@ -46,27 +37,32 @@ finish() {
 
     local navidrome_success=${NAVIDROME_RESCAN_SUCCESS:-1}
 
-    push_metrics "# TYPE music_scan_last_run_success gauge
+    local body="# TYPE music_scan_last_run_success gauge
 music_scan_last_run_success ${success}
 # TYPE music_scan_duration_seconds gauge
 music_scan_duration_seconds ${duration}
 # TYPE music_scan_quarantined_tracks_total gauge
 music_scan_quarantined_tracks_total ${quarantined}
 # TYPE music_scan_navidrome_rescan_success gauge
-music_scan_navidrome_rescan_success ${navidrome_success}
+music_scan_navidrome_rescan_success ${navidrome_success}"
+
+    if [[ $success -eq 0 ]]; then
+        body+="
 # TYPE music_scan_last_failure_reason gauge
-music_scan_last_failure_reason{reason=\"${FAILURE_REASON}\"} $((1 - success))"
+music_scan_last_failure_reason{reason=\"${FAILURE_REASON}\"} 1"
+    fi
+
+    push_metrics "$body"
 }
 
 handle_sigterm() {
-    log "Shutdown signal received — pushing interrupted metrics and exiting"
+    log "Shutdown signal received — exiting"
     FAILURE_REASON=interrupted
-    finish 1
-    # If beet is running in background, kill it
     [[ -n "${BEET_PID:-}" ]] && kill "$BEET_PID" 2>/dev/null || true
     exit 130
 }
 trap handle_sigterm SIGTERM
+trap 'finish $?' EXIT
 
 navidrome_rescan() {
     NAVIDROME_RESCAN_SUCCESS=1
@@ -123,5 +119,4 @@ QUARANTINED_AFTER=$(find "$QUARANTINE" -type f 2>/dev/null | wc -l || echo 0)
 
 navidrome_rescan
 
-finish 0
 log "==> music-scan complete"

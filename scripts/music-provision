@@ -27,7 +27,7 @@ while IFS= read -r line; do
 
     read -r name url flags <<< "$line" || true
 
-    if [[ -z "$name" || -z "$url" || "$name" == "$url" ]]; then
+    if [[ -z "$name" || -z "$url" ]]; then
         echo "WARNING: malformed line in $CONF — skipping: $line" >&2
         continue
     fi

@@ -25,26 +25,32 @@ finish() {
     duration=$((end_time - START_TIME))
     success=$([[ $exit_code -eq 0 ]] && echo 1 || echo 0)
 
-    push_metrics "# TYPE music_ingest_last_run_success gauge
+    local body="# TYPE music_ingest_last_run_success gauge
 music_ingest_last_run_success ${success}
 # TYPE music_ingest_duration_seconds gauge
 music_ingest_duration_seconds ${duration}
 # TYPE music_ingest_playlists_total gauge
 music_ingest_playlists_total ${PLAYLISTS_TOTAL}
 # TYPE music_ingest_playlists_skipped_total gauge
-music_ingest_playlists_skipped_total ${PLAYLISTS_SKIPPED}
+music_ingest_playlists_skipped_total ${PLAYLISTS_SKIPPED}"
+
+    if [[ $success -eq 0 ]]; then
+        body+="
 # TYPE music_ingest_last_failure_reason gauge
-music_ingest_last_failure_reason{reason=\"${FAILURE_REASON}\"} $((1 - success))"
+music_ingest_last_failure_reason{reason=\"${FAILURE_REASON}\"} 1"
+    fi
+
+    push_metrics "$body"
 }
 
 handle_sigterm() {
-    log "Shutdown signal received — pushing interrupted metrics and exiting"
+    log "Shutdown signal received — exiting"
     FAILURE_REASON=interrupted
-    finish 1
     [[ -n "${SPOTDL_PID:-}" ]] && kill "$SPOTDL_PID" 2>/dev/null || true
     exit 130
 }
 trap handle_sigterm SIGTERM
+trap 'finish $?' EXIT
 
 # Classify a spotdl stderr capture into a failure reason string.
 classify_failure() {
@@ -66,14 +72,12 @@ if [[ ! -f "$COOKIE_FILE" ]]; then
     log "Error: YouTube Premium cookies not found at $COOKIE_FILE"
     log "See README for export instructions."
     FAILURE_REASON=missing_cookies
-    finish 1
     exit 1
 fi
 
 if [[ -z "${SPOTIFY_CLIENT_ID:-}" || -z "${SPOTIFY_CLIENT_SECRET:-}" ]]; then
     log "Error: SPOTIFY_CLIENT_ID and SPOTIFY_CLIENT_SECRET must be set"
     FAILURE_REASON=auth_spotify
-    finish 1
     exit 1
 fi
 
@@ -81,7 +85,6 @@ available_kb=$(df -k ~/Music | awk 'NR==2 {print $4}')
 if [[ "$available_kb" -lt 1048576 ]]; then
     log "Error: less than 1 GB free on ~/Music (${available_kb} KB available)"
     FAILURE_REASON=disk_full
-    finish 1
     exit 1
 fi
 
@@ -101,10 +104,8 @@ SPOTDL_OPTS=(
 
 log "==> music-ingest starting"
 
-found_any=false
 for spotdl_file in "$SPOTDL_DIR"/*.spotdl; do
     [[ -e "$spotdl_file" ]] || { log "No .spotdl files found in $SPOTDL_DIR"; break; }
-    found_any=true
     name=$(basename "$spotdl_file" .spotdl)
 
     # .nosync support — skip spotdl sync for frozen playlists
@@ -130,29 +131,27 @@ for spotdl_file in "$SPOTDL_DIR"/*.spotdl; do
     cp "$spotdl_file" "$before_snapshot"
 
     stderr_tmp=$(mktemp)
-    if spotdl "${SPOTDL_OPTS[@]}" sync "$spotdl_file" --output "$SPOTDL_DIR/$name" --sync-without-deleting \
+    # Run spotdl in background so SIGTERM can interrupt it via the trap above.
+    spotdl "${SPOTDL_OPTS[@]}" sync "$spotdl_file" --output "$SPOTDL_DIR/$name" --sync-without-deleting \
             2> "$stderr_tmp" &
-    then
-        SPOTDL_PID=$!
-        wait $SPOTDL_PID || {
-            sync_exit=$?
-            SPOTDL_PID=""
-            FAILURE_REASON=$(classify_failure "$(cat "$stderr_tmp")")
-            log "ERROR: spotdl sync failed for $name (exit $sync_exit, reason=$FAILURE_REASON)"
-            cat "$stderr_tmp" >&2
-            rm -f "$before_snapshot" "$stderr_tmp"
-            finish $sync_exit
-            exit $sync_exit
-        }
+    SPOTDL_PID=$!
+    wait $SPOTDL_PID || {
+        sync_exit=$?
         SPOTDL_PID=""
-    fi
+        FAILURE_REASON=$(classify_failure "$(cat "$stderr_tmp")")
+        log "ERROR: spotdl sync failed for $name (exit $sync_exit, reason=$FAILURE_REASON)"
+        cat "$stderr_tmp" >&2
+        rm -f "$before_snapshot" "$stderr_tmp"
+        exit $sync_exit
+    }
+    SPOTDL_PID=""
     rm -f "$stderr_tmp"
 
     # Remove beets source tags for tracks removed from this Spotify playlist.
-    local_before_urls=$(jq -r '.[].url' "$before_snapshot" 2>/dev/null | sort || true)
-    local_after_urls=$(jq  -r '.[].url' "$spotdl_file"     2>/dev/null | sort || true)
-    if [[ -n "$local_before_urls" ]]; then
-        removed_urls=$(comm -23 <(echo "$local_before_urls") <(echo "$local_after_urls") || true)
+    before_urls=$(jq -r '.[].url' "$before_snapshot" 2>/dev/null | sort || true)
+    after_urls=$(jq  -r '.[].url' "$spotdl_file"     2>/dev/null | sort || true)
+    if [[ -n "$before_urls" ]]; then
+        removed_urls=$(comm -23 <(echo "$before_urls") <(echo "$after_urls") || true)
         if [[ -n "$removed_urls" ]]; then
             log "==> Unlinking removed tracks from playlist: $name"
             while IFS= read -r url; do
@@ -170,11 +169,11 @@ for spotdl_file in "$SPOTDL_DIR"/*.spotdl; do
     fi
     rm -f "$before_snapshot"
 
+    # Brief courtesy pause between playlists to avoid hammering Spotify/YouTube APIs.
     sleep 5
 done
 
 log "==> Sync complete. Calling music-scan for local import and playlist generation..."
 music-scan
 
-finish 0
 log "==> music-ingest complete"
