@@ -23,7 +23,10 @@ paths:
   singleton: $albumartist/$album/$track - $title
   comp: Various Artists/$album/$track - $title
 
-plugins: chroma fromfilename fetchart embedart scrub duplicates
+pluginpath:
+  - /app/pipeline
+
+plugins: chroma fromfilename fetchart embedart scrub duplicates spotdl_replace
 
 fetchart:
   auto: yes
