@@ -10,6 +10,25 @@ env:
   IMAGE_NAME: ghcr.io/${{ github.repository_owner }}/music-pipeline
 
 jobs:
+  test:
+    name: Unit Tests
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dev dependencies
+        run: pip install -r requirements-dev.txt
+
+      - name: Run tests
+        run: pytest
+
   build-and-check:
     name: Build, Health Check & Push
     runs-on: ubuntu-latest
@@ -63,11 +82,19 @@ jobs:
       - name: Health check — ffmpeg
         run: docker run --rm --entrypoint ffmpeg music-pipeline:ci-local -version
 
-      - name: Health check — jq
-        run: docker run --rm --entrypoint jq music-pipeline:ci-local --version
-
       - name: Health check — fpcalc
         run: docker run --rm --entrypoint fpcalc music-pipeline:ci-local -version
+
+      - name: Health check — pipeline commands
+        run: |
+          docker run --rm music-pipeline:ci-local sh -c "
+            which music-scan &&
+            which music-ingest &&
+            which music-import &&
+            which music-setup &&
+            which music-remove &&
+            which music-provision
+          "
 
       - name: Push to GHCR
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
