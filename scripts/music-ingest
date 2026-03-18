@@ -2,20 +2,99 @@
 set -euo pipefail
 
 SPOTDL_DIR=~/Music/inbox/spotdl
-QUARANTINE=~/Music/quarantine
-PLAYLISTS=~/Music/playlists
 COOKIE_FILE=~/.config/spotdl/cookies.txt
+START_TIME=$(date +%s)
+
+log() { echo "[$(date -Iseconds)] $*"; }
+
+push_metrics() {
+    [[ -z "${PUSHGATEWAY_URL:-}" ]] && return 0
+    local body=$1
+    printf '%s\n' "$body" \
+        | curl -sf --data-binary @- "${PUSHGATEWAY_URL}/metrics/job/music_ingest" || true
+}
+
+FAILURE_REASON=""
+PLAYLISTS_TOTAL=0
+PLAYLISTS_SKIPPED=0
+
+finish() {
+    local exit_code=$1
+    local end_time duration success
+    end_time=$(date +%s)
+    duration=$((end_time - START_TIME))
+    success=$([[ $exit_code -eq 0 ]] && echo 1 || echo 0)
+
+    local body="# TYPE music_ingest_last_run_success gauge
+music_ingest_last_run_success ${success}
+# TYPE music_ingest_duration_seconds gauge
+music_ingest_duration_seconds ${duration}
+# TYPE music_ingest_playlists_total gauge
+music_ingest_playlists_total ${PLAYLISTS_TOTAL}
+# TYPE music_ingest_playlists_skipped_total gauge
+music_ingest_playlists_skipped_total ${PLAYLISTS_SKIPPED}"
+
+    if [[ $success -eq 0 ]]; then
+        body+="
+# TYPE music_ingest_last_failure_reason gauge
+music_ingest_last_failure_reason{reason=\"${FAILURE_REASON}\"} 1"
+    fi
+
+    push_metrics "$body"
+}
+
+handle_sigterm() {
+    log "Shutdown signal received — exiting"
+    FAILURE_REASON=interrupted
+    [[ -n "${SPOTDL_PID:-}" ]] && kill "$SPOTDL_PID" 2>/dev/null || true
+    exit 130
+}
+trap handle_sigterm SIGTERM
+trap 'finish $?' EXIT
+
+# Classify a spotdl stderr capture into a failure reason string.
+classify_failure() {
+    local stderr_output=$1
+    if echo "$stderr_output" | grep -qiE "SpotifyError|Invalid credentials"; then
+        echo "auth_spotify"
+    elif echo "$stderr_output" | grep -qiE "HTTP Error 403|Sign in to confirm|cookies"; then
+        echo "auth_youtube"
+    elif echo "$stderr_output" | grep -qiE "429|Too Many Requests"; then
+        echo "rate_limited"
+    else
+        echo "spotdl_error"
+    fi
+}
+
+# --- Pre-flight checks ---
 
 if [[ ! -f "$COOKIE_FILE" ]]; then
-    echo "Error: YouTube Premium cookies not found at $COOKIE_FILE" >&2
-    echo "See README for export instructions." >&2
+    log "Error: YouTube Premium cookies not found at $COOKIE_FILE"
+    log "See README for export instructions."
+    FAILURE_REASON=missing_cookies
     exit 1
 fi
 
 if [[ -z "${SPOTIFY_CLIENT_ID:-}" || -z "${SPOTIFY_CLIENT_SECRET:-}" ]]; then
-    echo "Error: SPOTIFY_CLIENT_ID and SPOTIFY_CLIENT_SECRET must be set" >&2
+    log "Error: SPOTIFY_CLIENT_ID and SPOTIFY_CLIENT_SECRET must be set"
+    FAILURE_REASON=auth_spotify
     exit 1
 fi
+
+available_kb=$(df -k ~/Music | awk 'NR==2 {print $4}')
+if [[ "$available_kb" -lt 1048576 ]]; then
+    log "Error: less than 1 GB free on ~/Music (${available_kb} KB available)"
+    FAILURE_REASON=disk_full
+    exit 1
+fi
+
+# --- Jitter ---
+
+if [[ -n "${SYNC_JITTER_SECONDS:-}" && "$SYNC_JITTER_SECONDS" -gt 0 ]]; then
+    sleep $(( RANDOM % SYNC_JITTER_SECONDS ))
+fi
+
+# --- spotdl sync loop ---
 
 SPOTDL_OPTS=(
     --cookie-file "$COOKIE_FILE"
@@ -23,98 +102,78 @@ SPOTDL_OPTS=(
     --client-secret "$SPOTIFY_CLIENT_SECRET"
 )
 
-audio_files_in() {
-    find "$1" -maxdepth "${2:-1}" -type f | grep -Ei "\.(mp3|flac|ogg|opus|m4a|aac|wav|wma|aiff|ape|mpc)$" || true
-}
-
-navidrome_rescan() {
-    [[ -z "${NAVIDROME_URL:-}" || -z "${NAVIDROME_API_KEY:-}" ]] && return 0
-    local user password
-    IFS=: read -r user password <<< "$NAVIDROME_API_KEY"
-    echo "==> Triggering Navidrome library rescan..."
-    local response
-    response=$(curl -sf \
-        "${NAVIDROME_URL}/rest/startScan?u=${user}&p=${password}&v=1.16.1&c=music-pipeline&f=json" \
-        2>&1) || { echo "WARNING: Navidrome rescan request failed" >&2; return 0; }
-    local status
-    status=$(echo "$response" | jq -r '."subsonic-response".status' 2>/dev/null || echo "unknown")
-    if [[ "$status" == "ok" ]]; then
-        echo "    Navidrome rescan triggered successfully."
-    else
-        echo "WARNING: Navidrome rescan returned unexpected status: $status" >&2
-        echo "    Response: $response" >&2
-    fi
-}
-
-# Remove beets source tags for tracks that were removed from a Spotify playlist.
-# Compares the .spotdl snapshot taken before sync to the updated file after sync.
-# Files are never deleted — only the source association is cleared.
-remove_stale_source_tags() {
-    local name=$1 spotdl_file=$2 before_snapshot=$3
-
-    local before_urls after_urls removed_urls
-    before_urls=$(jq -r '.[].url' "$before_snapshot" 2>/dev/null | sort || true)
-    after_urls=$(jq  -r '.[].url' "$spotdl_file"     2>/dev/null | sort || true)
-
-    [[ -z "$before_urls" ]] && return
-
-    removed_urls=$(comm -23 <(echo "$before_urls") <(echo "$after_urls") || true)
-    [[ -z "$removed_urls" ]] && return
-
-    echo "==> Unlinking removed tracks from playlist: $name"
-    while IFS= read -r url; do
-        [[ -z "$url" ]] && continue
-        local track_name first_artist
-        track_name=$(jq -r --arg u "$url" '.[] | select(.url == $u) | .name'        "$before_snapshot")
-        first_artist=$(jq -r --arg u "$url" '.[] | select(.url == $u) | .artists[0]' "$before_snapshot")
-
-        echo "  Unlinking: $track_name — $first_artist"
-        if beet ls "title:$track_name" "artist:$first_artist" "source:$name" 2>/dev/null | grep -q .; then
-            beet modify -y "title:$track_name" "artist:$first_artist" "source:$name" source=
-        else
-            echo "  WARNING: not found in beets — may need manual cleanup: $track_name by $first_artist" >&2
-        fi
-    done <<< "$removed_urls"
-}
+log "==> music-ingest starting"
 
 for spotdl_file in "$SPOTDL_DIR"/*.spotdl; do
-    [[ -e "$spotdl_file" ]] || { echo "No .spotdl files found in $SPOTDL_DIR" >&2; exit 1; }
+    [[ -e "$spotdl_file" ]] || { log "No .spotdl files found in $SPOTDL_DIR"; break; }
     name=$(basename "$spotdl_file" .spotdl)
-    echo "==> Syncing playlist: $name"
+
+    # .nosync support — skip spotdl sync for frozen playlists
+    if [[ -f "${spotdl_file%.spotdl}.nosync" ]]; then
+        log "==> Skipping sync for static playlist: $name (.nosync present)"
+        PLAYLISTS_SKIPPED=$(( PLAYLISTS_SKIPPED + 1 ))
+        PLAYLISTS_TOTAL=$(( PLAYLISTS_TOTAL + 1 ))
+        continue
+    fi
+
+    # Validate .spotdl file before syncing
+    if ! jq empty "$spotdl_file" 2>/dev/null; then
+        log "WARNING: $spotdl_file is not valid JSON — skipping"
+        PLAYLISTS_TOTAL=$(( PLAYLISTS_TOTAL + 1 ))
+        continue
+    fi
+
+    log "==> Syncing playlist: $name"
+    PLAYLISTS_TOTAL=$(( PLAYLISTS_TOTAL + 1 ))
     mkdir -p "$SPOTDL_DIR/$name"
 
     before_snapshot=$(mktemp)
     cp "$spotdl_file" "$before_snapshot"
 
-    spotdl "${SPOTDL_OPTS[@]}" sync "$spotdl_file" --output "$SPOTDL_DIR/$name" --sync-without-deleting
+    stderr_tmp=$(mktemp)
+    # Run spotdl in background so SIGTERM can interrupt it via the trap above.
+    spotdl "${SPOTDL_OPTS[@]}" sync "$spotdl_file" --output "$SPOTDL_DIR/$name" --sync-without-deleting \
+            2> "$stderr_tmp" &
+    SPOTDL_PID=$!
+    wait $SPOTDL_PID || {
+        sync_exit=$?
+        SPOTDL_PID=""
+        FAILURE_REASON=$(classify_failure "$(cat "$stderr_tmp")")
+        log "ERROR: spotdl sync failed for $name (exit $sync_exit, reason=$FAILURE_REASON)"
+        cat "$stderr_tmp" >&2
+        rm -f "$before_snapshot" "$stderr_tmp"
+        exit $sync_exit
+    }
+    SPOTDL_PID=""
+    rm -f "$stderr_tmp"
 
-    remove_stale_source_tags "$name" "$spotdl_file" "$before_snapshot"
+    # Remove beets source tags for tracks removed from this Spotify playlist.
+    before_urls=$(jq -r '.[].url' "$before_snapshot" 2>/dev/null | sort || true)
+    after_urls=$(jq  -r '.[].url' "$spotdl_file"     2>/dev/null | sort || true)
+    if [[ -n "$before_urls" ]]; then
+        removed_urls=$(comm -23 <(echo "$before_urls") <(echo "$after_urls") || true)
+        if [[ -n "$removed_urls" ]]; then
+            log "==> Unlinking removed tracks from playlist: $name"
+            while IFS= read -r url; do
+                [[ -z "$url" ]] && continue
+                track_name=$(jq -r --arg u "$url" '.[] | select(.url == $u) | .name'        "$before_snapshot")
+                first_artist=$(jq -r --arg u "$url" '.[] | select(.url == $u) | .artists[0]' "$before_snapshot")
+                log "  Unlinking: $track_name — $first_artist"
+                if beet ls "title:$track_name" "artist:$first_artist" "source:$name" 2>/dev/null | grep -q .; then
+                    beet modify -y "title:$track_name" "artist:$first_artist" "source:$name" source=
+                else
+                    log "  WARNING: not found in beets — may need manual cleanup: $track_name by $first_artist"
+                fi
+            done <<< "$removed_urls"
+        fi
+    fi
     rm -f "$before_snapshot"
 
-    echo "==> Importing $name into beets..."
-    beet import --quiet --set source="$name" "$SPOTDL_DIR/$name" || true
-
-    echo "==> Generating playlist: $PLAYLISTS/$name.m3u"
-    mkdir -p "$PLAYLISTS"
-    beet ls -f '$path' source:"$name" \
-        | while IFS= read -r p; do
-            realpath --relative-to="$(realpath "$PLAYLISTS")" "$p"
-          done \
-        > "$PLAYLISTS/$name.m3u"
-
-    echo "==> Quarantining skipped files from $name..."
-    audio_files_in "$SPOTDL_DIR/$name" 10 | while read -r f; do
-        mv "$f" "$QUARANTINE/"
-    done
+    # Brief courtesy pause between playlists to avoid hammering Spotify/YouTube APIs.
+    sleep 5
 done
 
-echo ""
-echo "==> Processing inbox..."
-music-import
+log "==> Sync complete. Calling music-scan for local import and playlist generation..."
+music-scan
 
-echo ""
-echo "==> Refreshing library metadata..."
-beet update 2>&1 || true
-
-echo ""
-navidrome_rescan
+log "==> music-ingest complete"
