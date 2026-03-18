@@ -1,0 +1,29 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "music-pipeline"
+version = "0.1.0"
+requires-python = ">=3.11"
+dependencies = [
+    "beets==2.7.1",
+    "spotdl==4.4.3",
+    "pyacoustid==1.3.0",
+    "requests>=2.32",
+]
+
+[project.scripts]
+music-scan      = "pipeline.cli:scan"
+music-ingest    = "pipeline.cli:ingest"
+music-import    = "pipeline.cli:import_cmd"
+music-setup     = "pipeline.cli:setup"
+music-remove    = "pipeline.cli:remove"
+music-provision = "pipeline.cli:provision"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["pipeline*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
