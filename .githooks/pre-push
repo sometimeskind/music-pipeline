@@ -1,0 +1,6 @@
+#!/usr/bin/env bash
+# Runs the test suite in a dev container before every push.
+# Install with: just hooks
+set -euo pipefail
+echo "pre-push: running tests..."
+just test
