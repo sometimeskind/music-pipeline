@@ -26,7 +26,7 @@ paths:
 pluginpath:
   - /app/pipeline
 
-plugins: chroma fromfilename fetchart embedart scrub duplicates spotdl_replace
+plugins: chroma fromfilename fetchart embedart scrub duplicates music_pipeline
 
 fetchart:
   auto: yes
