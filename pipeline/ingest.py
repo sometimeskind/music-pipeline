@@ -122,6 +122,13 @@ def run() -> None:
     try:
         logger.info("==> music-ingest starting")
 
+        track_limit_str = os.environ.get("SYNC_TRACK_LIMIT", "")
+        session_budget: int | None = int(track_limit_str) if track_limit_str.strip() else None
+        remaining: int | None = session_budget
+
+        if session_budget is not None:
+            logger.info("Session track budget: %d new tracks across all playlists", session_budget)
+
         spotdl_files = sorted(SPOTDL_DIR.glob("*.spotdl"))
         if not spotdl_files:
             logger.info("No .spotdl files found in %s", SPOTDL_DIR)
@@ -133,6 +140,13 @@ def run() -> None:
                 # .nosync: skip spotdl sync for frozen playlists
                 if (SPOTDL_DIR / f"{name}.nosync").exists():
                     logger.info("==> Skipping sync for static playlist: %s (.nosync present)", name)
+                    metrics.playlists_skipped += 1
+                    metrics.playlists_total += 1
+                    continue
+
+                # Budget exhausted: defer remaining playlists to the next session.
+                if remaining is not None and remaining <= 0:
+                    logger.info("==> Track budget exhausted — deferring %s to next session", name)
                     metrics.playlists_skipped += 1
                     metrics.playlists_total += 1
                     continue
@@ -154,10 +168,11 @@ def run() -> None:
                 output_dir.mkdir(parents=True, exist_ok=True)
 
                 try:
-                    removed_urls = sync_playlist(
+                    removed_urls, downloaded = sync_playlist(
                         spotdl_file=spotdl_file,
                         output_dir=output_dir,
                         cookie_file=COOKIE_FILE,
+                        track_limit=remaining,
                     )
                 except Exception as exc:
                     reason = classify_failure(str(exc))
@@ -167,6 +182,9 @@ def run() -> None:
                     metrics.success = False
                     metrics.failure_reason = reason
                     raise
+
+                if remaining is not None:
+                    remaining -= downloaded
 
                 _remove_source_tags(lib, removed_urls, old_songs, name)
 

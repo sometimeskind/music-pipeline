@@ -79,15 +79,21 @@ def sync_playlist(
     spotdl_file: Path,
     output_dir: Path,
     cookie_file: Path,
-) -> set[str]:
+    track_limit: int | None = None,
+) -> tuple[set[str], int]:
     """Sync a playlist from its .spotdl file.
 
-    Downloads any tracks new to the Spotify playlist.
+    Downloads tracks new to the Spotify playlist, up to *track_limit* new
+    downloads this session.  When *track_limit* is None all new tracks are
+    downloaded.  Tracks deferred by the limit are excluded from the updated
+    snapshot so they re-appear as new on the next run.
+
     Does NOT delete downloaded files for removed tracks — we handle that
     separately via beets source-tag removal (soft delete).
 
-    Returns the set of Spotify track URLs that were removed from the playlist
-    since the last sync.  Callers use this to clear beets source tags.
+    Returns a tuple of:
+      - the set of Spotify track URLs removed from the playlist since the last sync
+      - the number of new tracks downloaded this session
     """
     with open(spotdl_file, encoding="utf-8") as fh:
         sync_data = json.load(fh)
@@ -115,23 +121,40 @@ def sync_playlist(
     if removed_urls:
         logger.info("%d track(s) removed from Spotify playlist", len(removed_urls))
 
-    # Download only new / never-downloaded tracks (overwrite=skip handles the rest).
-    spotdl_obj.download_songs(new_songs)
+    # Identify tracks not yet downloaded (absent from the previous snapshot).
+    truly_new = [s for s in new_songs if s.url not in old_urls]
+    total_new = len(truly_new)
 
-    # Persist updated song list to the .spotdl file.
+    if track_limit is not None and total_new > track_limit:
+        logger.info(
+            "Track budget: downloading %d of %d new track(s) this session (%d deferred to next run)",
+            track_limit,
+            total_new,
+            total_new - track_limit,
+        )
+        truly_new = truly_new[:track_limit]
+
+    # Download only the new batch; existing tracks are already on disk (overwrite=skip).
+    spotdl_obj.download_songs(truly_new)
+
+    # Persist: previously known songs still on Spotify + newly downloaded batch.
+    # Unprocessed songs are intentionally excluded — they'll be picked up next session.
+    batch_urls = {s.url for s in truly_new}
+    songs_to_write = [s for s in new_songs if s.url in old_urls or s.url in batch_urls]
+
     with open(spotdl_file, "w", encoding="utf-8") as fh:
         json.dump(
             {
                 "type": "sync",
                 "query": query,
-                "songs": [s.json for s in new_songs],
+                "songs": [s.json for s in songs_to_write],
             },
             fh,
             indent=4,
             ensure_ascii=False,
         )
 
-    return removed_urls
+    return removed_urls, len(truly_new)
 
 
 def find_track_in_snapshot(snapshot: list[dict], url: str) -> dict | None:
