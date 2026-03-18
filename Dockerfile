@@ -1,10 +1,9 @@
 FROM python:3.12-slim
 
-# System dependencies: ffmpeg for audio processing, jq for .spotdl JSON diffing,
-# cron for scheduled ingest
+# System dependencies: ffmpeg for audio processing, cron for scheduled ingest.
+# jq removed — JSON processing is now done in Python.
 RUN apt-get update && apt-get install -y \
     ffmpeg \
-    jq \
     cron \
     libchromaprint-tools \
     && rm -rf /var/lib/apt/lists/*
@@ -13,15 +12,10 @@ RUN apt-get update && apt-get install -y \
 COPY requirements.txt /requirements.txt
 RUN pip install --no-cache-dir -r /requirements.txt
 
-# Scripts go on PATH
-COPY scripts/ /usr/local/bin/
-RUN chmod +x \
-    /usr/local/bin/music-setup \
-    /usr/local/bin/music-provision \
-    /usr/local/bin/music-scan \
-    /usr/local/bin/music-ingest \
-    /usr/local/bin/music-import \
-    /usr/local/bin/music-remove
+# Install the pipeline package — entry points land in /usr/local/bin/
+COPY pipeline/ /app/pipeline/
+COPY pyproject.toml /app/pyproject.toml
+RUN pip install --no-cache-dir -e /app
 
 # Entrypoint: writes cron schedule from env then execs CMD
 COPY entrypoint.sh /entrypoint.sh
