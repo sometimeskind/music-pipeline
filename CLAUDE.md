@@ -74,6 +74,7 @@ There is no test suite. Shell script validation is manual.
 - `SCAN_CRON_SCHEDULE` — Cron expression for `music-scan`. Default: `*/5 * * * *` (every 5 min).
 - `SYNC_CRON_SCHEDULE` — Cron expression for `music-ingest`. Default: `0 3 * * *` (03:00 UTC daily).
 - `SYNC_JITTER_SECONDS` — If set > 0, `music-ingest` sleeps a random number of seconds (up to this value) before starting. Reduces thundering herd when multiple k8s pods start simultaneously. Default: `0`.
+- `SYNC_TRACK_LIMIT` — If set, caps the total number of new tracks downloaded across all playlists in a single `music-ingest` run. Playlists are processed in alphabetical order; the budget is shared. Tracks deferred by the limit are excluded from the `.spotdl` snapshot and re-appear as new on the next run. Useful for large playlists (e.g. liked songs) to avoid rate limiting. Default: unset (no limit).
 - `PUSHGATEWAY_URL` — Prometheus Pushgateway URL (e.g. `http://pushgateway:9091`). If unset, metrics are not pushed.
 - `SPOTIFY_CLIENT_ID` / `SPOTIFY_CLIENT_SECRET` — Injected via 1Password at runtime.
 - `NAVIDROME_URL` / `NAVIDROME_API_KEY` — Optional Navidrome rescan trigger. `NAVIDROME_API_KEY` format: `user:password`.
