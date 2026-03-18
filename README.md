@@ -48,14 +48,14 @@ Cookies expire periodically. Re-export when downloads start failing at quality.
 
 Store your Spotify Developer app credentials in 1Password:
 
-- **Item:** `Private/Spotify Developer App`
-- **Fields:** `client_id`, `client_secret`
+- **Item:** `Personal/Spotify API`
+- **Fields:** `username` (client ID), `credential` (client secret)
 
 Create an `.env.tpl` for `op run`:
 
 ```bash
-SPOTIFY_CLIENT_ID=op://Private/Spotify Developer App/client_id
-SPOTIFY_CLIENT_SECRET=op://Private/Spotify Developer App/client_secret
+SPOTIFY_CLIENT_ID=op://Personal/Spotify API/username
+SPOTIFY_CLIENT_SECRET=op://Personal/Spotify API/credential
 ```
 
 ### 4. Register playlists
