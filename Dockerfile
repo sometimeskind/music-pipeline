@@ -17,6 +17,7 @@ RUN pip install --no-cache-dir -r /requirements.txt
 COPY scripts/ /usr/local/bin/
 RUN chmod +x \
     /usr/local/bin/music-setup \
+    /usr/local/bin/music-provision \
     /usr/local/bin/music-scan \
     /usr/local/bin/music-ingest \
     /usr/local/bin/music-import \
@@ -33,7 +34,8 @@ RUN mkdir -p \
     /root/Music/quarantine \
     /root/Music/playlists \
     /root/.config/beets \
-    /root/.config/spotdl
+    /root/.config/spotdl \
+    /root/.config/music-pipeline
 
 ENTRYPOINT ["/entrypoint.sh"]
 CMD ["cron", "-f"]

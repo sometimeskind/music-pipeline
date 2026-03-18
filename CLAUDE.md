@@ -40,7 +40,8 @@ There is no test suite. Shell script validation is manual.
 
 - **`music-scan`** — Fast local path (runs every 5 min). Imports inbox → beets, refreshes metadata, regenerates `.m3u` playlists, triggers Navidrome rescan, pushes Prometheus metrics. No network calls. Called by `music-ingest` after sync.
 - **`music-ingest`** — Daily network sync. Loops `.spotdl` files, runs `spotdl sync`, diffs snapshots with `jq` to detect Spotify removals, then calls `music-scan`. Skips `.nosync` playlists.
-- **`music-setup`** — Interactive. Creates local directories, runs `spotdl save` to create the initial `.spotdl` sync file, validates credentials.
+- **`music-provision`** — Non-interactive. Reads `config/playlists.conf` and calls `music-setup` for each entry. Idempotent. Use in k8s Jobs and for PVC recovery.
+- **`music-setup`** — Creates local directories, runs `spotdl save` to create the initial `.spotdl` sync file. Interactive by default; non-interactive with `--name <name> --url <url>`. Idempotent — skips if `.spotdl` already exists.
 - **`music-import`** — Called by `music-scan`. Imports all audio from inbox to beets; moves unmatched files to quarantine.
 - **`music-remove`** — Interactive. Removes `.spotdl` file, download dir, `.m3u`, and clears `source=<name>` beets tags. Does not delete library files.
 
@@ -51,6 +52,8 @@ There is no test suite. Shell script validation is manual.
 **Snapshot diff for soft deletes** — `music-ingest` snapshots the `.spotdl` file before and after sync, diffs with `jq` to find removed tracks, then removes only their `source=` tags (files stay in the library).
 
 **Strict MusicBrainz threshold** — `strong_rec_thresh: 0.05` in `config/beets/config.yaml`. Files that don't match confidently go to `/root/Music/quarantine/` for manual review. Raise to `0.10` if too many good tracks are quarantined.
+
+**`config/playlists.conf`** — Declarative registry of playlists: one `name spotify-url` line per playlist. Committed to the repo. Enables PVC recovery (`music-provision` re-creates all `.spotdl` files from this file) and non-interactive k8s provisioning Jobs. In k8s, mount as a ConfigMap at `/root/.config/music-pipeline/playlists.conf`.
 
 **Credentials via 1Password** — `SPOTIFY_CLIENT_ID` and `SPOTIFY_CLIENT_SECRET` are injected at runtime via `op run --env-file=.env.tpl`. The `.env.tpl` file holds vault references, not secrets.
 

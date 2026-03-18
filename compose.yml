@@ -12,6 +12,8 @@ services:
       - ./config/beets/config.yaml:/root/.config/beets/config.yaml:ro
       # spotdl config (from this repo)
       - ./config/spotdl/config.json:/root/.config/spotdl/config.json:ro
+      # Playlist registry (from this repo; k8s: mount as ConfigMap)
+      - ./config/playlists.conf:/root/.config/music-pipeline/playlists.conf:ro
       # YouTube Premium cookies — NOT committed; export from browser and place here
       # See README for export instructions. Expires periodically.
       - ./cookies.txt:/root/.config/spotdl/cookies.txt:ro
