@@ -123,7 +123,15 @@ def run() -> None:
         logger.info("==> music-ingest starting")
 
         track_limit_str = os.environ.get("SYNC_TRACK_LIMIT", "")
-        session_budget: int | None = int(track_limit_str) if track_limit_str.strip() else None
+        session_budget: int | None = None
+        if track_limit_str.strip():
+            try:
+                session_budget = int(track_limit_str.strip())
+            except ValueError:
+                logger.error("SYNC_TRACK_LIMIT must be a positive integer, got %r — ignoring", track_limit_str)
+        if session_budget is not None and session_budget <= 0:
+            logger.error("SYNC_TRACK_LIMIT must be a positive integer, got %d — ignoring", session_budget)
+            session_budget = None
         remaining: int | None = session_budget
 
         if session_budget is not None:
@@ -147,7 +155,7 @@ def run() -> None:
                 # Budget exhausted: defer remaining playlists to the next session.
                 if remaining is not None and remaining <= 0:
                     logger.info("==> Track budget exhausted — deferring %s to next session", name)
-                    metrics.playlists_skipped += 1
+                    metrics.playlists_deferred += 1
                     metrics.playlists_total += 1
                     continue
 
@@ -168,7 +176,7 @@ def run() -> None:
                 output_dir.mkdir(parents=True, exist_ok=True)
 
                 try:
-                    removed_urls, downloaded = sync_playlist(
+                    removed_urls, tracks_sent = sync_playlist(
                         spotdl_file=spotdl_file,
                         output_dir=output_dir,
                         cookie_file=COOKIE_FILE,
@@ -184,7 +192,7 @@ def run() -> None:
                     raise
 
                 if remaining is not None:
-                    remaining -= downloaded
+                    remaining -= tracks_sent
 
                 _remove_source_tags(lib, removed_urls, old_songs, name)
 

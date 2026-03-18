@@ -93,7 +93,13 @@ def sync_playlist(
 
     Returns a tuple of:
       - the set of Spotify track URLs removed from the playlist since the last sync
-      - the number of new tracks downloaded this session
+      - the number of tracks sent to spotdl this session (tracks *sent*, not confirmed
+        completions — spotdl may download fewer if some are unavailable on YouTube)
+
+    Note on ordering: when *track_limit* is set, the batch is taken from the front of
+    the list returned by spotdl.search(), which for Spotify playlists is typically
+    playlist order (oldest-added first for Liked Songs).  This means the same leading
+    batch is retried each session until fully downloaded, then the next batch follows.
     """
     with open(spotdl_file, encoding="utf-8") as fh:
         sync_data = json.load(fh)
