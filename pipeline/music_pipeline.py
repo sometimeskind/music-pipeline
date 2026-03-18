@@ -86,8 +86,8 @@ class MusicPipelinePlugin(BeetsPlugin):
     # Listener 2: decide what to do when a duplicate is detected
     # ------------------------------------------------------------------
 
-    def duplicate_action(self, session, task):
-        duplicates = getattr(task, "duplicates", None)
+    def duplicate_action(self, session, task, duplicates):
+        # duplicates is passed as a keyword arg by beets, not stored on task
         if not duplicates:
             return None
 
@@ -115,6 +115,9 @@ class MusicPipelinePlugin(BeetsPlugin):
         # All duplicates are spotdl-sourced — replace them.
         # Inherit source= (playlist membership) from the existing item so the
         # track stays in its .m3u playlists.
+        # Note: only the first non-empty source= is inherited. If the same
+        # track somehow exists in two spotdl playlists, the second membership
+        # is lost. In practice each track belongs to one playlist at a time.
         if item is not None:
             inherited = next(
                 (d["source"] for d in duplicates if d.get("source")), ""
