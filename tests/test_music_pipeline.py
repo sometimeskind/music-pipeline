@@ -32,21 +32,33 @@ def _item(path: str, source: str = "", via: str = "") -> MagicMock:
     m.path = path
     data = {"source": source, "via": via}
     m.get = lambda k, default="": data.get(k, default)
-    # __setitem__ is automatically tracked by MagicMock; also update data so
-    # subsequent .get() calls see the written value.
+    # __setitem__ tracked by MagicMock; also update data so .get() sees writes.
     def _setitem(k, v):
         data[k] = v
     m.__setitem__ = MagicMock(side_effect=_setitem)
     return m
 
 
-def _dup(source: str = "", via: str = "") -> MagicMock:
-    """Mock an existing library item used as a duplicate."""
-    d = MagicMock()
-    data = {"source": source, "via": via}
+def _dup(via: str = "spotdl") -> MagicMock:
+    """Mock a library Item used as a duplicate (not a beets_library.Album)."""
+    d = MagicMock(spec=[])  # spec=[] prevents hasattr from matching Album
+    data = {"via": via}
     d.get = lambda k, default="": data.get(k, default)
-    d.__getitem__ = lambda self, k: data[k]
     return d
+
+
+def _task(choice_flag=None, item=None, items=None):
+    """Build a mock import task with configurable choice_flag."""
+    t = MagicMock()
+    t.choice_flag = choice_flag if choice_flag is not None else beets_importer.Action.APPLY
+    if item is not None:
+        t.item = item
+        t.items = None
+    else:
+        t.item = None
+        t.items = items or []
+    t.find_duplicates = MagicMock(return_value=[])
+    return t
 
 
 # ---------------------------------------------------------------------------
@@ -85,21 +97,21 @@ def test_all_via_spotdl_one_manual() -> None:
     assert _all_via_spotdl([_via_item("spotdl"), _via_item("")]) is False
 
 def test_all_via_spotdl_empty() -> None:
-    assert _all_via_spotdl([]) is True  # vacuously true — guarded by `if not duplicates` in caller
+    assert _all_via_spotdl([]) is True  # vacuously true — guarded by `if not found` in caller
 
 def test_all_via_spotdl_none_via() -> None:
     assert _all_via_spotdl([_via_item("")]) is False
 
 
 # ---------------------------------------------------------------------------
-# MusicPipelinePlugin.tag_source
+# MusicPipelinePlugin.tag_source — tagging
 # ---------------------------------------------------------------------------
 
 def test_tag_source_singleton_in_inbox() -> None:
     plugin = _make_plugin()
     item = _item("/root/Music/inbox/spotdl/jazz/track.m4a")
-    task = MagicMock()
-    task.item = item
+    task = _task(item=item)
+    task.find_duplicates.return_value = []
 
     plugin.tag_source(session=MagicMock(), task=task)
 
@@ -110,8 +122,7 @@ def test_tag_source_singleton_in_inbox() -> None:
 def test_tag_source_singleton_outside_inbox() -> None:
     plugin = _make_plugin()
     item = _item("/root/Music/library/Artist/Album/track.m4a")
-    task = MagicMock()
-    task.item = item
+    task = _task(item=item)
 
     plugin.tag_source(session=MagicMock(), task=task)
 
@@ -122,9 +133,8 @@ def test_tag_source_album_task_tags_all_items() -> None:
     plugin = _make_plugin()
     item1 = _item("/root/Music/inbox/spotdl/pop/a.m4a")
     item2 = _item("/root/Music/inbox/spotdl/pop/b.m4a")
-    task = MagicMock()
-    task.item = None
-    task.items = [item1, item2]
+    task = _task(items=[item1, item2])
+    task.find_duplicates.return_value = []
 
     plugin.tag_source(session=MagicMock(), task=task)
 
@@ -134,55 +144,62 @@ def test_tag_source_album_task_tags_all_items() -> None:
 
 
 # ---------------------------------------------------------------------------
-# MusicPipelinePlugin.duplicate_action
+# MusicPipelinePlugin.tag_source — duplicate handling
 # ---------------------------------------------------------------------------
 
-def test_duplicate_action_empty_list_returns_none() -> None:
+def test_tag_source_skip_choice_skips_duplicate_check() -> None:
+    """Tasks already marked SKIP should not trigger a duplicate check."""
     plugin = _make_plugin()
-    task = MagicMock()
-    task.item = _item("/root/Music/inbox/spotdl/jazz/track.m4a")
+    item = _item("/root/Music/inbox/spotdl/jazz/track.m4a")
+    task = _task(choice_flag=beets_importer.Action.SKIP, item=item)
 
-    assert plugin.duplicate_action(MagicMock(), task, []) is None
+    plugin.tag_source(session=MagicMock(), task=task)
+
+    task.find_duplicates.assert_not_called()
 
 
-def test_duplicate_action_all_spotdl_returns_remove() -> None:
+def test_tag_source_no_duplicates_does_not_skip() -> None:
     plugin = _make_plugin()
-    task = MagicMock()
-    task.item = _item("/root/Music/inbox/spotdl/jazz/track.m4a")
+    item = _item("/root/Music/inbox/spotdl/jazz/track.m4a")
+    task = _task(item=item)
+    task.find_duplicates.return_value = []
 
-    result = plugin.duplicate_action(MagicMock(), task, [_dup(source="jazz", via="spotdl")])
+    plugin.tag_source(session=MagicMock(), task=task)
 
-    assert result is beets_importer.Action.REMOVE
+    task.set_choice.assert_not_called()
 
 
-def test_duplicate_action_all_spotdl_inherits_source() -> None:
+def test_tag_source_spotdl_only_duplicates_defers_to_config() -> None:
+    """All-spotdl duplicates: plugin steps aside; beets config handles removal."""
     plugin = _make_plugin()
-    incoming = _item("/root/Music/inbox/spotdl/jazz/track.m4a", source="")
-    task = MagicMock()
-    task.item = incoming
+    item = _item("/root/Music/inbox/spotdl/jazz/track.m4a")
+    task = _task(item=item)
+    task.find_duplicates.return_value = [_dup(via="spotdl")]
 
-    plugin.duplicate_action(MagicMock(), task, [_dup(source="jazz", via="spotdl")])
+    plugin.tag_source(session=MagicMock(), task=task)
 
-    incoming.__setitem__.assert_any_call("source", "jazz")
+    task.set_choice.assert_not_called()
 
 
-def test_duplicate_action_manual_dup_returns_skip() -> None:
+def test_tag_source_manual_duplicate_sets_skip() -> None:
     plugin = _make_plugin()
-    task = MagicMock()
-    task.item = _item("/root/Music/inbox/spotdl/jazz/track.m4a")
+    item = _item("/root/Music/inbox/spotdl/jazz/track.m4a")
+    task = _task(item=item)
+    task.find_duplicates.return_value = [_dup(via="")]  # no via = manual
 
     with patch("pipeline.music_pipeline.Path"):
-        result = plugin.duplicate_action(MagicMock(), task, [_dup(via="")])
+        plugin.tag_source(session=MagicMock(), task=task)
 
-    assert result is beets_importer.Action.SKIP
+    task.set_choice.assert_called_once_with(beets_importer.Action.SKIP)
 
 
-def test_duplicate_action_manual_dup_deletes_inbox_file() -> None:
+def test_tag_source_manual_duplicate_deletes_inbox_file() -> None:
     plugin = _make_plugin()
-    task = MagicMock()
-    task.item = _item("/root/Music/inbox/spotdl/jazz/track.m4a")
+    item = _item("/root/Music/inbox/spotdl/jazz/track.m4a")
+    task = _task(item=item)
+    task.find_duplicates.return_value = [_dup(via="")]
 
     with patch("pipeline.music_pipeline.Path") as mock_path:
-        plugin.duplicate_action(MagicMock(), task, [_dup(via="")])
+        plugin.tag_source(session=MagicMock(), task=task)
 
     mock_path.return_value.unlink.assert_called_once_with(missing_ok=True)

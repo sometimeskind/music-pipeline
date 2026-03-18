@@ -10,7 +10,7 @@ import:
   quiet: yes
   move: yes
   log: /root/.config/beets/import.log
-  duplicate_action: skip
+  duplicate_action: remove
 
 match:
   # Distance threshold: lower = stricter (0 = perfect match).

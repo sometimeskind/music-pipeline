@@ -9,19 +9,25 @@ Responsibilities
      ``clear_source_tag``, and ``music-remove``.  All existing pipeline code
      reads this unchanged.
    * ``via=spotdl``          — import origin; used *only* to decide whether a
-     duplicate can be replaced.  Never inherited.
+     duplicate can be replaced safely.  Never inherited.
 
    Handles both singleton (``task.item``) and album (``task.items``) import
    tasks.
 
-2. **duplicate_action** (``import_task_duplicate_action``): when beets finds
-   an existing library item that matches the incoming track:
+2. **Duplicate protection** (also ``import_task_choice``): when duplicates
+   exist in the library for the incoming track:
 
-   * All existing duplicates have ``via=spotdl``  → replace them; incoming
-     file inherits ``source=`` so the track stays in its playlists.
-   * Any duplicate has no ``via=`` (manually imported, even if it carries a
-     ``source=`` tag) → skip the incoming file AND delete it from the inbox so
-     it does not get re-attempted on every subsequent beet-import run.
+   * Any duplicate has no ``via=spotdl`` (manually imported) → skip the
+     incoming file AND delete it from the inbox so it does not get
+     re-attempted on every subsequent beet-import run.
+   * All duplicates have ``via=spotdl`` → do nothing; ``duplicate_action:
+     remove`` in config.yaml handles removal automatically.
+
+Note
+----
+beets 2.7.1 does not expose an ``import_task_duplicate_action`` event.
+Duplicate handling must be done inside ``import_task_choice``, which fires
+just before ``_resolve_duplicates()`` is called by the importer pipeline.
 
 Known limitations
 -----------------
@@ -33,9 +39,18 @@ duplicate check fires. After the rebuild completes all tracks will carry
 from pathlib import Path
 
 from beets import importer as beets_importer
+from beets import library as beets_library
 from beets.plugins import BeetsPlugin
 
 SPOTDL_INBOX = Path("/root/Music/inbox/spotdl")
+
+# Actions that indicate the task will actually be applied to the library.
+# Matches the guard used by beets' own _resolve_duplicates().
+_WILL_APPLY = (
+    beets_importer.Action.APPLY,
+    beets_importer.Action.ASIS,
+    beets_importer.Action.RETAG,
+)
 
 
 def _playlist_from_path(path: str | bytes) -> str | None:
@@ -58,15 +73,9 @@ class MusicPipelinePlugin(BeetsPlugin):
     def __init__(self):
         super().__init__("music_pipeline")
         self.register_listener("import_task_choice", self.tag_source)
-        self.register_listener(
-            "import_task_duplicate_action", self.duplicate_action
-        )
-
-    # ------------------------------------------------------------------
-    # Listener 1: set source= and via= on every spotdl import
-    # ------------------------------------------------------------------
 
     def tag_source(self, session, task):
+        """Tag incoming tracks with source= and via=, then handle duplicates."""
         if getattr(task, "item", None) is not None:
             items = [task.item]
         else:
@@ -82,51 +91,52 @@ class MusicPipelinePlugin(BeetsPlugin):
                 "tagged incoming track source={} via=spotdl: {}", playlist, item.path
             )
 
-    # ------------------------------------------------------------------
-    # Listener 2: decide what to do when a duplicate is detected
-    # ------------------------------------------------------------------
+        # Only check duplicates for tasks that will be applied to the library.
+        # Mirrors the guard in beets' own _resolve_duplicates().
+        if not items or task.choice_flag not in _WILL_APPLY:
+            return
 
-    def duplicate_action(self, session, task, duplicates):
-        # duplicates is passed as a keyword arg by beets, not stored on task
-        if not duplicates:
-            return None
+        try:
+            found = task.find_duplicates(session.lib)
+        except Exception as exc:
+            self._log.warning("could not check for duplicates: {}", exc)
+            return
 
-        item = getattr(task, "item", None)
+        if not found:
+            return
 
-        if not _all_via_spotdl(duplicates):
-            # At least one manually-imported copy — protect it.
-            # Delete the incoming spotdl file from the inbox so it doesn't
-            # linger and get re-attempted on every beet import run.
-            if item is not None:
-                path = item.path if isinstance(item.path, str) else item.path.decode()
-                try:
-                    Path(path).unlink(missing_ok=True)
-                    self._log.debug(
-                        "discarded spotdl inbox file protected by"
-                        " non-spotdl duplicate: {}",
-                        path,
-                    )
-                except OSError as exc:
-                    self._log.warning(
-                        "could not remove skipped inbox file {}: {}", path, exc
-                    )
-            return beets_importer.Action.SKIP
+        # Flatten album duplicates to individual items for via= inspection.
+        dup_items = []
+        for dup in found:
+            if isinstance(dup, beets_library.Album):
+                dup_items.extend(dup.items())
+            else:
+                dup_items.append(dup)
 
-        # All duplicates are spotdl-sourced — replace them.
-        # Inherit source= (playlist membership) from the existing item so the
-        # track stays in its .m3u playlists.
-        # Note: only the first non-empty source= is inherited. If the same
-        # track somehow exists in two spotdl playlists, the second membership
-        # is lost. In practice each track belongs to one playlist at a time.
-        if item is not None:
-            inherited = next(
-                (d["source"] for d in duplicates if d.get("source")), ""
-            )
-            if inherited and not (item.get("source") or ""):
-                item["source"] = inherited
+        if _all_via_spotdl(dup_items):
+            # All spotdl-sourced — let duplicate_action: remove in config
+            # handle removal automatically.
             self._log.debug(
-                "replacing spotdl duplicate (source={}) incoming via={}",
-                inherited,
-                item.get("via") or "",
+                "spotdl-only duplicate(s) found; deferring to config duplicate_action"
             )
-        return beets_importer.Action.REMOVE
+            return
+
+        # At least one manually-imported copy — protect it.
+        # Delete the incoming spotdl file from the inbox so it doesn't
+        # linger and get re-attempted on every beet import run.
+        for item in items:
+            path = item.path if isinstance(item.path, str) else item.path.decode()
+            try:
+                Path(path).unlink(missing_ok=True)
+                self._log.debug(
+                    "discarded spotdl inbox file protected by"
+                    " non-spotdl duplicate: {}",
+                    path,
+                )
+            except OSError as exc:
+                self._log.warning(
+                    "could not remove skipped inbox file {}: {}", path, exc
+                )
+
+        task.set_choice(beets_importer.Action.SKIP)
+        self._log.debug("skipping import: manual duplicate exists in library")
