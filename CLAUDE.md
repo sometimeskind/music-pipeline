@@ -38,7 +38,7 @@ There is no test suite. Shell script validation is manual.
 
 ### Scripts (`scripts/`)
 
-- **`music-scan`** — Fast local path (runs every 5 min). Imports inbox → beets, refreshes metadata, regenerates `.m3u` playlists, triggers Navidrome rescan, pushes Prometheus metrics. No network calls. Called by `music-ingest` after sync.
+- **`music-scan`** — Fast local path (runs every 5 min). Imports inbox → beets (makes MusicBrainz/AcoustID calls during import), refreshes metadata, regenerates `.m3u` playlists, triggers Navidrome rescan, pushes Prometheus metrics. No Spotify or YouTube calls. Called by `music-ingest` after sync.
 - **`music-ingest`** — Daily network sync. Loops `.spotdl` files, runs `spotdl sync`, diffs snapshots with `jq` to detect Spotify removals, then calls `music-scan`. Skips `.nosync` playlists.
 - **`music-provision`** — Non-interactive. Reads `config/playlists.conf` and calls `music-setup` for each entry. Idempotent. Use in k8s Jobs and for PVC recovery.
 - **`music-setup`** — Creates local directories, runs `spotdl save` to create the initial `.spotdl` sync file. Interactive by default; non-interactive with `--name <name> --url <url>`. Idempotent — skips if `.spotdl` already exists.
@@ -84,14 +84,21 @@ Generated in `/root/Music/playlists/` with paths relative to that directory, for
 
 ### Static Playlists (`.nosync`)
 
-To freeze a playlist so it is never re-synced from Spotify, create a sentinel file alongside its `.spotdl` file:
+Mark a playlist as static by adding `nosync` as a third field in `config/playlists.conf`:
 
 ```
-inbox/spotdl/my-playlist.spotdl   ← managed by music-setup
-inbox/spotdl/my-playlist.nosync   ← you create this to freeze it
+my-playlist  https://open.spotify.com/playlist/...  nosync
+```
+
+`music-provision` creates (or removes) the `.nosync` sentinel file on the PVC to match the config — making it declarative and recoverable after PVC loss. The sentinel file itself lives at:
+
+```
+inbox/spotdl/my-playlist.nosync
 ```
 
 `music-ingest` skips `spotdl sync` for any playlist with a matching `.nosync` file. The tracks remain in the library and continue to appear in m3u generation.
+
+The sentinel file can also be created directly (e.g. via `kubectl exec`) without changing `playlists.conf`, but that state won't survive PVC loss.
 
 ### Managing Playlists in k8s
 

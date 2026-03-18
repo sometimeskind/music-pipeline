@@ -63,10 +63,12 @@ SPOTIFY_CLIENT_SECRET=op://Private/Spotify Developer App/client_secret
 Edit `config/playlists.conf` and add one line per playlist:
 
 ```
-# name             spotify-url
+# name             spotify-url                                               [flags]
 liked-songs        https://open.spotify.com/playlist/37i9dQZF1DXcBWIGoYBM5M
-chill              https://open.spotify.com/playlist/37i9dQZF1DXd9rLJfaAKCk
+archived-mix       https://open.spotify.com/playlist/37i9dQZF1DXd9rLJfaAKCk  nosync
 ```
+
+The optional `nosync` flag freezes a playlist: `music-provision` creates a `.nosync` sentinel on the PVC and `music-ingest` skips `spotdl sync` for it. Remove the flag and re-run `music-provision` to unfreeze.
 
 This file is the authoritative registry of playlists. It enables PVC recovery and non-interactive k8s provisioning.
 
@@ -281,10 +283,9 @@ spec:
 4. The next `music-ingest` CronJob run picks it up automatically.
 
 **Freeze a playlist (stop syncing):**
-```bash
-# Exec into any running music-* pod, or create a one-shot job
-kubectl exec -it <pod> -- touch /root/Music/inbox/spotdl/<name>.nosync
-```
+1. Add `nosync` as the third field on the playlist's line in `config/playlists.conf`.
+2. Update the `music-pipeline-playlists` ConfigMap (or let GitOps do it).
+3. `kubectl apply -f job-music-provision.yaml` — creates the `.nosync` sentinel on the PVC.
 
 **Remove a playlist:**
 ```bash
