@@ -117,7 +117,7 @@ docker compose cp track-a.mp3 scan:/root/Music/inbox/spotdl/test-playlist/
 
 **3. Create a minimal `.spotdl` state file:**
 ```bash
-docker compose run --rm scan sh -c 'echo "{\"songs\": []}" > /root/Music/inbox/spotdl/test-playlist.spotdl'
+docker compose run --rm scan sh -c 'echo "[]" > /root/Music/inbox/spotdl/test-playlist.spotdl'
 ```
 
 **4. Run a scan:**
