@@ -11,11 +11,11 @@ hooks:
 
 # Run spotdl sync (fetch container: Spotify/YouTube → inbox)
 fetch:
-    op run --env-file .env.tpl -- docker compose run --rm fetch music-ingest
+    op run --env-file .env.tpl -- docker compose run --rm fetch
 
 # Run a local scan: import inbox → .m3u (no Spotify/YouTube)
 scan:
-    docker compose run --rm scan music-scan
+    docker compose run --rm scan
 
 # Run full ingest: spotdl sync → import → .m3u
 sync:

@@ -26,6 +26,7 @@ RUN mkdir -p \
     /root/.config/beets \
     /root/.config/spotdl
 
+CMD ["music-scan"]
 
 # dev stage: extends prod with test deps; used by `just test`, never pushed to registry
 FROM prod AS dev

@@ -78,8 +78,8 @@ jobs:
       - name: Health check — spotdl
         run: docker run --rm --entrypoint spotdl music-pipeline-fetch:ci-local --version
 
-      - name: Health check — fetch entry points
-        run: docker run --rm music-pipeline-fetch:ci-local sh -c "which music-ingest"
+      - name: Health check — default command
+        run: docker run --rm --entrypoint which music-pipeline-fetch:ci-local music-ingest
 
       - name: Push fetch image to GHCR
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
