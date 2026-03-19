@@ -9,7 +9,7 @@ requires-python = ">=3.11"
 dependencies = []
 
 [project.scripts]
-music-ingest = "pipeline.cli:ingest"
+music-ingest = "pipeline.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["."]

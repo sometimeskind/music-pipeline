@@ -11,7 +11,7 @@ logging.basicConfig(
 )
 
 
-def scan() -> None:
+def main() -> None:
     """Entry point: music-scan."""
     try:
         from pipeline.scan import run  # noqa: PLC0415

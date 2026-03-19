@@ -11,7 +11,7 @@ logging.basicConfig(
 )
 
 
-def ingest() -> None:
+def main() -> None:
     """Entry point: music-ingest."""
     try:
         from pipeline.ingest import run  # noqa: PLC0415
