@@ -1,6 +1,6 @@
 # fetch stage: spotdl sync, Spotify/YouTube network calls.
 # No ffmpeg or chromaprint needed — beets is not installed here.
-FROM python:3.13-slim AS fetch
+FROM python:3.14-slim AS fetch
 
 # Python dependencies: pinned in requirements-fetch.txt for Dependabot tracking
 COPY requirements-fetch.txt /requirements-fetch.txt
@@ -20,7 +20,7 @@ RUN mkdir -p \
 
 # scan stage: beets import, AcoustID fingerprinting, .m3u generation.
 # No Spotify or YouTube calls — reads inbox written by the fetch container.
-FROM python:3.13-slim AS scan
+FROM python:3.14-slim AS scan
 
 # System dependencies: ffmpeg for audio processing, chromaprint for AcoustID fingerprinting.
 RUN apt-get update && apt-get install -y \
