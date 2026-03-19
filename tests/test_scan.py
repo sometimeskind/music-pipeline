@@ -123,3 +123,63 @@ def test_process_pending_removals_empty_list(tmp_path: Path) -> None:
 
     assert count == 0
     assert not fake_path.exists()
+
+
+def test_process_pending_removals_malformed_json_deletes_file(tmp_path: Path) -> None:
+    """Malformed JSON must not leave the file in place (would break every future scan run)."""
+    from pipeline.scan import _process_pending_removals
+
+    fake_path = tmp_path / ".pending-removals.json"
+    fake_path.write_text("not valid json {{{{", encoding="utf-8")
+
+    with mock.patch("pipeline.scan.PENDING_REMOVALS", fake_path):
+        count = _process_pending_removals()
+
+    assert count == 0
+    assert not fake_path.exists()  # file consumed even though JSON was invalid
+
+
+def test_process_pending_removals_multi_entry(tmp_path: Path) -> None:
+    from pipeline.scan import _process_pending_removals
+
+    fake_path = tmp_path / ".pending-removals.json"
+    entries = [
+        {"title": "Song A", "artist": "Artist 1", "source": "playlist-1"},
+        {"title": "Song B", "artist": "Artist 2", "source": "playlist-2"},
+    ]
+    fake_path.write_text(json.dumps(entries), encoding="utf-8")
+
+    mock_lib = mock.MagicMock()
+    mock_lib.__enter__ = mock.MagicMock(return_value=mock_lib)
+    mock_lib.__exit__ = mock.MagicMock(return_value=False)
+    mock_lib.clear_source_tag = mock.MagicMock(return_value=True)
+
+    with mock.patch("pipeline.scan.PENDING_REMOVALS", fake_path), \
+         mock.patch("pipeline.scan.MusicLibrary", return_value=mock_lib):
+        count = _process_pending_removals()
+
+    assert count == 2
+    assert not fake_path.exists()
+    assert mock_lib.clear_source_tag.call_count == 2
+
+
+def test_process_pending_removals_file_deleted_before_processing(tmp_path: Path) -> None:
+    """File is unlinked before processing so an exception mid-processing doesn't re-block scans."""
+    from pipeline.scan import _process_pending_removals
+
+    fake_path = tmp_path / ".pending-removals.json"
+    entries = [{"title": "Song A", "artist": "Artist 1", "source": "my-playlist"}]
+    fake_path.write_text(json.dumps(entries), encoding="utf-8")
+
+    mock_lib = mock.MagicMock()
+    mock_lib.__enter__ = mock.MagicMock(return_value=mock_lib)
+    mock_lib.__exit__ = mock.MagicMock(return_value=False)
+    mock_lib.clear_source_tag = mock.MagicMock(side_effect=RuntimeError("beets exploded"))
+
+    with mock.patch("pipeline.scan.PENDING_REMOVALS", fake_path), \
+         mock.patch("pipeline.scan.MusicLibrary", return_value=mock_lib):
+        with pytest.raises(RuntimeError):
+            _process_pending_removals()
+
+    # File was deleted before processing started — future scans are unblocked
+    assert not fake_path.exists()

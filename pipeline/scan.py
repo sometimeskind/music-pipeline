@@ -61,10 +61,14 @@ def _process_pending_removals() -> int:
     if not PENDING_REMOVALS.exists():
         return 0
 
-    with open(PENDING_REMOVALS, encoding="utf-8") as fh:
-        entries = json.load(fh)
-
+    content = PENDING_REMOVALS.read_text(encoding="utf-8")
     PENDING_REMOVALS.unlink()
+
+    try:
+        entries = json.loads(content)
+    except json.JSONDecodeError:
+        logger.warning("Discarded malformed .pending-removals.json — skipping source-tag cleanup")
+        return 0
 
     if not entries:
         return 0
