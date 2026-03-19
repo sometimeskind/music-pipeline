@@ -281,7 +281,7 @@ def run() -> None:
                 metrics.playlists_total += 1
                 continue
 
-            old_songs: list[dict] = sync_data.get("songs", [])
+            old_songs: list[dict] = sync_data if isinstance(sync_data, list) else []
 
             logger.info("==> Syncing playlist: %s", name)
             metrics.playlists_total += 1
