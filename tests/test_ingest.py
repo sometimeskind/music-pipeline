@@ -285,6 +285,22 @@ def test_write_pending_removals_merges_remove_sources(tmp_path: Path) -> None:
     assert result["remove_sources"] == ["old-playlist", "another-removed"]
 
 
+def test_write_pending_removals_deduplicates_remove_sources(tmp_path: Path) -> None:
+    """Duplicate remove_sources entries (e.g. from two fetch runs) are deduplicated."""
+    import unittest.mock as mock
+    from pipeline import ingest
+
+    fake_path = tmp_path / ".pending-removals.json"
+    existing = {"tracks": [], "remove_sources": ["old-playlist"]}
+    fake_path.write_text(json.dumps(existing), encoding="utf-8")
+
+    with mock.patch.object(ingest, "PENDING_REMOVALS", fake_path):
+        _write_pending_removals([], ["old-playlist"])
+
+    result = json.loads(fake_path.read_text())
+    assert result["remove_sources"] == ["old-playlist"]
+
+
 def test_write_pending_removals_merges_with_old_format_file(tmp_path: Path) -> None:
     """Old list-format file is read and merged into the new dict format."""
     import unittest.mock as mock
@@ -488,3 +504,26 @@ def test_reconcile_deletes_nosync_for_removed_playlist(tmp_path: Path) -> None:
 
     assert result == ["gone"]
     assert not (spotdl_dir / "gone.nosync").exists()
+
+
+def test_reconcile_save_playlist_failure_propagates(tmp_path: Path) -> None:
+    """If save_playlist raises during provisioning, the exception propagates.
+
+    This documents the known behaviour: a persistent provisioning failure for
+    one playlist will abort reconciliation before the 'detect removed' phase
+    runs, so removed-playlist cleanup is deferred to the next successful run.
+    """
+    import unittest.mock as mock
+    from pipeline import ingest
+
+    spotdl_dir = tmp_path / "spotdl"
+    spotdl_dir.mkdir()
+    # new-playlist has no .spotdl yet → save_playlist will be called
+    conf = _make_conf(tmp_path, ["new-playlist  https://open.spotify.com/playlist/abc"])
+
+    with mock.patch.object(ingest, "CONF_PATH", conf), \
+         mock.patch.object(ingest, "SPOTDL_DIR", spotdl_dir), \
+         mock.patch.object(ingest, "COOKIE_FILE", tmp_path / "cookies.txt"), \
+         mock.patch("pipeline.ingest.save_playlist", side_effect=RuntimeError("network error")):
+        with pytest.raises(RuntimeError, match="network error"):
+            _reconcile_playlists()

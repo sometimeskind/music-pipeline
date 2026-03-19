@@ -62,7 +62,7 @@ A `pre-push` git hook runs `just test` automatically before every push. Install 
 
 ### Scripts (`scripts/`)
 
-- **`music-scan`** — Fast local path (runs every 5 min). Imports inbox → beets (makes MusicBrainz/AcoustID calls during import), refreshes metadata, regenerates `.m3u` playlists, pushes Prometheus metrics. No Spotify or YouTube calls. Called by `music-ingest` after sync.
+- **`music-scan`** — Runs independently of fetch. Imports inbox → beets (makes MusicBrainz/AcoustID calls during import), regenerates `.m3u` playlists, pushes Prometheus metrics. No Spotify or YouTube calls.
 - **`music-ingest`** — Daily network sync. Reconciles disk state against `playlists.conf` (provisions new playlists, queues removed ones), loops `.spotdl` files, runs `spotdl sync`, diffs snapshots to detect Spotify removals. Skips `.nosync` playlists.
 - **`music-import`** — Called by `music-scan`. Imports all audio from inbox to beets; moves unmatched files to quarantine.
 

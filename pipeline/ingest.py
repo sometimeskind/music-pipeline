@@ -192,7 +192,7 @@ def _write_pending_removals(pending: list[dict], remove_sources: list[str] | Non
             logger.error("Could not read %s — discarding prior pending removals: %s", PENDING_REMOVALS, exc)
 
     merged_tracks = existing_tracks + pending
-    merged_remove_sources = existing_remove_sources + remove_sources
+    merged_remove_sources = list(dict.fromkeys(existing_remove_sources + remove_sources))
 
     # Atomic write: write to a temp file then rename so a mid-write failure never
     # truncates the existing file.
