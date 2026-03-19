@@ -71,7 +71,7 @@ def _jitter() -> None:
     """Sleep a random interval if SYNC_JITTER_SECONDS is set."""
     import random
 
-    jitter = int(os.environ.get("SYNC_JITTER_SECONDS", "0"))
+    jitter = int(os.environ.get("SYNC_JITTER_SECONDS") or "0")
     if jitter > 0:
         delay = random.randint(0, jitter)
         logger.debug("Jitter: sleeping %d seconds", delay)
