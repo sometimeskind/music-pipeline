@@ -39,16 +39,31 @@ def _make_downloader_settings(
 
 
 def _make_spotdl(settings: dict):
-    """Initialise and return a Spotdl instance."""
+    """Initialise and return a Spotdl instance.
+
+    SpotifyClient is a process-wide singleton in spotdl; calling Spotdl() a
+    second time raises SpotifyError("already been initialized").  When that
+    happens we skip re-init and just attach a fresh Downloader so the caller
+    gets an object with the requested output/format settings.
+    """
     from spotdl import Spotdl  # noqa: PLC0415
+    from spotdl.download.downloader import Downloader  # noqa: PLC0415
+    from spotdl.utils.spotify import SpotifyError  # noqa: PLC0415
 
     client_id = os.environ["SPOTIFY_CLIENT_ID"]
     client_secret = os.environ["SPOTIFY_CLIENT_SECRET"]
-    return Spotdl(
-        client_id=client_id,
-        client_secret=client_secret,
-        downloader_settings=settings,
-    )
+    try:
+        return Spotdl(
+            client_id=client_id,
+            client_secret=client_secret,
+            downloader_settings=settings,
+        )
+    except SpotifyError as exc:
+        if "already been initialized" not in str(exc):
+            raise
+        obj = object.__new__(Spotdl)
+        obj.downloader = Downloader(settings=settings)
+        return obj
 
 
 # ---------------------------------------------------------------------------
