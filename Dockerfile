@@ -18,7 +18,7 @@ RUN mkdir -p \
     /root/.config/music-pipeline
 
 
-# scan stage: beets import, AcoustID fingerprinting, .m3u generation, Navidrome rescan.
+# scan stage: beets import, AcoustID fingerprinting, .m3u generation.
 # No Spotify or YouTube calls — reads inbox written by the fetch container.
 FROM python:3.13-slim AS scan
 
