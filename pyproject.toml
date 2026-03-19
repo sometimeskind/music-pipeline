@@ -9,12 +9,9 @@ requires-python = ">=3.11"
 dependencies = []
 
 [project.scripts]
-music-scan      = "pipeline.cli:scan"
-music-ingest    = "pipeline.cli:ingest"
-music-import    = "pipeline.cli:import_cmd"
-music-setup     = "pipeline.cli:setup"
-music-remove    = "pipeline.cli:remove"
-music-provision = "pipeline.cli:provision"
+music-scan   = "pipeline.cli:scan"
+music-ingest = "pipeline.cli:ingest"
+music-import = "pipeline.cli:import_cmd"
 
 [tool.setuptools.packages.find]
 where = ["."]

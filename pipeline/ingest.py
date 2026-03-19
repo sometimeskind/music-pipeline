@@ -1,11 +1,15 @@
-"""music-ingest: daily spotdl sync loop → write pending-removals for music-scan.
+"""music-ingest: reconcile playlists.conf → daily spotdl sync loop → write pending-removals.
 
-For each .spotdl playlist:
-1. Load the current .spotdl snapshot (old songs).
-2. Fetch the current Spotify playlist state (new songs) via spotdl library.
-3. Download new tracks (overwrite=skip ignores already-downloaded files).
-4. Diff old vs new URL sets to find removed tracks.
-5. Write removed track info to .pending-removals.json on the shared volume.
+On each run:
+1. Reconcile disk state with playlists.conf:
+   a. Provision new playlists (spotdl save for entries without a .spotdl file).
+   b. Reconcile .nosync sentinels.
+   c. Queue whole-playlist removals for playlists removed from config.
+   d. Delete .spotdl file and download dir for removed playlists.
+2. For each remaining .spotdl playlist:
+   a. Diff old vs new Spotify URL sets to find removed tracks.
+   b. Download new tracks (overwrite=skip ignores already-downloaded files).
+   c. Write removed track info to .pending-removals.json on the shared volume.
    music-scan reads this file to clear beets source tags (soft delete — files stay in library).
 """
 
@@ -15,17 +19,20 @@ import json
 import logging
 import os
 import re
+import shutil
 import time
 from pathlib import Path
 
+from pipeline.config import load_playlists
 from pipeline.metrics import IngestMetrics
-from pipeline.spotdl_ops import find_track_in_snapshot, sync_playlist
+from pipeline.spotdl_ops import find_track_in_snapshot, save_playlist, sync_playlist
 
 logger = logging.getLogger(__name__)
 
 SPOTDL_DIR = Path("/root/Music/inbox/spotdl")
 COOKIE_FILE = Path("/root/.config/spotdl/cookies.txt")
 PENDING_REMOVALS = Path("/root/Music/inbox/.pending-removals.json")
+CONF_PATH = Path("/root/.config/music-pipeline/playlists.conf")
 
 
 def classify_failure(error_msg: str) -> str:
@@ -51,7 +58,6 @@ def _preflight() -> str | None:
         logger.error("Error: SPOTIFY_CLIENT_ID and SPOTIFY_CLIENT_SECRET must be set")
         return "auth_spotify"
 
-    import shutil
     usage = shutil.disk_usage(Path.home() / "Music")
     free_gb = usage.free / 1024**3
     if free_gb < 1.0:
@@ -70,6 +76,62 @@ def _jitter() -> None:
         delay = random.randint(0, jitter)
         logger.debug("Jitter: sleeping %d seconds", delay)
         time.sleep(delay)
+
+
+def _reconcile_playlists() -> list[str]:
+    """Reconcile disk state with playlists.conf; return list of removed source names.
+
+    - Provisions new playlist entries (spotdl save for entries without .spotdl).
+    - Reconciles .nosync sentinels to match config.
+    - Detects playlists present on disk but absent from config.
+    - Deletes .spotdl file and download dir for removed playlists.
+
+    Returns a list of source names that were removed and should have their beets
+    tags cleared by the scan container.  Returns an empty list if playlists.conf
+    does not exist (backwards-compatible: no reconciliation occurs).
+    """
+    if not CONF_PATH.exists():
+        logger.warning("playlists.conf not found at %s — skipping declarative reconciliation", CONF_PATH)
+        return []
+
+    playlists = load_playlists(CONF_PATH)
+    conf_names = {pl.name for pl in playlists}
+
+    # Provision new entries and reconcile .nosync sentinels.
+    for pl in playlists:
+        spotdl_file = SPOTDL_DIR / f"{pl.name}.spotdl"
+        output_dir = SPOTDL_DIR / pl.name
+        nosync_file = SPOTDL_DIR / f"{pl.name}.nosync"
+
+        if not spotdl_file.exists():
+            logger.info("==> Provisioning new playlist: %s", pl.name)
+            output_dir.mkdir(parents=True, exist_ok=True)
+            save_playlist(url=pl.url, spotdl_file=spotdl_file, output_dir=output_dir, cookie_file=COOKIE_FILE)
+
+        if pl.nosync:
+            if not nosync_file.exists():
+                logger.info("    Creating .nosync sentinel for %s", pl.name)
+                nosync_file.touch()
+        else:
+            if nosync_file.exists():
+                logger.info("    Removing .nosync sentinel for %s (nosync flag removed from config)", pl.name)
+                nosync_file.unlink()
+
+    # Detect playlists on disk that are no longer in config.
+    existing_names = {f.stem for f in SPOTDL_DIR.glob("*.spotdl")}
+    removed_names = existing_names - conf_names
+
+    remove_sources: list[str] = []
+    for name in sorted(removed_names):
+        logger.info("==> Playlist removed from config: %s — queuing cleanup", name)
+        remove_sources.append(name)
+        (SPOTDL_DIR / f"{name}.spotdl").unlink(missing_ok=True)
+        (SPOTDL_DIR / f"{name}.nosync").unlink(missing_ok=True)
+        download_dir = SPOTDL_DIR / name
+        if download_dir.exists():
+            shutil.rmtree(download_dir)
+
+    return remove_sources
 
 
 def _collect_removals(
@@ -100,31 +162,56 @@ def _collect_removals(
         pending.append({"title": title, "artist": artist, "source": playlist_name})
 
 
-def _write_pending_removals(pending: list[dict]) -> None:
-    """Append pending source-tag removals to the shared volume for music-scan."""
-    if not pending:
+def _write_pending_removals(pending: list[dict], remove_sources: list[str] | None = None) -> None:
+    """Write pending source-tag removals to the shared volume for music-scan.
+
+    Writes {"tracks": [...], "remove_sources": [...]} format.
+    Merges with any existing file so multiple fetch runs before a scan don't
+    overwrite each other.  Supports merging with old list-format files.
+    """
+    remove_sources = remove_sources or []
+    if not pending and not remove_sources:
         return
 
     PENDING_REMOVALS.parent.mkdir(parents=True, exist_ok=True)
 
-    # Load and append — safe if fetch runs multiple times before scan processes the file.
-    existing: list[dict] = []
+    # Load and merge — safe if fetch runs multiple times before scan processes the file.
+    existing_tracks: list[dict] = []
+    existing_remove_sources: list[str] = []
     if PENDING_REMOVALS.exists():
         try:
             with open(PENDING_REMOVALS, encoding="utf-8") as fh:
                 existing = json.load(fh)
+            if isinstance(existing, list):
+                # Old format: just a list of track entries.
+                existing_tracks = existing
+            else:
+                existing_tracks = existing.get("tracks", [])
+                existing_remove_sources = existing.get("remove_sources", [])
         except (json.JSONDecodeError, OSError) as exc:
             logger.error("Could not read %s — discarding prior pending removals: %s", PENDING_REMOVALS, exc)
-            existing = []
+
+    merged_tracks = existing_tracks + pending
+    merged_remove_sources = existing_remove_sources + remove_sources
 
     # Atomic write: write to a temp file then rename so a mid-write failure never
     # truncates the existing file.
     tmp = PENDING_REMOVALS.with_suffix(".tmp")
     with open(tmp, "w", encoding="utf-8") as fh:
-        json.dump(existing + pending, fh, indent=2, ensure_ascii=False)
+        json.dump(
+            {"tracks": merged_tracks, "remove_sources": merged_remove_sources},
+            fh,
+            indent=2,
+            ensure_ascii=False,
+        )
     tmp.replace(PENDING_REMOVALS)
 
-    logger.info("==> Wrote %d pending removal(s) to %s", len(pending), PENDING_REMOVALS)
+    logger.info(
+        "==> Wrote %d pending track removal(s) and %d source removal(s) to %s",
+        len(pending),
+        len(remove_sources),
+        PENDING_REMOVALS,
+    )
 
 
 def run() -> None:
@@ -144,6 +231,8 @@ def run() -> None:
 
     try:
         logger.info("==> music-ingest starting")
+
+        remove_sources = _reconcile_playlists()
 
         track_limit_str = os.environ.get("SYNC_TRACK_LIMIT", "")
         session_budget: int | None = None
@@ -223,7 +312,7 @@ def run() -> None:
             # Brief pause between playlists — avoid hammering Spotify/YouTube APIs.
             time.sleep(5)
 
-        _write_pending_removals(pending_removals)
+        _write_pending_removals(pending_removals, remove_sources)
 
         logger.info("==> music-ingest complete. Run music-scan for local import and playlist generation.")
 

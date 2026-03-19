@@ -23,18 +23,6 @@ sync:
 import:
     docker compose run --rm scan music-import
 
-# Add a new playlist (interactive)
-setup:
-    op run --env-file .env.tpl -- docker compose run --rm -it fetch music-setup
-
-# Provision all playlists from config/playlists.conf (idempotent)
-provision:
-    op run --env-file .env.tpl -- docker compose run --rm fetch music-provision
-
-# Remove a playlist: just remove <name>
-remove name:
-    docker compose run --rm scan music-remove {{name}}
-
 # Dump beets DB and export JSON from the container
 backup:
     docker compose run --rm scan sh -c "beet export > /root/.config/beets/library-export.json"

@@ -76,7 +76,7 @@ def test_quarantine_leftovers(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# _process_pending_removals
+# _process_pending_removals — new {tracks, remove_sources} format
 # ---------------------------------------------------------------------------
 
 
@@ -93,8 +93,8 @@ def test_process_pending_removals_reads_and_deletes(tmp_path: Path) -> None:
     from pipeline.scan import _process_pending_removals
 
     fake_path = tmp_path / ".pending-removals.json"
-    entries = [{"title": "Song A", "artist": "Artist 1", "source": "my-playlist"}]
-    fake_path.write_text(json.dumps(entries), encoding="utf-8")
+    data = {"tracks": [{"title": "Song A", "artist": "Artist 1", "source": "my-playlist"}], "remove_sources": []}
+    fake_path.write_text(json.dumps(data), encoding="utf-8")
 
     mock_lib = mock.MagicMock()
     mock_lib.__enter__ = mock.MagicMock(return_value=mock_lib)
@@ -112,11 +112,11 @@ def test_process_pending_removals_reads_and_deletes(tmp_path: Path) -> None:
     )
 
 
-def test_process_pending_removals_empty_list(tmp_path: Path) -> None:
+def test_process_pending_removals_empty_data(tmp_path: Path) -> None:
     from pipeline.scan import _process_pending_removals
 
     fake_path = tmp_path / ".pending-removals.json"
-    fake_path.write_text("[]", encoding="utf-8")
+    fake_path.write_text(json.dumps({"tracks": [], "remove_sources": []}), encoding="utf-8")
 
     with mock.patch("pipeline.scan.PENDING_REMOVALS", fake_path):
         count = _process_pending_removals()
@@ -139,15 +139,18 @@ def test_process_pending_removals_malformed_json_deletes_file(tmp_path: Path) ->
     assert not fake_path.exists()  # file consumed even though JSON was invalid
 
 
-def test_process_pending_removals_multi_entry(tmp_path: Path) -> None:
+def test_process_pending_removals_multi_track(tmp_path: Path) -> None:
     from pipeline.scan import _process_pending_removals
 
     fake_path = tmp_path / ".pending-removals.json"
-    entries = [
-        {"title": "Song A", "artist": "Artist 1", "source": "playlist-1"},
-        {"title": "Song B", "artist": "Artist 2", "source": "playlist-2"},
-    ]
-    fake_path.write_text(json.dumps(entries), encoding="utf-8")
+    data = {
+        "tracks": [
+            {"title": "Song A", "artist": "Artist 1", "source": "playlist-1"},
+            {"title": "Song B", "artist": "Artist 2", "source": "playlist-2"},
+        ],
+        "remove_sources": [],
+    }
+    fake_path.write_text(json.dumps(data), encoding="utf-8")
 
     mock_lib = mock.MagicMock()
     mock_lib.__enter__ = mock.MagicMock(return_value=mock_lib)
@@ -163,13 +166,92 @@ def test_process_pending_removals_multi_entry(tmp_path: Path) -> None:
     assert mock_lib.clear_source_tag.call_count == 2
 
 
+def test_process_pending_removals_remove_sources(tmp_path: Path) -> None:
+    """remove_sources → items_by_source called, source tags cleared, .m3u deleted."""
+    from pipeline.scan import _process_pending_removals
+
+    fake_path = tmp_path / ".pending-removals.json"
+    playlists_dir = tmp_path / "playlists"
+    playlists_dir.mkdir()
+    m3u = playlists_dir / "old-playlist.m3u"
+    m3u.touch()
+
+    data = {"tracks": [], "remove_sources": ["old-playlist"]}
+    fake_path.write_text(json.dumps(data), encoding="utf-8")
+
+    mock_item = mock.MagicMock()
+    mock_lib = mock.MagicMock()
+    mock_lib.__enter__ = mock.MagicMock(return_value=mock_lib)
+    mock_lib.__exit__ = mock.MagicMock(return_value=False)
+    mock_lib.items_by_source = mock.MagicMock(return_value=[mock_item])
+
+    with mock.patch("pipeline.scan.PENDING_REMOVALS", fake_path), \
+         mock.patch("pipeline.scan.PLAYLISTS", playlists_dir), \
+         mock.patch("pipeline.scan.MusicLibrary", return_value=mock_lib):
+        count = _process_pending_removals()
+
+    assert count == 1
+    assert not fake_path.exists()
+    mock_lib.items_by_source.assert_called_once_with("old-playlist")
+    mock_item.__setitem__.assert_called_once_with("source", "")
+    mock_item.store.assert_called_once()
+    assert not m3u.exists()
+
+
+def test_process_pending_removals_remove_source_missing_m3u(tmp_path: Path) -> None:
+    """remove_sources processing doesn't fail if .m3u doesn't exist."""
+    from pipeline.scan import _process_pending_removals
+
+    fake_path = tmp_path / ".pending-removals.json"
+    playlists_dir = tmp_path / "playlists"
+    playlists_dir.mkdir()
+
+    data = {"tracks": [], "remove_sources": ["gone-playlist"]}
+    fake_path.write_text(json.dumps(data), encoding="utf-8")
+
+    mock_lib = mock.MagicMock()
+    mock_lib.__enter__ = mock.MagicMock(return_value=mock_lib)
+    mock_lib.__exit__ = mock.MagicMock(return_value=False)
+    mock_lib.items_by_source = mock.MagicMock(return_value=[])
+
+    with mock.patch("pipeline.scan.PENDING_REMOVALS", fake_path), \
+         mock.patch("pipeline.scan.PLAYLISTS", playlists_dir), \
+         mock.patch("pipeline.scan.MusicLibrary", return_value=mock_lib):
+        count = _process_pending_removals()
+
+    assert count == 1
+
+
+def test_process_pending_removals_backward_compat_old_list_format(tmp_path: Path) -> None:
+    """Old list format is still processed correctly."""
+    from pipeline.scan import _process_pending_removals
+
+    fake_path = tmp_path / ".pending-removals.json"
+    old_format = [{"title": "Song A", "artist": "Artist 1", "source": "my-playlist"}]
+    fake_path.write_text(json.dumps(old_format), encoding="utf-8")
+
+    mock_lib = mock.MagicMock()
+    mock_lib.__enter__ = mock.MagicMock(return_value=mock_lib)
+    mock_lib.__exit__ = mock.MagicMock(return_value=False)
+    mock_lib.clear_source_tag = mock.MagicMock(return_value=True)
+
+    with mock.patch("pipeline.scan.PENDING_REMOVALS", fake_path), \
+         mock.patch("pipeline.scan.MusicLibrary", return_value=mock_lib):
+        count = _process_pending_removals()
+
+    assert count == 1
+    mock_lib.clear_source_tag.assert_called_once_with(
+        title="Song A", artist="Artist 1", source="my-playlist"
+    )
+
+
 def test_process_pending_removals_file_deleted_before_processing(tmp_path: Path) -> None:
     """File is unlinked before processing so an exception mid-processing doesn't re-block scans."""
     from pipeline.scan import _process_pending_removals
 
     fake_path = tmp_path / ".pending-removals.json"
-    entries = [{"title": "Song A", "artist": "Artist 1", "source": "my-playlist"}]
-    fake_path.write_text(json.dumps(entries), encoding="utf-8")
+    data = {"tracks": [{"title": "Song A", "artist": "Artist 1", "source": "my-playlist"}], "remove_sources": []}
+    fake_path.write_text(json.dumps(data), encoding="utf-8")
 
     mock_lib = mock.MagicMock()
     mock_lib.__enter__ = mock.MagicMock(return_value=mock_lib)

@@ -31,16 +31,11 @@ just test
 # Build both container images
 docker compose build
 
-# Interactive: add a new playlist (runs in fetch container)
-just setup
-
-# Provision all playlists from config/playlists.conf (idempotent, fetch container)
-just provision
-
 # Run spotdl sync only (fetch container: Spotify/YouTube → inbox)
+# Reconciles playlists.conf: provisions new, queues removed
 just fetch
 
-# Run a local scan only (scan container: import inbox → .m3u → Navidrome rescan)
+# Run a local scan only (scan container: import inbox → .m3u)
 just scan
 
 # Run full ingest: just fetch && just scan
@@ -68,11 +63,8 @@ A `pre-push` git hook runs `just test` automatically before every push. Install 
 ### Scripts (`scripts/`)
 
 - **`music-scan`** — Fast local path (runs every 5 min). Imports inbox → beets (makes MusicBrainz/AcoustID calls during import), refreshes metadata, regenerates `.m3u` playlists, pushes Prometheus metrics. No Spotify or YouTube calls. Called by `music-ingest` after sync.
-- **`music-ingest`** — Daily network sync. Loops `.spotdl` files, runs `spotdl sync`, diffs snapshots with `jq` to detect Spotify removals, then calls `music-scan`. Skips `.nosync` playlists.
-- **`music-provision`** — Non-interactive. Reads `config/playlists.conf` and calls `music-setup` for each entry. Idempotent. Use in k8s Jobs and for PVC recovery.
-- **`music-setup`** — Creates local directories, runs `spotdl save` to create the initial `.spotdl` sync file. Interactive by default; non-interactive with `--name <name> --url <url>`. Idempotent — skips if `.spotdl` already exists.
+- **`music-ingest`** — Daily network sync. Reconciles disk state against `playlists.conf` (provisions new playlists, queues removed ones), loops `.spotdl` files, runs `spotdl sync`, diffs snapshots to detect Spotify removals. Skips `.nosync` playlists.
 - **`music-import`** — Called by `music-scan`. Imports all audio from inbox to beets; moves unmatched files to quarantine.
-- **`music-remove`** — Interactive. Removes `.spotdl` file, download dir, `.m3u`, and clears `source=<name>` beets tags. Does not delete library files.
 
 ### Key Design Decisions
 
@@ -82,7 +74,7 @@ A `pre-push` git hook runs `just test` automatically before every push. Install 
 
 **Strict MusicBrainz threshold** — `strong_rec_thresh: 0.05` in `config/beets/config.yaml`. Files that don't match confidently go to `/root/Music/quarantine/` for manual review. Raise to `0.10` if too many good tracks are quarantined.
 
-**`config/playlists.conf`** — Declarative registry of playlists: one `name spotify-url` line per playlist. Committed to the repo. Enables PVC recovery (`music-provision` re-creates all `.spotdl` files from this file) and non-interactive k8s provisioning Jobs. In k8s, mount as a ConfigMap at `/root/.config/music-pipeline/playlists.conf`.
+**`config/playlists.conf`** — Declarative registry of playlists: one `name spotify-url` line per playlist. Committed to the repo. `music-ingest` reconciles disk state to match this file on every run — provisioning new entries, reconciling `.nosync` sentinels, and queuing removed playlists for cleanup. In k8s, mount as a ConfigMap at `/root/.config/music-pipeline/playlists.conf`.
 
 **Credentials via 1Password** — `SPOTIFY_CLIENT_ID` and `SPOTIFY_CLIENT_SECRET` are injected at runtime via `op run --env-file=.env.tpl`. The `.env.tpl` file holds vault references, not secrets.
 
@@ -121,7 +113,7 @@ Mark a playlist as static by adding `nosync` as a third field in `config/playlis
 my-playlist  https://open.spotify.com/playlist/...  nosync
 ```
 
-`music-provision` creates (or removes) the `.nosync` sentinel file on the PVC to match the config — making it declarative and recoverable after PVC loss. The sentinel file itself lives at:
+`music-ingest` creates (or removes) the `.nosync` sentinel file on the PVC to match the config — making it declarative and recoverable after PVC loss. The sentinel file itself lives at:
 
 ```
 inbox/spotdl/my-playlist.nosync
@@ -133,26 +125,20 @@ The sentinel file can also be created directly (e.g. via `kubectl exec`) without
 
 ### Managing Playlists in k8s
 
-There is no always-running pod to exec into. The idiomatic pattern is an ephemeral pod that mounts the same PVCs.
+Playlist management is fully declarative: edit `config/playlists.conf` and update the `music-pipeline-playlists` ConfigMap. The next `music-ingest` CronJob run reconciles disk state automatically.
 
 **Add a new playlist:**
-```bash
-kubectl apply -f job-music-setup.yaml   # job template in homelab repo
-kubectl attach -it job/music-setup
-# interactive setup writes .spotdl file to the PVC
-# next music-ingest CronJob run picks it up automatically
-```
+1. Add the entry to `config/playlists.conf`, commit and push.
+2. Update the `music-pipeline-playlists` ConfigMap (or let GitOps do it).
+3. The next `music-ingest` CronJob run provisions the `.spotdl` file and begins syncing.
 
 **Remove a playlist:**
-```bash
-kubectl apply -f job-music-remove.yaml
-kubectl attach -it job/music-remove
-```
+1. Remove the entry from `config/playlists.conf`, commit and push.
+2. Update the `music-pipeline-playlists` ConfigMap.
+3. The next `music-ingest` run deletes the `.spotdl` file and queues beets tag cleanup.
 
 **Run a manual sync now:**
 ```bash
 kubectl create job music-ingest-manual --from=cronjob/music-ingest
 kubectl logs -f job/music-ingest-manual
 ```
-
-`music-setup` and `music-remove` already work as interactive scripts reading from env vars — no container changes needed.
