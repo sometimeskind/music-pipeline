@@ -1,8 +1,8 @@
 services:
   fetch:
     build:
-      context: .
-      target: fetch
+      context: fetch
+      target: prod
     image: ghcr.io/sometimeskind/music-pipeline-fetch:latest
     volumes:
       # Music data: inbox shared with scan container for downloaded files and pending-removals.json
@@ -27,8 +27,8 @@ services:
 
   scan:
     build:
-      context: .
-      target: scan
+      context: scan
+      target: prod
     image: ghcr.io/sometimeskind/music-pipeline-scan:latest
     volumes:
       # Music data: inbox shared with fetch container, plus library/quarantine/playlists

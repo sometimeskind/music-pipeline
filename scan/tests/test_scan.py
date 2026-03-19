@@ -245,6 +245,68 @@ def test_process_pending_removals_backward_compat_old_list_format(tmp_path: Path
     )
 
 
+# ---------------------------------------------------------------------------
+# _regen_playlists
+# ---------------------------------------------------------------------------
+
+
+def test_regen_playlists_writes_m3u_with_relative_paths(tmp_path: Path) -> None:
+    from pipeline.scan import _regen_playlists
+
+    spotdl_dir = tmp_path / "spotdl"
+    spotdl_dir.mkdir()
+    (spotdl_dir / "my-playlist.spotdl").touch()
+
+    playlists_dir = tmp_path / "playlists"
+    playlists_dir.mkdir()
+
+    track_path = tmp_path / "library" / "Artist" / "Album" / "01 - Song.m4a"
+
+    mock_lib = mock.MagicMock()
+    mock_lib.__enter__ = mock.MagicMock(return_value=mock_lib)
+    mock_lib.__exit__ = mock.MagicMock(return_value=False)
+    mock_lib.paths_by_source = mock.MagicMock(return_value=[track_path])
+
+    with mock.patch("pipeline.scan.SPOTDL_DIR", spotdl_dir), \
+         mock.patch("pipeline.scan.PLAYLISTS", playlists_dir), \
+         mock.patch("pipeline.scan.LIBRARY_DB", tmp_path / "library.db"), \
+         mock.patch("pipeline.scan.MusicLibrary", return_value=mock_lib):
+        _regen_playlists()
+
+    m3u = playlists_dir / "my-playlist.m3u"
+    assert m3u.exists()
+    content = m3u.read_text(encoding="utf-8")
+    expected_rel = os.path.relpath(track_path, playlists_dir)
+    assert content == expected_rel + "\n"
+    mock_lib.paths_by_source.assert_called_once_with("my-playlist")
+
+
+def test_regen_playlists_empty_playlist_writes_empty_m3u(tmp_path: Path) -> None:
+    from pipeline.scan import _regen_playlists
+
+    spotdl_dir = tmp_path / "spotdl"
+    spotdl_dir.mkdir()
+    (spotdl_dir / "empty-playlist.spotdl").touch()
+
+    playlists_dir = tmp_path / "playlists"
+    playlists_dir.mkdir()
+
+    mock_lib = mock.MagicMock()
+    mock_lib.__enter__ = mock.MagicMock(return_value=mock_lib)
+    mock_lib.__exit__ = mock.MagicMock(return_value=False)
+    mock_lib.paths_by_source = mock.MagicMock(return_value=[])
+
+    with mock.patch("pipeline.scan.SPOTDL_DIR", spotdl_dir), \
+         mock.patch("pipeline.scan.PLAYLISTS", playlists_dir), \
+         mock.patch("pipeline.scan.LIBRARY_DB", tmp_path / "library.db"), \
+         mock.patch("pipeline.scan.MusicLibrary", return_value=mock_lib):
+        _regen_playlists()
+
+    m3u = playlists_dir / "empty-playlist.m3u"
+    assert m3u.exists()
+    assert m3u.read_text(encoding="utf-8") == ""
+
+
 def test_process_pending_removals_file_deleted_before_processing(tmp_path: Path) -> None:
     """File is unlinked before processing so an exception mid-processing doesn't re-block scans."""
     from pipeline.scan import _process_pending_removals

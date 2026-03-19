@@ -101,7 +101,6 @@ A `justfile` lives in the repo root. Run these from the repo directory.
 | `just sync` | Run full ingest now (fetch + scan) |
 | `just fetch` | Run spotdl sync only (reconciles playlists.conf → provisions/removes) |
 | `just scan` | Run local scan only (import inbox → .m3u) |
-| `just import` | Import files dropped into inbox |
 | `just backup` | Dump beets DB + export JSON inside container |
 
 ---
@@ -141,14 +140,6 @@ Two `CronJob` resources sharing two `PersistentVolumeClaim`s:
 |---|---|---|
 | `music-scan` | `*/5 * * * *` | `/usr/local/bin/music-scan` |
 | `music-ingest` | `0 3 * * *` | `/usr/local/bin/music-ingest` |
-
-One-shot `Job` resources for management operations:
-
-| Job | Command | When to run |
-|---|---|---|
-| `music-provision` | `/usr/local/bin/music-provision` | On first deploy; after adding playlists to `playlists.conf` |
-| `music-setup` | `/usr/local/bin/music-setup` | Interactive — attach to pod for single-playlist setup |
-| `music-remove` | `/usr/local/bin/music-remove` | Interactive — attach to pod to remove a playlist |
 
 ### PersistentVolumeClaims
 

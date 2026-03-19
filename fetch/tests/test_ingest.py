@@ -385,6 +385,8 @@ def test_reconcile_provisions_new_playlist(tmp_path: Path) -> None:
     mock_save.assert_called_once()
     call_kwargs = mock_save.call_args[1]
     assert call_kwargs["url"] == "https://open.spotify.com/playlist/abc"
+    assert call_kwargs["spotdl_file"] == spotdl_dir / "my-playlist.spotdl"
+    assert call_kwargs["output_dir"] == spotdl_dir / "my-playlist"
     assert result == []
 
 
@@ -468,6 +470,68 @@ def test_reconcile_detects_removed_playlist(tmp_path: Path) -> None:
     assert not (spotdl_dir / "gone.spotdl").exists()
     assert not (spotdl_dir / "gone").exists()
     assert (spotdl_dir / "kept.spotdl").exists()
+
+
+# ---------------------------------------------------------------------------
+# _preflight
+# ---------------------------------------------------------------------------
+
+
+def test_preflight_missing_cookies(tmp_path: Path) -> None:
+    import unittest.mock as mock
+    from pipeline import ingest
+
+    with mock.patch.object(ingest, "COOKIE_FILE", tmp_path / "cookies.txt"), \
+         mock.patch.dict("os.environ", {"SPOTIFY_CLIENT_ID": "id", "SPOTIFY_CLIENT_SECRET": "secret"}):
+        result = ingest._preflight()
+
+    assert result == "missing_cookies"
+
+
+def test_preflight_missing_spotify_env(tmp_path: Path) -> None:
+    import unittest.mock as mock
+    from pipeline import ingest
+
+    cookie_file = tmp_path / "cookies.txt"
+    cookie_file.touch()
+
+    with mock.patch.object(ingest, "COOKIE_FILE", cookie_file), \
+         mock.patch.dict("os.environ", {}, clear=True):
+        result = ingest._preflight()
+
+    assert result == "auth_spotify"
+
+
+def test_preflight_disk_full(tmp_path: Path) -> None:
+    import shutil
+    import unittest.mock as mock
+    from pipeline import ingest
+
+    cookie_file = tmp_path / "cookies.txt"
+    cookie_file.touch()
+
+    fake_usage = shutil.disk_usage.__class__  # just need a namedtuple-like; use mock
+    with mock.patch.object(ingest, "COOKIE_FILE", cookie_file), \
+         mock.patch.dict("os.environ", {"SPOTIFY_CLIENT_ID": "id", "SPOTIFY_CLIENT_SECRET": "secret"}), \
+         mock.patch("shutil.disk_usage", return_value=mock.Mock(free=512 * 1024 * 1024)):  # 0.5 GB
+        result = ingest._preflight()
+
+    assert result == "disk_full"
+
+
+def test_preflight_ok(tmp_path: Path) -> None:
+    import unittest.mock as mock
+    from pipeline import ingest
+
+    cookie_file = tmp_path / "cookies.txt"
+    cookie_file.touch()
+
+    with mock.patch.object(ingest, "COOKIE_FILE", cookie_file), \
+         mock.patch.dict("os.environ", {"SPOTIFY_CLIENT_ID": "id", "SPOTIFY_CLIENT_SECRET": "secret"}), \
+         mock.patch("shutil.disk_usage", return_value=mock.Mock(free=10 * 1024**3)):  # 10 GB
+        result = ingest._preflight()
+
+    assert result is None
 
 
 def test_reconcile_deletes_nosync_for_removed_playlist(tmp_path: Path) -> None:

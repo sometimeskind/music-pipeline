@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 import os
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 import requests
 
@@ -31,11 +31,6 @@ def _push(body: str, job: str) -> None:
         logger.warning("Failed to push metrics to %s: %s", endpoint, exc)
 
 
-# ---------------------------------------------------------------------------
-# Per-command metric structs
-# ---------------------------------------------------------------------------
-
-
 @dataclass
 class ScanMetrics:
     success: bool = True
@@ -54,27 +49,3 @@ class ScanMetrics:
                 _gauge("music_scan_last_failure_reason", 1, {"reason": self.failure_reason})
             )
         _push("\n".join(lines), "music_scan")
-
-
-@dataclass
-class IngestMetrics:
-    success: bool = True
-    duration_seconds: int = 0
-    playlists_total: int = 0
-    playlists_skipped: int = 0
-    playlists_deferred: int = 0
-    failure_reason: str = ""
-
-    def push(self) -> None:
-        lines = [
-            _gauge("music_ingest_last_run_success", int(self.success)),
-            _gauge("music_ingest_duration_seconds", self.duration_seconds),
-            _gauge("music_ingest_playlists_total", self.playlists_total),
-            _gauge("music_ingest_playlists_skipped_total", self.playlists_skipped),
-            _gauge("music_ingest_playlists_deferred_total", self.playlists_deferred),
-        ]
-        if not self.success and self.failure_reason:
-            lines.append(
-                _gauge("music_ingest_last_failure_reason", 1, {"reason": self.failure_reason})
-            )
-        _push("\n".join(lines), "music_ingest")

@@ -1,7 +1,9 @@
-# Run the test suite in a dev container (never pushed to registry)
+# Run the test suite in dev containers (never pushed to registry)
 test:
-    docker build --target dev -t music-pipeline:dev .
-    docker run --rm music-pipeline:dev
+    docker build --target dev -t music-pipeline-fetch:dev fetch
+    docker run --rm music-pipeline-fetch:dev
+    docker build --target dev -t music-pipeline-scan:dev scan
+    docker run --rm music-pipeline-scan:dev
 
 # Install git hooks (run once after cloning)
 hooks:
@@ -9,19 +11,15 @@ hooks:
 
 # Run spotdl sync (fetch container: Spotify/YouTube → inbox)
 fetch:
-    op run --env-file .env.tpl -- docker compose run --rm fetch music-ingest
+    op run --env-file .env.tpl -- docker compose run --rm fetch
 
 # Run a local scan: import inbox → .m3u (no Spotify/YouTube)
 scan:
-    docker compose run --rm scan music-scan
+    docker compose run --rm scan
 
 # Run full ingest: spotdl sync → import → .m3u
 sync:
     just fetch && just scan
-
-# Import files dropped into inbox (subset of scan)
-import:
-    docker compose run --rm scan music-import
 
 # Dump beets DB and export JSON from the container
 backup:

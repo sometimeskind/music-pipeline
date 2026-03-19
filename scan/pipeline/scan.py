@@ -70,7 +70,10 @@ def _process_pending_removals() -> int:
     try:
         data = json.loads(content)
     except json.JSONDecodeError:
-        logger.warning("Discarded malformed .pending-removals.json — skipping source-tag cleanup")
+        logger.error(
+            "Discarded malformed .pending-removals.json — source-tag cleanup skipped. "
+            "Manually run `beet modify source= source:<name>` for affected playlists."
+        )
         return 0
 
     # Support old list format for backward compatibility.
