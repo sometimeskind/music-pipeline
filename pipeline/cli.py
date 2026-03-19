@@ -105,7 +105,7 @@ def setup() -> None:
     if not os.environ.get("SPOTIFY_CLIENT_ID") or not os.environ.get("SPOTIFY_CLIENT_SECRET"):
         print("Error: SPOTIFY_CLIENT_ID and SPOTIFY_CLIENT_SECRET must be set", file=sys.stderr)
         print(
-            "Run via: op run --env-file=.env.tpl -- docker compose run --rm pipeline music-setup",
+            "Run via: op run --env-file=.env.tpl -- docker compose run --rm fetch music-setup",
             file=sys.stderr,
         )
         sys.exit(1)

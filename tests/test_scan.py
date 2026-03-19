@@ -1,7 +1,9 @@
 """Tests for pipeline.scan — pure-Python logic."""
 
+import json
 import os
 from pathlib import Path
+import unittest.mock as mock
 
 import pytest
 
@@ -55,7 +57,6 @@ def test_count_quarantine_with_files(tmp_path: Path) -> None:
 
 
 def test_quarantine_leftovers(tmp_path: Path) -> None:
-    import unittest.mock as mock
     from pipeline.scan import _quarantine_inbox_leftovers
 
     inbox = tmp_path / "inbox"
@@ -72,3 +73,53 @@ def test_quarantine_leftovers(tmp_path: Path) -> None:
     assert moved == 1
     assert (quarantine / "unmatched.m4a").exists()
     assert (inbox / "readme.txt").exists()  # non-audio left in place
+
+
+# ---------------------------------------------------------------------------
+# _process_pending_removals
+# ---------------------------------------------------------------------------
+
+
+def test_process_pending_removals_no_file(tmp_path: Path) -> None:
+    from pipeline.scan import _process_pending_removals
+
+    fake_path = tmp_path / ".pending-removals.json"
+    with mock.patch("pipeline.scan.PENDING_REMOVALS", fake_path):
+        count = _process_pending_removals()
+    assert count == 0
+
+
+def test_process_pending_removals_reads_and_deletes(tmp_path: Path) -> None:
+    from pipeline.scan import _process_pending_removals
+
+    fake_path = tmp_path / ".pending-removals.json"
+    entries = [{"title": "Song A", "artist": "Artist 1", "source": "my-playlist"}]
+    fake_path.write_text(json.dumps(entries), encoding="utf-8")
+
+    mock_lib = mock.MagicMock()
+    mock_lib.__enter__ = mock.MagicMock(return_value=mock_lib)
+    mock_lib.__exit__ = mock.MagicMock(return_value=False)
+    mock_lib.clear_source_tag = mock.MagicMock(return_value=True)
+
+    with mock.patch("pipeline.scan.PENDING_REMOVALS", fake_path), \
+         mock.patch("pipeline.scan.MusicLibrary", return_value=mock_lib):
+        count = _process_pending_removals()
+
+    assert count == 1
+    assert not fake_path.exists()
+    mock_lib.clear_source_tag.assert_called_once_with(
+        title="Song A", artist="Artist 1", source="my-playlist"
+    )
+
+
+def test_process_pending_removals_empty_list(tmp_path: Path) -> None:
+    from pipeline.scan import _process_pending_removals
+
+    fake_path = tmp_path / ".pending-removals.json"
+    fake_path.write_text("[]", encoding="utf-8")
+
+    with mock.patch("pipeline.scan.PENDING_REMOVALS", fake_path):
+        count = _process_pending_removals()
+
+    assert count == 0
+    assert not fake_path.exists()

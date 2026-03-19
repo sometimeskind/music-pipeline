@@ -1,12 +1,13 @@
 """music-scan: import inbox → beets, refresh metadata, regenerate .m3u playlists,
 trigger Navidrome rescan, push Prometheus metrics.
 
-Called frequently (every 5 min by default) and also by music-ingest after a sync.
+Called frequently (every 5 min by default) and also after music-ingest completes.
 No Spotify or YouTube calls.
 """
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 import time
@@ -24,6 +25,7 @@ QUARANTINE = Path("/root/Music/quarantine")
 PLAYLISTS = Path("/root/Music/playlists")
 INBOX = Path("/root/Music/inbox")
 LIBRARY_DB = Path("/root/.config/beets/library.db")
+PENDING_REMOVALS = Path("/root/Music/inbox/.pending-removals.json")
 
 
 def _count_quarantine() -> int:
@@ -48,6 +50,41 @@ def _quarantine_inbox_leftovers() -> int:
             f.rename(dest)
             moved += 1
     return moved
+
+
+def _process_pending_removals() -> int:
+    """Clear beets source tags for tracks removed from Spotify playlists by the fetch container.
+
+    Reads .pending-removals.json from the shared volume, processes each entry,
+    then deletes the file.  Returns the number of entries processed.
+    """
+    if not PENDING_REMOVALS.exists():
+        return 0
+
+    with open(PENDING_REMOVALS, encoding="utf-8") as fh:
+        entries = json.load(fh)
+
+    PENDING_REMOVALS.unlink()
+
+    if not entries:
+        return 0
+
+    logger.info("==> Processing %d pending removal(s) from fetch run...", len(entries))
+    with MusicLibrary(LIBRARY_DB) as lib:
+        for entry in entries:
+            title = entry.get("title", "")
+            artist = entry.get("artist", "")
+            source = entry.get("source", "")
+            found = lib.clear_source_tag(title=title, artist=artist, source=source)
+            if not found:
+                logger.warning(
+                    "  WARNING: not found in beets — may need manual cleanup: %s by %s (source=%s)",
+                    title,
+                    artist,
+                    source,
+                )
+
+    return len(entries)
 
 
 def _regen_playlists() -> None:
@@ -75,6 +112,9 @@ def run() -> None:
 
     try:
         logger.info("==> music-scan starting")
+
+        logger.info("==> Processing pending removals from fetch container...")
+        _process_pending_removals()
 
         quarantined_before = _count_quarantine()
 

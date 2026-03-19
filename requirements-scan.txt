@@ -1,4 +1,3 @@
 beets==2.7.1
-spotdl==4.4.3
 pyacoustid==1.3.0
 requests>=2.32
