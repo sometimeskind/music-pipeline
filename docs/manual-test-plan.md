@@ -4,7 +4,7 @@ End-to-end verification for the music pipeline. Run these scenarios top-to-botto
 
 ## Prerequisites
 
-- Container built: `docker compose build`
+- Images pulled from the registry: `docker compose pull`
 - `cookies.txt` present on the host (YouTube Premium cookies)
 - 1Password CLI (`op`) configured with Spotify credentials (required only for Scenarios 1, 5)
 - A few test audio files ready to drop in — see [Test Audio Files](#test-audio-files) below
@@ -38,7 +38,8 @@ just scan
 
 **Pass criteria:**
 - Container starts, `music-scan` runs, and exits 0
-- Output shows "Imported 0 items" (inbox is empty)
+- Output shows `No files imported from /root/Music/inbox`
+- `beet update exited with code 1 (non-fatal)` is expected on an empty library — not a failure
 
 ---
 

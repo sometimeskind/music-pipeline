@@ -26,7 +26,7 @@ class MusicLibrary:
         return self
 
     def __exit__(self, *_: object) -> None:
-        self._lib.close()
+        self._lib._close()
 
     # ------------------------------------------------------------------
     # Query helpers
