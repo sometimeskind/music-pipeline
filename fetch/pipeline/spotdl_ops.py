@@ -15,6 +15,8 @@ from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
+_spotdl_instance = None  # process-wide singleton (SpotifyClient + ProgressHandler can't be reinitialised)
+
 
 def _make_downloader_settings(
     cookie_file: Path,
@@ -39,31 +41,27 @@ def _make_downloader_settings(
 
 
 def _make_spotdl(settings: dict):
-    """Initialise and return a Spotdl instance.
+    """Return a Spotdl instance, creating it on the first call.
 
-    SpotifyClient is a process-wide singleton in spotdl; calling Spotdl() a
-    second time raises SpotifyError("already been initialized").  When that
-    happens we skip re-init and just attach a fresh Downloader so the caller
-    gets an object with the requested output/format settings.
+    Both SpotifyClient and Rich's ProgressHandler are process-wide singletons
+    that cannot be reinitialised.  We keep one module-level instance and update
+    its Downloader settings on each call so per-playlist output_dir is respected.
     """
+    global _spotdl_instance  # noqa: PLW0603
     from spotdl import Spotdl  # noqa: PLC0415
-    from spotdl.download.downloader import Downloader  # noqa: PLC0415
-    from spotdl.utils.spotify import SpotifyError  # noqa: PLC0415
+
+    if _spotdl_instance is not None:
+        _spotdl_instance.downloader.settings.update(settings)
+        return _spotdl_instance
 
     client_id = os.environ["SPOTIFY_CLIENT_ID"]
     client_secret = os.environ["SPOTIFY_CLIENT_SECRET"]
-    try:
-        return Spotdl(
-            client_id=client_id,
-            client_secret=client_secret,
-            downloader_settings=settings,
-        )
-    except SpotifyError as exc:
-        if "already been initialized" not in str(exc):
-            raise
-        obj = object.__new__(Spotdl)
-        obj.downloader = Downloader(settings=settings)
-        return obj
+    _spotdl_instance = Spotdl(
+        client_id=client_id,
+        client_secret=client_secret,
+        downloader_settings=settings,
+    )
+    return _spotdl_instance
 
 
 # ---------------------------------------------------------------------------
