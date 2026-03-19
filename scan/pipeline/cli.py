@@ -13,8 +13,12 @@ logging.basicConfig(
 
 def scan() -> None:
     """Entry point: music-scan."""
-    from pipeline.scan import run  # noqa: PLC0415
-
+    try:
+        from pipeline.scan import run  # noqa: PLC0415
+    except ImportError as exc:
+        import sys
+        print(f"[music-scan] Failed to import pipeline: {exc}. Check container installation.", file=sys.stderr)
+        sys.exit(1)
     run()
 
 

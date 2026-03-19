@@ -13,6 +13,10 @@ logging.basicConfig(
 
 def ingest() -> None:
     """Entry point: music-ingest."""
-    from pipeline.ingest import run  # noqa: PLC0415
-
+    try:
+        from pipeline.ingest import run  # noqa: PLC0415
+    except ImportError as exc:
+        import sys
+        print(f"[music-ingest] Failed to import pipeline: {exc}. Check container installation.", file=sys.stderr)
+        sys.exit(1)
     run()

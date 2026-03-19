@@ -3,10 +3,10 @@ name: scan CI
 on:
   push:
     branches: [main]
-    paths: [scan/**, compose.yml, justfile]
+    paths: ["scan/**", "compose.yml", "justfile", ".github/workflows/scan.yml"]
   pull_request:
     branches: [main]
-    paths: [scan/**, compose.yml, justfile]
+    paths: ["scan/**", "compose.yml", "justfile", ".github/workflows/scan.yml"]
 
 jobs:
   test:

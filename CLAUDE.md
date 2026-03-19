@@ -94,7 +94,7 @@ A `pre-push` git hook runs `just test` automatically before every push. Install 
 
 **`source=<playlist_name>` beets tag** — This drives the entire lifecycle. It's written during import, used to generate `.m3u` playlists, and is how `music-remove` identifies which tracks belong to a playlist. All scripts depend on it.
 
-**Snapshot diff for soft deletes** — `music-ingest` snapshots the `.spotdl` file before and after sync, diffs with `jq` to find removed tracks, then removes only their `source=` tags (files stay in the library).
+**Snapshot diff for soft deletes** — `music-ingest` snapshots the `.spotdl` file before and after sync, diffs URL sets in Python to find removed tracks, then removes only their `source=` tags (files stay in the library).
 
 **Strict MusicBrainz threshold** — `strong_rec_thresh: 0.05` in `config/beets/config.yaml`. Files that don't match confidently go to `/root/Music/quarantine/` for manual review. Raise to `0.10` if too many good tracks are quarantined.
 

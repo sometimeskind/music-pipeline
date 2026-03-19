@@ -3,10 +3,10 @@ name: fetch CI
 on:
   push:
     branches: [main]
-    paths: [fetch/**, compose.yml, justfile]
+    paths: ["fetch/**", "compose.yml", "justfile", ".github/workflows/fetch.yml"]
   pull_request:
     branches: [main]
-    paths: [fetch/**, compose.yml, justfile]
+    paths: ["fetch/**", "compose.yml", "justfile", ".github/workflows/fetch.yml"]
 
 jobs:
   test:
