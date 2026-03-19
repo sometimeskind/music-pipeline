@@ -21,10 +21,6 @@ scan:
 sync:
     just fetch && just scan
 
-# Import files dropped into inbox (subset of scan)
-import:
-    docker compose run --rm scan music-import
-
 # Dump beets DB and export JSON from the container
 backup:
     docker compose run --rm scan sh -c "beet export > /root/.config/beets/library-export.json"

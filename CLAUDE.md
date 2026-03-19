@@ -89,7 +89,6 @@ A `pre-push` git hook runs `just test` automatically before every push. Install 
 
 **scan container** (`scan/pipeline/cli.py`):
 - **`music-scan`** — Imports inbox → beets (MusicBrainz/AcoustID calls during import), regenerates `.m3u` playlists, pushes Prometheus metrics. No Spotify or YouTube calls.
-- **`music-import`** — Called by `music-scan`. Imports all audio from inbox to beets; moves unmatched files to quarantine.
 
 ### Key Design Decisions
 

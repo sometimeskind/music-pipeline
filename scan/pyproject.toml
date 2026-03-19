@@ -9,8 +9,7 @@ requires-python = ">=3.11"
 dependencies = []
 
 [project.scripts]
-music-scan   = "pipeline.cli:scan"
-music-import = "pipeline.cli:import_cmd"
+music-scan = "pipeline.cli:scan"
 
 [tool.setuptools.packages.find]
 where = ["."]
