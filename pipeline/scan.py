@@ -52,10 +52,14 @@ def _quarantine_inbox_leftovers() -> int:
 
 
 def _process_pending_removals() -> int:
-    """Clear beets source tags for tracks removed from Spotify playlists by the fetch container.
+    """Clear beets source tags for tracks/playlists removed by the fetch container.
 
     Reads .pending-removals.json from the shared volume, processes each entry,
     then deletes the file.  Returns the number of entries processed.
+
+    Supports both formats:
+    - Old (list): [{title, artist, source}, ...]
+    - New (dict): {tracks: [{title, artist, source}], remove_sources: [name, ...]}
     """
     if not PENDING_REMOVALS.exists():
         return 0
@@ -64,17 +68,30 @@ def _process_pending_removals() -> int:
     PENDING_REMOVALS.unlink()
 
     try:
-        entries = json.loads(content)
+        data = json.loads(content)
     except json.JSONDecodeError:
         logger.warning("Discarded malformed .pending-removals.json — skipping source-tag cleanup")
         return 0
 
-    if not entries:
+    # Support old list format for backward compatibility.
+    if isinstance(data, list):
+        tracks: list[dict] = data
+        remove_sources: list[str] = []
+    else:
+        tracks = data.get("tracks", [])
+        remove_sources = data.get("remove_sources", [])
+
+    if not tracks and not remove_sources:
         return 0
 
-    logger.info("==> Processing %d pending removal(s) from fetch run...", len(entries))
+    logger.info(
+        "==> Processing pending removals: %d track(s), %d source(s)...",
+        len(tracks),
+        len(remove_sources),
+    )
+    total = 0
     with MusicLibrary(LIBRARY_DB) as lib:
-        for entry in entries:
+        for entry in tracks:
             title = entry.get("title", "")
             artist = entry.get("artist", "")
             source = entry.get("source", "")
@@ -86,8 +103,20 @@ def _process_pending_removals() -> int:
                     artist,
                     source,
                 )
+            total += 1
 
-    return len(entries)
+        for source_name in remove_sources:
+            logger.info("==> Removing all tracks from playlist: %s", source_name)
+            items = lib.items_by_source(source_name)
+            for item in items:
+                item["source"] = ""
+                item.store()
+            m3u = PLAYLISTS / f"{source_name}.m3u"
+            m3u.unlink(missing_ok=True)
+            logger.info("  Cleared %d item(s) and removed .m3u for source=%s", len(items), source_name)
+            total += 1
+
+    return total
 
 
 def _regen_playlists() -> None:

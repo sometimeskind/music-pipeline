@@ -68,23 +68,17 @@ liked-songs        https://open.spotify.com/playlist/37i9dQZF1DXcBWIGoYBM5M
 archived-mix       https://open.spotify.com/playlist/37i9dQZF1DXd9rLJfaAKCk  nosync
 ```
 
-The optional `nosync` flag freezes a playlist: `music-provision` creates a `.nosync` sentinel on the PVC and `music-ingest` skips `spotdl sync` for it. Remove the flag and re-run `music-provision` to unfreeze.
+The optional `nosync` flag freezes a playlist: `music-ingest` creates a `.nosync` sentinel on the PVC and skips `spotdl sync` for it. Remove the flag and run `music-ingest` again to unfreeze.
 
-This file is the authoritative registry of playlists. It enables PVC recovery and non-interactive k8s provisioning.
+This file is the single source of truth for playlists. `music-ingest` reconciles disk state to match it on every run — provisioning new entries, reconciling `.nosync` sentinels, and queuing removed playlists for cleanup.
 
-### 5. Provision playlists (create .spotdl files)
-
-```bash
-just provision
-```
-
-Or interactively add a single playlist:
+### 5. Run the first ingest
 
 ```bash
-just setup
+just fetch
 ```
 
-`music-setup` and `music-provision` are idempotent — they skip playlists whose `.spotdl` file already exists on the volume.
+This provisions `.spotdl` files for all entries in `playlists.conf` and begins downloading. To add or remove playlists later, just edit `playlists.conf` and run `just fetch` again.
 
 ### 6. Start the service
 
@@ -104,14 +98,10 @@ A `justfile` lives in the repo root. Run these from the repo directory.
 
 | Recipe | What it does |
 |---|---|
-| `just up` | Start the container |
-| `just down` | Stop the container |
-| `just sync` | Run full ingest now |
-| `just setup` | Add a new playlist (interactive) |
-| `just provision` | Provision all playlists from `config/playlists.conf` (idempotent) |
-| `just remove <name>` | Remove a playlist |
+| `just sync` | Run full ingest now (fetch + scan) |
+| `just fetch` | Run spotdl sync only (reconciles playlists.conf → provisions/removes) |
+| `just scan` | Run local scan only (import inbox → .m3u) |
 | `just import` | Import files dropped into inbox |
-| `just logs` | Tail container logs |
 | `just backup` | Dump beets DB + export JSON inside container |
 
 ---
@@ -188,8 +178,8 @@ All three ConfigMaps should be mounted `readOnly: true`.
 
 | Variable | Source | Default | Notes |
 |---|---|---|---|
-| `SPOTIFY_CLIENT_ID` | Secret `music-pipeline-spotify/client-id` | — | Required for music-ingest and music-setup pods |
-| `SPOTIFY_CLIENT_SECRET` | Secret `music-pipeline-spotify/client-secret` | — | Required for music-ingest and music-setup pods |
+| `SPOTIFY_CLIENT_ID` | Secret `music-pipeline-spotify/client-id` | — | Required for music-ingest pods |
+| `SPOTIFY_CLIENT_SECRET` | Secret `music-pipeline-spotify/client-secret` | — | Required for music-ingest pods |
 | `PUSHGATEWAY_URL` | Plain value | `""` | e.g. `http://prometheus-pushgateway.monitoring:9091` |
 | `SYNC_JITTER_SECONDS` | Plain value | `"300"` | Random pre-sync sleep to stagger retries |
 | `SYNC_TRACK_LIMIT` | Plain value | `""` | Max new tracks downloaded across all playlists per session. Unset = no limit. Useful for large playlists (e.g. liked songs); the pipeline resumes where it left off next run. |
@@ -235,50 +225,34 @@ spec:
       # Needs: SPOTIFY_CLIENT_ID, SPOTIFY_CLIENT_SECRET, cookies Secret
 ```
 
-### Job spec notes (interactive management)
-
-```yaml
-# music-provision Job (non-interactive; run after adding playlists to playlists.conf)
-spec:
-  backoffLimit: 0
-  ttlSecondsAfterFinished: 3600
-  containers:
-    - command: ["/usr/local/bin/music-provision"]
-      # Needs: SPOTIFY_CLIENT_ID, SPOTIFY_CLIENT_SECRET, cookies Secret, playlists ConfigMap
-
-# music-setup / music-remove Jobs (interactive — kubectl attach -it)
-spec:
-  backoffLimit: 0
-  ttlSecondsAfterFinished: 300
-  containers:
-    - command: ["/usr/local/bin/music-setup"]   # or music-remove
-      stdin: true
-      tty: true
-```
-
 ### Typical k8s playlist workflow
+
+Playlist management is fully declarative: edit `config/playlists.conf` and update the `music-pipeline-playlists` ConfigMap. The next `music-ingest` CronJob run reconciles disk state automatically.
 
 **Add a new playlist:**
 1. Add the entry to `config/playlists.conf`, commit and push.
 2. Update the `music-pipeline-playlists` ConfigMap (or let GitOps do it).
-3. `kubectl apply -f job-music-provision.yaml` — creates the `.spotdl` file on the PVC.
-4. The next `music-ingest` CronJob run picks it up automatically.
+3. The next `music-ingest` CronJob run provisions the `.spotdl` file and begins syncing.
 
 **Freeze a playlist (stop syncing):**
 1. Add `nosync` as the third field on the playlist's line in `config/playlists.conf`.
-2. Update the `music-pipeline-playlists` ConfigMap (or let GitOps do it).
-3. `kubectl apply -f job-music-provision.yaml` — creates the `.nosync` sentinel on the PVC.
+2. Update the `music-pipeline-playlists` ConfigMap.
+3. The next `music-ingest` run creates the `.nosync` sentinel automatically.
 
 **Remove a playlist:**
+1. Remove the entry from `config/playlists.conf`, commit and push.
+2. Update the `music-pipeline-playlists` ConfigMap.
+3. The next `music-ingest` run queues beets tag cleanup and deletes the `.spotdl` file.
+
+**Run a manual ingest now:**
 ```bash
-kubectl apply -f job-music-remove.yaml
-kubectl attach -it job/music-remove
+kubectl create job music-ingest-manual --from=cronjob/music-ingest
+kubectl logs -f job/music-ingest-manual
 ```
 
 **Recover after PVC loss:**
 1. Restore `beets-data` PVC from backup (restores `library.db`).
-2. `kubectl apply -f job-music-provision.yaml` — re-creates all `.spotdl` files from `playlists.conf`.
-3. `kubectl create job music-ingest-recovery --from=cronjob/music-ingest` — re-downloads and re-imports.
+2. `kubectl create job music-ingest-recovery --from=cronjob/music-ingest` — re-provisions all `.spotdl` files from `playlists.conf` and re-downloads.
 
 ---
 
@@ -289,4 +263,4 @@ kubectl attach -it job/music-remove
 - **Cookies expire.** Re-export from browser when downloads fail at quality.
 - **Spotify rate limits.** Always use your own app credentials — the spotdl defaults are shared and hit limits quickly. For large playlists, set `SYNC_TRACK_LIMIT` to cap new downloads per session (e.g. `50`); the pipeline picks up where it left off each run.
 - **MusicBrainz threshold.** `strong_rec_thresh: 0.05` is strict. Raise to `0.10` in `config/beets/config.yaml` if too many valid tracks land in quarantine.
-- **`.spotdl` files are the sync state.** Never delete them manually. They are backed by the PVC and also derivable from `config/playlists.conf` via `music-provision`. When `SYNC_TRACK_LIMIT` is active, the snapshot intentionally contains only downloaded tracks — deferred tracks are absent so they re-appear as new on the next run.
+- **`.spotdl` files are the sync state.** Never delete them manually. They are backed by the PVC and re-created by `music-ingest` from `config/playlists.conf` on first run or after PVC loss. When `SYNC_TRACK_LIMIT` is active, the snapshot intentionally contains only downloaded tracks — deferred tracks are absent so they re-appear as new on the next run.
