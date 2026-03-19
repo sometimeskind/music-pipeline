@@ -59,20 +59,23 @@ def _make_spotdl(settings: dict):
 def save_playlist(url: str, spotdl_file: Path, output_dir: Path, cookie_file: Path) -> None:
     """Fetch a Spotify playlist's metadata and write a .spotdl sync file.
 
-    Equivalent to: spotdl save <url> --save-file <file>
+    Writes the sync dict format (type/query/songs) that sync_playlist expects,
+    rather than spotdl's native save format (a plain list).
     Idempotent: callers should check whether the file already exists before calling.
     """
-    from spotdl.console.save import save as _save  # noqa: PLC0415
-
     spotdl_obj = _make_spotdl(
-        _make_downloader_settings(
-            cookie_file=cookie_file,
-            output_dir=output_dir,
-            save_file=spotdl_file,
-        )
+        _make_downloader_settings(cookie_file=cookie_file, output_dir=output_dir)
     )
     logger.info("Fetching playlist metadata for %s", url)
-    _save([url], spotdl_obj.downloader)
+    songs = spotdl_obj.search([url])
+    sync_data = {
+        "type": "sync",
+        "query": [url],
+        "songs": [s.json for s in songs],
+    }
+    with open(spotdl_file, "w", encoding="utf-8") as fh:
+        json.dump(sync_data, fh, indent=4, ensure_ascii=False)
+    logger.info("Saved %d song(s) to %s", len(songs), spotdl_file)
 
 
 def sync_playlist(
