@@ -211,20 +211,14 @@ docker compose run --rm scan beet ls -a source:test-small
 docker compose run --rm scan cat /root/Music/playlists/test-small.m3u
 ```
 
-**6. If `NAVIDROME_URL` is set — check logs for rescan confirmation:**
-```bash
-just logs | grep -i navidrome
-# expect: "Navidrome rescan triggered successfully"
-```
-
-**7. If `PUSHGATEWAY_URL` is set — check Prometheus for metrics:**
+**6. If `PUSHGATEWAY_URL` is set — check Prometheus for metrics:**
 Look for `music_scan_*` metrics in the Pushgateway UI.
 
 **Pass criteria:**
 - All playlist tracks imported to library
 - Each track tagged `source=test-small`
 - `.m3u` populated with correct relative paths
-- Optional integrations (Navidrome, Prometheus) confirmed in logs/UI
+- Optional integration (Prometheus) confirmed in Pushgateway UI
 
 ---
 

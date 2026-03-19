@@ -40,11 +40,6 @@ services:
     environment:
       # Optional: Prometheus Pushgateway URL for job metrics
       - PUSHGATEWAY_URL=${PUSHGATEWAY_URL:-}
-      # Optional: trigger Navidrome library rescan after each scan
-      # NAVIDROME_URL: base URL, e.g. http://navidrome:4533
-      # NAVIDROME_API_KEY: credentials as user:password
-      - NAVIDROME_URL=${NAVIDROME_URL:-}
-      - NAVIDROME_API_KEY=${NAVIDROME_API_KEY:-}
 
 volumes:
   music-data:

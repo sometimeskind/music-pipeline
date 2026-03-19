@@ -33,7 +33,7 @@ def test_scan_metrics_success_body(monkeypatch: pytest.MonkeyPatch) -> None:
     pushed: list[str] = []
     monkeypatch.setattr("pipeline.metrics._push", lambda body, job: pushed.append(body))
 
-    m = ScanMetrics(success=True, duration_seconds=30, quarantined_tracks=2, navidrome_rescan_success=True)
+    m = ScanMetrics(success=True, duration_seconds=30, quarantined_tracks=2)
     m.push()
 
     assert len(pushed) == 1
@@ -41,7 +41,6 @@ def test_scan_metrics_success_body(monkeypatch: pytest.MonkeyPatch) -> None:
     assert "music_scan_last_run_success 1" in body
     assert "music_scan_duration_seconds 30" in body
     assert "music_scan_quarantined_tracks_total 2" in body
-    assert "music_scan_navidrome_rescan_success 1" in body
     assert "failure_reason" not in body
 
 

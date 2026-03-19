@@ -1,5 +1,5 @@
 """music-scan: import inbox → beets, refresh metadata, regenerate .m3u playlists,
-trigger Navidrome rescan, push Prometheus metrics.
+push Prometheus metrics.
 
 Called frequently (every 5 min by default) and also after music-ingest completes.
 No Spotify or YouTube calls.
@@ -15,7 +15,6 @@ from pathlib import Path
 
 from pipeline.library import MusicLibrary
 from pipeline.metrics import ScanMetrics
-from pipeline.navidrome import trigger_rescan
 from pipeline.process import run_beet_import, run_beet_update
 
 logger = logging.getLogger(__name__)
@@ -138,8 +137,6 @@ def run() -> None:
 
         quarantined_after = _count_quarantine()
         metrics.quarantined_tracks = max(0, quarantined_after - quarantined_before)
-
-        metrics.navidrome_rescan_success = trigger_rescan()
 
         logger.info("==> music-scan complete")
 

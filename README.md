@@ -1,16 +1,16 @@
 # music-pipeline
 
-Dockerized music pipeline: Spotify playlists → spotdl downloads → beets import/tag → Navidrome.
+Dockerized music pipeline: Spotify playlists → spotdl downloads → beets import/tag → music library.
 
 ```
-Spotify playlists → spotdl → beets → ~/Music/library → Navidrome
+Spotify playlists → spotdl → beets → ~/Music/library
 ```
 
 Two jobs run on separate schedules:
 
 | Job | Default schedule | Does |
 |---|---|---|
-| `music-scan` | Every 5 min | Import inbox → beets, refresh metadata, regenerate m3u, Navidrome rescan |
+| `music-scan` | Every 5 min | Import inbox → beets, refresh metadata, regenerate m3u |
 | `music-ingest` | Daily 03:00 UTC | spotdl sync all playlists → calls music-scan |
 
 ---
@@ -138,24 +138,6 @@ A `justfile` lives in the repo root. Run these from the repo directory.
 
 ---
 
-## Navidrome integration
-
-Navidrome lives in a separate stack and reads from the same music volume via NFS.
-
-Required Navidrome settings:
-- `ND_MUSICFOLDER` pointing at the music volume root (not just `/library` — so it sees playlists too)
-- `ND_AUTOIMPORTPLAYLISTS=true`
-
-After ingest, trigger a rescan via:
-
-```
-POST /rest/startScan?u=<user>&p=<pass>&v=1.16.1&c=music-pipeline&f=json
-```
-
-The `just rescan` recipe handles this.
-
----
-
 ## Kubernetes deployment
 
 This section contains everything an agent needs to write the k8s manifests.
@@ -201,7 +183,6 @@ All three ConfigMaps should be mounted `readOnly: true`.
 |---|---|---|---|
 | `music-pipeline-spotify` | `client-id` | `SPOTIFY_CLIENT_ID` | Spotify Developer app client ID |
 | `music-pipeline-spotify` | `client-secret` | `SPOTIFY_CLIENT_SECRET` | Spotify Developer app client secret |
-| `music-pipeline-navidrome` | `api-key` | `NAVIDROME_API_KEY` | Navidrome credentials as `user:password` |
 
 ### Environment variables (all pods)
 
@@ -209,8 +190,6 @@ All three ConfigMaps should be mounted `readOnly: true`.
 |---|---|---|---|
 | `SPOTIFY_CLIENT_ID` | Secret `music-pipeline-spotify/client-id` | — | Required for music-ingest and music-setup pods |
 | `SPOTIFY_CLIENT_SECRET` | Secret `music-pipeline-spotify/client-secret` | — | Required for music-ingest and music-setup pods |
-| `NAVIDROME_URL` | Plain value | `""` | Base URL e.g. `http://navidrome.media:4533` |
-| `NAVIDROME_API_KEY` | Secret `music-pipeline-navidrome/api-key` | `""` | Format: `user:password` |
 | `PUSHGATEWAY_URL` | Plain value | `""` | e.g. `http://prometheus-pushgateway.monitoring:9091` |
 | `SYNC_JITTER_SECONDS` | Plain value | `"300"` | Random pre-sync sleep to stagger retries |
 | `SYNC_TRACK_LIMIT` | Plain value | `""` | Max new tracks downloaded across all playlists per session. Unset = no limit. Useful for large playlists (e.g. liked songs); the pipeline resumes where it left off next run. |

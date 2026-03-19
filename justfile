@@ -11,11 +11,11 @@ hooks:
 fetch:
     op run --env-file .env.tpl -- docker compose run --rm fetch music-ingest
 
-# Run a local scan: import inbox → .m3u → Navidrome rescan (no Spotify/YouTube)
+# Run a local scan: import inbox → .m3u (no Spotify/YouTube)
 scan:
     docker compose run --rm scan music-scan
 
-# Run full ingest: spotdl sync → import → .m3u → Navidrome rescan
+# Run full ingest: spotdl sync → import → .m3u
 sync:
     just fetch && just scan
 
