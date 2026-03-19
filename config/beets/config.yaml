@@ -17,6 +17,9 @@ match:
   # 0.05 accepts only very close MusicBrainz matches automatically.
   # Raise to 0.10 if too many valid tracks land in quarantine.
   strong_rec_thresh: 0.05
+  # Ignore missing-tracks penalty so spotdl downloads (one track at a time
+  # from multi-track albums) are not penalised for absent album tracks.
+  ignored: [missing_tracks]
 
 paths:
   default: $albumartist/$album/$track - $title
