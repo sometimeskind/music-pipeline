@@ -1,8 +1,4 @@
-"""Console entry points for all music-pipeline commands.
-
-Each function is registered as a console_script in pyproject.toml and
-installed to /usr/local/bin/ via the pip package.
-"""
+"""Console entry points for the scan container."""
 
 from __future__ import annotations
 
@@ -16,33 +12,11 @@ logging.basicConfig(
 )
 
 
-# ---------------------------------------------------------------------------
-# music-scan
-# ---------------------------------------------------------------------------
-
-
 def scan() -> None:
     """Entry point: music-scan."""
     from pipeline.scan import run  # noqa: PLC0415
 
     run()
-
-
-# ---------------------------------------------------------------------------
-# music-ingest
-# ---------------------------------------------------------------------------
-
-
-def ingest() -> None:
-    """Entry point: music-ingest."""
-    from pipeline.ingest import run  # noqa: PLC0415
-
-    run()
-
-
-# ---------------------------------------------------------------------------
-# music-import
-# ---------------------------------------------------------------------------
 
 
 def import_cmd() -> None:

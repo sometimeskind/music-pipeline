@@ -44,26 +44,51 @@ just sync
 
 **Do not run Python commands directly on the host.** All Python tooling (pytest, beet, spotdl) runs inside the container. Use `just test` to run tests.
 
-## Testing
+## Repo Structure
 
-The test suite lives in `tests/` and runs inside a Docker container:
+```
+fetch/          — fetch container: spotdl sync, Spotify/YouTube calls
+  pipeline/     — Python package (ingest, spotdl_ops, config, metrics, cli)
+  tests/
+  Dockerfile    — prod + dev stages
+  pyproject.toml
+  requirements.txt / requirements-dev.txt
 
-```bash
-just test   # builds music-pipeline:dev, runs pytest
+scan/           — scan container: beets import, .m3u generation
+  pipeline/     — Python package (scan, library, process, music_pipeline, metrics, cli)
+  tests/
+  Dockerfile    — prod + dev stages
+  pyproject.toml
+  requirements.txt / requirements-dev.txt
+
+config/         — bind-mounted config files (beets, spotdl, playlists.conf)
+compose.yml     — references fetch/ and scan/ build contexts
+justfile
 ```
 
-The Dockerfile uses a two-stage build:
-- **`prod` stage** — the image that runs in CI and is pushed to GHCR. Contains only runtime dependencies (ffmpeg, chromaprint, pip packages from `requirements.txt`).
+## Testing
+
+Tests live in `fetch/tests/` and `scan/tests/`. Both suites run inside Docker dev containers:
+
+```bash
+just test   # builds fetch dev container → runs pytest, then same for scan
+```
+
+Each Dockerfile uses a two-stage build:
+- **`prod` stage** — the image pushed to GHCR. Contains only runtime dependencies.
 - **`dev` stage** — extends `prod` with `requirements-dev.txt` (pytest) and the `tests/` directory. Built locally by `just test`. Never pushed to the registry.
 
 A `pre-push` git hook runs `just test` automatically before every push. Install it once with `just hooks`.
 
 ## Architecture
 
-### Scripts (`scripts/`)
+### Entry Points
 
-- **`music-scan`** — Fast local path (runs every 5 min). Imports inbox → beets (makes MusicBrainz/AcoustID calls during import), refreshes metadata, regenerates `.m3u` playlists, pushes Prometheus metrics. No Spotify or YouTube calls. Called by `music-ingest` after sync.
-- **`music-ingest`** — Daily network sync. Reconciles disk state against `playlists.conf` (provisions new playlists, queues removed ones), loops `.spotdl` files, runs `spotdl sync`, diffs snapshots to detect Spotify removals. Skips `.nosync` playlists.
+**fetch container** (`fetch/pipeline/cli.py`):
+- **`music-ingest`** — Declarative reconciliation loop. Reconciles disk state against `playlists.conf` (provisions new playlists, queues removed ones), loops `.spotdl` files, runs `spotdl sync`, diffs snapshots to detect Spotify removals. Skips `.nosync` playlists.
+
+**scan container** (`scan/pipeline/cli.py`):
+- **`music-scan`** — Imports inbox → beets (MusicBrainz/AcoustID calls during import), regenerates `.m3u` playlists, pushes Prometheus metrics. No Spotify or YouTube calls.
 - **`music-import`** — Called by `music-scan`. Imports all audio from inbox to beets; moves unmatched files to quarantine.
 
 ### Key Design Decisions

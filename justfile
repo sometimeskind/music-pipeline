@@ -1,7 +1,9 @@
-# Run the test suite in a dev container (never pushed to registry)
+# Run the test suite in dev containers (never pushed to registry)
 test:
-    docker build --target dev -t music-pipeline:dev .
-    docker run --rm music-pipeline:dev
+    docker build --target dev -t music-pipeline-fetch:dev fetch
+    docker run --rm music-pipeline-fetch:dev
+    docker build --target dev -t music-pipeline-scan:dev scan
+    docker run --rm music-pipeline-scan:dev
 
 # Install git hooks (run once after cloning)
 hooks:

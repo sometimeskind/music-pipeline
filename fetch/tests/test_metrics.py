@@ -1,8 +1,8 @@
-"""Tests for pipeline.metrics — Prometheus text format output."""
+"""Tests for pipeline.metrics — IngestMetrics Prometheus output."""
 
 import pytest
 
-from pipeline.metrics import IngestMetrics, ScanMetrics, _gauge
+from pipeline.metrics import IngestMetrics, _gauge
 
 
 # ---------------------------------------------------------------------------
@@ -23,37 +23,6 @@ def test_gauge_with_labels() -> None:
 def test_gauge_float_value() -> None:
     result = _gauge("duration", 42.5)
     assert "42.5" in result
-
-
-# ---------------------------------------------------------------------------
-# ScanMetrics
-# ---------------------------------------------------------------------------
-
-def test_scan_metrics_success_body(monkeypatch: pytest.MonkeyPatch) -> None:
-    pushed: list[str] = []
-    monkeypatch.setattr("pipeline.metrics._push", lambda body, job: pushed.append(body))
-
-    m = ScanMetrics(success=True, duration_seconds=30, quarantined_tracks=2)
-    m.push()
-
-    assert len(pushed) == 1
-    body = pushed[0]
-    assert "music_scan_last_run_success 1" in body
-    assert "music_scan_duration_seconds 30" in body
-    assert "music_scan_quarantined_tracks_total 2" in body
-    assert "failure_reason" not in body
-
-
-def test_scan_metrics_failure_includes_reason(monkeypatch: pytest.MonkeyPatch) -> None:
-    pushed: list[str] = []
-    monkeypatch.setattr("pipeline.metrics._push", lambda body, job: pushed.append(body))
-
-    m = ScanMetrics(success=False, failure_reason="disk_full")
-    m.push()
-
-    body = pushed[0]
-    assert "music_scan_last_run_success 0" in body
-    assert 'reason="disk_full"' in body
 
 
 # ---------------------------------------------------------------------------
@@ -85,13 +54,6 @@ def test_ingest_metrics_failure_includes_reason(monkeypatch: pytest.MonkeyPatch)
     body = pushed[0]
     assert "music_ingest_last_run_success 0" in body
     assert 'reason="rate_limited"' in body
-
-
-def test_push_job_label_scan(monkeypatch: pytest.MonkeyPatch) -> None:
-    jobs: list[str] = []
-    monkeypatch.setattr("pipeline.metrics._push", lambda body, job: jobs.append(job))
-    ScanMetrics().push()
-    assert jobs == ["music_scan"]
 
 
 def test_push_job_label_ingest(monkeypatch: pytest.MonkeyPatch) -> None:
