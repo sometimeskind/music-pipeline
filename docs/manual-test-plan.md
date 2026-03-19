@@ -6,7 +6,7 @@ End-to-end verification for the music pipeline. Run these scenarios top-to-botto
 
 - Images pulled from the registry: `docker compose pull`
 - `cookies.txt` present on the host (YouTube Premium cookies)
-- 1Password CLI (`op`) configured with Spotify credentials (required only for Scenarios 1, 5)
+- Spotify credentials available for Scenario 5 (via `op run` or set `SPOTIFY_CLIENT_ID` / `SPOTIFY_CLIENT_SECRET` directly)
 - A few test audio files ready to drop in — see [Test Audio Files](#test-audio-files) below
 
 ---
@@ -59,7 +59,7 @@ docker compose cp noise.mp3 scan:/root/Music/inbox/
 
 **2. Trigger an import:**
 ```bash
-just import
+just scan
 ```
 
 **3. Verify Case A (well-known track) was imported to the library:**
@@ -158,7 +158,7 @@ docker compose cp track-a.mp3 scan:/root/Music/inbox/
 
 **2. Run import again:**
 ```bash
-just import
+just scan
 ```
 
 **3. Check the import log for a skip/duplicate decision:**
@@ -183,7 +183,8 @@ docker compose run --rm scan beet ls -a title:<track-title>
 
 **Goal:** Verify the complete `spotdl sync → import → .m3u` flow with a real playlist.
 
-> Requires `op` and Spotify credentials. Use a small playlist (≤10 tracks) to keep the test fast.
+> Requires Spotify credentials. Use a small playlist (≤10 tracks) to keep the test fast.
+> Pass credentials via `op run` or export `SPOTIFY_CLIENT_ID` / `SPOTIFY_CLIENT_SECRET` directly.
 
 ### Steps
 
@@ -192,12 +193,23 @@ docker compose run --rm scan beet ls -a title:<track-title>
 test-small  https://open.spotify.com/playlist/<id>
 ```
 
-**2. Provision it (creates the `.spotdl` state file):**
+**2. Provision the playlist (first `just fetch` run):**
 ```bash
-just provision
+just fetch
 ```
 
-**3. Run a full ingest:**
+This provisions the `.spotdl` state file (recording all current songs as already known) and
+then runs a sync — which downloads 0 tracks because all songs are already in the snapshot.
+
+> To force a download of existing playlist tracks (e.g. to test the full download path), write
+> an empty-songs snapshot before running `just fetch`:
+> ```bash
+> PLAYLIST_URL="https://open.spotify.com/playlist/<id>"
+> docker compose run --rm fetch sh -c "printf '{\"type\":\"sync\",\"query\":[\"$PLAYLIST_URL\"],\"songs\":[]}' > /root/Music/inbox/spotdl/test-small.spotdl"
+> ```
+> Then run `just fetch` — all tracks will appear as new and be downloaded.
+
+**3. Run a full sync:**
 ```bash
 just sync
 ```
@@ -228,14 +240,18 @@ Look for `music_scan_*` metrics in the Pushgateway UI.
 Remove test data to leave the environment clean:
 
 ```bash
-# Remove the fake test playlist added in Scenario 3
-just remove test-playlist
+# Remove fake spotdl dirs created in Scenario 3
+docker compose run --rm scan rm -rf /root/Music/inbox/spotdl/test-playlist
+docker compose run --rm fetch rm -f /root/Music/inbox/spotdl/test-playlist.spotdl
 
-# Remove the small Spotify test playlist added in Scenario 5 (if added)
-# First edit config/playlists.conf to remove the entry, then:
-just remove test-small
+# Clear the source tag from any test-playlist tracks in beets
+docker compose run --rm scan beet modify -y source= source:test-playlist
 
-# Clear quarantine manually
+# Remove test-small from config/playlists.conf (edit the file), then:
+docker compose run --rm fetch rm -rf /root/Music/inbox/spotdl/test-small /root/Music/inbox/spotdl/test-small.spotdl
+docker compose run --rm scan rm -f /root/Music/playlists/test-small.m3u
+
+# Clear quarantine
 docker compose run --rm scan rm -rf /root/Music/quarantine/*
 ```
 
