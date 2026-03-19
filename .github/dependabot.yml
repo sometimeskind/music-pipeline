@@ -9,6 +9,10 @@ updates:
     directory: /
     schedule:
       interval: weekly
+    ignore:
+      # beets does not support Python 3.14 yet — unblock when it does
+      - dependency-name: python
+        versions: [">=3.14"]
 
   - package-ecosystem: github-actions
     directory: /
