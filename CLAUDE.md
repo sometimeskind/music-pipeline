@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What This Is
 
-A Dockerized music pipeline: Spotify playlists → spotdl downloads → beets import/tagging → Navidrome music server. Runs on a cron schedule inside the container.
+A Dockerized music pipeline: Spotify playlists → spotdl downloads → beets import/tagging → Navidrome music server. Scheduling is handled externally (k8s CronJobs); the container runs a single task and exits.
 
 **Data flow:**
 ```
@@ -31,14 +31,11 @@ just setup
 # Provision all playlists from config/playlists.conf (idempotent)
 just provision
 
-# Start the service (cron-based daily ingest)
-just up
-
-# Run a full ingest immediately
+# Run a full ingest (spotdl sync → import → .m3u → Navidrome rescan)
 just sync
 
-# Follow logs
-just logs
+# Run a local scan only (import inbox → .m3u → Navidrome rescan, no Spotify/YouTube)
+just scan
 ```
 
 **Do not run Python commands directly on the host.** All Python tooling (pytest, beet, spotdl) runs inside the container. Use `just test` to run tests.
@@ -94,9 +91,6 @@ A `pre-push` git hook runs `just test` automatically before every push. Install 
 
 ### Environment Variables
 
-- `SCAN_CRON_SCHEDULE` — Cron expression for `music-scan`. Default: `*/5 * * * *` (every 5 min).
-- `SYNC_CRON_SCHEDULE` — Cron expression for `music-ingest`. Default: `0 3 * * *` (03:00 UTC daily).
-- `SYNC_JITTER_SECONDS` — If set > 0, `music-ingest` sleeps a random number of seconds (up to this value) before starting. Reduces thundering herd when multiple k8s pods start simultaneously. Default: `0`.
 - `SYNC_TRACK_LIMIT` — If set, caps the total number of new tracks downloaded across all playlists in a single `music-ingest` run. Playlists are processed in alphabetical order; the budget is shared. Tracks deferred by the limit are excluded from the `.spotdl` snapshot and re-appear as new on the next run. Useful for large playlists (e.g. liked songs) to avoid rate limiting. Default: unset (no limit).
 - `PUSHGATEWAY_URL` — Prometheus Pushgateway URL (e.g. `http://pushgateway:9091`). If unset, metrics are not pushed.
 - `SPOTIFY_CLIENT_ID` / `SPOTIFY_CLIENT_SECRET` — Injected via 1Password at runtime.
