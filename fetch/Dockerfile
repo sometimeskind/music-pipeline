@@ -1,6 +1,10 @@
 # fetch: spotdl sync, Spotify/YouTube network calls.
-# No ffmpeg or chromaprint needed — beets is not installed here.
 FROM python:3.13-slim AS prod
+
+# ffmpeg required by spotdl (audio download and format handling)
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ffmpeg \
+    && rm -rf /var/lib/apt/lists/*
 
 # Python dependencies
 COPY requirements.txt /requirements.txt
