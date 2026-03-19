@@ -4,12 +4,18 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What This Is
 
-A Dockerized music pipeline: Spotify playlists → spotdl downloads → beets import/tagging → Navidrome music server. Scheduling is handled externally (k8s CronJobs); the container runs a single task and exits.
+A Dockerized music pipeline: Spotify playlists → spotdl downloads → beets import/tagging → Navidrome music server. Scheduling is handled externally (k8s CronJobs); each container runs a single task and exits.
+
+The pipeline runs as two containers:
+- **fetch** (`music-pipeline-fetch`) — spotdl sync, Spotify/YouTube network calls; no beets/ffmpeg
+- **scan** (`music-pipeline-scan`) — beets import, AcoustID fingerprinting, .m3u generation, Navidrome rescan
 
 **Data flow:**
 ```
-Spotify playlists → spotdl sync → /root/Music/inbox/spotdl/<name>/ → beets import → /root/Music/library/$albumartist/$album/$track - $title.m4a → Navidrome (via NFS)
+Spotify playlists → [fetch] spotdl sync → /root/Music/inbox/spotdl/<name>/ → [scan] beets import → /root/Music/library/$albumartist/$album/$track - $title.m4a → Navidrome (via NFS)
 ```
+
+Removed-track info is passed between containers via `/root/Music/inbox/.pending-removals.json` on the shared volume. The fetch container writes it; music-scan reads and processes it, then deletes it.
 
 ## Common Commands
 
@@ -22,20 +28,23 @@ just hooks
 # Run the test suite (builds the dev container, runs pytest)
 just test
 
-# Build the production container image
+# Build both container images
 docker compose build
 
-# Interactive: add a new playlist
+# Interactive: add a new playlist (runs in fetch container)
 just setup
 
-# Provision all playlists from config/playlists.conf (idempotent)
+# Provision all playlists from config/playlists.conf (idempotent, fetch container)
 just provision
 
-# Run a full ingest (spotdl sync → import → .m3u → Navidrome rescan)
-just sync
+# Run spotdl sync only (fetch container: Spotify/YouTube → inbox)
+just fetch
 
-# Run a local scan only (import inbox → .m3u → Navidrome rescan, no Spotify/YouTube)
+# Run a local scan only (scan container: import inbox → .m3u → Navidrome rescan)
 just scan
+
+# Run full ingest: just fetch && just scan
+just sync
 ```
 
 **Do not run Python commands directly on the host.** All Python tooling (pytest, beet, spotdl) runs inside the container. Use `just test` to run tests.
@@ -91,10 +100,15 @@ A `pre-push` git hook runs `just test` automatically before every push. Install 
 
 ### Environment Variables
 
-- `SYNC_TRACK_LIMIT` — If set, caps the total number of new tracks downloaded across all playlists in a single `music-ingest` run. Playlists are processed in alphabetical order; the budget is shared. Tracks deferred by the limit are excluded from the `.spotdl` snapshot and re-appear as new on the next run. Useful for large playlists (e.g. liked songs) to avoid rate limiting. Default: unset (no limit).
-- `PUSHGATEWAY_URL` — Prometheus Pushgateway URL (e.g. `http://pushgateway:9091`). If unset, metrics are not pushed.
+**fetch container:**
 - `SPOTIFY_CLIENT_ID` / `SPOTIFY_CLIENT_SECRET` — Injected via 1Password at runtime.
+- `SYNC_TRACK_LIMIT` — If set, caps the total number of new tracks downloaded across all playlists in a single `music-ingest` run. Playlists are processed in alphabetical order; the budget is shared. Tracks deferred by the limit are excluded from the `.spotdl` snapshot and re-appear as new on the next run. Useful for large playlists (e.g. liked songs) to avoid rate limiting. Default: unset (no limit).
+- `SYNC_JITTER_SECONDS` — If set, sleeps a random 0–N seconds before syncing to spread load. Default: unset.
+- `PUSHGATEWAY_URL` — Prometheus Pushgateway URL (e.g. `http://pushgateway:9091`). If unset, metrics are not pushed.
+
+**scan container:**
 - `NAVIDROME_URL` / `NAVIDROME_API_KEY` — Optional Navidrome rescan trigger. `NAVIDROME_API_KEY` format: `user:password`.
+- `PUSHGATEWAY_URL` — Prometheus Pushgateway URL. If unset, metrics are not pushed.
 
 ### `.m3u` Playlists
 

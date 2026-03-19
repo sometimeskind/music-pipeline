@@ -1,8 +1,11 @@
 """Tests for pipeline.ingest — pure-Python logic (no I/O, no external tools)."""
 
+import json
+from pathlib import Path
+
 import pytest
 
-from pipeline.ingest import classify_failure
+from pipeline.ingest import classify_failure, _collect_removals, _write_pending_removals
 from pipeline.spotdl_ops import find_track_in_snapshot
 
 
@@ -175,3 +178,102 @@ def test_budget_spans_playlists() -> None:
     # B2 and B3 are deferred
     assert "https://spotify.com/track/B2" not in written_b
     assert "https://spotify.com/track/B3" not in written_b
+
+
+# ---------------------------------------------------------------------------
+# _collect_removals
+# ---------------------------------------------------------------------------
+
+SNAPSHOT = [
+    {"url": "https://spotify.com/track/A", "name": "Song A", "artists": ["Artist 1"]},
+    {"url": "https://spotify.com/track/B", "name": "Song B", "artists": []},
+]
+
+
+def test_collect_removals_normal_case() -> None:
+    pending: list[dict] = []
+    _collect_removals(pending, {"https://spotify.com/track/A"}, SNAPSHOT, "my-playlist")
+    assert pending == [{"title": "Song A", "artist": "Artist 1", "source": "my-playlist"}]
+
+
+def test_collect_removals_url_not_in_snapshot() -> None:
+    """URL missing from snapshot → entry is skipped, no crash."""
+    pending: list[dict] = []
+    _collect_removals(pending, {"https://spotify.com/track/Z"}, SNAPSHOT, "my-playlist")
+    assert pending == []
+
+
+def test_collect_removals_empty_artists() -> None:
+    """artists=[] → artist field defaults to empty string."""
+    pending: list[dict] = []
+    _collect_removals(pending, {"https://spotify.com/track/B"}, SNAPSHOT, "my-playlist")
+    assert pending == [{"title": "Song B", "artist": "", "source": "my-playlist"}]
+
+
+def test_collect_removals_no_removed_urls() -> None:
+    pending: list[dict] = []
+    _collect_removals(pending, set(), SNAPSHOT, "my-playlist")
+    assert pending == []
+
+
+# ---------------------------------------------------------------------------
+# _write_pending_removals
+# ---------------------------------------------------------------------------
+
+
+def test_write_pending_removals_creates_file(tmp_path: Path) -> None:
+    import unittest.mock as mock
+    from pipeline import ingest
+
+    fake_path = tmp_path / ".pending-removals.json"
+    entries = [{"title": "Song A", "artist": "Artist 1", "source": "my-playlist"}]
+
+    with mock.patch.object(ingest, "PENDING_REMOVALS", fake_path):
+        _write_pending_removals(entries)
+
+    assert fake_path.exists()
+    assert json.loads(fake_path.read_text()) == entries
+
+
+def test_write_pending_removals_appends_to_existing(tmp_path: Path) -> None:
+    """The append-safe merge is the key correctness guarantee of the cross-container handoff."""
+    import unittest.mock as mock
+    from pipeline import ingest
+
+    fake_path = tmp_path / ".pending-removals.json"
+    existing = [{"title": "Song A", "artist": "Artist 1", "source": "playlist-1"}]
+    fake_path.write_text(json.dumps(existing), encoding="utf-8")
+
+    new_entries = [{"title": "Song B", "artist": "Artist 2", "source": "playlist-2"}]
+    with mock.patch.object(ingest, "PENDING_REMOVALS", fake_path):
+        _write_pending_removals(new_entries)
+
+    result = json.loads(fake_path.read_text())
+    assert result == existing + new_entries
+
+
+def test_write_pending_removals_recovers_from_corrupt_file(tmp_path: Path) -> None:
+    """Corrupt existing file is discarded; new entries are still written."""
+    import unittest.mock as mock
+    from pipeline import ingest
+
+    fake_path = tmp_path / ".pending-removals.json"
+    fake_path.write_text("not valid json", encoding="utf-8")
+
+    entries = [{"title": "Song A", "artist": "Artist 1", "source": "my-playlist"}]
+    with mock.patch.object(ingest, "PENDING_REMOVALS", fake_path):
+        _write_pending_removals(entries)
+
+    assert json.loads(fake_path.read_text()) == entries
+
+
+def test_write_pending_removals_noop_when_empty(tmp_path: Path) -> None:
+    """No file created when there are no pending removals."""
+    import unittest.mock as mock
+    from pipeline import ingest
+
+    fake_path = tmp_path / ".pending-removals.json"
+    with mock.patch.object(ingest, "PENDING_REMOVALS", fake_path):
+        _write_pending_removals([])
+
+    assert not fake_path.exists()

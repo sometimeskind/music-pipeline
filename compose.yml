@@ -1,13 +1,12 @@
 services:
-  pipeline:
-    image: ghcr.io/sometimeskind/music-pipeline:latest
+  fetch:
+    build:
+      context: .
+      target: fetch
+    image: ghcr.io/sometimeskind/music-pipeline-fetch:latest
     volumes:
-      # Music data: inbox, library, quarantine, playlists
+      # Music data: inbox shared with scan container for downloaded files and pending-removals.json
       - music-data:/root/Music
-      # Beets database and import log (SQLite — back this up)
-      - beets-data:/root/.config/beets
-      # Beets config (from this repo)
-      - ./config/beets/config.yaml:/root/.config/beets/config.yaml:ro
       # spotdl config (from this repo)
       - ./config/spotdl/config.json:/root/.config/spotdl/config.json:ro
       # Playlist registry (from this repo; k8s: mount as ConfigMap)
@@ -19,6 +18,26 @@ services:
       # Inject Spotify credentials at runtime via: op run --env-file=.env.tpl -- docker compose run ...
       - SPOTIFY_CLIENT_ID=${SPOTIFY_CLIENT_ID}
       - SPOTIFY_CLIENT_SECRET=${SPOTIFY_CLIENT_SECRET}
+      # Optional: cap total new downloads per run across all playlists
+      - SYNC_TRACK_LIMIT=${SYNC_TRACK_LIMIT:-}
+      # Optional: random delay before syncing to spread load (seconds)
+      - SYNC_JITTER_SECONDS=${SYNC_JITTER_SECONDS:-}
+      # Optional: Prometheus Pushgateway URL for job metrics
+      - PUSHGATEWAY_URL=${PUSHGATEWAY_URL:-}
+
+  scan:
+    build:
+      context: .
+      target: scan
+    image: ghcr.io/sometimeskind/music-pipeline-scan:latest
+    volumes:
+      # Music data: inbox shared with fetch container, plus library/quarantine/playlists
+      - music-data:/root/Music
+      # Beets database and import log (SQLite — back this up)
+      - beets-data:/root/.config/beets
+      # Beets config (from this repo)
+      - ./config/beets/config.yaml:/root/.config/beets/config.yaml:ro
+    environment:
       # Optional: Prometheus Pushgateway URL for job metrics
       - PUSHGATEWAY_URL=${PUSHGATEWAY_URL:-}
       # Optional: trigger Navidrome library rescan after each scan

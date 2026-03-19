@@ -6,9 +6,6 @@ on:
   pull_request:
     branches: [main]
 
-env:
-  IMAGE_NAME: ghcr.io/${{ github.repository_owner }}/music-pipeline
-
 jobs:
   test:
     name: Unit Tests
@@ -51,58 +48,104 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Extract metadata
-        id: meta
+      # --- fetch image ---
+
+      - name: Extract metadata (fetch)
+        id: meta-fetch
         uses: docker/metadata-action@v6
         with:
-          images: ${{ env.IMAGE_NAME }}
+          images: ghcr.io/${{ github.repository_owner }}/music-pipeline-fetch
           tags: |
             type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' }}
             type=sha,format=short
 
-      - name: Build image (load for health checks)
+      - name: Build fetch image
         uses: docker/build-push-action@v7
         with:
           context: .
+          target: fetch
           push: false
           load: true
           tags: |
-            ${{ steps.meta.outputs.tags }}
-            music-pipeline:ci-local
-          labels: ${{ steps.meta.outputs.labels }}
+            ${{ steps.meta-fetch.outputs.tags }}
+            music-pipeline-fetch:ci-local
+          labels: ${{ steps.meta-fetch.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
-      - name: Health check — beet
-        run: docker run --rm --entrypoint beet music-pipeline:ci-local version
-
       - name: Health check — spotdl
-        run: docker run --rm --entrypoint spotdl music-pipeline:ci-local --version
+        run: docker run --rm --entrypoint spotdl music-pipeline-fetch:ci-local --version
 
-      - name: Health check — ffmpeg
-        run: docker run --rm --entrypoint ffmpeg music-pipeline:ci-local -version
-
-      - name: Health check — fpcalc
-        run: docker run --rm --entrypoint fpcalc music-pipeline:ci-local -version
-
-      - name: Health check — pipeline commands
+      - name: Health check — fetch commands
         run: |
-          docker run --rm music-pipeline:ci-local sh -c "
-            which music-scan &&
+          docker run --rm music-pipeline-fetch:ci-local sh -c "
             which music-ingest &&
-            which music-import &&
             which music-setup &&
-            which music-remove &&
             which music-provision
           "
 
-      - name: Push to GHCR
+      - name: Push fetch image to GHCR
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         uses: docker/build-push-action@v7
         with:
           context: .
+          target: fetch
           push: true
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
+          tags: ${{ steps.meta-fetch.outputs.tags }}
+          labels: ${{ steps.meta-fetch.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      # --- scan image ---
+
+      - name: Extract metadata (scan)
+        id: meta-scan
+        uses: docker/metadata-action@v6
+        with:
+          images: ghcr.io/${{ github.repository_owner }}/music-pipeline-scan
+          tags: |
+            type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' }}
+            type=sha,format=short
+
+      - name: Build scan image
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          target: scan
+          push: false
+          load: true
+          tags: |
+            ${{ steps.meta-scan.outputs.tags }}
+            music-pipeline-scan:ci-local
+          labels: ${{ steps.meta-scan.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Health check — beet
+        run: docker run --rm --entrypoint beet music-pipeline-scan:ci-local version
+
+      - name: Health check — ffmpeg
+        run: docker run --rm --entrypoint ffmpeg music-pipeline-scan:ci-local -version
+
+      - name: Health check — fpcalc
+        run: docker run --rm --entrypoint fpcalc music-pipeline-scan:ci-local -version
+
+      - name: Health check — scan commands
+        run: |
+          docker run --rm music-pipeline-scan:ci-local sh -c "
+            which music-scan &&
+            which music-import &&
+            which music-remove
+          "
+
+      - name: Push scan image to GHCR
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          target: scan
+          push: true
+          tags: ${{ steps.meta-scan.outputs.tags }}
+          labels: ${{ steps.meta-scan.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max

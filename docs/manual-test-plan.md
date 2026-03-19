@@ -52,8 +52,8 @@ just scan
 
 **1. Copy test files into the inbox:**
 ```bash
-docker compose cp track-a.mp3 pipeline:/root/Music/inbox/
-docker compose cp noise.mp3 pipeline:/root/Music/inbox/
+docker compose cp track-a.mp3 scan:/root/Music/inbox/
+docker compose cp noise.mp3 scan:/root/Music/inbox/
 ```
 
 **2. Trigger an import:**
@@ -63,28 +63,28 @@ just import
 
 **3. Verify Case A (well-known track) was imported to the library:**
 ```bash
-docker compose run --rm pipeline beet ls -a
+docker compose run --rm scan beet ls -a
 # should list the track with artist/album/title populated
 
-docker compose run --rm pipeline find /root/Music/library -type f
+docker compose run --rm scan find /root/Music/library -type f
 # should show: /root/Music/library/<albumartist>/<album>/<track> - <title>.*
 ```
 
 **4. Verify Case B (unknown track) went to quarantine:**
 ```bash
-docker compose run --rm pipeline find /root/Music/quarantine -type f
+docker compose run --rm scan find /root/Music/quarantine -type f
 # noise.mp3 should appear here
 ```
 
 **5. Verify inbox is clear:**
 ```bash
-docker compose run --rm pipeline find /root/Music/inbox -maxdepth 1 -type f
+docker compose run --rm scan find /root/Music/inbox -maxdepth 1 -type f
 # should be empty — files have been moved out
 ```
 
 **6. Check the import log for match decisions:**
 ```bash
-docker compose run --rm pipeline tail -50 /root/.config/beets/import.log
+docker compose run --rm scan tail -50 /root/.config/beets/import.log
 # shows confidence scores and import/skip/quarantine decisions per file
 ```
 
@@ -106,17 +106,17 @@ docker compose run --rm pipeline tail -50 /root/.config/beets/import.log
 
 **1. Create a fake spotdl playlist directory:**
 ```bash
-docker compose run --rm pipeline mkdir -p /root/Music/inbox/spotdl/test-playlist
+docker compose run --rm scan mkdir -p /root/Music/inbox/spotdl/test-playlist
 ```
 
 **2. Drop a well-known track into it (simulating a spotdl download):**
 ```bash
-docker compose cp track-a.mp3 pipeline:/root/Music/inbox/spotdl/test-playlist/
+docker compose cp track-a.mp3 scan:/root/Music/inbox/spotdl/test-playlist/
 ```
 
 **3. Create a minimal `.spotdl` state file:**
 ```bash
-docker compose run --rm pipeline sh -c 'echo "{\"songs\": []}" > /root/Music/inbox/spotdl/test-playlist.spotdl'
+docker compose run --rm scan sh -c 'echo "{\"songs\": []}" > /root/Music/inbox/spotdl/test-playlist.spotdl'
 ```
 
 **4. Run a scan:**
@@ -126,13 +126,13 @@ just scan
 
 **5. Verify the `source` tag was applied:**
 ```bash
-docker compose run --rm pipeline beet ls -a source:test-playlist
+docker compose run --rm scan beet ls -a source:test-playlist
 # should list the imported track
 ```
 
 **6. Verify the `.m3u` was generated:**
 ```bash
-docker compose run --rm pipeline cat /root/Music/playlists/test-playlist.m3u
+docker compose run --rm scan cat /root/Music/playlists/test-playlist.m3u
 # should contain a relative path to the imported track
 ```
 
@@ -152,7 +152,7 @@ docker compose run --rm pipeline cat /root/Music/playlists/test-playlist.m3u
 
 **1. Drop the same well-known track into the inbox again:**
 ```bash
-docker compose cp track-a.mp3 pipeline:/root/Music/inbox/
+docker compose cp track-a.mp3 scan:/root/Music/inbox/
 ```
 
 **2. Run import again:**
@@ -162,12 +162,12 @@ just import
 
 **3. Check the import log for a skip/duplicate decision:**
 ```bash
-docker compose run --rm pipeline tail -20 /root/.config/beets/import.log
+docker compose run --rm scan tail -20 /root/.config/beets/import.log
 ```
 
 **4. Confirm there is only one copy in the library:**
 ```bash
-docker compose run --rm pipeline beet ls -a title:<track-title>
+docker compose run --rm scan beet ls -a title:<track-title>
 # should show exactly one entry
 ```
 
@@ -203,12 +203,12 @@ just sync
 
 **4. Verify tracks are in the library with the correct tag:**
 ```bash
-docker compose run --rm pipeline beet ls -a source:test-small
+docker compose run --rm scan beet ls -a source:test-small
 ```
 
 **5. Verify the `.m3u` was generated:**
 ```bash
-docker compose run --rm pipeline cat /root/Music/playlists/test-small.m3u
+docker compose run --rm scan cat /root/Music/playlists/test-small.m3u
 ```
 
 **6. If `NAVIDROME_URL` is set — check logs for rescan confirmation:**
@@ -241,7 +241,7 @@ just remove test-playlist
 just remove test-small
 
 # Clear quarantine manually
-docker compose run --rm pipeline rm -rf /root/Music/quarantine/*
+docker compose run --rm scan rm -rf /root/Music/quarantine/*
 ```
 
 ---

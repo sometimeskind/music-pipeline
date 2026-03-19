@@ -7,31 +7,35 @@ test:
 hooks:
     git config core.hooksPath .githooks
 
-# Run full ingest: spotdl sync → import → .m3u → Navidrome rescan
-sync:
-    op run --env-file .env.tpl -- docker compose run --rm pipeline music-ingest
+# Run spotdl sync (fetch container: Spotify/YouTube → inbox)
+fetch:
+    op run --env-file .env.tpl -- docker compose run --rm fetch music-ingest
 
 # Run a local scan: import inbox → .m3u → Navidrome rescan (no Spotify/YouTube)
 scan:
-    docker compose run --rm pipeline music-scan
+    docker compose run --rm scan music-scan
+
+# Run full ingest: spotdl sync → import → .m3u → Navidrome rescan
+sync:
+    just fetch && just scan
 
 # Import files dropped into inbox (subset of scan)
 import:
-    docker compose run --rm pipeline music-import
+    docker compose run --rm scan music-import
 
 # Add a new playlist (interactive)
 setup:
-    op run --env-file .env.tpl -- docker compose run --rm -it pipeline music-setup
+    op run --env-file .env.tpl -- docker compose run --rm -it fetch music-setup
 
 # Provision all playlists from config/playlists.conf (idempotent)
 provision:
-    op run --env-file .env.tpl -- docker compose run --rm pipeline music-provision
+    op run --env-file .env.tpl -- docker compose run --rm fetch music-provision
 
 # Remove a playlist: just remove <name>
 remove name:
-    docker compose run --rm pipeline music-remove {{name}}
+    docker compose run --rm scan music-remove {{name}}
 
 # Dump beets DB and export JSON from the container
 backup:
-    docker compose run --rm pipeline sh -c "beet export > /root/.config/beets/library-export.json"
-    docker compose run --rm pipeline sh -c "sqlite3 /root/.config/beets/library.db .dump > /root/.config/beets/library-dump.sql"
+    docker compose run --rm scan sh -c "beet export > /root/.config/beets/library-export.json"
+    docker compose run --rm scan sh -c "sqlite3 /root/.config/beets/library.db .dump > /root/.config/beets/library-dump.sql"

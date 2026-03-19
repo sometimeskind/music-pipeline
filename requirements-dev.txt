@@ -1,2 +1,3 @@
--r requirements.txt
+-r requirements-fetch.txt
+-r requirements-scan.txt
 pytest>=8.0

@@ -1,24 +1,23 @@
-"""music-ingest: daily spotdl sync loop → music-scan.
+"""music-ingest: daily spotdl sync loop → write pending-removals for music-scan.
 
 For each .spotdl playlist:
 1. Load the current .spotdl snapshot (old songs).
 2. Fetch the current Spotify playlist state (new songs) via spotdl library.
 3. Download new tracks (overwrite=skip ignores already-downloaded files).
 4. Diff old vs new URL sets to find removed tracks.
-5. Clear beets source tags for removed tracks (soft delete — files stay in library).
-Then calls music-scan to import + tag + generate playlists.
+5. Write removed track info to .pending-removals.json on the shared volume.
+   music-scan reads this file to clear beets source tags (soft delete — files stay in library).
 """
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 import re
 import time
 from pathlib import Path
 
-import pipeline.scan as scan_module
-from pipeline.library import MusicLibrary
 from pipeline.metrics import IngestMetrics
 from pipeline.spotdl_ops import find_track_in_snapshot, sync_playlist
 
@@ -26,7 +25,7 @@ logger = logging.getLogger(__name__)
 
 SPOTDL_DIR = Path("/root/Music/inbox/spotdl")
 COOKIE_FILE = Path("/root/.config/spotdl/cookies.txt")
-LIBRARY_DB = Path("/root/.config/beets/library.db")
+PENDING_REMOVALS = Path("/root/Music/inbox/.pending-removals.json")
 
 
 def classify_failure(error_msg: str) -> str:
@@ -73,17 +72,21 @@ def _jitter() -> None:
         time.sleep(delay)
 
 
-def _remove_source_tags(
-    lib: MusicLibrary,
+def _collect_removals(
+    pending: list[dict],
     removed_urls: set[str],
     old_songs: list[dict],
     playlist_name: str,
 ) -> None:
-    """Clear beets source tags for all removed track URLs."""
+    """Collect removed track info for deferred beets tag cleanup by music-scan."""
     if not removed_urls:
         return
 
-    logger.info("==> Unlinking %d removed track(s) from playlist: %s", len(removed_urls), playlist_name)
+    logger.info(
+        "==> Scheduling unlinking of %d removed track(s) from playlist: %s",
+        len(removed_urls),
+        playlist_name,
+    )
     for url in removed_urls:
         entry = find_track_in_snapshot(old_songs, url)
         if entry is None:
@@ -93,19 +96,39 @@ def _remove_source_tags(
         title = entry.get("name", "")
         artists = entry.get("artists", [])
         artist = artists[0] if artists else ""
-        logger.info("  Unlinking: %s — %s", title, artist)
+        logger.info("  Scheduling unlink: %s — %s", title, artist)
+        pending.append({"title": title, "artist": artist, "source": playlist_name})
 
-        found = lib.clear_source_tag(title=title, artist=artist, source=playlist_name)
-        if not found:
-            logger.warning(
-                "  WARNING: not found in beets — may need manual cleanup: %s by %s", title, artist
-            )
+
+def _write_pending_removals(pending: list[dict]) -> None:
+    """Append pending source-tag removals to the shared volume for music-scan."""
+    if not pending:
+        return
+
+    PENDING_REMOVALS.parent.mkdir(parents=True, exist_ok=True)
+
+    # Load and append — safe if fetch runs multiple times before scan processes the file.
+    existing: list[dict] = []
+    if PENDING_REMOVALS.exists():
+        try:
+            with open(PENDING_REMOVALS, encoding="utf-8") as fh:
+                existing = json.load(fh)
+        except (json.JSONDecodeError, OSError) as exc:
+            logger.error("Could not read %s — discarding prior pending removals: %s", PENDING_REMOVALS, exc)
+            existing = []
+
+    # Atomic write: write to a temp file then rename so a mid-write failure never
+    # truncates the existing file.
+    tmp = PENDING_REMOVALS.with_suffix(".tmp")
+    with open(tmp, "w", encoding="utf-8") as fh:
+        json.dump(existing + pending, fh, indent=2, ensure_ascii=False)
+    tmp.replace(PENDING_REMOVALS)
+
+    logger.info("==> Wrote %d pending removal(s) to %s", len(pending), PENDING_REMOVALS)
 
 
 def run() -> None:
     """Execute the full ingest pipeline, push metrics on completion."""
-    import json
-
     metrics = IngestMetrics()
     start = time.monotonic()
 
@@ -141,68 +164,68 @@ def run() -> None:
         if not spotdl_files:
             logger.info("No .spotdl files found in %s", SPOTDL_DIR)
 
-        with MusicLibrary(LIBRARY_DB) as lib:
-            for spotdl_file in spotdl_files:
-                name = spotdl_file.stem
+        pending_removals: list[dict] = []
 
-                # .nosync: skip spotdl sync for frozen playlists
-                if (SPOTDL_DIR / f"{name}.nosync").exists():
-                    logger.info("==> Skipping sync for static playlist: %s (.nosync present)", name)
-                    metrics.playlists_skipped += 1
-                    metrics.playlists_total += 1
-                    continue
+        for spotdl_file in spotdl_files:
+            name = spotdl_file.stem
 
-                # Budget exhausted: defer remaining playlists to the next session.
-                if remaining is not None and remaining <= 0:
-                    logger.info("==> Track budget exhausted — deferring %s to next session", name)
-                    metrics.playlists_deferred += 1
-                    metrics.playlists_total += 1
-                    continue
-
-                # Validate JSON before we attempt a sync
-                try:
-                    with open(spotdl_file, encoding="utf-8") as fh:
-                        sync_data = json.load(fh)
-                except json.JSONDecodeError:
-                    logger.warning("WARNING: %s is not valid JSON — skipping", spotdl_file)
-                    metrics.playlists_total += 1
-                    continue
-
-                old_songs: list[dict] = sync_data.get("songs", [])
-
-                logger.info("==> Syncing playlist: %s", name)
+            # .nosync: skip spotdl sync for frozen playlists
+            if (SPOTDL_DIR / f"{name}.nosync").exists():
+                logger.info("==> Skipping sync for static playlist: %s (.nosync present)", name)
+                metrics.playlists_skipped += 1
                 metrics.playlists_total += 1
-                output_dir = SPOTDL_DIR / name
-                output_dir.mkdir(parents=True, exist_ok=True)
+                continue
 
-                try:
-                    removed_urls, tracks_sent = sync_playlist(
-                        spotdl_file=spotdl_file,
-                        output_dir=output_dir,
-                        cookie_file=COOKIE_FILE,
-                        track_limit=remaining,
-                    )
-                except Exception as exc:
-                    reason = classify_failure(str(exc))
-                    logger.error(
-                        "ERROR: spotdl sync failed for %s (reason=%s): %s", name, reason, exc
-                    )
-                    metrics.success = False
-                    metrics.failure_reason = reason
-                    raise
+            # Budget exhausted: defer remaining playlists to the next session.
+            if remaining is not None and remaining <= 0:
+                logger.info("==> Track budget exhausted — deferring %s to next session", name)
+                metrics.playlists_deferred += 1
+                metrics.playlists_total += 1
+                continue
 
-                if remaining is not None:
-                    remaining -= tracks_sent
+            # Validate JSON before we attempt a sync
+            try:
+                with open(spotdl_file, encoding="utf-8") as fh:
+                    sync_data = json.load(fh)
+            except json.JSONDecodeError:
+                logger.warning("WARNING: %s is not valid JSON — skipping", spotdl_file)
+                metrics.playlists_total += 1
+                continue
 
-                _remove_source_tags(lib, removed_urls, old_songs, name)
+            old_songs: list[dict] = sync_data.get("songs", [])
 
-                # Brief pause between playlists — avoid hammering Spotify/YouTube APIs.
-                time.sleep(5)
+            logger.info("==> Syncing playlist: %s", name)
+            metrics.playlists_total += 1
+            output_dir = SPOTDL_DIR / name
+            output_dir.mkdir(parents=True, exist_ok=True)
 
-        logger.info("==> Sync complete. Calling music-scan for local import and playlist generation...")
-        scan_module.run()
+            try:
+                removed_urls, tracks_sent = sync_playlist(
+                    spotdl_file=spotdl_file,
+                    output_dir=output_dir,
+                    cookie_file=COOKIE_FILE,
+                    track_limit=remaining,
+                )
+            except Exception as exc:
+                reason = classify_failure(str(exc))
+                logger.error(
+                    "ERROR: spotdl sync failed for %s (reason=%s): %s", name, reason, exc
+                )
+                metrics.success = False
+                metrics.failure_reason = reason
+                raise
 
-        logger.info("==> music-ingest complete")
+            if remaining is not None:
+                remaining -= tracks_sent
+
+            _collect_removals(pending_removals, removed_urls, old_songs, name)
+
+            # Brief pause between playlists — avoid hammering Spotify/YouTube APIs.
+            time.sleep(5)
+
+        _write_pending_removals(pending_removals)
+
+        logger.info("==> music-ingest complete. Run music-scan for local import and playlist generation.")
 
     except SystemExit:
         raise
