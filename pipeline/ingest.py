@@ -113,11 +113,16 @@ def _write_pending_removals(pending: list[dict]) -> None:
         try:
             with open(PENDING_REMOVALS, encoding="utf-8") as fh:
                 existing = json.load(fh)
-        except (json.JSONDecodeError, OSError):
+        except (json.JSONDecodeError, OSError) as exc:
+            logger.error("Could not read %s — discarding prior pending removals: %s", PENDING_REMOVALS, exc)
             existing = []
 
-    with open(PENDING_REMOVALS, "w", encoding="utf-8") as fh:
+    # Atomic write: write to a temp file then rename so a mid-write failure never
+    # truncates the existing file.
+    tmp = PENDING_REMOVALS.with_suffix(".tmp")
+    with open(tmp, "w", encoding="utf-8") as fh:
         json.dump(existing + pending, fh, indent=2, ensure_ascii=False)
+    tmp.replace(PENDING_REMOVALS)
 
     logger.info("==> Wrote %d pending removal(s) to %s", len(pending), PENDING_REMOVALS)
 
