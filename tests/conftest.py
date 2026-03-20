@@ -113,12 +113,14 @@ def fixture_audio(docker_client, tmp_path_factory):
 
 
 @pytest.fixture(scope="session")
-def beets_autotag_config(tmp_path_factory):
-    """Production config + autotag=off, no chroma.
+def beets_asis_config(tmp_path_factory):
+    """Production config with autotag=False and chroma removed.
 
-    Disables MusicBrainz lookup entirely. beets imports files using their
-    embedded tags (ASIS), which fires import_task_choice so the music_pipeline
-    plugin still writes source= and via= to the library. Fully network-free.
+    ASIS mode: beets imports files using embedded tags without any MusicBrainz
+    or AcoustID network calls. import_task_created still fires (it fires in all
+    modes), so the music_pipeline plugin writes source= and via= to the library.
+    import_task_choice (duplicate handling) does NOT fire in ASIS mode — beets
+    applies duplicate_action from config directly instead. Fully network-free.
     """
     with open(BEETS_CONFIG) as f:
         config = yaml.safe_load(f)
@@ -130,7 +132,7 @@ def beets_autotag_config(tmp_path_factory):
         plugins = plugins.split()
     config["plugins"] = [p for p in plugins if p != "chroma"]
 
-    tmp = tmp_path_factory.mktemp("beets-cfg-autotag") / "config.yaml"
+    tmp = tmp_path_factory.mktemp("beets-cfg-asis") / "config.yaml"
     tmp.write_text(yaml.dump(config))
     return str(tmp)
 
@@ -185,7 +187,7 @@ def put_file(client, vol_names: dict, container_dir: str, local_path: Path) -> N
 
     helper = client.containers.create(
         SCAN_IMAGE,
-        command=["sleep", "30"],
+        command=["sleep", "infinity"],
         volumes={vol_names["music"]: {"bind": "/root/Music", "mode": "rw"}},
     )
     helper.start()
@@ -210,7 +212,7 @@ def put_bytes(
 
     helper = client.containers.create(
         SCAN_IMAGE,
-        command=["sleep", "30"],
+        command=["sleep", "infinity"],
         volumes={vol_names["music"]: {"bind": "/root/Music", "mode": "rw"}},
     )
     helper.start()
@@ -284,7 +286,7 @@ def ls_in_volume(client, vol_names: dict, container_path: str) -> list[str]:
         remove=True,
     )
     lines = result.decode().strip().splitlines()
-    return [l for l in lines if l]
+    return [line for line in lines if line]
 
 
 def beet_ls(client, vol_names: dict, query: str) -> str:
