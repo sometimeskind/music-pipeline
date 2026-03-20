@@ -1,44 +1,49 @@
 # Test Audio Fixture
 
-The audio file used by `test_import.py` is **not committed** to this repository.
-It is downloaded automatically on the first test run and cached here.
+The test suite generates its own audio fixture at runtime using ffmpeg — no file
+needs to be provided manually, and nothing is committed here.
 
-## Track in use
+## What gets generated
 
-**"7 Ghosts I" by Nine Inch Nails**, from *Ghosts I–IV* (2008)
+A **silent MP3** with embedded metadata matching the real recording:
 
 | Field | Value |
 |---|---|
 | Artist | Nine Inch Nails |
 | Title | 7 Ghosts I |
-| Album | Ghosts I–IV |
-| Duration | 2:01 |
-| License | [CC BY-NC-SA 3.0](https://creativecommons.org/licenses/by-nc-sa/3.0/) |
+| Album | Ghosts I-IV |
+| Duration | 121 s (matches MusicBrainz track length) |
 | MusicBrainz Recording ID | [1d1bb32a-5bc6-4b6f-88cc-c043f6c52509](https://musicbrainz.org/recording/1d1bb32a-5bc6-4b6f-88cc-c043f6c52509) |
-| Source | [Internet Archive](https://archive.org/details/nineinchnails_ghosts_I_IV) |
-| Download URL | `https://archive.org/download/nineinchnails_ghosts_I_IV/07_Ghosts_I.mp3` |
+| License | [CC BY-NC-SA 3.0](https://creativecommons.org/licenses/by-nc-sa/3.0/) |
 
-The file is saved as `Nine Inch Nails - 7 Ghosts I.mp3` so beets' `fromfilename`
-plugin extracts the correct artist and title for MusicBrainz text matching.
+## Why synthetic audio works
 
-## Why this track?
+The import tests use a test-specific beets config (`beets_test_config` fixture) with:
+- `strong_rec_thresh: 0.30` — accepts a good MusicBrainz text match
+- `chroma` plugin removed — no AcoustID fingerprint lookups
 
-- Verified in MusicBrainz with AcoustID fingerprints registered
-- CC BY-NC-SA 3.0 — compatible with non-commercial test infrastructure
-- Hosted on Internet Archive (long-term preservation; no authentication required)
-- Short (2:01) — keeps test download time low
-- Ghosts I–IV was a pioneering CC music release; the metadata is exemplary
+With embedded `artist`, `title`, and `album` tags, plus a matching duration, beets
+gets enough signal from a MusicBrainz text search to achieve high confidence on this
+unique title/artist combination — no real audio signal required.
+
+## How it's generated
+
+`ffmpeg` runs inside the scan container (which already ships ffmpeg) and writes the
+file to a host-side `tmp_path_factory` directory. The `fixture_audio` pytest fixture
+is session-scoped, so generation happens once per test run.
+
+```bash
+ffmpeg -f lavfi -i anullsrc=r=44100:cl=stereo \
+  -t 121 \
+  -metadata artist="Nine Inch Nails" \
+  -metadata title="7 Ghosts I" \
+  -metadata album="Ghosts I-IV" \
+  -q:a 9 -y "Nine Inch Nails - 7 Ghosts I.mp3"
+```
 
 ## Attribution (CC BY-NC-SA 3.0)
 
 "7 Ghosts I" by Nine Inch Nails is licensed under
 [Creative Commons Attribution-NonCommercial-ShareAlike 3.0](https://creativecommons.org/licenses/by-nc-sa/3.0/).
-
-## Cache behaviour
-
-The `fixture_audio` pytest fixture in `conftest.py` checks for the cached file
-before downloading. Delete it to force a re-download:
-
-```bash
-rm "tests/fixtures/audio/Nine Inch Nails - 7 Ghosts I.mp3"
-```
+The synthesized file is used solely as a metadata carrier for non-commercial
+test infrastructure.

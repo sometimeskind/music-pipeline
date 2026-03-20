@@ -10,9 +10,6 @@ from __future__ import annotations
 import io
 import os
 import tarfile
-import time
-import urllib.error
-import urllib.request
 from pathlib import Path, PurePosixPath
 
 import docker
@@ -37,18 +34,18 @@ PLAYLISTS_CONF = str(REPO_ROOT / "config" / "playlists.conf")
 COOKIES_PATH = REPO_ROOT / "cookies.txt"
 
 # ---------------------------------------------------------------------------
-# Audio fixture — CC BY-NC-SA 3.0 track downloaded at test time, cached locally.
-# "7 Ghosts I" by Nine Inch Nails, from Ghosts I–IV (2008).
+# Audio fixture — synthetic silent MP3 generated at test time by ffmpeg.
+#
+# Named after "7 Ghosts I" by Nine Inch Nails (CC BY-NC-SA 3.0).
 # MusicBrainz Recording ID: 1d1bb32a-5bc6-4b6f-88cc-c043f6c52509
-# Hosted on Internet Archive (long-term preservation guaranteed).
+#
+# beets matches on embedded artist/title/album tags + duration (no AcoustID).
+# Duration is set to 121 s (the real track length) to keep distance low.
+# No external downloads required — ffmpeg is already in the scan image.
 # ---------------------------------------------------------------------------
 
-FIXTURE_AUDIO_URL = (
-    "https://archive.org/download/nineinchnails_ghosts_I_IV/07_Ghosts_I.mp3"
-)
-FIXTURE_AUDIO_PATH = (
-    Path(__file__).parent / "fixtures" / "audio" / "Nine Inch Nails - 7 Ghosts I.mp3"
-)
+_FIXTURE_FILENAME = "Nine Inch Nails - 7 Ghosts I.mp3"
+_FIXTURE_DURATION_S = 121  # matches MusicBrainz track length (2:01)
 
 
 # ---------------------------------------------------------------------------
@@ -81,27 +78,33 @@ def volumes(docker_client):
 # ---------------------------------------------------------------------------
 
 
-def _download_fixture(url: str, dest: Path, retries: int = 4) -> None:
-    """Download url to dest, retrying with exponential backoff on transient errors."""
-    for attempt in range(retries):
-        try:
-            urllib.request.urlretrieve(url, dest)
-            return
-        except (urllib.error.HTTPError, urllib.error.URLError) as exc:
-            if attempt == retries - 1:
-                raise
-            wait = 2 ** (attempt + 1)  # 2, 4, 8, 16 s
-            print(f"\nFixture download failed ({exc}), retrying in {wait}s…")
-            time.sleep(wait)
-
-
 @pytest.fixture(scope="session")
-def fixture_audio():
-    """Return path to the CC test track, downloading it if not already cached."""
-    if not FIXTURE_AUDIO_PATH.exists():
-        print(f"\nDownloading test fixture from {FIXTURE_AUDIO_URL} …")
-        _download_fixture(FIXTURE_AUDIO_URL, FIXTURE_AUDIO_PATH)
-    return FIXTURE_AUDIO_PATH
+def fixture_audio(docker_client, tmp_path_factory):
+    """Generate a silent MP3 named after a MusicBrainz-indexed track.
+
+    Uses ffmpeg inside the scan container — no external downloads.
+    Embedded tags (artist, title, album) + matching duration give beets
+    enough signal for a confident text-only match against MusicBrainz.
+    """
+    dest_dir = tmp_path_factory.mktemp("audio")
+    dest = dest_dir / _FIXTURE_FILENAME
+    docker_client.containers.run(
+        SCAN_IMAGE,
+        command=[
+            "ffmpeg",
+            "-f", "lavfi", "-i", "anullsrc=r=44100:cl=stereo",
+            "-t", str(_FIXTURE_DURATION_S),
+            "-metadata", "artist=Nine Inch Nails",
+            "-metadata", "title=7 Ghosts I",
+            "-metadata", "album=Ghosts I-IV",
+            "-q:a", "9", "-y",
+            f"/out/{_FIXTURE_FILENAME}",
+        ],
+        volumes={str(dest_dir): {"bind": "/out", "mode": "rw"}},
+        remove=True,
+    )
+    assert dest.exists(), f"ffmpeg failed to produce {dest}"
+    return dest
 
 
 # ---------------------------------------------------------------------------

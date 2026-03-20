@@ -51,11 +51,12 @@ just test-auth
 - `cookies.txt` exists at the repo root
 - `TEST_PLAYLIST_URL` is exported in your shell (or added to `.env.tpl`)
 
-## Test audio fixture (track-a.m4a)
+## Test audio fixture
 
-Scenarios 2, 3, and 4 require a CC-licensed audio file at `tests/fixtures/audio/track-a.m4a`. See [`tests/fixtures/audio/README.md`](fixtures/audio/README.md) for sourcing instructions.
-
-All tests in `test_import.py` are automatically skipped with a clear message if the file is absent, so the suite remains runnable (smoke + chroma tests pass) before you add it.
+Scenarios 2–4 use a synthetic silent MP3 generated at runtime by ffmpeg inside
+the scan container. No file needs to be provided — the `fixture_audio` session
+fixture handles generation automatically. See
+[`tests/fixtures/audio/README.md`](fixtures/audio/README.md) for details.
 
 ## Scenarios covered
 
