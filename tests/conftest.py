@@ -35,15 +35,17 @@ PLAYLISTS_CONF = str(REPO_ROOT / "config" / "playlists.conf")
 COOKIES_PATH = REPO_ROOT / "cookies.txt"
 
 # ---------------------------------------------------------------------------
-# Audio fixture — CC-BY 4.0 track downloaded at test time, cached locally.
-# "Carefree" by Kevin MacLeod (incompetech.com). MusicBrainz-indexed.
+# Audio fixture — CC BY-NC-SA 3.0 track downloaded at test time, cached locally.
+# "7 Ghosts I" by Nine Inch Nails, from Ghosts I–IV (2008).
+# MusicBrainz Recording ID: 1d1bb32a-5bc6-4b6f-88cc-c043f6c52509
+# Hosted on Internet Archive (long-term preservation guaranteed).
 # ---------------------------------------------------------------------------
 
 FIXTURE_AUDIO_URL = (
-    "https://incompetech.com/music/royalty-free/mp3-royaltyfree/Carefree.mp3"
+    "https://archive.org/download/nineinchnails_ghosts_I_IV/07_Ghosts_I.mp3"
 )
 FIXTURE_AUDIO_PATH = (
-    Path(__file__).parent / "fixtures" / "audio" / "Kevin MacLeod - Carefree.mp3"
+    Path(__file__).parent / "fixtures" / "audio" / "Nine Inch Nails - 7 Ghosts I.mp3"
 )
 
 

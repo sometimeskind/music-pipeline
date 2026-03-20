@@ -5,31 +5,34 @@ It is downloaded automatically on the first test run and cached here.
 
 ## Track in use
 
-**"Carefree" by Kevin MacLeod**
+**"7 Ghosts I" by Nine Inch Nails**, from *Ghosts I–IV* (2008)
 
 | Field | Value |
 |---|---|
-| Artist | Kevin MacLeod |
-| Title | Carefree |
-| License | [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/) |
-| Source | [incompetech.com](https://incompetech.com/music/royalty-free/index.html?isrc=USUAN1100245) |
-| MusicBrainz artist | [1f9df192-a621-4f54-8850-2c5373b7eac9](https://musicbrainz.org/artist/1f9df192-a621-4f54-8850-2c5373b7eac9) |
-| Download URL | `https://incompetech.com/music/royalty-free/mp3-royaltyfree/Carefree.mp3` |
+| Artist | Nine Inch Nails |
+| Title | 7 Ghosts I |
+| Album | Ghosts I–IV |
+| Duration | 2:01 |
+| License | [CC BY-NC-SA 3.0](https://creativecommons.org/licenses/by-nc-sa/3.0/) |
+| MusicBrainz Recording ID | [1d1bb32a-5bc6-4b6f-88cc-c043f6c52509](https://musicbrainz.org/recording/1d1bb32a-5bc6-4b6f-88cc-c043f6c52509) |
+| Source | [Internet Archive](https://archive.org/details/nineinchnails_ghosts_I_IV) |
+| Download URL | `https://archive.org/download/nineinchnails_ghosts_I_IV/07_Ghosts_I.mp3` |
 
-The file is saved as `Kevin MacLeod - Carefree.mp3` so beets' `fromfilename`
-plugin extracts the artist and title for MusicBrainz matching.
+The file is saved as `Nine Inch Nails - 7 Ghosts I.mp3` so beets' `fromfilename`
+plugin extracts the correct artist and title for MusicBrainz text matching.
 
 ## Why this track?
 
-- Widely known and indexed in MusicBrainz
-- CC-BY 4.0 — compatible with open-source test infrastructure
-- Available via direct download from Kevin MacLeod's own site (stable URL)
-- The `Artist - Title` filename format enables reliable MusicBrainz text matching
-  even without AcoustID fingerprint lookups
+- Verified in MusicBrainz with AcoustID fingerprints registered
+- CC BY-NC-SA 3.0 — compatible with non-commercial test infrastructure
+- Hosted on Internet Archive (long-term preservation; no authentication required)
+- Short (2:01) — keeps test download time low
+- Ghosts I–IV was a pioneering CC music release; the metadata is exemplary
 
-## Attribution requirement (CC-BY 4.0)
+## Attribution (CC BY-NC-SA 3.0)
 
-Kevin MacLeod (incompetech.com) — Licensed under Creative Commons Attribution 4.0.
+"7 Ghosts I" by Nine Inch Nails is licensed under
+[Creative Commons Attribution-NonCommercial-ShareAlike 3.0](https://creativecommons.org/licenses/by-nc-sa/3.0/).
 
 ## Cache behaviour
 
@@ -37,5 +40,5 @@ The `fixture_audio` pytest fixture in `conftest.py` checks for the cached file
 before downloading. Delete it to force a re-download:
 
 ```bash
-rm tests/fixtures/audio/"Kevin MacLeod - Carefree.mp3"
+rm "tests/fixtures/audio/Nine Inch Nails - 7 Ghosts I.mp3"
 ```
