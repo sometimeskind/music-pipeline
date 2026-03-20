@@ -74,25 +74,47 @@ class MusicPipelinePlugin(BeetsPlugin):
         super().__init__("music_pipeline")
         self.register_listener("import_task_choice", self.tag_source)
         self.register_listener("item_imported", self.tag_imported_item)
+        self.register_listener("album_imported", self.tag_imported_album)
 
-    def tag_imported_item(self, lib, item):
-        """Ensure source= is set for items imported from the spotdl inbox.
+    def _tag_item_if_needed(self, item) -> bool:
+        """Set source= and via= on *item* if it's from the spotdl inbox and not tagged.
 
-        Fires after every import regardless of autotag mode (ASIS or matched).
-        Complements tag_source: if import_task_choice did not fire or its
-        modification was not persisted, this sets source= and stores the item.
+        Returns True if the item was modified.
         """
         playlist = _playlist_from_path(item.path)
         if playlist is None:
-            return
+            return False
         if (item.get("source") or "") == playlist:
-            return  # already set correctly by tag_source
+            return False  # already set correctly
         item["source"] = playlist
         item["via"] = "spotdl"
-        item.store()
-        self._log.debug(
-            "tagged imported item source={} via=spotdl (item_imported): {}", playlist, item.path
-        )
+        return True
+
+    def tag_imported_item(self, lib, item):
+        """Ensure source= is set for singleton items imported from the spotdl inbox.
+
+        Fires after every singleton import regardless of autotag mode.
+        Complements tag_source for cases where import_task_choice does not fire.
+        """
+        if self._tag_item_if_needed(item):
+            item.store()
+            self._log.debug(
+                "tagged singleton source={} via=spotdl (item_imported): {}", item.get("source"), item.path
+            )
+
+    def tag_imported_album(self, lib, album):
+        """Ensure source= is set for album items imported from the spotdl inbox.
+
+        Fires when files in a directory are imported together as an album (the
+        default grouping when singletons mode is not active). Without this,
+        import_task_choice modifications may not persist in ASIS mode.
+        """
+        for item in album.items():
+            if self._tag_item_if_needed(item):
+                item.store()
+                self._log.debug(
+                    "tagged album item source={} via=spotdl (album_imported): {}", item.get("source"), item.path
+                )
 
     def tag_source(self, session, task):
         """Tag incoming tracks with source= and via=, then handle duplicates."""
