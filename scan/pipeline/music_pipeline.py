@@ -2,8 +2,8 @@
 
 Responsibilities
 ----------------
-1. **tag_source** (``import_task_choice``): every track imported from the
-   spotdl inbox gets two flexible attributes:
+1. **tag_source_on_created** (``import_task_created``): every track imported
+   from the spotdl inbox gets two flexible attributes:
 
    * ``source=<playlist>``  — playlist membership; drives .m3u generation,
      ``clear_source_tag``, and ``music-remove``.  All existing pipeline code
@@ -11,11 +11,13 @@ Responsibilities
    * ``via=spotdl``          — import origin; used *only* to decide whether a
      duplicate can be replaced safely.  Never inherited.
 
+   Fires from ``handle_created()`` during ``read_tasks`` — always, regardless
+   of autotag mode — while ``item.path`` still points to the inbox file.
    Handles both singleton (``task.item``) and album (``task.items``) import
    tasks.
 
-2. **Duplicate protection** (also ``import_task_choice``): when duplicates
-   exist in the library for the incoming track:
+2. **Duplicate protection** (``import_task_choice``): when duplicates exist in
+   the library for the incoming track:
 
    * Any duplicate has no ``via=spotdl`` (manually imported) → skip the
      incoming file AND delete it from the inbox so it does not get
@@ -23,9 +25,17 @@ Responsibilities
    * All duplicates have ``via=spotdl`` → do nothing; ``duplicate_action:
      remove`` in config.yaml handles removal automatically.
 
+   Only fires when ``autotag=True`` (production). In ASIS mode
+   (``autotag=False``), ``import_asis`` calls ``_resolve_duplicates``
+   directly using ``config duplicate_action``.
+
 Note
 ----
-beets 2.7.1 does not expose an ``import_task_duplicate_action`` event.
+``import_task_start`` is inside ``lookup_candidates`` and only fires when
+``autotag=True``; it is never emitted in ASIS mode.  ``import_task_created``
+is the earliest hook that works in both modes.
+
+beets does not expose an ``import_task_duplicate_action`` event.
 Duplicate handling must be done inside ``import_task_choice``, which fires
 just before ``_resolve_duplicates()`` is called by the importer pipeline.
 
@@ -69,19 +79,27 @@ def _all_via_spotdl(duplicates: list) -> bool:
     return all((item.get("via") or "") == "spotdl" for item in duplicates)
 
 
+def _items_from_task(task) -> list:
+    """Return the list of items for a task (singleton or album)."""
+    if getattr(task, "item", None) is not None:
+        return [task.item]
+    return list(getattr(task, "items", None) or [])
+
+
 class MusicPipelinePlugin(BeetsPlugin):
     def __init__(self):
         super().__init__("music_pipeline")
-        self.register_listener("import_task_choice", self.tag_source)
+        self.register_listener("import_task_created", self.tag_source_on_created)
+        self.register_listener("import_task_choice", self.handle_duplicates)
 
-    def tag_source(self, session, task):
-        """Tag incoming tracks with source= and via=, then handle duplicates."""
-        if getattr(task, "item", None) is not None:
-            items = [task.item]
-        else:
-            items = list(getattr(task, "items", None) or [])
+    def tag_source_on_created(self, session, task):
+        """Tag incoming tracks with source= and via= at task creation.
 
-        for item in items:
+        Fires from handle_created() during read_tasks — always, regardless of
+        autotag mode — while item.path still points to the inbox file (before
+        any pipeline stage runs).
+        """
+        for item in _items_from_task(task):
             playlist = _playlist_from_path(item.path)
             if playlist is None:
                 continue
@@ -91,10 +109,26 @@ class MusicPipelinePlugin(BeetsPlugin):
                 "tagged incoming track source={} via=spotdl: {}", playlist, item.path
             )
 
+    def handle_duplicates(self, session, task):
+        """Protect manually-imported tracks from spotdl overwrites.
+
+        Fires from user_query (autotag=True only). In ASIS mode
+        (autotag=False) beets applies duplicate_action from config directly.
+        """
+        items = _items_from_task(task)
+
         # Only check duplicates for tasks that will be applied to the library.
         # Mirrors the guard in beets' own _resolve_duplicates().
         if not items or task.choice_flag not in _WILL_APPLY:
             return
+
+        # Re-apply source= in case MB lookup mutated item metadata.
+        for item in items:
+            playlist = _playlist_from_path(item.path)
+            if playlist is None:
+                continue
+            item["source"] = playlist
+            item["via"] = "spotdl"
 
         try:
             found = task.find_duplicates(session.lib)
