@@ -9,6 +9,7 @@ ui:
 import:
   quiet: yes
   move: yes
+  singletons: yes
   log: /root/.config/beets/import.log
   duplicate_action: remove
 
