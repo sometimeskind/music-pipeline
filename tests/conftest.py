@@ -108,21 +108,25 @@ def fixture_audio(docker_client, tmp_path_factory):
 
 
 # ---------------------------------------------------------------------------
-# Beets test config — derived from the production config at runtime.
+# Beets test configs
 #
-# Only two values are overridden so import tests are deterministic in CI:
-#   strong_rec_thresh: 0.30   — accepts a good text match; avoids relying on
-#                               AcoustID fingerprint lookup in the database
-#   chroma plugin removed     — no AcoustID network calls (CI stability)
+# Two variants, both derived from the production config to avoid drift:
 #
-# Everything else (paths, plugins, fetchart, etc.) comes from the production
-# config, so this fixture tracks production automatically — no config drift.
+#   beets_test_config      — autotag ON, strong_rec_thresh 0.30, no chroma.
+#                            Use for tests that need beets to attempt matching
+#                            and FAIL (e.g. noise → quarantine). MusicBrainz
+#                            network calls still happen; noise.mp3 won't match.
+#
+#   beets_autotag_config   — autotag OFF, no chroma.
+#                            Use for import-mechanic tests (inbox → library →
+#                            source= tag → .m3u). beets imports using embedded
+#                            tags only; no MusicBrainz calls, fully deterministic.
 # ---------------------------------------------------------------------------
 
 
 @pytest.fixture(scope="session")
 def beets_test_config(tmp_path_factory):
-    """Production beets config + test overrides, written to a session-scoped tmp file."""
+    """Production config + autotag=on, strong_rec_thresh=0.30, no chroma."""
     with open(BEETS_CONFIG) as f:
         config = yaml.safe_load(f)
 
@@ -134,6 +138,29 @@ def beets_test_config(tmp_path_factory):
     config["plugins"] = [p for p in plugins if p != "chroma"]
 
     tmp = tmp_path_factory.mktemp("beets-cfg") / "config.yaml"
+    tmp.write_text(yaml.dump(config))
+    return str(tmp)
+
+
+@pytest.fixture(scope="session")
+def beets_autotag_config(tmp_path_factory):
+    """Production config + autotag=off, no chroma.
+
+    Disables MusicBrainz lookup entirely. beets imports files using their
+    embedded tags (ASIS), which fires import_task_choice so the music_pipeline
+    plugin still writes source= and via= to the library. Fully network-free.
+    """
+    with open(BEETS_CONFIG) as f:
+        config = yaml.safe_load(f)
+
+    config.setdefault("import", {})["autotag"] = False
+
+    plugins = config.get("plugins", [])
+    if isinstance(plugins, str):
+        plugins = plugins.split()
+    config["plugins"] = [p for p in plugins if p != "chroma"]
+
+    tmp = tmp_path_factory.mktemp("beets-cfg-autotag") / "config.yaml"
     tmp.write_text(yaml.dump(config))
     return str(tmp)
 
