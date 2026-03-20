@@ -5,6 +5,18 @@ test:
     docker build --target dev -t music-pipeline-scan:dev scan
     docker run --rm music-pipeline-scan:dev
 
+# Run container integration tests against the current GHCR image (no auth needed)
+# Override the image with: SCAN_IMAGE=music-pipeline-scan:local just test-integration
+test-integration:
+    pip install -q -r tests/requirements.txt
+    pytest tests/ -m "not auth" -v
+
+# Run auth-required integration tests (local only; requires Spotify credentials via 1Password)
+# Set TEST_PLAYLIST_URL to a small playlist before running: export TEST_PLAYLIST_URL=https://...
+test-auth:
+    pip install -q -r tests/requirements.txt
+    op run --env-file .env.tpl -- pytest tests/ -m auth -v
+
 # Install git hooks (run once after cloning)
 hooks:
     git config core.hooksPath .githooks

@@ -3,10 +3,10 @@ name: scan CI
 on:
   push:
     branches: [main]
-    paths: ["scan/**", "compose.yml", "justfile", ".github/workflows/scan.yml"]
+    paths: ["scan/**", "tests/**", "config/beets/**", "compose.yml", "justfile", ".github/workflows/scan.yml"]
   pull_request:
     branches: [main]
-    paths: ["scan/**", "compose.yml", "justfile", ".github/workflows/scan.yml"]
+    paths: ["scan/**", "tests/**", "config/beets/**", "compose.yml", "justfile", ".github/workflows/scan.yml"]
 
 jobs:
   test:
@@ -86,6 +86,16 @@ jobs:
 
       - name: Health check — default command
         run: docker run --rm --entrypoint which music-pipeline-scan:ci-local music-scan
+
+      - name: Set up Python for integration tests
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Integration tests (scan)
+        run: |
+          pip install -r tests/requirements.txt
+          SCAN_IMAGE=music-pipeline-scan:ci-local pytest tests/ -m "not auth" -v
 
       - name: Push scan image to GHCR
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
