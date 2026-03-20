@@ -288,11 +288,15 @@ def ls_in_volume(client, vol_names: dict, container_path: str) -> list[str]:
 
 
 def beet_ls(client, vol_names: dict, query: str) -> str:
-    """Run `beet ls -a <query>` inside the scan container and return stdout."""
+    """Run `beet ls <query>` inside the scan container and return stdout.
+
+    Queries items (not albums) so that item-level flexible attributes such as
+    source= are matched correctly.
+    """
     c = client.containers.create(
         SCAN_IMAGE,
         entrypoint=["beet"],
-        command=["ls", "-a", query],
+        command=["ls", query],
         volumes=scan_binds(vol_names),
     )
     c.start()
