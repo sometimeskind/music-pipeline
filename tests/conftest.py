@@ -10,6 +10,8 @@ from __future__ import annotations
 import io
 import os
 import tarfile
+import time
+import urllib.error
 import urllib.request
 from pathlib import Path, PurePosixPath
 
@@ -79,12 +81,26 @@ def volumes(docker_client):
 # ---------------------------------------------------------------------------
 
 
+def _download_fixture(url: str, dest: Path, retries: int = 4) -> None:
+    """Download url to dest, retrying with exponential backoff on transient errors."""
+    for attempt in range(retries):
+        try:
+            urllib.request.urlretrieve(url, dest)
+            return
+        except (urllib.error.HTTPError, urllib.error.URLError) as exc:
+            if attempt == retries - 1:
+                raise
+            wait = 2 ** (attempt + 1)  # 2, 4, 8, 16 s
+            print(f"\nFixture download failed ({exc}), retrying in {wait}s…")
+            time.sleep(wait)
+
+
 @pytest.fixture(scope="session")
 def fixture_audio():
     """Return path to the CC test track, downloading it if not already cached."""
     if not FIXTURE_AUDIO_PATH.exists():
-        print(f"\nDownloading test fixture from {FIXTURE_AUDIO_URL} ...")
-        urllib.request.urlretrieve(FIXTURE_AUDIO_URL, FIXTURE_AUDIO_PATH)
+        print(f"\nDownloading test fixture from {FIXTURE_AUDIO_URL} …")
+        _download_fixture(FIXTURE_AUDIO_URL, FIXTURE_AUDIO_PATH)
     return FIXTURE_AUDIO_PATH
 
 

@@ -92,6 +92,15 @@ jobs:
         with:
           python-version: "3.12"
 
+      - name: Cache test audio fixture
+        uses: actions/cache@v4
+        with:
+          path: tests/fixtures/audio
+          # Cache key includes the URL embedded in conftest.py — busts automatically
+          # if the track is ever swapped out.
+          key: test-fixture-audio-${{ hashFiles('tests/conftest.py') }}
+          restore-keys: test-fixture-audio-
+
       - name: Integration tests (scan)
         run: |
           pip install -r tests/requirements.txt
