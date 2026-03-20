@@ -2,8 +2,8 @@
 
 Responsibilities
 ----------------
-1. **tag_source_on_start** (``import_task_start``): every track imported from
-   the spotdl inbox gets two flexible attributes:
+1. **tag_source_on_created** (``import_task_created``): every track imported
+   from the spotdl inbox gets two flexible attributes:
 
    * ``source=<playlist>``  — playlist membership; drives .m3u generation,
      ``clear_source_tag``, and ``music-remove``.  All existing pipeline code
@@ -11,9 +11,10 @@ Responsibilities
    * ``via=spotdl``          — import origin; used *only* to decide whether a
      duplicate can be replaced safely.  Never inherited.
 
-   Fires from ``read_tasks`` — always, regardless of autotag mode — while
-   ``item.path`` still points to the inbox file.  Handles both singleton
-   (``task.item``) and album (``task.items``) import tasks.
+   Fires from ``handle_created()`` during ``read_tasks`` — always, regardless
+   of autotag mode — while ``item.path`` still points to the inbox file.
+   Handles both singleton (``task.item``) and album (``task.items``) import
+   tasks.
 
 2. **Duplicate protection** (``import_task_choice``): when duplicates exist in
    the library for the incoming track:
@@ -24,12 +25,17 @@ Responsibilities
    * All duplicates have ``via=spotdl`` → do nothing; ``duplicate_action:
      remove`` in config.yaml handles removal automatically.
 
-   Only fires when ``autotag=True`` (production), which is fine: in ASIS
-   mode (``autotag=False``) beets uses ``duplicate_action`` directly.
+   Only fires when ``autotag=True`` (production). In ASIS mode
+   (``autotag=False``), ``import_asis`` calls ``_resolve_duplicates``
+   directly using ``config duplicate_action``.
 
 Note
 ----
-beets 2.7.1 does not expose an ``import_task_duplicate_action`` event.
+``import_task_start`` is inside ``lookup_candidates`` and only fires when
+``autotag=True``; it is never emitted in ASIS mode.  ``import_task_created``
+is the earliest hook that works in both modes.
+
+beets does not expose an ``import_task_duplicate_action`` event.
 Duplicate handling must be done inside ``import_task_choice``, which fires
 just before ``_resolve_duplicates()`` is called by the importer pipeline.
 
@@ -83,15 +89,15 @@ def _items_from_task(task) -> list:
 class MusicPipelinePlugin(BeetsPlugin):
     def __init__(self):
         super().__init__("music_pipeline")
-        self.register_listener("import_task_start", self.tag_source_on_start)
+        self.register_listener("import_task_created", self.tag_source_on_created)
         self.register_listener("import_task_choice", self.handle_duplicates)
 
-    def tag_source_on_start(self, session, task):
-        """Tag incoming tracks with source= and via= at task start.
+    def tag_source_on_created(self, session, task):
+        """Tag incoming tracks with source= and via= at task creation.
 
-        Fires from read_tasks — always, regardless of autotag mode — while
-        item.path still points to the inbox file (before manipulate_files
-        moves it to the library).
+        Fires from handle_created() during read_tasks — always, regardless of
+        autotag mode — while item.path still points to the inbox file (before
+        any pipeline stage runs).
         """
         for item in _items_from_task(task):
             playlist = _playlist_from_path(item.path)

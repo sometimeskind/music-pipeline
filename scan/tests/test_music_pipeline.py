@@ -104,37 +104,37 @@ def test_all_via_spotdl_none_via() -> None:
 
 
 # ---------------------------------------------------------------------------
-# MusicPipelinePlugin.tag_source_on_start — tagging
+# MusicPipelinePlugin.tag_source_on_created — tagging
 # ---------------------------------------------------------------------------
 
-def test_tag_source_on_start_singleton_in_inbox() -> None:
+def test_tag_source_on_created_singleton_in_inbox() -> None:
     plugin = _make_plugin()
     item = _item("/root/Music/inbox/spotdl/jazz/track.m4a")
     task = _task(item=item)
 
-    plugin.tag_source_on_start(session=MagicMock(), task=task)
+    plugin.tag_source_on_created(session=MagicMock(), task=task)
 
     item.__setitem__.assert_any_call("source", "jazz")
     item.__setitem__.assert_any_call("via", "spotdl")
 
 
-def test_tag_source_on_start_singleton_outside_inbox() -> None:
+def test_tag_source_on_created_singleton_outside_inbox() -> None:
     plugin = _make_plugin()
     item = _item("/root/Music/library/Artist/Album/track.m4a")
     task = _task(item=item)
 
-    plugin.tag_source_on_start(session=MagicMock(), task=task)
+    plugin.tag_source_on_created(session=MagicMock(), task=task)
 
     item.__setitem__.assert_not_called()
 
 
-def test_tag_source_on_start_album_task_tags_all_items() -> None:
+def test_tag_source_on_created_album_task_tags_all_items() -> None:
     plugin = _make_plugin()
     item1 = _item("/root/Music/inbox/spotdl/pop/a.m4a")
     item2 = _item("/root/Music/inbox/spotdl/pop/b.m4a")
     task = _task(items=[item1, item2])
 
-    plugin.tag_source_on_start(session=MagicMock(), task=task)
+    plugin.tag_source_on_created(session=MagicMock(), task=task)
 
     for item in (item1, item2):
         item.__setitem__.assert_any_call("source", "pop")
