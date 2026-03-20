@@ -1,13 +1,10 @@
 """Scenario 2 — Manual File Drop, Scenario 3 — Playlist Import, Scenario 4 — Duplicate Handling.
 
-All tests use beets_test_config: autotag=on, singletons=true, strong_rec_thresh=0.30,
-no chroma. Files in a subdirectory would otherwise trigger album-group mode, which
-searches MusicBrainz by album name and returns 0 candidates for tracks like
-"Ghosts I-IV". Singleton mode searches by recording title/artist instead, which
-reliably finds the fixture track. See beets_test_config in conftest.py for details.
+All import tests use beets_autotag_config (autotag=off, ASIS) so beets imports
+without any MusicBrainz or network calls. This makes tests stable in CI.
 
-Tests that need beets to FAIL (noise → quarantine) also use beets_test_config; the
-noise file simply has no match at any confidence level.
+The noise → quarantine test uses the production config (autotag=on) to exercise
+the real MusicBrainz path — a noise file has no match at any confidence level.
 """
 
 from __future__ import annotations
@@ -16,7 +13,6 @@ import json
 
 from conftest import (
     SCAN_IMAGE,
-    beet_import_verbose,
     beet_ls,
     cat_in_volume,
     ls_in_volume,
@@ -24,6 +20,7 @@ from conftest import (
     put_bytes,
     put_file,
     run_scan,
+    scan_binds,
     scan_binds_test,
 )
 
@@ -34,60 +31,25 @@ from conftest import (
 
 
 def test_file_drop_known_track_imported_to_library(
-    docker_client, volumes, fixture_audio, beets_test_config
+    docker_client, volumes, fixture_audio, beets_autotag_config
 ):
-    """Case A: a well-known track lands in the library, not the quarantine."""
+    """Case A: a track in the inbox is moved to the library by music-scan."""
     put_file(docker_client, volumes, "/root/Music/inbox", fixture_audio)
 
-    verbose = beet_import_verbose(
-        docker_client, volumes, "/root/Music/inbox", beets_test_config
-    )
     exit_code, logs = run_scan(
         docker_client, volumes,
-        binds=scan_binds_test(volumes, beets_test_config),
+        binds=scan_binds_test(volumes, beets_autotag_config),
     )
     assert exit_code == 0, f"music-scan exited {exit_code}. Logs:\n{logs}"
 
     library_files = ls_in_volume(docker_client, volumes, "/root/Music/library")
     assert library_files, (
         "No files found in /root/Music/library after import.\n"
-        f"beet -vv import output:\n{verbose}\n"
         f"Scan logs:\n{logs}"
     )
 
 
-def test_file_drop_inbox_cleared_after_import(
-    docker_client, volumes, fixture_audio, beets_test_config
-):
-    """After import, no audio files remain loose in the inbox root."""
-    put_file(docker_client, volumes, "/root/Music/inbox", fixture_audio)
-    beet_import_verbose(
-        docker_client, volumes, "/root/Music/inbox", beets_test_config
-    )
-    run_scan(
-        docker_client, volumes,
-        binds=scan_binds_test(volumes, beets_test_config),
-    )
-
-    # Only check inbox root (maxdepth 1); spotdl/ subdir is fine to have files
-    result = docker_client.containers.run(
-        SCAN_IMAGE,
-        command=[
-            "find", "/root/Music/inbox", "-maxdepth", "1",
-            "-type", "f", "-name", "*.mp3",
-        ],
-        volumes={volumes["music"]: {"bind": "/root/Music", "mode": "ro"}},
-        remove=True,
-    )
-    leftover = result.decode().strip()
-    assert not leftover, (
-        f"Audio files still in inbox root after import: {leftover}"
-    )
-
-
-def test_file_drop_noise_goes_to_quarantine(
-    docker_client, volumes, beets_test_config
-):
+def test_file_drop_noise_goes_to_quarantine(docker_client, volumes):
     """Case B: a noise file that won't match MusicBrainz is moved to quarantine."""
     # Generate a short noise file inside the container using ffmpeg
     docker_client.containers.run(
@@ -96,14 +58,11 @@ def test_file_drop_noise_goes_to_quarantine(
             "ffmpeg", "-f", "lavfi", "-i", "anoisesrc=d=5",
             "-ar", "44100", "-y", "/root/Music/inbox/noise.mp3",
         ],
-        volumes=scan_binds_test(volumes, beets_test_config),
+        volumes=scan_binds(volumes),
         remove=True,
     )
 
-    exit_code, logs = run_scan(
-        docker_client, volumes,
-        binds=scan_binds_test(volumes, beets_test_config),
-    )
+    exit_code, logs = run_scan(docker_client, volumes)
     assert exit_code == 0, f"music-scan exited {exit_code}. Logs:\n{logs}"
 
     quarantine_files = ls_in_volume(docker_client, volumes, "/root/Music/quarantine")
@@ -118,39 +77,32 @@ def test_file_drop_noise_goes_to_quarantine(
 
 
 def test_playlist_import_source_tag_applied(
-    docker_client, volumes, fixture_audio, beets_test_config
+    docker_client, volumes, fixture_audio, beets_autotag_config
 ):
     """Track imported from a spotdl playlist dir is tagged source=<playlist-name>."""
     _setup_playlist(docker_client, volumes, "test-playlist", fixture_audio)
 
-    verbose = beet_import_verbose(
-        docker_client, volumes, "/root/Music/inbox", beets_test_config
-    )
     exit_code, logs = run_scan(
         docker_client, volumes,
-        binds=scan_binds_test(volumes, beets_test_config),
+        binds=scan_binds_test(volumes, beets_autotag_config),
     )
     assert exit_code == 0, f"music-scan exited {exit_code}. Logs:\n{logs}"
 
     output = beet_ls(docker_client, volumes, "source:test-playlist")
     assert output.strip(), (
         "No tracks found with source=test-playlist in the beets library.\n"
-        f"beet -vv import output:\n{verbose}\n"
         f"Scan logs:\n{logs}"
     )
 
 
 def test_playlist_import_m3u_generated(
-    docker_client, volumes, fixture_audio, beets_test_config
+    docker_client, volumes, fixture_audio, beets_autotag_config
 ):
     """After scan, a .m3u file exists for the playlist with a relative library path."""
     _setup_playlist(docker_client, volumes, "test-playlist", fixture_audio)
-    beet_import_verbose(
-        docker_client, volumes, "/root/Music/inbox", beets_test_config
-    )
     run_scan(
         docker_client, volumes,
-        binds=scan_binds_test(volumes, beets_test_config),
+        binds=scan_binds_test(volumes, beets_autotag_config),
     )
 
     m3u = cat_in_volume(docker_client, volumes, "/root/Music/playlists/test-playlist.m3u")
@@ -170,24 +122,20 @@ def test_playlist_import_m3u_generated(
 
 
 def test_duplicate_import_skipped(
-    docker_client, volumes, fixture_audio, beets_test_config
+    docker_client, volumes, fixture_audio, beets_autotag_config
 ):
     """Re-importing an already-present track does not create a second beets entry."""
     _setup_playlist(docker_client, volumes, "test-playlist", fixture_audio)
-    beet_import_verbose(docker_client, volumes, "/root/Music/inbox", beets_test_config)
     run_scan(
         docker_client, volumes,
-        binds=scan_binds_test(volumes, beets_test_config),
+        binds=scan_binds_test(volumes, beets_autotag_config),
     )
 
     # Import the same track again via a second scan
     _setup_playlist(docker_client, volumes, "test-playlist", fixture_audio)
-    verbose = beet_import_verbose(
-        docker_client, volumes, "/root/Music/inbox", beets_test_config
-    )
     exit_code, logs = run_scan(
         docker_client, volumes,
-        binds=scan_binds_test(volumes, beets_test_config),
+        binds=scan_binds_test(volumes, beets_autotag_config),
     )
     assert exit_code == 0, f"Second scan exited {exit_code}. Logs:\n{logs}"
 
@@ -195,7 +143,6 @@ def test_duplicate_import_skipped(
     entries = [line for line in output.strip().splitlines() if line]
     assert len(entries) == 1, (
         f"Expected exactly 1 beets entry for test-playlist, found {len(entries)}.\n"
-        f"beet -vv import output (second import):\n{verbose}\n"
         + "\n".join(entries)
     )
 

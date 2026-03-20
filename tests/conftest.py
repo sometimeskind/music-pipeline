@@ -113,34 +113,6 @@ def fixture_audio(docker_client, tmp_path_factory):
 
 
 @pytest.fixture(scope="session")
-def beets_test_config(tmp_path_factory):
-    """Production config + autotag=on, strong_rec_thresh=0.30, no chroma.
-
-    Also sets import.singletons=true so beets searches by recording title/artist
-    rather than by album name. Without this, a single file in a subdirectory is
-    treated as a partial album and the album text search returns 0 candidates
-    (e.g. "Nine Inch Nails - Ghosts I-IV" → 0 results from MusicBrainz). A
-    singleton recording search for "7 Ghosts I" by "Nine Inch Nails" reliably
-    finds the track. This is also the correct mode for spotdl imports, which
-    downloads individual tracks rather than full albums.
-    """
-    with open(BEETS_CONFIG) as f:
-        config = yaml.safe_load(f)
-
-    config.setdefault("match", {})["strong_rec_thresh"] = 0.30
-    config.setdefault("import", {})["singletons"] = True
-
-    plugins = config.get("plugins", [])
-    if isinstance(plugins, str):
-        plugins = plugins.split()
-    config["plugins"] = [p for p in plugins if p != "chroma"]
-
-    tmp = tmp_path_factory.mktemp("beets-cfg") / "config.yaml"
-    tmp.write_text(yaml.dump(config))
-    return str(tmp)
-
-
-@pytest.fixture(scope="session")
 def beets_autotag_config(tmp_path_factory):
     """Production config + autotag=off, no chroma.
 
@@ -262,38 +234,6 @@ def mkdir_in_volume(client, vol_names: dict, container_path: str) -> None:
 # ---------------------------------------------------------------------------
 # Container run helpers
 # ---------------------------------------------------------------------------
-
-
-def beet_import_verbose(
-    client, vol_names: dict, inbox_path: str, config_path: str,
-    extra_flags: list[str] | None = None,
-) -> str:
-    """Run `beet -vv import --quiet [extra_flags] <inbox_path>` and return combined output.
-
-    The -vv flag enables DEBUG logging which includes MusicBrainz query results,
-    candidate distances, and the reason for any skip decisions. Behaviorally
-    identical to a quiet import — this is purely for diagnostic capture.
-
-    Run this BEFORE the full music-scan to populate the library (if the match
-    succeeds) and to capture the match evidence either way. If the match fails
-    the file stays in the inbox and the subsequent scan will also fail, but the
-    failure message will include exactly why beets skipped it.
-
-    Pass ``extra_flags`` to inject additional beet-import flags before the path,
-    e.g. ``["--search-id", "1d1bb32a-5bc6-4b6f-88cc-c043f6c52509"]`` to bypass
-    text search and use a known MusicBrainz recording ID directly.
-    """
-    c = client.containers.create(
-        SCAN_IMAGE,
-        entrypoint=["beet"],
-        command=["-vv", "import", "--quiet", *(extra_flags or []), inbox_path],
-        volumes=scan_binds_test(vol_names, config_path),
-    )
-    c.start()
-    c.wait()
-    output = c.logs(stdout=True, stderr=True).decode()
-    c.remove(force=True)
-    return output
 
 
 def run_scan(
