@@ -266,6 +266,33 @@ def mkdir_in_volume(client, vol_names: dict, container_path: str) -> None:
 # ---------------------------------------------------------------------------
 
 
+def beet_import_verbose(
+    client, vol_names: dict, inbox_path: str, config_path: str
+) -> str:
+    """Run `beet -vv import --quiet <inbox_path>` and return combined output.
+
+    The -vv flag enables DEBUG logging which includes MusicBrainz query results,
+    candidate distances, and the reason for any skip decisions. Behaviorally
+    identical to a quiet import — this is purely for diagnostic capture.
+
+    Run this BEFORE the full music-scan to populate the library (if the match
+    succeeds) and to capture the match evidence either way. If the match fails
+    the file stays in the inbox and the subsequent scan will also fail, but the
+    failure message will include exactly why beets skipped it.
+    """
+    c = client.containers.create(
+        SCAN_IMAGE,
+        entrypoint=["beet"],
+        command=["-vv", "import", "--quiet", inbox_path],
+        volumes=scan_binds_test(vol_names, config_path),
+    )
+    c.start()
+    c.wait()
+    output = c.logs(stdout=True, stderr=True).decode()
+    c.remove(force=True)
+    return output
+
+
 def run_scan(
     client, vol_names: dict, env: dict | None = None, binds: dict | None = None
 ) -> tuple[int, str]:
