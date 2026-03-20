@@ -109,28 +109,26 @@ def fixture_audio(docker_client, tmp_path_factory):
 
 # ---------------------------------------------------------------------------
 # Beets test configs
-#
-# Two variants, both derived from the production config to avoid drift:
-#
-#   beets_test_config      — autotag ON, strong_rec_thresh 0.30, no chroma.
-#                            Use for tests that need beets to attempt matching
-#                            and FAIL (e.g. noise → quarantine). MusicBrainz
-#                            network calls still happen; noise.mp3 won't match.
-#
-#   beets_autotag_config   — autotag OFF, no chroma.
-#                            Use for import-mechanic tests (inbox → library →
-#                            source= tag → .m3u). beets imports using embedded
-#                            tags only; no MusicBrainz calls, fully deterministic.
 # ---------------------------------------------------------------------------
 
 
 @pytest.fixture(scope="session")
 def beets_test_config(tmp_path_factory):
-    """Production config + autotag=on, strong_rec_thresh=0.30, no chroma."""
+    """Production config + autotag=on, strong_rec_thresh=0.30, no chroma.
+
+    Also sets import.singletons=true so beets searches by recording title/artist
+    rather than by album name. Without this, a single file in a subdirectory is
+    treated as a partial album and the album text search returns 0 candidates
+    (e.g. "Nine Inch Nails - Ghosts I-IV" → 0 results from MusicBrainz). A
+    singleton recording search for "7 Ghosts I" by "Nine Inch Nails" reliably
+    finds the track. This is also the correct mode for spotdl imports, which
+    downloads individual tracks rather than full albums.
+    """
     with open(BEETS_CONFIG) as f:
         config = yaml.safe_load(f)
 
     config.setdefault("match", {})["strong_rec_thresh"] = 0.30
+    config.setdefault("import", {})["singletons"] = True
 
     plugins = config.get("plugins", [])
     if isinstance(plugins, str):

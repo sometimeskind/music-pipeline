@@ -1,18 +1,13 @@
 """Scenario 2 — Manual File Drop, Scenario 3 — Playlist Import, Scenario 4 — Duplicate Handling.
 
-Two beets config variants are used (both derived from production config):
+All tests use beets_test_config: autotag=on, singletons=true, strong_rec_thresh=0.30,
+no chroma. Files in a subdirectory would otherwise trigger album-group mode, which
+searches MusicBrainz by album name and returns 0 candidates for tracks like
+"Ghosts I-IV". Singleton mode searches by recording title/artist instead, which
+reliably finds the fixture track. See beets_test_config in conftest.py for details.
 
-  beets_autotag_config  — autotag=off; used for all tests where we expect the
-      track to land in the library. beets imports using embedded tags (ASIS)
-      without any MusicBrainz lookup. import_task_choice still fires so the
-      music_pipeline plugin writes source= and via= correctly.
-
-  beets_test_config     — autotag=on, strong_rec_thresh=0.30, no chroma; used
-      for the noise-goes-to-quarantine test, which specifically needs beets to
-      attempt MusicBrainz matching and fail so the file gets quarantined.
-
-This module tests pipeline mechanics (inbox → library → source tag → .m3u),
-not MusicBrainz matching accuracy, which is beets' own concern.
+Tests that need beets to FAIL (noise → quarantine) also use beets_test_config; the
+noise file simply has no match at any confidence level.
 """
 
 from __future__ import annotations
