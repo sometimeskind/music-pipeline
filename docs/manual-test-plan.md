@@ -43,6 +43,51 @@ just scan
 
 ---
 
+## Scenario 1a — Chroma Plugin Verification
+
+**Goal:** Confirm that the chroma plugin and its runtime dependencies are correctly installed, and that AcoustID fingerprinting can be invoked during import.
+
+> Run this once after pulling a new image. Silent failure is possible: if `fpcalc` is missing or `pyacoustid` is broken, beets silently falls back to MusicBrainz-only matching with no error.
+
+### Layer 1 — Installation checks
+
+```bash
+# 1. Verify the fpcalc binary (from libchromaprint-tools) is present and functional
+docker compose run --rm scan fpcalc -version
+# Expected: "fpcalc version X.X.X" — exits 0
+
+# 2. Verify pyacoustid is importable
+docker compose run --rm scan python -c "import acoustid; print(acoustid.__version__)"
+# Expected: prints a version string — exits 0
+
+# 3. Verify beets loads the chroma plugin without errors
+docker compose run --rm scan beet version
+# Expected: "chroma" appears in the plugins list — no "plugin not found" errors
+```
+
+**Pass criteria:** All three exit 0. Any failure points to the image: check `scan/Dockerfile` for `libchromaprint-tools` and `scan/requirements.txt` for `pyacoustid`.
+
+### Layer 2 — Runtime verification (fingerprinting invoked during import)
+
+After completing Scenario 2, check the import log for AcoustID activity:
+
+```bash
+docker compose run --rm scan grep -i "fingerprint\|acoustid\|chroma" /root/.config/beets/import.log
+```
+
+If the grep returns nothing, beets matched entirely via MusicBrainz metadata (valid for well-tagged spotdl files). To force the fingerprint path, strip tags before import:
+
+```bash
+ffmpeg -i track-a.mp3 -map_metadata -1 -c:a copy track-a-notags.mp3
+docker compose cp track-a-notags.mp3 scan:/root/Music/inbox/
+just scan
+docker compose run --rm scan grep -i "fingerprint\|acoustid\|chroma" /root/.config/beets/import.log
+```
+
+**Pass criteria:** Import log contains at least one fingerprint/AcoustID reference when a tag-stripped file is imported.
+
+---
+
 ## Scenario 2 — Manual File Drop into Inbox
 
 **Goal:** Verify beets import, library placement, quarantine, and inbox cleanup — without Spotify or YouTube.
@@ -261,8 +306,10 @@ docker compose run --rm scan rm -rf /root/Music/quarantine/*
 
 | File | Purpose |
 |---|---|
-| `/root/.config/beets/import.log` | Per-file import decisions and confidence scores |
+| `/root/.config/beets/import.log` | Per-file import decisions, confidence scores, and AcoustID lookups |
 | `/root/.config/beets/library.db` | Beets SQLite DB — query with `beet ls` or `sqlite3` |
 | `/root/Music/quarantine/` | Files that didn't meet the MusicBrainz match threshold |
 | `/root/Music/playlists/` | Generated `.m3u` files |
-| `config/beets/config.yaml` | Match threshold (`strong_rec_thresh`), library paths |
+| `config/beets/config.yaml` | Match threshold (`strong_rec_thresh`), library paths, plugin list |
+| `scan/Dockerfile` | Installs `libchromaprint-tools` (provides `fpcalc`) — required by chroma plugin |
+| `scan/requirements.txt` | Lists `pyacoustid` — Python binding used by beets chroma plugin |
