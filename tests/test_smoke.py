@@ -47,14 +47,12 @@ def test_fpcalc_installed(docker_client):
 
 
 def test_acoustid_importable(docker_client):
-    """pyacoustid is importable and reports a version string."""
-    result = docker_client.containers.run(
+    """pyacoustid is importable and exposes the fingerprint function."""
+    docker_client.containers.run(
         SCAN_IMAGE,
-        command=["python", "-c", "import acoustid; print(acoustid.__version__)"],
+        command=["python", "-c", "import acoustid; assert hasattr(acoustid, 'fingerprint')"],
         remove=True,
     )
-    version = result.decode().strip()
-    assert version, "acoustid.__version__ returned an empty string"
 
 
 def test_beet_version_includes_chroma(docker_client, volumes):
