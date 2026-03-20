@@ -12,3 +12,8 @@ __pycache__/
 *.egg-info/
 .pytest_cache/
 .venv/
+
+# Downloaded test fixture audio (fetched at test time, never committed)
+tests/fixtures/audio/*.mp3
+tests/fixtures/audio/*.m4a
+tests/fixtures/audio/*.flac

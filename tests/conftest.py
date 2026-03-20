@@ -10,10 +10,12 @@ from __future__ import annotations
 import io
 import os
 import tarfile
+import urllib.request
 from pathlib import Path, PurePosixPath
 
 import docker
 import pytest
+import yaml
 
 # ---------------------------------------------------------------------------
 # Image names — override via environment for CI
@@ -31,6 +33,18 @@ BEETS_CONFIG = str(REPO_ROOT / "config" / "beets" / "config.yaml")
 SPOTDL_CONFIG = str(REPO_ROOT / "config" / "spotdl" / "config.json")
 PLAYLISTS_CONF = str(REPO_ROOT / "config" / "playlists.conf")
 COOKIES_PATH = REPO_ROOT / "cookies.txt"
+
+# ---------------------------------------------------------------------------
+# Audio fixture — CC-BY 4.0 track downloaded at test time, cached locally.
+# "Carefree" by Kevin MacLeod (incompetech.com). MusicBrainz-indexed.
+# ---------------------------------------------------------------------------
+
+FIXTURE_AUDIO_URL = (
+    "https://incompetech.com/music/royalty-free/mp3-royaltyfree/Carefree.mp3"
+)
+FIXTURE_AUDIO_PATH = (
+    Path(__file__).parent / "fixtures" / "audio" / "Kevin MacLeod - Carefree.mp3"
+)
 
 
 # ---------------------------------------------------------------------------
@@ -59,16 +73,70 @@ def volumes(docker_client):
 
 
 # ---------------------------------------------------------------------------
+# Audio fixture
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture(scope="session")
+def fixture_audio():
+    """Return path to the CC test track, downloading it if not already cached."""
+    if not FIXTURE_AUDIO_PATH.exists():
+        print(f"\nDownloading test fixture from {FIXTURE_AUDIO_URL} ...")
+        urllib.request.urlretrieve(FIXTURE_AUDIO_URL, FIXTURE_AUDIO_PATH)
+    return FIXTURE_AUDIO_PATH
+
+
+# ---------------------------------------------------------------------------
+# Beets test config — derived from the production config at runtime.
+#
+# Only two values are overridden so import tests are deterministic in CI:
+#   strong_rec_thresh: 0.30   — accepts a good text match; avoids relying on
+#                               AcoustID fingerprint lookup in the database
+#   chroma plugin removed     — no AcoustID network calls (CI stability)
+#
+# Everything else (paths, plugins, fetchart, etc.) comes from the production
+# config, so this fixture tracks production automatically — no config drift.
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture(scope="session")
+def beets_test_config(tmp_path_factory):
+    """Production beets config + test overrides, written to a session-scoped tmp file."""
+    with open(BEETS_CONFIG) as f:
+        config = yaml.safe_load(f)
+
+    config.setdefault("match", {})["strong_rec_thresh"] = 0.30
+
+    plugins = config.get("plugins", [])
+    if isinstance(plugins, str):
+        plugins = plugins.split()
+    config["plugins"] = [p for p in plugins if p != "chroma"]
+
+    tmp = tmp_path_factory.mktemp("beets-cfg") / "config.yaml"
+    tmp.write_text(yaml.dump(config))
+    return str(tmp)
+
+
+# ---------------------------------------------------------------------------
 # Volume bind helpers
 # ---------------------------------------------------------------------------
 
 
 def scan_binds(vol_names: dict) -> dict:
-    """Standard volume/mount mapping for the scan container."""
+    """Standard volume/mount mapping for the scan container (production config)."""
     return {
         vol_names["music"]: {"bind": "/root/Music", "mode": "rw"},
         vol_names["beets"]: {"bind": "/root/.config/beets", "mode": "rw"},
         BEETS_CONFIG: {"bind": "/root/.config/beets/config.yaml", "mode": "ro"},
+    }
+
+
+def scan_binds_test(vol_names: dict, config_path: str) -> dict:
+    """scan_binds variant that mounts a generated test beets config."""
+    return {
+        vol_names["music"]: {"bind": "/root/Music", "mode": "rw"},
+        vol_names["beets"]: {"bind": "/root/.config/beets", "mode": "rw"},
+        config_path: {"bind": "/root/.config/beets/config.yaml", "mode": "ro"},
     }
 
 
@@ -150,12 +218,18 @@ def mkdir_in_volume(client, vol_names: dict, container_path: str) -> None:
 # ---------------------------------------------------------------------------
 
 
-def run_scan(client, vol_names: dict, env: dict | None = None) -> tuple[int, str]:
-    """Run music-scan to completion. Returns (exit_code, combined_logs)."""
+def run_scan(
+    client, vol_names: dict, env: dict | None = None, binds: dict | None = None
+) -> tuple[int, str]:
+    """Run music-scan to completion. Returns (exit_code, combined_logs).
+
+    Pass `binds=scan_binds_test(vol_names, beets_test_config)` to use the
+    test beets config instead of the production one.
+    """
     c = client.containers.create(
         SCAN_IMAGE,
         environment={"PUSHGATEWAY_URL": "", **(env or {})},
-        volumes=scan_binds(vol_names),
+        volumes=binds if binds is not None else scan_binds(vol_names),
     )
     c.start()
     exit_code = c.wait()["StatusCode"]

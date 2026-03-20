@@ -1,43 +1,41 @@
-# Test Audio Fixture: track-a.m4a
+# Test Audio Fixture
 
-`track-a.m4a` is **not committed** to this repository. You must provide it before running Scenarios 2–4.
+The audio file used by `test_import.py` is **not committed** to this repository.
+It is downloaded automatically on the first test run and cached here.
 
-## Requirements
+## Track in use
 
-The file must be:
-- A short (5–10 second) clip is sufficient — full-length tracks work too
-- CC-licensed (Creative Commons) or otherwise freely redistributable
-- From a release indexed in [MusicBrainz](https://musicbrainz.org) so that beets can identify it with high confidence via AcoustID fingerprinting + metadata matching
+**"Carefree" by Kevin MacLeod**
 
-## Sourcing a suitable file
+| Field | Value |
+|---|---|
+| Artist | Kevin MacLeod |
+| Title | Carefree |
+| License | [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/) |
+| Source | [incompetech.com](https://incompetech.com/music/royalty-free/index.html?isrc=USUAN1100245) |
+| MusicBrainz artist | [1f9df192-a621-4f54-8850-2c5373b7eac9](https://musicbrainz.org/artist/1f9df192-a621-4f54-8850-2c5373b7eac9) |
+| Download URL | `https://incompetech.com/music/royalty-free/mp3-royaltyfree/Carefree.mp3` |
 
-Good sources:
-- **[Jamendo](https://www.jamendo.com)** — large catalogue of CC releases, many indexed in MusicBrainz. Download any track, verify it appears in MusicBrainz via `https://musicbrainz.org/search`.
-- **[ccMixter](https://ccmixter.org)** — CC-BY and CC0 tracks. Search for the artist/title in MusicBrainz to confirm it's indexed.
-- **[Free Music Archive](https://freemusicarchive.org)** — CC-licensed catalogue.
+The file is saved as `Kevin MacLeod - Carefree.mp3` so beets' `fromfilename`
+plugin extracts the artist and title for MusicBrainz matching.
 
-## After adding the file
+## Why this track?
 
-1. Place the file here as `track-a.m4a`
-2. Update this README with the track details:
+- Widely known and indexed in MusicBrainz
+- CC-BY 4.0 — compatible with open-source test infrastructure
+- Available via direct download from Kevin MacLeod's own site (stable URL)
+- The `Artist - Title` filename format enables reliable MusicBrainz text matching
+  even without AcoustID fingerprint lookups
 
----
+## Attribution requirement (CC-BY 4.0)
 
-**Track:** _(fill in)_
-**Artist:** _(fill in)_
-**Album:** _(fill in)_
-**License:** _(fill in — e.g. CC BY 4.0)_
-**MusicBrainz Recording ID:** _(fill in — e.g. https://musicbrainz.org/recording/<uuid>)_
+Kevin MacLeod (incompetech.com) — Licensed under Creative Commons Attribution 4.0.
 
----
+## Cache behaviour
 
-## Verifying the match threshold
+The `fixture_audio` pytest fixture in `conftest.py` checks for the cached file
+before downloading. Delete it to force a re-download:
 
-If `test_file_drop_known_track_imported_to_library` fails with "No files found in library", the track likely went to quarantine because the match confidence fell below the threshold in `config/beets/config.yaml`:
-
-```yaml
-match:
-  strong_rec_thresh: 0.05
+```bash
+rm tests/fixtures/audio/"Kevin MacLeod - Carefree.mp3"
 ```
-
-Try raising it to `0.10` and re-running. If the track still doesn't match, choose a different source file with better MusicBrainz coverage.
