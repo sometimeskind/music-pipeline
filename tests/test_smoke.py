@@ -11,8 +11,12 @@ import pytest
 from conftest import (
     BEETS_CONFIG,
     SCAN_IMAGE,
+    beet_import_verbose,
+    ls_in_volume,
+    put_file,
     run_scan,
     scan_binds,
+    scan_binds_test,
 )
 
 
@@ -71,3 +75,50 @@ def test_beet_version_includes_chroma(docker_client, volumes):
         "chroma plugin not listed in `beet version` output.\n"
         f"Full output:\n{output}"
     )
+
+
+# ---------------------------------------------------------------------------
+# Scenario 1c — Recording ID Lookup (Simulated AcoustID Path)
+# ---------------------------------------------------------------------------
+#
+# AcoustID fingerprinting yields a MusicBrainz recording ID, which beets then
+# looks up directly. This test simulates that path via `beet import --search-id`
+# — bypassing both text search and AcoustID while exercising the recording-ID →
+# MusicBrainz lookup → import code path that chroma enables in production.
+
+_RECORDING_MBID = "1d1bb32a-5bc6-4b6f-88cc-c043f6c52509"  # "7 Ghosts I" by NIN
+
+
+def test_search_id_imports_track_to_library(
+    docker_client, volumes, fixture_audio, beets_test_config
+):
+    """Track imported via --search-id lands in the library (recording-ID path)."""
+    put_file(docker_client, volumes, "/root/Music/inbox", fixture_audio)
+
+    verbose = beet_import_verbose(
+        docker_client, volumes, "/root/Music/inbox", beets_test_config,
+        extra_flags=["--search-id", _RECORDING_MBID],
+    )
+
+    library_files = ls_in_volume(docker_client, volumes, "/root/Music/library")
+    assert library_files, (
+        "No files found in /root/Music/library after --search-id import.\n"
+        f"beet -vv import output:\n{verbose}"
+    )
+
+
+def test_search_id_import_then_scan_succeeds(
+    docker_client, volumes, fixture_audio, beets_test_config
+):
+    """Full scan pipeline succeeds when the track was imported via recording ID."""
+    put_file(docker_client, volumes, "/root/Music/inbox", fixture_audio)
+
+    beet_import_verbose(
+        docker_client, volumes, "/root/Music/inbox", beets_test_config,
+        extra_flags=["--search-id", _RECORDING_MBID],
+    )
+    exit_code, logs = run_scan(
+        docker_client, volumes,
+        binds=scan_binds_test(volumes, beets_test_config),
+    )
+    assert exit_code == 0, f"music-scan exited {exit_code}. Logs:\n{logs}"

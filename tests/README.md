@@ -62,6 +62,6 @@ fixture handles generation automatically. See
 
 | File | Scenarios | Auth required |
 |---|---|---|
-| `test_smoke.py` | 1 (smoke), 1a (chroma plugin) | No |
+| `test_smoke.py` | 1 (smoke), 1a (chroma plugin), 1c (recording ID lookup) | No |
 | `test_import.py` | 2 (file drop), 3 (playlist + .m3u), 4 (duplicate handling) | No |
 | `test_auth.py` | 5 (full ingest with Spotify) | Yes |
