@@ -73,6 +73,26 @@ class MusicPipelinePlugin(BeetsPlugin):
     def __init__(self):
         super().__init__("music_pipeline")
         self.register_listener("import_task_choice", self.tag_source)
+        self.register_listener("item_imported", self.tag_imported_item)
+
+    def tag_imported_item(self, lib, item):
+        """Ensure source= is set for items imported from the spotdl inbox.
+
+        Fires after every import regardless of autotag mode (ASIS or matched).
+        Complements tag_source: if import_task_choice did not fire or its
+        modification was not persisted, this sets source= and stores the item.
+        """
+        playlist = _playlist_from_path(item.path)
+        if playlist is None:
+            return
+        if (item.get("source") or "") == playlist:
+            return  # already set correctly by tag_source
+        item["source"] = playlist
+        item["via"] = "spotdl"
+        item.store()
+        self._log.debug(
+            "tagged imported item source={} via=spotdl (item_imported): {}", playlist, item.path
+        )
 
     def tag_source(self, session, task):
         """Tag incoming tracks with source= and via=, then handle duplicates."""
