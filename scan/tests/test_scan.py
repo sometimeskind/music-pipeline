@@ -332,7 +332,7 @@ def test_name_words_normalises_correctly() -> None:
     from pipeline.scan import _name_words
 
     assert _name_words("DJ Koze - Pick Up") == {"koze", "pick"}
-    assert _name_words("Four Tet - Pyramid") == {"four", "pyramid"}
+    assert _name_words("Four Tet - Pyramid") == {"four", "tet", "pyramid"}
     # stop words and short words filtered
     assert "the" not in _name_words("The End of the World")
     assert "of" not in _name_words("Battle of Evermore")
