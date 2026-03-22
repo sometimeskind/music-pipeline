@@ -1,2 +1,3 @@
 spotdl==4.4.3
 requests>=2.32
+yt-dlp[default]

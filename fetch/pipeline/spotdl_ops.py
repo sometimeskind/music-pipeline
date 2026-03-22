@@ -32,6 +32,7 @@ def _make_downloader_settings(
         "sync_without_deleting": sync_without_deleting,
         "load_config": False,
         "threads": 4,
+        "yt_dlp_args": "--js-runtimes node",
     }
     if output_dir is not None:
         settings["output"] = str(output_dir)

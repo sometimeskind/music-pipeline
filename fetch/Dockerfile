@@ -1,9 +1,9 @@
 # fetch: spotdl sync, Spotify/YouTube network calls.
 FROM python:3.13-slim AS prod
 
-# ffmpeg required by spotdl (audio download and format handling)
+# ffmpeg required by spotdl; nodejs required by yt-dlp for JS challenge solving
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends ffmpeg \
+    && apt-get install -y --no-install-recommends ffmpeg nodejs \
     && rm -rf /var/lib/apt/lists/*
 
 # Python dependencies
@@ -19,7 +19,11 @@ RUN pip install --no-cache-dir -e /app
 RUN mkdir -p \
     /root/Music/inbox/spotdl \
     /root/.config/spotdl \
-    /root/.config/music-pipeline
+    /root/.config/music-pipeline \
+    /root/.config/yt-dlp
+
+# Use Node.js for EJS JS challenge solving (Deno is the default but not installed)
+RUN echo --js-runtimes node > /root/.config/yt-dlp/config
 
 CMD ["music-ingest"]
 
