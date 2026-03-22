@@ -204,17 +204,14 @@ def run() -> None:
         quarantined_before = _count_quarantine()
 
         logger.info("==> Importing from inbox...")
-        asis = os.environ.get("BEET_IMPORT_ASIS", "").lower() in ("1", "true", "yes")
         skip_limit_env = os.environ.get("BEET_SKIP_LIMIT")
         skip_limit = int(skip_limit_env) if skip_limit_env else None
-        if asis:
-            logger.info("Import mode   : --asis (trusting existing tags, no MusicBrainz lookup)")
         if skip_limit is not None:
             logger.info("Skip limit    : %d (early termination enabled)", skip_limit)
         inbox_snapshot = _snapshot_inbox(INBOX)
         logger.info("Inbox snapshot : %d audio file(s) queued for import", len(inbox_snapshot))
         import_start = time.time()
-        run_beet_import(INBOX, asis=asis, skip_limit=skip_limit)
+        run_beet_import(INBOX, skip_limit=skip_limit)
 
         with MusicLibrary(LIBRARY_DB) as lib:
             imported = lib.items_added_since(import_start)
