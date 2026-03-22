@@ -36,6 +36,14 @@ class MusicLibrary:
         """All items whose source flexible-attribute matches *source*."""
         return list(self._lib.items(f"source:{source}"))
 
+    def items_added_since(self, since: float) -> list[tuple[str, str]]:
+        """Return (title, artist) for items added to the library after *since* (Unix timestamp)."""
+        return [
+            (item.title or "", item.artist or item.albumartist or "")
+            for item in self._lib.items()
+            if (item.added or 0) >= since
+        ]
+
     def paths_by_source(self, source: str) -> list[Path]:
         """File paths for all items with the given source tag."""
         items = self.items_by_source(source)

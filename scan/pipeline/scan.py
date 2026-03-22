@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import time
 from pathlib import Path
 
@@ -19,12 +20,62 @@ from pipeline.process import run_beet_import, run_beet_update
 
 logger = logging.getLogger(__name__)
 
+AUDIO_EXTS = {".mp3", ".flac", ".ogg", ".opus", ".m4a", ".aac", ".wav", ".wma", ".aiff", ".ape", ".mpc"}
 SPOTDL_DIR = Path("/root/Music/inbox/spotdl")
 QUARANTINE = Path("/root/Music/quarantine")
 PLAYLISTS = Path("/root/Music/playlists")
 INBOX = Path("/root/Music/inbox")
 LIBRARY_DB = Path("/root/.config/beets/library.db")
 PENDING_REMOVALS = Path("/root/Music/inbox/.pending-removals.json")
+
+
+_STOP_WORDS = frozenset({"the", "and", "for", "feat", "ft", "vs", "with", "a", "an", "of", "in", "on"})
+
+
+def _name_words(s: str) -> frozenset[str]:
+    """Normalise a track/filename string to a set of significant lowercase words."""
+    words = re.sub(r"[^\w\s]", " ", s.lower()).split()
+    return frozenset(w for w in words if len(w) > 2 and w not in _STOP_WORDS)
+
+
+def _snapshot_inbox(inbox: Path) -> list[str]:
+    """Return sorted list of audio filename stems currently in the inbox tree."""
+    return sorted(
+        f.stem for f in inbox.rglob("*")
+        if f.is_file() and f.suffix.lower() in AUDIO_EXTS
+    )
+
+
+def _check_import_names(inbox_stems: list[str], imported: list[tuple[str, str]]) -> None:
+    """Compare imported track names against the pre-import inbox snapshot.
+
+    Flags tracks whose title+artist shares less than 40% Jaccard word-overlap
+    with the closest matching inbox filename — a signal that beets may have
+    applied a wildly wrong match.
+    """
+    if not inbox_stems or not imported:
+        return
+
+    inbox_word_sets = [_name_words(s) for s in inbox_stems]
+
+    flagged = []
+    for title, artist in imported:
+        lib_words = _name_words(f"{title} {artist}")
+        if not lib_words:
+            continue
+        best = max(
+            (len(lib_words & iws) / max(len(lib_words | iws), 1) for iws in inbox_word_sets),
+            default=0.0,
+        )
+        if best < 0.4:
+            flagged.append((title, artist, best))
+
+    if flagged:
+        logger.warning("==> %d imported track(s) look unlike anything in the inbox (possible bad match):", len(flagged))
+        for title, artist, score in sorted(flagged, key=lambda x: x[2]):
+            logger.warning("  !! %s — %s  (best inbox overlap: %.0f%%)", title, artist, score * 100)
+    else:
+        logger.info("==> Name check OK: all %d imported tracks resemble their inbox source files", len(imported))
 
 
 def _count_quarantine() -> int:
@@ -40,11 +91,10 @@ def _quarantine_inbox_leftovers() -> int:
     files remain in the inbox.  We move them to quarantine for manual review.
     Returns the count of files moved.
     """
-    audio_exts = {".mp3", ".flac", ".ogg", ".opus", ".m4a", ".aac", ".wav", ".wma", ".aiff", ".ape", ".mpc"}
     QUARANTINE.mkdir(parents=True, exist_ok=True)
     moved = 0
     for f in INBOX.glob("*"):
-        if f.is_file() and f.suffix.lower() in audio_exts:
+        if f.is_file() and f.suffix.lower() in AUDIO_EXTS:
             dest = QUARANTINE / f.name
             f.rename(dest)
             moved += 1
@@ -154,7 +204,15 @@ def run() -> None:
         quarantined_before = _count_quarantine()
 
         logger.info("==> Importing from inbox...")
+        inbox_snapshot = _snapshot_inbox(INBOX)
+        logger.info("Inbox snapshot : %d audio file(s) queued for import", len(inbox_snapshot))
+        import_start = time.time()
         run_beet_import(INBOX)
+
+        with MusicLibrary(LIBRARY_DB) as lib:
+            imported = lib.items_added_since(import_start)
+        logger.info("Newly imported : %d track(s)", len(imported))
+        _check_import_names(inbox_snapshot, imported)
 
         logger.info("==> Quarantining skipped files...")
         moved = _quarantine_inbox_leftovers()

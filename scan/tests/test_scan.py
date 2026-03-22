@@ -307,6 +307,65 @@ def test_regen_playlists_empty_playlist_writes_empty_m3u(tmp_path: Path) -> None
     assert m3u.read_text(encoding="utf-8") == ""
 
 
+# ---------------------------------------------------------------------------
+# _snapshot_inbox, _name_words, _check_import_names
+# ---------------------------------------------------------------------------
+
+
+def test_snapshot_inbox_finds_audio_files(tmp_path: Path) -> None:
+    from pipeline.scan import _snapshot_inbox
+
+    inbox = tmp_path / "inbox"
+    inbox.mkdir()
+    (inbox / "sub").mkdir()
+    (inbox / "DJ Koze - Pick Up.m4a").touch()
+    (inbox / "sub" / "Four Tet - Pyramid.flac").touch()
+    (inbox / "readme.txt").touch()
+
+    with mock.patch("pipeline.scan.AUDIO_EXTS", {".m4a", ".flac"}):
+        stems = _snapshot_inbox(inbox)
+
+    assert stems == ["DJ Koze - Pick Up", "Four Tet - Pyramid"]
+
+
+def test_name_words_normalises_correctly() -> None:
+    from pipeline.scan import _name_words
+
+    assert _name_words("DJ Koze - Pick Up") == {"koze", "pick"}
+    assert _name_words("Four Tet - Pyramid") == {"four", "tet", "pyramid"}
+    # stop words and short words filtered
+    assert "the" not in _name_words("The End of the World")
+    assert "of" not in _name_words("Battle of Evermore")
+
+
+def test_check_import_names_no_flags_on_good_match(caplog: pytest.LogCaptureFixture) -> None:
+    from pipeline.scan import _check_import_names
+    import logging
+
+    inbox = ["DJ Koze - Pick Up", "Four Tet - Pyramid"]
+    imported = [("Pick Up", "DJ Koze"), ("Pyramid", "Four Tet")]
+
+    with caplog.at_level(logging.INFO, logger="pipeline.scan"):
+        _check_import_names(inbox, imported)
+
+    assert "Name check OK" in caplog.text
+    assert "!!" not in caplog.text
+
+
+def test_check_import_names_flags_bad_match(caplog: pytest.LogCaptureFixture) -> None:
+    from pipeline.scan import _check_import_names
+    import logging
+
+    inbox = ["DJ Koze - Pick Up"]
+    imported = [("Never Be Like You", "Flume")]  # completely different
+
+    with caplog.at_level(logging.WARNING, logger="pipeline.scan"):
+        _check_import_names(inbox, imported)
+
+    assert "!!" in caplog.text
+    assert "Never Be Like You" in caplog.text
+
+
 def test_process_pending_removals_file_deleted_before_processing(tmp_path: Path) -> None:
     """File is unlinked before processing so an exception mid-processing doesn't re-block scans."""
     from pipeline.scan import _process_pending_removals
