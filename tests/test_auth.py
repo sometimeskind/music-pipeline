@@ -29,6 +29,7 @@ from conftest import (
     put_bytes,
     run_fetch,
     run_scan,
+    scan_binds_test,
 )
 
 pytestmark = pytest.mark.auth
@@ -48,7 +49,7 @@ _SKIP_REASON = "; ".join(_MISSING_PREREQS) + " — run via `just test-auth`"
 
 
 @pytest.mark.skipif(bool(_MISSING_PREREQS), reason=_SKIP_REASON)
-def test_full_ingest_spotify(docker_client, volumes):
+def test_full_ingest_spotify(docker_client, volumes, beets_asis_config):
     """End-to-end: spotdl sync → beets import → source tag → .m3u generation."""
     # Write a minimal .spotdl state with no songs so spotdl actually downloads
     put_bytes(
@@ -94,8 +95,8 @@ def test_full_ingest_spotify(docker_client, volumes):
         f"Fetch logs:\n{fetch_logs}"
     )
 
-    # Run scan
-    scan_exit, scan_logs = run_scan(docker_client, volumes)
+    # Run scan with asis config: this test validates auth and download, not MusicBrainz matching
+    scan_exit, scan_logs = run_scan(docker_client, volumes, binds=scan_binds_test(volumes, beets_asis_config))
     assert scan_exit == 0, f"music-scan exited {scan_exit}. Logs:\n{scan_logs}"
 
     # All downloaded tracks should be tagged with the correct source
