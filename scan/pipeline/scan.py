@@ -11,6 +11,7 @@ import json
 import logging
 import os
 import re
+import shutil
 import tempfile
 import time
 from pathlib import Path
@@ -198,7 +199,7 @@ def _move_asis_eligible(quarantine: Path, staging: Path) -> int:
             continue
         dest = staging / f.relative_to(quarantine)
         dest.parent.mkdir(parents=True, exist_ok=True)
-        f.rename(dest)
+        shutil.move(str(f), dest)
         moved += 1
     return moved
 
@@ -267,7 +268,7 @@ def run() -> None:
                     if remaining.is_file() and remaining.suffix.lower() in AUDIO_EXTS:
                         dest = QUARANTINE / remaining.relative_to(staging)
                         dest.parent.mkdir(parents=True, exist_ok=True)
-                        remaining.rename(dest)
+                        shutil.move(str(remaining), dest)
         with MusicLibrary(LIBRARY_DB) as lib:
             asis_imported = lib.items_added_since(asis_start)
         logger.info("Asis pass     : %d track(s) imported from quarantine", len(asis_imported))
