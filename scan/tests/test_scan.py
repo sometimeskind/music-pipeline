@@ -372,6 +372,64 @@ def test_check_import_names_flags_bad_match(caplog: pytest.LogCaptureFixture) ->
     assert "Never Be Like You" in caplog.text
 
 
+def _fake_tags(overrides: dict | None = None) -> dict:
+    base = {"title": ["Song"], "artist": ["Artist"], "album": ["Album"], "tracknumber": ["1"]}
+    if overrides:
+        base.update(overrides)
+    return base
+
+
+def test_move_asis_eligible_moves_fully_tagged_file(tmp_path: Path) -> None:
+    from pipeline.scan import _move_asis_eligible
+
+    quarantine = tmp_path / "quarantine"
+    quarantine.mkdir()
+    staging = tmp_path / "staging"
+    staging.mkdir()
+    (quarantine / "tagged.m4a").touch()
+
+    with mock.patch("mutagen.File", return_value=_fake_tags()):
+        count = _move_asis_eligible(quarantine, staging)
+
+    assert count == 1
+    assert (staging / "tagged.m4a").exists()
+    assert not (quarantine / "tagged.m4a").exists()
+
+
+def test_move_asis_eligible_leaves_untagged_file(tmp_path: Path) -> None:
+    from pipeline.scan import _move_asis_eligible
+
+    quarantine = tmp_path / "quarantine"
+    quarantine.mkdir()
+    staging = tmp_path / "staging"
+    staging.mkdir()
+    (quarantine / "noise.mp3").touch()
+
+    with mock.patch("mutagen.File", return_value={}):
+        count = _move_asis_eligible(quarantine, staging)
+
+    assert count == 0
+    assert (quarantine / "noise.mp3").exists()
+    assert not list(staging.iterdir())
+
+
+def test_move_asis_eligible_leaves_partially_tagged_file(tmp_path: Path) -> None:
+    from pipeline.scan import _move_asis_eligible
+
+    quarantine = tmp_path / "quarantine"
+    quarantine.mkdir()
+    staging = tmp_path / "staging"
+    staging.mkdir()
+    (quarantine / "partial.flac").touch()
+
+    # Has title and artist but missing album and tracknumber
+    with mock.patch("mutagen.File", return_value=_fake_tags({"album": None, "tracknumber": None})):
+        count = _move_asis_eligible(quarantine, staging)
+
+    assert count == 0
+    assert (quarantine / "partial.flac").exists()
+
+
 def test_run_beet_import_asis_flag() -> None:
     from pipeline.process import run_beet_import
     import unittest.mock as mock

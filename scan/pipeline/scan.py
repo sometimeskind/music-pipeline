@@ -11,6 +11,7 @@ import json
 import logging
 import os
 import re
+import tempfile
 import time
 from pathlib import Path
 
@@ -174,6 +175,34 @@ def _process_pending_removals() -> int:
     return total
 
 
+_ASIS_REQUIRED_TAGS = ("title", "artist", "album", "tracknumber")
+
+
+def _move_asis_eligible(quarantine: Path, staging: Path) -> int:
+    """Move audio files from *quarantine* that have all required tags to *staging*.
+
+    Files missing title, artist, album, or tracknumber are left in quarantine.
+    Returns the count of files moved.
+    """
+    from mutagen import File as MutagenFile  # noqa: PLC0415 — beets dep, always available
+
+    moved = 0
+    for f in sorted(quarantine.rglob("*")):
+        if not f.is_file() or f.suffix.lower() not in AUDIO_EXTS:
+            continue
+        try:
+            tags = MutagenFile(f, easy=True)
+            if tags is None or not all(tags.get(k) for k in _ASIS_REQUIRED_TAGS):
+                continue
+        except Exception:
+            continue
+        dest = staging / f.relative_to(quarantine)
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        f.rename(dest)
+        moved += 1
+    return moved
+
+
 def _regen_playlists() -> None:
     """Regenerate .m3u files for every .spotdl playlist."""
     PLAYLISTS.mkdir(parents=True, exist_ok=True)
@@ -227,7 +256,18 @@ def run() -> None:
 
         logger.info("==> Importing quarantine with existing tags (--asis)...")
         asis_start = time.time()
-        run_beet_import(QUARANTINE, asis=True)
+        with tempfile.TemporaryDirectory(prefix="asis-staging-") as staging_str:
+            staging = Path(staging_str)
+            staged = _move_asis_eligible(QUARANTINE, staging)
+            logger.info("Asis eligible : %d file(s) with sufficient tags", staged)
+            if staged:
+                run_beet_import(staging, asis=True)
+                # Return any files beet skipped (e.g. duplicates) to quarantine
+                for remaining in staging.rglob("*"):
+                    if remaining.is_file() and remaining.suffix.lower() in AUDIO_EXTS:
+                        dest = QUARANTINE / remaining.relative_to(staging)
+                        dest.parent.mkdir(parents=True, exist_ok=True)
+                        remaining.rename(dest)
         with MusicLibrary(LIBRARY_DB) as lib:
             asis_imported = lib.items_added_since(asis_start)
         logger.info("Asis pass     : %d track(s) imported from quarantine", len(asis_imported))
