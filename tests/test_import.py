@@ -49,8 +49,9 @@ def test_file_drop_known_track_imported_to_library(
     )
 
 
-def test_file_drop_noise_goes_to_quarantine(docker_client, volumes):
-    """Case B: a noise file that won't match MusicBrainz is moved to quarantine."""
+def test_file_drop_noise_rescued_by_asis_pass(docker_client, volumes):
+    """Case B: a noise file that won't match MusicBrainz is quarantined, then rescued
+    by the --asis fallback pass and imported to the library using its existing tags."""
     # Generate a short noise file inside the container using ffmpeg
     docker_client.containers.run(
         SCAN_IMAGE,
@@ -65,9 +66,15 @@ def test_file_drop_noise_goes_to_quarantine(docker_client, volumes):
     exit_code, logs = run_scan(docker_client, volumes)
     assert exit_code == 0, f"music-scan exited {exit_code}. Logs:\n{logs}"
 
+    # After the asis pass, the file should be out of quarantine
     quarantine_files = ls_in_volume(docker_client, volumes, "/root/Music/quarantine")
-    assert any("noise" in f for f in quarantine_files), (
-        f"noise.mp3 not found in quarantine. Quarantine contents: {quarantine_files}"
+    assert not any("noise" in f for f in quarantine_files), (
+        f"noise.mp3 still in quarantine after asis pass. Quarantine contents: {quarantine_files}"
+    )
+    # And imported into the library
+    library_files = ls_in_volume(docker_client, volumes, "/root/Music/library")
+    assert library_files, (
+        f"Library is empty after asis pass. Scan logs:\n{logs}"
     )
 
 
