@@ -374,13 +374,13 @@ def test_check_import_names_flags_bad_match(caplog: pytest.LogCaptureFixture) ->
 
 def test_run_beet_import_asis_flag() -> None:
     from pipeline.process import run_beet_import
-    import subprocess
     import unittest.mock as mock
 
-    with mock.patch("subprocess.Popen") as mock_popen:
-        mock_proc = mock.MagicMock()
-        mock_proc.wait.return_value = 0
-        mock_popen.return_value = mock_proc
+    mock_proc = mock.MagicMock()
+    mock_proc.wait.return_value = 0
+    with mock.patch("subprocess.Popen", return_value=mock_proc) as mock_popen, \
+         mock.patch("pipeline.process.IMPORT_LOG") as mock_log:
+        mock_log.exists.return_value = False
         run_beet_import(Path("/some/dir"), asis=True)
 
     cmd = mock_popen.call_args[0][0]
@@ -390,13 +390,13 @@ def test_run_beet_import_asis_flag() -> None:
 
 def test_run_beet_import_no_asis_flag_by_default() -> None:
     from pipeline.process import run_beet_import
-    import subprocess
     import unittest.mock as mock
 
-    with mock.patch("subprocess.Popen") as mock_popen:
-        mock_proc = mock.MagicMock()
-        mock_proc.wait.return_value = 0
-        mock_popen.return_value = mock_proc
+    mock_proc = mock.MagicMock()
+    mock_proc.wait.return_value = 0
+    with mock.patch("subprocess.Popen", return_value=mock_proc) as mock_popen, \
+         mock.patch("pipeline.process.IMPORT_LOG") as mock_log:
+        mock_log.exists.return_value = False
         run_beet_import(Path("/some/dir"))
 
     cmd = mock_popen.call_args[0][0]
