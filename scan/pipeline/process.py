@@ -53,14 +53,19 @@ def _watch_for_skips(log_path: Path, start_pos: int, skip_limit: int,
         time.sleep(0.5)
 
 
-def run_beet_import(inbox_dir: Path, skip_limit: int | None = None) -> None:
+def run_beet_import(inbox_dir: Path, skip_limit: int | None = None, asis: bool = False) -> None:
     """Run ``beet import --quiet <inbox_dir>``, forwarding SIGTERM to beet.
 
     Args:
         skip_limit: If set, terminate beet after this many skipped tracks (for threshold
                     testing without waiting through a full library run).
+        asis: If True, pass ``--asis`` to import using existing embedded tags without
+              MusicBrainz lookups.
     """
-    cmd = ["beet", "import", "--quiet", str(inbox_dir)]
+    cmd = ["beet", "import", "--quiet"]
+    if asis:
+        cmd.append("-A")
+    cmd.append(str(inbox_dir))
     logger.debug("Running: %s", " ".join(cmd))
 
     log_start = IMPORT_LOG.stat().st_size if IMPORT_LOG.exists() else 0

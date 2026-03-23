@@ -50,7 +50,8 @@ def test_file_drop_known_track_imported_to_library(
 
 
 def test_file_drop_noise_goes_to_quarantine(docker_client, volumes):
-    """Case B: a noise file that won't match MusicBrainz is moved to quarantine."""
+    """Case B: a tagless noise file that won't match MusicBrainz is moved to quarantine
+    and stays there — the asis pass skips files without sufficient embedded metadata."""
     # Generate a short noise file inside the container using ffmpeg
     docker_client.containers.run(
         SCAN_IMAGE,
