@@ -384,7 +384,7 @@ def test_run_beet_import_asis_flag() -> None:
         run_beet_import(Path("/some/dir"), asis=True)
 
     cmd = mock_popen.call_args[0][0]
-    assert "--asis" in cmd
+    assert "-A" in cmd
     assert "--quiet" in cmd
 
 
@@ -400,7 +400,7 @@ def test_run_beet_import_no_asis_flag_by_default() -> None:
         run_beet_import(Path("/some/dir"))
 
     cmd = mock_popen.call_args[0][0]
-    assert "--asis" not in cmd
+    assert "-A" not in cmd
     assert "--quiet" in cmd
 
 

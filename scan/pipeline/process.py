@@ -64,7 +64,7 @@ def run_beet_import(inbox_dir: Path, skip_limit: int | None = None, asis: bool =
     """
     cmd = ["beet", "import", "--quiet"]
     if asis:
-        cmd.append("--asis")
+        cmd.append("-A")
     cmd.append(str(inbox_dir))
     logger.debug("Running: %s", " ".join(cmd))
 
