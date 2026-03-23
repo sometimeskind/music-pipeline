@@ -63,15 +63,21 @@ def test_quarantine_leftovers(tmp_path: Path) -> None:
     inbox.mkdir()
     quarantine = tmp_path / "quarantine"
 
-    # Place an audio file and a non-audio file in the inbox root
+    # Root-level file
     (inbox / "unmatched.m4a").touch()
+    # Subdirectory file (e.g. spotdl playlist or artist/album folder)
+    subdir = inbox / "Artist" / "Album"
+    subdir.mkdir(parents=True)
+    (subdir / "01 - Track.mp3").touch()
+    # Non-audio file — must not be touched
     (inbox / "readme.txt").touch()
 
     with mock.patch("pipeline.scan.INBOX", inbox), mock.patch("pipeline.scan.QUARANTINE", quarantine):
         moved = _quarantine_inbox_leftovers()
 
-    assert moved == 1
+    assert moved == 2
     assert (quarantine / "unmatched.m4a").exists()
+    assert (quarantine / "Artist" / "Album" / "01 - Track.mp3").exists()
     assert (inbox / "readme.txt").exists()  # non-audio left in place
 
 
