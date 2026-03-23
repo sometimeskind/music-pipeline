@@ -372,6 +372,38 @@ def test_check_import_names_flags_bad_match(caplog: pytest.LogCaptureFixture) ->
     assert "Never Be Like You" in caplog.text
 
 
+def test_run_beet_import_asis_flag() -> None:
+    from pipeline.process import run_beet_import
+    import subprocess
+    import unittest.mock as mock
+
+    with mock.patch("subprocess.Popen") as mock_popen:
+        mock_proc = mock.MagicMock()
+        mock_proc.wait.return_value = 0
+        mock_popen.return_value = mock_proc
+        run_beet_import(Path("/some/dir"), asis=True)
+
+    cmd = mock_popen.call_args[0][0]
+    assert "--asis" in cmd
+    assert "--quiet" in cmd
+
+
+def test_run_beet_import_no_asis_flag_by_default() -> None:
+    from pipeline.process import run_beet_import
+    import subprocess
+    import unittest.mock as mock
+
+    with mock.patch("subprocess.Popen") as mock_popen:
+        mock_proc = mock.MagicMock()
+        mock_proc.wait.return_value = 0
+        mock_popen.return_value = mock_proc
+        run_beet_import(Path("/some/dir"))
+
+    cmd = mock_popen.call_args[0][0]
+    assert "--asis" not in cmd
+    assert "--quiet" in cmd
+
+
 def test_process_pending_removals_file_deleted_before_processing(tmp_path: Path) -> None:
     """File is unlinked before processing so an exception mid-processing doesn't re-block scans."""
     from pipeline.scan import _process_pending_removals

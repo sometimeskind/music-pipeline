@@ -225,6 +225,13 @@ def run() -> None:
         logger.info("Quarantined : %d file(s) → %s", moved, QUARANTINE)
         logger.info("Log         : ~/.config/beets/import.log")
 
+        logger.info("==> Importing quarantine with existing tags (--asis)...")
+        asis_start = time.time()
+        run_beet_import(QUARANTINE, asis=True)
+        with MusicLibrary(LIBRARY_DB) as lib:
+            asis_imported = lib.items_added_since(asis_start)
+        logger.info("Asis pass     : %d track(s) imported from quarantine", len(asis_imported))
+
         logger.info("==> Refreshing library metadata...")
         run_beet_update()
 
