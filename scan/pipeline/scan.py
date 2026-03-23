@@ -85,17 +85,19 @@ def _count_quarantine() -> int:
 
 
 def _quarantine_inbox_leftovers() -> int:
-    """Move any audio files still in the inbox root to quarantine.
+    """Move any audio files still anywhere in the inbox tree to quarantine.
 
     After ``beet import`` has processed everything it can, un-matched audio
-    files remain in the inbox.  We move them to quarantine for manual review.
-    Returns the count of files moved.
+    files remain in the inbox.  We move them to quarantine for manual review,
+    preserving the relative path so it's clear which playlist/album they came
+    from.  Returns the count of files moved.
     """
     QUARANTINE.mkdir(parents=True, exist_ok=True)
     moved = 0
-    for f in INBOX.glob("*"):
+    for f in INBOX.rglob("*"):
         if f.is_file() and f.suffix.lower() in AUDIO_EXTS:
-            dest = QUARANTINE / f.name
+            dest = QUARANTINE / f.relative_to(INBOX)
+            dest.parent.mkdir(parents=True, exist_ok=True)
             f.rename(dest)
             moved += 1
     return moved

@@ -6,7 +6,7 @@ services:
     image: ghcr.io/sometimeskind/music-pipeline-fetch:latest
     volumes:
       # Music data: inbox shared with scan container for downloaded files and pending-removals.json
-      - music-data:/root/Music
+      - /home/tom/Music:/root/Music
       # spotdl config (from this repo)
       - ./config/spotdl/config.json:/root/.config/spotdl/config.json:ro
       # Playlist registry (from this repo; k8s: mount as ConfigMap)
@@ -32,7 +32,7 @@ services:
     image: ghcr.io/sometimeskind/music-pipeline-scan:latest
     volumes:
       # Music data: inbox shared with fetch container, plus library/quarantine/playlists
-      - music-data:/root/Music
+      - /home/tom/Music:/root/Music
       # Beets database and import log (SQLite — back this up)
       - beets-data:/root/.config/beets
       # Beets config (from this repo)
@@ -40,7 +40,8 @@ services:
     environment:
       # Optional: Prometheus Pushgateway URL for job metrics
       - PUSHGATEWAY_URL=${PUSHGATEWAY_URL:-}
+      # Optional: stop beet import after N skips (for threshold testing)
+      - BEET_SKIP_LIMIT=${BEET_SKIP_LIMIT:-}
 
 volumes:
-  music-data:
   beets-data:
