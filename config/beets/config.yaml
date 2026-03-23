@@ -17,7 +17,7 @@ match:
   # Distance threshold: lower = stricter (0 = perfect match).
   # 0.05 accepts only very close MusicBrainz matches automatically.
   # Raise to 0.10 if too many valid tracks land in quarantine.
-  strong_rec_thresh: 0.30
+  strong_rec_thresh: 0.10
   # Allow spotdl downloads (one track at a time from multi-track albums) to
   # still receive a strong recommendation despite missing album tracks, so
   # quiet-mode auto-import accepts them.
