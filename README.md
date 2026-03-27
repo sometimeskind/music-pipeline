@@ -11,7 +11,7 @@ Two jobs run on separate schedules:
 | Job | Default schedule | Does |
 |---|---|---|
 | `music-scan` | Every 5 min | Import inbox → beets, refresh metadata, regenerate m3u |
-| `music-ingest` | Daily 03:00 UTC | spotdl sync all playlists → calls music-scan |
+| `music-ingest` | Daily 03:00 UTC | spotdl sync all playlists → writes pending removals for music-scan |
 
 ---
 
@@ -173,7 +173,8 @@ All three ConfigMaps should be mounted `readOnly: true`.
 | `SPOTIFY_CLIENT_SECRET` | Secret `music-pipeline-spotify/client-secret` | — | Required for music-ingest pods |
 | `PUSHGATEWAY_URL` | Plain value | `""` | e.g. `http://prometheus-pushgateway.monitoring:9091` |
 | `SYNC_JITTER_SECONDS` | Plain value | `"300"` | Random pre-sync sleep to stagger retries |
-| `SYNC_TRACK_LIMIT` | Plain value | `""` | Max new tracks downloaded across all playlists per session. Unset = no limit. Useful for large playlists (e.g. liked songs); the pipeline resumes where it left off next run. |
+| `SYNC_TRACK_LIMIT` | Plain value | `""` | Max new tracks downloaded across all playlists per session. Unset = no limit. Useful for large playlists (e.g. liked songs); the pipeline resumes where it left off next run. Fetch pods only. |
+| `BEET_SKIP_LIMIT` | Plain value | `""` | Terminate beet import early after this many skipped tracks. Unset = no limit. Useful for threshold testing or capping import time per run. Scan pods only. |
 
 `SCAN_CRON_SCHEDULE` and `SYNC_CRON_SCHEDULE` are only relevant to Docker Compose (written to `/etc/cron.d`). In k8s, the schedule is set on the `CronJob` spec directly.
 
@@ -253,5 +254,5 @@ kubectl logs -f job/music-ingest-manual
 - **`beet update` does not prune deleted files.** Use `beet remove <query>` with a specific query. Never run `beet remove` without a query.
 - **Cookies expire.** Re-export from browser when downloads fail at quality.
 - **Spotify rate limits.** Always use your own app credentials — the spotdl defaults are shared and hit limits quickly. For large playlists, set `SYNC_TRACK_LIMIT` to cap new downloads per session (e.g. `50`); the pipeline picks up where it left off each run.
-- **MusicBrainz threshold.** `strong_rec_thresh: 0.05` is strict. Raise to `0.10` in `config/beets/config.yaml` if too many valid tracks land in quarantine.
+- **MusicBrainz threshold.** `strong_rec_thresh: 0.10` in `config/beets/config.yaml`. Tracks that don't match confidently land in quarantine. A second `--asis` pass then imports any quarantined file that already has sufficient embedded tags (title, artist, album, tracknumber); the rest stay in quarantine for manual review. Raise the threshold if too many valid tracks are being quarantined.
 - **`.spotdl` files are the sync state.** Never delete them manually. They are backed by the PVC and re-created by `music-ingest` from `config/playlists.conf` on first run or after PVC loss. When `SYNC_TRACK_LIMIT` is active, the snapshot intentionally contains only downloaded tracks — deferred tracks are absent so they re-appear as new on the next run.
