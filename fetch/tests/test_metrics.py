@@ -61,3 +61,32 @@ def test_push_job_label_ingest(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr("pipeline.metrics._push", lambda body, job: jobs.append(job))
     IngestMetrics().push()
     assert jobs == ["music_ingest"]
+
+
+def test_ingest_metrics_tracks_downloaded(monkeypatch: pytest.MonkeyPatch) -> None:
+    pushed: list[str] = []
+    monkeypatch.setattr("pipeline.metrics._push", lambda body, job: pushed.append(body))
+
+    m = IngestMetrics(tracks_downloaded=42)
+    m.push()
+
+    assert "music_ingest_tracks_downloaded_total 42" in pushed[0]
+
+
+def test_ingest_metrics_cookies_expired_true(monkeypatch: pytest.MonkeyPatch) -> None:
+    pushed: list[str] = []
+    monkeypatch.setattr("pipeline.metrics._push", lambda body, job: pushed.append(body))
+
+    m = IngestMetrics(cookies_expired=True)
+    m.push()
+
+    assert "music_ingest_cookies_expired 1" in pushed[0]
+
+
+def test_ingest_metrics_cookies_expired_false_by_default(monkeypatch: pytest.MonkeyPatch) -> None:
+    pushed: list[str] = []
+    monkeypatch.setattr("pipeline.metrics._push", lambda body, job: pushed.append(body))
+
+    IngestMetrics().push()
+
+    assert "music_ingest_cookies_expired 0" in pushed[0]

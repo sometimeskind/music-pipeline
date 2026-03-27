@@ -302,8 +302,11 @@ def run() -> None:
                 )
                 metrics.success = False
                 metrics.failure_reason = reason
+                if reason == "auth_youtube":
+                    metrics.cookies_expired = True
                 raise
 
+            metrics.tracks_downloaded += tracks_sent
             if remaining is not None:
                 remaining -= tracks_sent
 
