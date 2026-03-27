@@ -231,7 +231,7 @@ def run() -> None:
         logger.info("==> music-scan starting")
 
         logger.info("==> Processing pending removals from fetch container...")
-        _process_pending_removals()
+        metrics.tracks_removed = _process_pending_removals()
 
         quarantined_before = _count_quarantine()
 
@@ -272,6 +272,7 @@ def run() -> None:
         with MusicLibrary(LIBRARY_DB) as lib:
             asis_imported = lib.items_added_since(asis_start)
         logger.info("Asis pass     : %d track(s) imported from quarantine", len(asis_imported))
+        metrics.tracks_imported = len(imported) + len(asis_imported)
 
         logger.info("==> Refreshing library metadata...")
         run_beet_update()

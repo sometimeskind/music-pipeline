@@ -61,3 +61,26 @@ def test_push_job_label_scan(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr("pipeline.metrics._push", lambda body, job: jobs.append(job))
     ScanMetrics().push()
     assert jobs == ["music_scan"]
+
+
+def test_scan_metrics_tracks_imported(monkeypatch: pytest.MonkeyPatch) -> None:
+    pushed: list[str] = []
+    monkeypatch.setattr("pipeline.metrics._push", lambda body, job: pushed.append(body))
+
+    m = ScanMetrics(tracks_imported=15, tracks_removed=3)
+    m.push()
+
+    body = pushed[0]
+    assert "music_scan_tracks_imported_total 15" in body
+    assert "music_scan_tracks_removed_total 3" in body
+
+
+def test_scan_metrics_track_counters_default_zero(monkeypatch: pytest.MonkeyPatch) -> None:
+    pushed: list[str] = []
+    monkeypatch.setattr("pipeline.metrics._push", lambda body, job: pushed.append(body))
+
+    ScanMetrics().push()
+
+    body = pushed[0]
+    assert "music_scan_tracks_imported_total 0" in body
+    assert "music_scan_tracks_removed_total 0" in body

@@ -36,6 +36,8 @@ class ScanMetrics:
     success: bool = True
     duration_seconds: int = 0
     quarantined_tracks: int = 0
+    tracks_imported: int = 0
+    tracks_removed: int = 0
     failure_reason: str = ""
 
     def push(self) -> None:
@@ -43,6 +45,8 @@ class ScanMetrics:
             _gauge("music_scan_last_run_success", int(self.success)),
             _gauge("music_scan_duration_seconds", self.duration_seconds),
             _gauge("music_scan_quarantined_tracks_total", self.quarantined_tracks),
+            _gauge("music_scan_tracks_imported_total", self.tracks_imported),
+            _gauge("music_scan_tracks_removed_total", self.tracks_removed),
         ]
         if not self.success and self.failure_reason:
             lines.append(

@@ -143,10 +143,23 @@ Two `CronJob` resources sharing two `PersistentVolumeClaim`s:
 
 ### PersistentVolumeClaims
 
-| PVC name | Mount path | Contents | Notes |
+| PVC name | Contents | Notes |
+|---|---|---|
+| `music-working` | `inbox/`, `quarantine/` | Ephemeral working data; shared between fetch and scan |
+| `music-library` | `library/`, `playlists/` | Permanent library; back this up |
+| `beets-data` | `library.db`, `import.log` | Small SQLite DB; back this up |
+
+Mounted with `subPath` so each PVC root maps to the correct sub-directory under `/root/Music`:
+
+| PVC | `subPath` | `mountPath` | Pods |
 |---|---|---|---|
-| `music-data` | `/root/Music` | Library, inbox, quarantine, playlists | Large; back up `library/` |
-| `beets-data` | `/root/.config/beets` | `library.db`, `import.log` | Small SQLite DB; back this up |
+| `music-working` | `inbox` | `/root/Music/inbox` | fetch, scan |
+| `music-working` | `quarantine` | `/root/Music/quarantine` | scan only |
+| `music-library` | `library` | `/root/Music/library` | scan only |
+| `music-library` | `playlists` | `/root/Music/playlists` | scan only |
+| `beets-data` | _(none)_ | `/root/.config/beets` | scan only |
+
+The fetch container only needs `music-working` (inbox mount). The scan container mounts all five.
 
 ### ConfigMaps
 

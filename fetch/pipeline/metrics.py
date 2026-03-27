@@ -38,6 +38,8 @@ class IngestMetrics:
     playlists_total: int = 0
     playlists_skipped: int = 0
     playlists_deferred: int = 0
+    tracks_downloaded: int = 0
+    cookies_expired: bool = False
     failure_reason: str = ""
 
     def push(self) -> None:
@@ -47,6 +49,8 @@ class IngestMetrics:
             _gauge("music_ingest_playlists_total", self.playlists_total),
             _gauge("music_ingest_playlists_skipped_total", self.playlists_skipped),
             _gauge("music_ingest_playlists_deferred_total", self.playlists_deferred),
+            _gauge("music_ingest_tracks_downloaded_total", self.tracks_downloaded),
+            _gauge("music_ingest_cookies_expired", int(self.cookies_expired)),
         ]
         if not self.success and self.failure_reason:
             lines.append(
