@@ -25,7 +25,7 @@ def _push(body: str, job: str) -> None:
         return
     endpoint = f"{url.rstrip('/')}/metrics/job/{job}"
     try:
-        resp = requests.post(endpoint, data=body.encode(), timeout=10)
+        resp = requests.post(endpoint, data=(body + "\n").encode(), timeout=10)
         resp.raise_for_status()
     except requests.RequestException as exc:
         logger.warning("Failed to push metrics to %s: %s", endpoint, exc)
