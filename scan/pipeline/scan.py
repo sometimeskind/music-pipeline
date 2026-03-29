@@ -285,7 +285,8 @@ def run() -> None:
         metrics.quarantined_tracks = max(0, quarantined_after - quarantined_before)
 
         logger.info("==> music-scan complete")
-        trigger_scan()
+        if imported or asis_imported:
+            trigger_scan()
 
     except Exception:
         metrics.success = False
