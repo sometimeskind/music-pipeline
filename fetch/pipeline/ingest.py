@@ -106,7 +106,7 @@ def _reconcile_playlists() -> list[str]:
         if not spotdl_file.exists():
             logger.info("==> Provisioning new playlist: %s", pl.name)
             output_dir.mkdir(parents=True, exist_ok=True)
-            save_playlist(url=pl.url, spotdl_file=spotdl_file, output_dir=output_dir, cookie_file=COOKIE_FILE)
+            save_playlist(url=pl.url, spotdl_file=spotdl_file)
 
         if pl.nosync:
             if not nosync_file.exists():
