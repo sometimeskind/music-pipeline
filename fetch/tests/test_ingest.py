@@ -386,7 +386,6 @@ def test_reconcile_provisions_new_playlist(tmp_path: Path) -> None:
     call_kwargs = mock_save.call_args[1]
     assert call_kwargs["url"] == "https://open.spotify.com/playlist/abc"
     assert call_kwargs["spotdl_file"] == spotdl_dir / "my-playlist.spotdl"
-    assert call_kwargs["output_dir"] == spotdl_dir / "my-playlist"
     assert result == []
 
 
