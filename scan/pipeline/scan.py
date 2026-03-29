@@ -18,6 +18,7 @@ from pathlib import Path
 
 from pipeline.library import MusicLibrary
 from pipeline.metrics import ScanMetrics
+from pipeline.navidrome import trigger_scan
 from pipeline.process import run_beet_import, run_beet_update
 
 logger = logging.getLogger(__name__)
@@ -284,6 +285,7 @@ def run() -> None:
         metrics.quarantined_tracks = max(0, quarantined_after - quarantined_before)
 
         logger.info("==> music-scan complete")
+        trigger_scan()
 
     except Exception:
         metrics.success = False
