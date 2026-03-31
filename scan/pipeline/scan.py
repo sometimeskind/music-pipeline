@@ -101,7 +101,7 @@ def _quarantine_inbox_leftovers() -> int:
         if f.is_file() and f.suffix.lower() in AUDIO_EXTS:
             dest = QUARANTINE / f.relative_to(INBOX)
             dest.parent.mkdir(parents=True, exist_ok=True)
-            f.rename(dest)
+            shutil.move(str(f), dest)
             moved += 1
     return moved
 
