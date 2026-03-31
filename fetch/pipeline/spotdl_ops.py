@@ -154,12 +154,13 @@ def sync_playlist(
         truly_new = truly_new[:track_limit]
 
     # Download only the new batch; existing tracks are already on disk (overwrite=skip).
-    spotdl_obj.download_songs(truly_new)
+    results = spotdl_obj.download_songs(truly_new)
 
-    # Persist: previously known songs still on Spotify + newly downloaded batch.
-    # Unprocessed songs are intentionally excluded — they'll be picked up next session.
-    batch_urls = {s.url for s in truly_new}
-    songs_to_write = [s for s in new_songs if s.url in old_urls or s.url in batch_urls]
+    # Only persist songs that were actually downloaded (path is not None).
+    # Songs where spotdl returned None failed silently — exclude them from the snapshot
+    # so they are retried as 'truly_new' on the next run.
+    downloaded_urls = {song.url for song, path in results if path is not None}
+    songs_to_write = [s for s in new_songs if s.url in old_urls or s.url in downloaded_urls]
 
     with open(spotdl_file, "w", encoding="utf-8") as fh:
         json.dump(

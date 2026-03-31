@@ -71,6 +71,7 @@ def test_sync_playlist_after_stub_downloads_all_songs(tmp_path: Path) -> None:
 
     mock_spotdl = mock.Mock()
     mock_spotdl.search.return_value = songs
+    mock_spotdl.download_songs.return_value = [(s, Path(f"/tmp/{i}.m4a")) for i, s in enumerate(songs)]
 
     with mock.patch("pipeline.spotdl_ops._make_spotdl", return_value=mock_spotdl):
         removed_urls, tracks_sent = sync_playlist(
@@ -85,6 +86,10 @@ def test_sync_playlist_after_stub_downloads_all_songs(tmp_path: Path) -> None:
     downloaded = mock_spotdl.download_songs.call_args[0][0]
     assert len(downloaded) == 5
     assert removed_urls == set()
+
+    # All 5 downloaded songs should be persisted to the snapshot
+    data = json.loads(spotdl_file.read_text(encoding="utf-8"))
+    assert len(data["songs"]) == 5
 
 
 def test_sync_playlist_second_run_skips_known_songs(tmp_path: Path) -> None:
@@ -108,8 +113,10 @@ def test_sync_playlist_second_run_skips_known_songs(tmp_path: Path) -> None:
     # Spotify now returns 5 songs: the 3 known + 2 new
     new_songs = [_make_mock_song(f"https://open.spotify.com/track/{i}") for i in range(5)]
 
+    new_only = [s for s in new_songs if s.url in {"https://open.spotify.com/track/3", "https://open.spotify.com/track/4"}]
     mock_spotdl = mock.Mock()
     mock_spotdl.search.return_value = new_songs
+    mock_spotdl.download_songs.return_value = [(s, Path(f"/tmp/{i}.m4a")) for i, s in enumerate(new_only)]
 
     with mock.patch("pipeline.spotdl_ops._make_spotdl", return_value=mock_spotdl):
         removed_urls, tracks_sent = sync_playlist(
@@ -127,6 +134,10 @@ def test_sync_playlist_second_run_skips_known_songs(tmp_path: Path) -> None:
         "https://open.spotify.com/track/4",
     }
     assert removed_urls == set()
+
+    # Snapshot should contain all 3 old + 2 newly downloaded = 5 songs
+    data = json.loads(spotdl_file.read_text(encoding="utf-8"))
+    assert len(data["songs"]) == 5
 
 
 def test_sync_playlist_detects_removed_tracks(tmp_path: Path) -> None:
@@ -151,6 +162,7 @@ def test_sync_playlist_detects_removed_tracks(tmp_path: Path) -> None:
     # Spotify no longer has track B
     mock_spotdl = mock.Mock()
     mock_spotdl.search.return_value = [_make_mock_song("https://open.spotify.com/track/A")]
+    mock_spotdl.download_songs.return_value = []  # nothing new to download
 
     with mock.patch("pipeline.spotdl_ops._make_spotdl", return_value=mock_spotdl):
         removed_urls, tracks_sent = sync_playlist(
@@ -161,3 +173,49 @@ def test_sync_playlist_detects_removed_tracks(tmp_path: Path) -> None:
 
     assert removed_urls == {"https://open.spotify.com/track/B"}
     assert tracks_sent == 0  # A was already known; nothing new to download
+
+def test_sync_playlist_failed_downloads_not_persisted(tmp_path: Path) -> None:
+    """Songs spotdl failed to download (path=None) are excluded from the snapshot.
+
+    Regression for issue #51: previously all attempted songs were written to the
+    snapshot regardless of download success, permanently skipping failed tracks.
+    """
+    spotdl_file = tmp_path / "mypl.spotdl"
+    output_dir = tmp_path / "mypl"
+    output_dir.mkdir()
+    cookie_file = tmp_path / "cookies.txt"
+
+    save_playlist(url="https://open.spotify.com/playlist/abc", spotdl_file=spotdl_file)
+
+    songs = [_make_mock_song(f"https://open.spotify.com/track/{i}") for i in range(4)]
+
+    mock_spotdl = mock.Mock()
+    mock_spotdl.search.return_value = songs
+    # Songs 0 and 2 succeed; songs 1 and 3 fail (path=None)
+    mock_spotdl.download_songs.return_value = [
+        (songs[0], Path("/tmp/0.m4a")),
+        (songs[1], None),
+        (songs[2], Path("/tmp/2.m4a")),
+        (songs[3], None),
+    ]
+
+    with mock.patch("pipeline.spotdl_ops._make_spotdl", return_value=mock_spotdl):
+        removed_urls, tracks_sent = sync_playlist(
+            spotdl_file=spotdl_file,
+            output_dir=output_dir,
+            cookie_file=cookie_file,
+        )
+
+    assert tracks_sent == 4  # all 4 were sent to spotdl
+    assert removed_urls == set()
+
+    # Only the 2 successful downloads should be in the snapshot
+    data = json.loads(spotdl_file.read_text(encoding="utf-8"))
+    persisted_urls = {s["url"] for s in data["songs"]}
+    assert persisted_urls == {
+        "https://open.spotify.com/track/0",
+        "https://open.spotify.com/track/2",
+    }
+    # Failed tracks (1 and 3) must be absent — they will be retried next run
+    assert "https://open.spotify.com/track/1" not in persisted_urls
+    assert "https://open.spotify.com/track/3" not in persisted_urls
