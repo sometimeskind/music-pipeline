@@ -35,6 +35,11 @@ PENDING_REMOVALS = Path("/root/Music/inbox/.pending-removals.json")
 CONF_PATH = Path("/root/.config/music-pipeline/playlists.conf")
 
 
+def _deadline_reached(elapsed: float, timeout: int | None) -> bool:
+    """Return True if *elapsed* seconds have met or exceeded *timeout*."""
+    return timeout is not None and elapsed >= timeout
+
+
 def classify_failure(error_msg: str) -> str:
     """Map a spotdl error message to a short Prometheus label string."""
     msg = error_msg.lower()
@@ -249,6 +254,20 @@ def run() -> None:
         if session_budget is not None:
             logger.info("Session track budget: %d new tracks across all playlists", session_budget)
 
+        timeout_str = os.environ.get("SYNC_TIMEOUT_SECONDS", "")
+        soft_timeout: int | None = None
+        if timeout_str.strip():
+            try:
+                soft_timeout = int(timeout_str.strip())
+            except ValueError:
+                logger.error("SYNC_TIMEOUT_SECONDS must be a positive integer, got %r — ignoring", timeout_str)
+        if soft_timeout is not None and soft_timeout <= 0:
+            logger.error("SYNC_TIMEOUT_SECONDS must be a positive integer, got %d — ignoring", soft_timeout)
+            soft_timeout = None
+
+        if soft_timeout is not None:
+            logger.info("Soft timeout: %ds — will stop before Kubernetes deadline fires", soft_timeout)
+
         spotdl_files = sorted(SPOTDL_DIR.glob("*.spotdl"))
         if not spotdl_files:
             logger.info("No .spotdl files found in %s", SPOTDL_DIR)
@@ -268,6 +287,18 @@ def run() -> None:
             # Budget exhausted: defer remaining playlists to the next session.
             if remaining is not None and remaining <= 0:
                 logger.info("==> Track budget exhausted — deferring %s to next session", name)
+                metrics.playlists_deferred += 1
+                metrics.playlists_total += 1
+                continue
+
+            # Soft timeout: stop before the Kubernetes activeDeadlineSeconds fires.
+            if _deadline_reached(time.monotonic() - start, soft_timeout):
+                logger.info(
+                    "==> Soft timeout reached (%ds/%ds) — deferring %s to next session",
+                    int(time.monotonic() - start),
+                    soft_timeout,
+                    name,
+                )
                 metrics.playlists_deferred += 1
                 metrics.playlists_total += 1
                 continue

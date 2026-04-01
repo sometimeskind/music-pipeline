@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from pipeline.ingest import classify_failure, _collect_removals, _reconcile_playlists, _write_pending_removals
+from pipeline.ingest import classify_failure, _collect_removals, _deadline_reached, _reconcile_playlists, _write_pending_removals
 from pipeline.spotdl_ops import find_track_in_snapshot
 
 
@@ -29,6 +29,27 @@ from pipeline.spotdl_ops import find_track_in_snapshot
 )
 def test_classify_failure(msg: str, expected: str) -> None:
     assert classify_failure(msg) == expected
+
+
+# ---------------------------------------------------------------------------
+# _deadline_reached
+# ---------------------------------------------------------------------------
+
+
+def test_deadline_reached_no_timeout() -> None:
+    assert _deadline_reached(0.0, None) is False
+
+
+def test_deadline_reached_not_yet() -> None:
+    assert _deadline_reached(50.0, 100) is False
+
+
+def test_deadline_reached_exactly_at_limit() -> None:
+    assert _deadline_reached(100.0, 100) is True
+
+
+def test_deadline_reached_past_limit() -> None:
+    assert _deadline_reached(200.0, 100) is True
 
 
 # ---------------------------------------------------------------------------
