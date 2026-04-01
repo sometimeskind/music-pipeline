@@ -35,9 +35,9 @@ PENDING_REMOVALS = Path("/root/Music/inbox/.pending-removals.json")
 CONF_PATH = Path("/root/.config/music-pipeline/playlists.conf")
 
 
-def _deadline_reached(start: float, timeout: int | None) -> bool:
-    """Return True if elapsed seconds since *start* have met or exceeded *timeout*."""
-    return timeout is not None and (time.monotonic() - start) >= timeout
+def _deadline_reached(elapsed: float, timeout: int | None) -> bool:
+    """Return True if *elapsed* seconds have met or exceeded *timeout*."""
+    return timeout is not None and elapsed >= timeout
 
 
 def classify_failure(error_msg: str) -> str:
@@ -292,7 +292,7 @@ def run() -> None:
                 continue
 
             # Soft timeout: stop before the Kubernetes activeDeadlineSeconds fires.
-            if _deadline_reached(start, soft_timeout):
+            if _deadline_reached(time.monotonic() - start, soft_timeout):
                 logger.info(
                     "==> Soft timeout reached (%ds/%ds) — deferring %s to next session",
                     int(time.monotonic() - start),
