@@ -23,6 +23,7 @@ def _make_plugin() -> MusicPipelinePlugin:
     """
     plugin = MusicPipelinePlugin.__new__(MusicPipelinePlugin)
     plugin._log = MagicMock()
+    plugin._pending_sources = {}
     return plugin
 
 
@@ -139,6 +140,93 @@ def test_tag_source_on_created_album_task_tags_all_items() -> None:
     for item in (item1, item2):
         item.__setitem__.assert_any_call("source", "pop")
         item.__setitem__.assert_any_call("via", "spotdl")
+
+
+# ---------------------------------------------------------------------------
+# MusicPipelinePlugin.tag_source_on_created — pending-source cache
+# ---------------------------------------------------------------------------
+
+def test_tag_source_on_created_caches_pending_source() -> None:
+    """Filename→playlist mapping must be cached for later item_imported re-apply."""
+    plugin = _make_plugin()
+    item = _item("/root/Music/inbox/spotdl/jazz/track.m4a")
+    task = _task(item=item)
+
+    plugin.tag_source_on_created(session=MagicMock(), task=task)
+
+    assert plugin._pending_sources["track.m4a"] == "jazz"
+
+
+def test_tag_source_on_created_outside_inbox_not_cached() -> None:
+    plugin = _make_plugin()
+    item = _item("/root/Music/library/Artist/Album/track.m4a")
+    task = _task(item=item)
+
+    plugin.tag_source_on_created(session=MagicMock(), task=task)
+
+    assert plugin._pending_sources == {}
+
+
+def test_tag_source_on_created_album_task_caches_all_items() -> None:
+    plugin = _make_plugin()
+    item1 = _item("/root/Music/inbox/spotdl/pop/a.m4a")
+    item2 = _item("/root/Music/inbox/spotdl/pop/b.m4a")
+    task = _task(items=[item1, item2])
+
+    plugin.tag_source_on_created(session=MagicMock(), task=task)
+
+    assert plugin._pending_sources["a.m4a"] == "pop"
+    assert plugin._pending_sources["b.m4a"] == "pop"
+
+
+# ---------------------------------------------------------------------------
+# MusicPipelinePlugin.tag_source_on_stored — item_imported re-apply
+# ---------------------------------------------------------------------------
+
+def test_tag_source_on_stored_applies_and_stores_source() -> None:
+    """After autotag mutates the item, item_imported must re-apply source/via."""
+    plugin = _make_plugin()
+    plugin._pending_sources = {"track.m4a": "jazz"}
+    item = _item("/root/Music/library/Artist/Album/track.m4a")
+
+    plugin.tag_source_on_stored(lib=MagicMock(), item=item)
+
+    item.__setitem__.assert_any_call("source", "jazz")
+    item.__setitem__.assert_any_call("via", "spotdl")
+    item.store.assert_called_once()
+
+
+def test_tag_source_on_stored_consumes_pending_entry() -> None:
+    """The cache entry must be removed after use to prevent memory leaks."""
+    plugin = _make_plugin()
+    plugin._pending_sources = {"track.m4a": "jazz"}
+    item = _item("/root/Music/library/Artist/Album/track.m4a")
+
+    plugin.tag_source_on_stored(lib=MagicMock(), item=item)
+
+    assert "track.m4a" not in plugin._pending_sources
+
+
+def test_tag_source_on_stored_unknown_item_does_nothing() -> None:
+    """Items not originating from the spotdl inbox must be left untouched."""
+    plugin = _make_plugin()
+    item = _item("/root/Music/library/Artist/Album/track.m4a")
+
+    plugin.tag_source_on_stored(lib=MagicMock(), item=item)
+
+    item.__setitem__.assert_not_called()
+    item.store.assert_not_called()
+
+
+def test_tag_source_on_stored_bytes_path() -> None:
+    plugin = _make_plugin()
+    plugin._pending_sources = {"track.m4a": "rock"}
+    item = _item(b"/root/Music/library/Artist/Album/track.m4a")
+
+    plugin.tag_source_on_stored(lib=MagicMock(), item=item)
+
+    item.__setitem__.assert_any_call("source", "rock")
+    item.store.assert_called_once()
 
 
 # ---------------------------------------------------------------------------

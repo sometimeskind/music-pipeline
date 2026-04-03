@@ -16,6 +16,14 @@ Responsibilities
    Handles both singleton (``task.item``) and album (``task.items``) import
    tasks.
 
+   Also caches ``filename → playlist`` in ``_pending_sources`` for step 1a.
+
+1a. **tag_source_on_stored** (``item_imported``): re-applies ``source=`` and
+    ``via=`` after the item is fully persisted, then calls ``item.store()``.
+    MusicBrainz autotag can replace the item's metadata dict wholesale between
+    steps 1 and 1a, silently discarding the flex attributes.  This hook
+    guarantees the tags survive to the database on clean first-time imports.
+
 2. **Duplicate protection** (``import_task_choice``): when duplicates exist in
    the library for the incoming track:
 
@@ -89,7 +97,11 @@ def _items_from_task(task) -> list:
 class MusicPipelinePlugin(BeetsPlugin):
     def __init__(self):
         super().__init__("music_pipeline")
+        # filename → playlist name; populated at import_task_created, consumed
+        # at item_imported to survive MusicBrainz autotag metadata replacement.
+        self._pending_sources: dict[str, str] = {}
         self.register_listener("import_task_created", self.tag_source_on_created)
+        self.register_listener("item_imported", self.tag_source_on_stored)
         self.register_listener("import_task_choice", self.handle_duplicates)
 
     def tag_source_on_created(self, session, task):
@@ -98,6 +110,9 @@ class MusicPipelinePlugin(BeetsPlugin):
         Fires from handle_created() during read_tasks — always, regardless of
         autotag mode — while item.path still points to the inbox file (before
         any pipeline stage runs).
+
+        Also caches filename→playlist in _pending_sources so tag_source_on_stored
+        can re-apply the tags after MusicBrainz autotag may have discarded them.
         """
         for item in _items_from_task(task):
             playlist = _playlist_from_path(item.path)
@@ -105,9 +120,31 @@ class MusicPipelinePlugin(BeetsPlugin):
                 continue
             item["source"] = playlist
             item["via"] = "spotdl"
+            path = item.path.decode() if isinstance(item.path, bytes) else item.path
+            self._pending_sources[Path(path).name] = playlist
             self._log.debug(
                 "tagged incoming track source={} via=spotdl: {}", playlist, item.path
             )
+
+    def tag_source_on_stored(self, lib, item):
+        """Re-apply source= and via= after the item is persisted to the library.
+
+        Fires from item_imported, after autotag and item.store() have run.
+        MusicBrainz autotag can replace the item's metadata dict wholesale,
+        discarding flex attributes set earlier by tag_source_on_created.
+        Consuming from _pending_sources here guarantees the tags are written to
+        the database even on a clean first-time import with no duplicates.
+        """
+        path = item.path.decode() if isinstance(item.path, bytes) else item.path
+        playlist = self._pending_sources.pop(Path(path).name, None)
+        if playlist is None:
+            return
+        item["source"] = playlist
+        item["via"] = "spotdl"
+        item.store()
+        self._log.debug(
+            "persisted source={} via=spotdl on stored item: {}", playlist, item.path
+        )
 
     def handle_duplicates(self, session, task):
         """Protect manually-imported tracks from spotdl overwrites.
