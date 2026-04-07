@@ -16,13 +16,18 @@ Responsibilities
    Handles both singleton (``task.item``) and album (``task.items``) import
    tasks.
 
-   Also caches ``filename → playlist`` in ``_pending_sources`` for step 1a.
+   Caches both ``filename → playlist`` and ``title → playlist`` in
+   ``_pending_sources`` for step 1a.
 
 1a. **tag_source_on_stored** (``item_imported``): re-applies ``source=`` and
     ``via=`` after the item is fully persisted, then calls ``item.store()``.
-    MusicBrainz autotag can replace the item's metadata dict wholesale between
-    steps 1 and 1a, silently discarding the flex attributes.  This hook
-    guarantees the tags survive to the database on clean first-time imports.
+    Two things can discard the flex attributes between steps 1 and 1a:
+    (a) MusicBrainz autotag replaces the item metadata dict wholesale, and
+    (b) beets renames the file on import (spotdl names ``Artist - Title.m4a``;
+    beets renames to ``NN - Title.m4a``), so the inbox filename no longer
+    matches ``item.path`` at ``item_imported`` time.  The title-based key
+    survives both.  This hook guarantees the tags land in the database on
+    clean first-time imports.
 
 2. **Duplicate protection** (``import_task_choice``): when duplicates exist in
    the library for the incoming track:
@@ -97,8 +102,12 @@ def _items_from_task(task) -> list:
 class MusicPipelinePlugin(BeetsPlugin):
     def __init__(self):
         super().__init__("music_pipeline")
-        # filename → playlist name; populated at import_task_created, consumed
-        # at item_imported to survive MusicBrainz autotag metadata replacement.
+        # Keys: inbox filename OR normalised title → playlist name.
+        # Populated at import_task_created, consumed at item_imported.
+        # Two keys per track because beets renames the file on import
+        # (spotdl names "Artist - Title.m4a"; beets renames to "NN - Title.m4a"),
+        # so the filename key no longer matches at item_imported time.
+        # The title key survives both the rename and MB autotag metadata replacement.
         self._pending_sources: dict[str, str] = {}
         self.register_listener("import_task_created", self.tag_source_on_created)
         self.register_listener("item_imported", self.tag_source_on_stored)
@@ -111,8 +120,10 @@ class MusicPipelinePlugin(BeetsPlugin):
         autotag mode — while item.path still points to the inbox file (before
         any pipeline stage runs).
 
-        Also caches filename→playlist in _pending_sources so tag_source_on_stored
-        can re-apply the tags after MusicBrainz autotag may have discarded them.
+        Caches both the inbox filename and the normalised title in
+        _pending_sources so tag_source_on_stored can re-apply the tags after
+        MusicBrainz autotag may have discarded them and beets has renamed the
+        file.
         """
         for item in _items_from_task(task):
             playlist = _playlist_from_path(item.path)
@@ -122,6 +133,9 @@ class MusicPipelinePlugin(BeetsPlugin):
             item["via"] = "spotdl"
             path = item.path.decode() if isinstance(item.path, bytes) else item.path
             self._pending_sources[Path(path).name] = playlist
+            title = (item.title or "").lower()
+            if title:
+                self._pending_sources[title] = playlist
             self._log.debug(
                 "tagged incoming track source={} via=spotdl: {}", playlist, item.path
             )
@@ -130,13 +144,25 @@ class MusicPipelinePlugin(BeetsPlugin):
         """Re-apply source= and via= after the item is persisted to the library.
 
         Fires from item_imported, after autotag and item.store() have run.
-        MusicBrainz autotag can replace the item's metadata dict wholesale,
-        discarding flex attributes set earlier by tag_source_on_created.
-        Consuming from _pending_sources here guarantees the tags are written to
-        the database even on a clean first-time import with no duplicates.
+        MusicBrainz autotag can replace the item's metadata dict wholesale and
+        beets renames the file, both of which discard the flex attributes set
+        earlier by tag_source_on_created.  We try the post-rename filename
+        first (handles no-rename edge cases), then fall back to the normalised
+        title (the common case after a move-import).
         """
         path = item.path.decode() if isinstance(item.path, bytes) else item.path
+        title = (item.title or "").lower()
         playlist = self._pending_sources.pop(Path(path).name, None)
+        if playlist is not None:
+            # Matched on filename — also clean the title key to avoid stale entries.
+            if title:
+                self._pending_sources.pop(title, None)
+        elif title:
+            playlist = self._pending_sources.pop(title, None)
+            # The original spotdl inbox filename key cannot be recovered from
+            # item.path (which is now the renamed library path), so it may
+            # remain in _pending_sources.  That is harmless: _pending_sources
+            # is session-scoped and is GC'd when the import session ends.
         if playlist is None:
             return
         item["source"] = playlist
