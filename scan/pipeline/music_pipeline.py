@@ -22,7 +22,9 @@ Responsibilities
 1a. **tag_source_on_stored** (``item_imported``): re-applies ``source=`` and
     ``via=`` after the item is fully persisted, then calls ``item.store()``.
     Two things can discard the flex attributes between steps 1 and 1a:
-    (a) MusicBrainz autotag replaces the item metadata dict wholesale, and
+    (a) beets' dirty-field tracking is reset during candidate lookup, so
+    flex attributes set in memory at ``import_task_created`` are not marked
+    dirty for the eventual ``item.add(lib)`` call; and
     (b) beets renames the file on import (spotdl names ``Artist - Title.m4a``;
     beets renames to ``NN - Title.m4a``), so the inbox filename no longer
     matches ``item.path`` at ``item_imported`` time.  The title-based key
@@ -184,14 +186,6 @@ class MusicPipelinePlugin(BeetsPlugin):
         # Mirrors the guard in beets' own _resolve_duplicates().
         if not items or task.choice_flag not in _WILL_APPLY:
             return
-
-        # Re-apply source= in case MB lookup mutated item metadata.
-        for item in items:
-            playlist = _playlist_from_path(item.path)
-            if playlist is None:
-                continue
-            item["source"] = playlist
-            item["via"] = "spotdl"
 
         try:
             found = task.find_duplicates(session.lib)
