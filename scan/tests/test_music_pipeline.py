@@ -27,10 +27,11 @@ def _make_plugin() -> MusicPipelinePlugin:
     return plugin
 
 
-def _item(path: str, source: str = "", via: str = "") -> MagicMock:
+def _item(path: str, source: str = "", via: str = "", title: str = "") -> MagicMock:
     """Mock beets Item with a path and readable/writable flexible attributes."""
     m = MagicMock()
     m.path = path
+    m.title = title
     data = {"source": source, "via": via}
     m.get = lambda k, default="": data.get(k, default)
     # __setitem__ tracked by MagicMock; also update data so .get() sees writes.
@@ -146,15 +147,27 @@ def test_tag_source_on_created_album_task_tags_all_items() -> None:
 # MusicPipelinePlugin.tag_source_on_created — pending-source cache
 # ---------------------------------------------------------------------------
 
-def test_tag_source_on_created_caches_pending_source() -> None:
-    """Filename→playlist mapping must be cached for later item_imported re-apply."""
+def test_tag_source_on_created_caches_filename_and_title() -> None:
+    """Both the inbox filename and the normalised title must be cached."""
     plugin = _make_plugin()
-    item = _item("/root/Music/inbox/spotdl/jazz/track.m4a")
+    item = _item("/root/Music/inbox/spotdl/jazz/Artist - My Track.m4a", title="My Track")
     task = _task(item=item)
 
     plugin.tag_source_on_created(session=MagicMock(), task=task)
 
-    assert plugin._pending_sources["track.m4a"] == "jazz"
+    assert plugin._pending_sources["Artist - My Track.m4a"] == "jazz"
+    assert plugin._pending_sources["my track"] == "jazz"
+
+
+def test_tag_source_on_created_no_title_caches_filename_only() -> None:
+    """When title is empty only the filename key is stored."""
+    plugin = _make_plugin()
+    item = _item("/root/Music/inbox/spotdl/jazz/track.m4a", title="")
+    task = _task(item=item)
+
+    plugin.tag_source_on_created(session=MagicMock(), task=task)
+
+    assert plugin._pending_sources == {"track.m4a": "jazz"}
 
 
 def test_tag_source_on_created_outside_inbox_not_cached() -> None:
@@ -169,25 +182,27 @@ def test_tag_source_on_created_outside_inbox_not_cached() -> None:
 
 def test_tag_source_on_created_album_task_caches_all_items() -> None:
     plugin = _make_plugin()
-    item1 = _item("/root/Music/inbox/spotdl/pop/a.m4a")
-    item2 = _item("/root/Music/inbox/spotdl/pop/b.m4a")
+    item1 = _item("/root/Music/inbox/spotdl/pop/a.m4a", title="Alpha")
+    item2 = _item("/root/Music/inbox/spotdl/pop/b.m4a", title="Beta")
     task = _task(items=[item1, item2])
 
     plugin.tag_source_on_created(session=MagicMock(), task=task)
 
     assert plugin._pending_sources["a.m4a"] == "pop"
+    assert plugin._pending_sources["alpha"] == "pop"
     assert plugin._pending_sources["b.m4a"] == "pop"
+    assert plugin._pending_sources["beta"] == "pop"
 
 
 # ---------------------------------------------------------------------------
 # MusicPipelinePlugin.tag_source_on_stored — item_imported re-apply
 # ---------------------------------------------------------------------------
 
-def test_tag_source_on_stored_applies_and_stores_source() -> None:
-    """After autotag mutates the item, item_imported must re-apply source/via."""
+def test_tag_source_on_stored_applies_via_filename_key() -> None:
+    """Filename key lookup works for items that beets didn't rename."""
     plugin = _make_plugin()
     plugin._pending_sources = {"track.m4a": "jazz"}
-    item = _item("/root/Music/library/Artist/Album/track.m4a")
+    item = _item("/root/Music/library/Artist/Album/track.m4a", title="Track")
 
     plugin.tag_source_on_stored(lib=MagicMock(), item=item)
 
@@ -196,21 +211,62 @@ def test_tag_source_on_stored_applies_and_stores_source() -> None:
     item.store.assert_called_once()
 
 
-def test_tag_source_on_stored_consumes_pending_entry() -> None:
-    """The cache entry must be removed after use to prevent memory leaks."""
+def test_tag_source_on_stored_applies_via_title_key_after_rename() -> None:
+    """Title key lookup resolves when beets renamed the file (the common case).
+
+    spotdl names files "Artist - Title.m4a"; beets renames to "NN - Title.m4a".
+    The filename key no longer matches, so the title key must be used.
+    """
     plugin = _make_plugin()
-    plugin._pending_sources = {"track.m4a": "jazz"}
-    item = _item("/root/Music/library/Artist/Album/track.m4a")
+    plugin._pending_sources = {
+        "Artist Name - My Track.m4a": "jazz",  # spotdl original filename
+        "my track": "jazz",                     # title key added by tag_source_on_created
+    }
+    # item_imported fires with the beets-renamed library path
+    item = _item("/root/Music/library/Artist Name/Album/03 - My Track.m4a", title="My Track")
+
+    plugin.tag_source_on_stored(lib=MagicMock(), item=item)
+
+    item.__setitem__.assert_any_call("source", "jazz")
+    item.__setitem__.assert_any_call("via", "spotdl")
+    item.store.assert_called_once()
+
+
+def test_tag_source_on_stored_filename_match_also_cleans_title_key() -> None:
+    """When the filename key matches, the title key is also cleaned up."""
+    plugin = _make_plugin()
+    plugin._pending_sources = {"track.m4a": "jazz", "my track": "jazz"}
+    item = _item("/root/Music/library/Artist/Album/track.m4a", title="My Track")
 
     plugin.tag_source_on_stored(lib=MagicMock(), item=item)
 
     assert "track.m4a" not in plugin._pending_sources
+    assert "my track" not in plugin._pending_sources
+
+
+def test_tag_source_on_stored_title_match_leaves_stale_filename_key() -> None:
+    """When the title key is the fallback match, the original spotdl filename key
+    cannot be recovered from the renamed item.path and is left in the cache.
+    It is harmless — _pending_sources is session-scoped and GC'd after the import.
+    """
+    plugin = _make_plugin()
+    plugin._pending_sources = {
+        "Artist Name - My Track.m4a": "jazz",
+        "my track": "jazz",
+    }
+    item = _item("/root/Music/library/Artist Name/Album/03 - My Track.m4a", title="My Track")
+
+    plugin.tag_source_on_stored(lib=MagicMock(), item=item)
+
+    assert "my track" not in plugin._pending_sources
+    # Original spotdl filename key cannot be cleaned — it remains (session-scoped).
+    assert "Artist Name - My Track.m4a" in plugin._pending_sources
 
 
 def test_tag_source_on_stored_unknown_item_does_nothing() -> None:
     """Items not originating from the spotdl inbox must be left untouched."""
     plugin = _make_plugin()
-    item = _item("/root/Music/library/Artist/Album/track.m4a")
+    item = _item("/root/Music/library/Artist/Album/track.m4a", title="Track")
 
     plugin.tag_source_on_stored(lib=MagicMock(), item=item)
 
@@ -221,7 +277,7 @@ def test_tag_source_on_stored_unknown_item_does_nothing() -> None:
 def test_tag_source_on_stored_bytes_path() -> None:
     plugin = _make_plugin()
     plugin._pending_sources = {"track.m4a": "rock"}
-    item = _item(b"/root/Music/library/Artist/Album/track.m4a")
+    item = _item(b"/root/Music/library/Artist/Album/track.m4a", title="Track")
 
     plugin.tag_source_on_stored(lib=MagicMock(), item=item)
 
