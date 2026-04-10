@@ -51,8 +51,11 @@ def main() -> None:
     with open(spotdl_file, encoding="utf-8") as fh:
         data = json.load(fh)
 
+    # Support both bare list (old spotdl format) and {songs: [...]} dict (new format)
+    if isinstance(data, dict):
+        data = data.get("songs", [])
     if not isinstance(data, list):
-        print("ERROR: unexpected .spotdl format (expected JSON array)", file=sys.stderr)
+        print("ERROR: unexpected .spotdl format (expected JSON array or {songs:[...]})", file=sys.stderr)
         sys.exit(1)
 
     spotify_titles: set[str] = set()
