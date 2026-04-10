@@ -87,6 +87,10 @@ def test_playlist_from_path_asis_staging() -> None:
     path = "/tmp/asis-staging-eqn4jd_u/spotdl/my-playlist/Artist - Title.m4a"
     assert _playlist_from_path(path) == "my-playlist"
 
+def test_playlist_from_path_arbitrary_spotdl_dir_rejected() -> None:
+    # A 'spotdl' directory somewhere else (e.g. /var/) should not match
+    assert _playlist_from_path("/var/data/spotdl/my-playlist/track.m4a") is None
+
 
 # ---------------------------------------------------------------------------
 # _all_via_spotdl

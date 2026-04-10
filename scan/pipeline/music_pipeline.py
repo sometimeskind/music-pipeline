@@ -67,6 +67,14 @@ from beets import importer as beets_importer
 from beets import library as beets_library
 from beets.plugins import BeetsPlugin
 
+# The two locations where spotdl downloads land at beet-import time.
+# 1. Main inbox: downloaded files sit here until beet import runs.
+SPOTDL_INBOX = Path("/root/Music/inbox/spotdl")
+# 2. ASIS staging: files that failed autotag are quarantined, then
+#    _move_asis_eligible() copies them into a per-run temp dir under /tmp/
+#    preserving the spotdl/<playlist>/ subdirectory structure.
+ASIS_STAGING_ROOT = Path("/tmp")
+
 # Actions that indicate the task will actually be applied to the library.
 # Matches the guard used by beets' own _resolve_duplicates().
 _WILL_APPLY = (
@@ -79,26 +87,32 @@ _WILL_APPLY = (
 def _playlist_from_path(path: str | bytes) -> str | None:
     """Return the playlist name for *path*, or None if not recognisable.
 
-    Handles both the main inbox path and the ASIS temp-staging path:
-      /root/Music/inbox/spotdl/<playlist>/<file>
-      /tmp/asis-staging-X/spotdl/<playlist>/<file>
-
-    Finds the ``spotdl`` component anywhere in the path and returns the
-    next component as the playlist name, provided it looks like a directory
-    (no file extension).
+    Checks two known locations in order:
+      1. Main inbox:    /root/Music/inbox/spotdl/<playlist>/<file>
+      2. ASIS staging:  /tmp/asis-staging-X/spotdl/<playlist>/<file>
+         (the staging dir name is random, but spotdl/ is always the first
+         subdir of the playlist tree relative to ASIS_STAGING_ROOT)
     """
     if isinstance(path, bytes):
         path = path.decode()
-    parts = Path(path).parts
+    p = Path(path)
+
+    # 1. Main inbox — spotdl/<playlist>/ is the root itself.
     try:
-        idx = parts.index("spotdl")
-        candidate = parts[idx + 1]
-        # A playlist name is a directory — skip if it looks like a filename.
-        if Path(candidate).suffix:
-            return None
-        return candidate
+        return p.relative_to(SPOTDL_INBOX).parts[0]
     except (ValueError, IndexError):
-        return None
+        pass
+
+    # 2. ASIS staging — /tmp/<staging-dir>/spotdl/<playlist>/<file>
+    try:
+        after_tmp = p.relative_to(ASIS_STAGING_ROOT)
+        # after_tmp.parts: ('<staging-dir>', 'spotdl', '<playlist>', '<file>')
+        idx = after_tmp.parts.index("spotdl")
+        return after_tmp.parts[idx + 1]
+    except (ValueError, IndexError):
+        pass
+
+    return None
 
 
 def _all_via_spotdl(duplicates: list) -> bool:
