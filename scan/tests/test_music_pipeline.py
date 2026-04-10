@@ -82,6 +82,11 @@ def test_playlist_from_path_inbox_root() -> None:
     # File directly in the inbox root (no playlist subdir) — returns None
     assert _playlist_from_path("/root/Music/inbox/spotdl") is None
 
+def test_playlist_from_path_asis_staging() -> None:
+    # ASIS temp-staging path: tracks quarantined then re-staged for --asis import
+    path = "/tmp/asis-staging-eqn4jd_u/spotdl/my-playlist/Artist - Title.m4a"
+    assert _playlist_from_path(path) == "my-playlist"
+
 
 # ---------------------------------------------------------------------------
 # _all_via_spotdl

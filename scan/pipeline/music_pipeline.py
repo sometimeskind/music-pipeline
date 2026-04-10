@@ -67,8 +67,6 @@ from beets import importer as beets_importer
 from beets import library as beets_library
 from beets.plugins import BeetsPlugin
 
-SPOTDL_INBOX = Path("/root/Music/inbox/spotdl")
-
 # Actions that indicate the task will actually be applied to the library.
 # Matches the guard used by beets' own _resolve_duplicates().
 _WILL_APPLY = (
@@ -79,12 +77,26 @@ _WILL_APPLY = (
 
 
 def _playlist_from_path(path: str | bytes) -> str | None:
-    """Return the playlist name if *path* is inside SPOTDL_INBOX, else None."""
+    """Return the playlist name for *path*, or None if not recognisable.
+
+    Handles both the main inbox path and the ASIS temp-staging path:
+      /root/Music/inbox/spotdl/<playlist>/<file>
+      /tmp/asis-staging-X/spotdl/<playlist>/<file>
+
+    Finds the ``spotdl`` component anywhere in the path and returns the
+    next component as the playlist name, provided it looks like a directory
+    (no file extension).
+    """
     if isinstance(path, bytes):
         path = path.decode()
+    parts = Path(path).parts
     try:
-        rel = Path(path).relative_to(SPOTDL_INBOX)
-        return rel.parts[0]
+        idx = parts.index("spotdl")
+        candidate = parts[idx + 1]
+        # A playlist name is a directory — skip if it looks like a filename.
+        if Path(candidate).suffix:
+            return None
+        return candidate
     except (ValueError, IndexError):
         return None
 
