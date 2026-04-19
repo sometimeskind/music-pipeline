@@ -20,7 +20,7 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v6
         with:
-          python-version: "3.12"
+          python-version: "3.13"
 
       - name: Install dependencies
         run: |
@@ -69,8 +69,8 @@ jobs:
           context: .
           file: service/Dockerfile
           target: prod
-          push: false
           load: true
+          push: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
           tags: |
             ${{ steps.meta.outputs.tags }}
             music-pipeline:ci-local
@@ -98,16 +98,3 @@ jobs:
 
       - name: Health check — fpcalc
         run: docker run --rm --entrypoint fpcalc music-pipeline:ci-local -version
-
-      - name: Push service image to GHCR
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-        uses: docker/build-push-action@v7
-        with:
-          context: .
-          file: service/Dockerfile
-          target: prod
-          push: true
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
