@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from music_fetch.ingest import classify_failure, _collect_removals, _deadline_reached, _reconcile_playlists, _write_pending_removals
+from music_fetch.ingest import classify_failure, _collect_removals, _deadline_reached, _reconcile_playlists, PendingRemovals, RemovedTrack
 from music_fetch.spotdl_ops import find_track_in_snapshot
 
 
@@ -212,157 +212,82 @@ SNAPSHOT = [
 
 
 def test_collect_removals_normal_case() -> None:
-    pending: list[dict] = []
+    pending: list[RemovedTrack] = []
     _collect_removals(pending, {"https://spotify.com/track/A"}, SNAPSHOT, "my-playlist")
-    assert pending == [{"title": "Song A", "artist": "Artist 1", "source": "my-playlist"}]
+    assert pending == [RemovedTrack(title="Song A", artist="Artist 1", source="my-playlist")]
 
 
 def test_collect_removals_url_not_in_snapshot() -> None:
     """URL missing from snapshot → entry is skipped, no crash."""
-    pending: list[dict] = []
+    pending: list[RemovedTrack] = []
     _collect_removals(pending, {"https://spotify.com/track/Z"}, SNAPSHOT, "my-playlist")
     assert pending == []
 
 
 def test_collect_removals_empty_artists() -> None:
     """artists=[] → artist field defaults to empty string."""
-    pending: list[dict] = []
+    pending: list[RemovedTrack] = []
     _collect_removals(pending, {"https://spotify.com/track/B"}, SNAPSHOT, "my-playlist")
-    assert pending == [{"title": "Song B", "artist": "", "source": "my-playlist"}]
+    assert pending == [RemovedTrack(title="Song B", artist="", source="my-playlist")]
 
 
 def test_collect_removals_no_removed_urls() -> None:
-    pending: list[dict] = []
+    pending: list[RemovedTrack] = []
     _collect_removals(pending, set(), SNAPSHOT, "my-playlist")
     assert pending == []
 
 
 # ---------------------------------------------------------------------------
-# _write_pending_removals — new {tracks, remove_sources} format
+# run() — PendingRemovals return type
 # ---------------------------------------------------------------------------
 
 
-def test_write_pending_removals_creates_file(tmp_path: Path) -> None:
+def test_run_returns_pending_removals_empty(tmp_path: Path) -> None:
+    """run() returns PendingRemovals(tracks=[], remove_sources=[]) when nothing to remove."""
     import unittest.mock as mock
     from music_fetch import ingest
 
-    fake_path = tmp_path / ".pending-removals.json"
-    entries = [{"title": "Song A", "artist": "Artist 1", "source": "my-playlist"}]
+    spotdl_dir = tmp_path / "spotdl"
+    spotdl_dir.mkdir()
+    cookie_file = tmp_path / "cookies.txt"
+    cookie_file.touch()
 
-    with mock.patch.object(ingest, "PENDING_REMOVALS", fake_path):
-        _write_pending_removals(entries)
+    with mock.patch.object(ingest, "SPOTDL_DIR", spotdl_dir), \
+         mock.patch.object(ingest, "COOKIE_FILE", cookie_file), \
+         mock.patch.object(ingest, "CONF_PATH", tmp_path / "missing.conf"), \
+         mock.patch.dict("os.environ", {"SPOTIFY_CLIENT_ID": "id", "SPOTIFY_CLIENT_SECRET": "secret"}), \
+         mock.patch("shutil.disk_usage", return_value=mock.Mock(free=10 * 1024**3)), \
+         mock.patch("music_fetch.ingest.IngestMetrics"), \
+         mock.patch("music_fetch.ingest._jitter"):
+        result = ingest.run()
 
-    assert fake_path.exists()
-    result = json.loads(fake_path.read_text())
-    assert result == {"tracks": entries, "remove_sources": []}
+    assert isinstance(result, PendingRemovals)
+    assert result.tracks == []
+    assert result.remove_sources == []
 
 
-def test_write_pending_removals_with_remove_sources(tmp_path: Path) -> None:
+def test_run_returns_pending_removals_with_remove_sources(tmp_path: Path) -> None:
+    """run() returns PendingRemovals with remove_sources from _reconcile_playlists."""
     import unittest.mock as mock
     from music_fetch import ingest
 
-    fake_path = tmp_path / ".pending-removals.json"
-    tracks = [{"title": "Song A", "artist": "Artist 1", "source": "pl-1"}]
-    sources = ["old-playlist"]
+    spotdl_dir = tmp_path / "spotdl"
+    spotdl_dir.mkdir()
+    cookie_file = tmp_path / "cookies.txt"
+    cookie_file.touch()
 
-    with mock.patch.object(ingest, "PENDING_REMOVALS", fake_path):
-        _write_pending_removals(tracks, sources)
+    with mock.patch.object(ingest, "SPOTDL_DIR", spotdl_dir), \
+         mock.patch.object(ingest, "COOKIE_FILE", cookie_file), \
+         mock.patch.dict("os.environ", {"SPOTIFY_CLIENT_ID": "id", "SPOTIFY_CLIENT_SECRET": "secret"}), \
+         mock.patch("shutil.disk_usage", return_value=mock.Mock(free=10 * 1024**3)), \
+         mock.patch("music_fetch.ingest._reconcile_playlists", return_value=["gone-playlist"]), \
+         mock.patch("music_fetch.ingest.IngestMetrics"), \
+         mock.patch("music_fetch.ingest._jitter"):
+        result = ingest.run()
 
-    result = json.loads(fake_path.read_text())
-    assert result == {"tracks": tracks, "remove_sources": sources}
-
-
-def test_write_pending_removals_appends_to_existing(tmp_path: Path) -> None:
-    """The append-safe merge is the key correctness guarantee of the cross-container handoff."""
-    import unittest.mock as mock
-    from music_fetch import ingest
-
-    fake_path = tmp_path / ".pending-removals.json"
-    existing = {"tracks": [{"title": "Song A", "artist": "Artist 1", "source": "playlist-1"}], "remove_sources": []}
-    fake_path.write_text(json.dumps(existing), encoding="utf-8")
-
-    new_entries = [{"title": "Song B", "artist": "Artist 2", "source": "playlist-2"}]
-    with mock.patch.object(ingest, "PENDING_REMOVALS", fake_path):
-        _write_pending_removals(new_entries)
-
-    result = json.loads(fake_path.read_text())
-    assert result["tracks"] == existing["tracks"] + new_entries
-    assert result["remove_sources"] == []
-
-
-def test_write_pending_removals_merges_remove_sources(tmp_path: Path) -> None:
-    """remove_sources from multiple fetch runs are accumulated."""
-    import unittest.mock as mock
-    from music_fetch import ingest
-
-    fake_path = tmp_path / ".pending-removals.json"
-    existing = {"tracks": [], "remove_sources": ["old-playlist"]}
-    fake_path.write_text(json.dumps(existing), encoding="utf-8")
-
-    with mock.patch.object(ingest, "PENDING_REMOVALS", fake_path):
-        _write_pending_removals([], ["another-removed"])
-
-    result = json.loads(fake_path.read_text())
-    assert result["remove_sources"] == ["old-playlist", "another-removed"]
-
-
-def test_write_pending_removals_merges_with_old_format_file(tmp_path: Path) -> None:
-    """Old list-format file is read and merged into the new dict format."""
-    import unittest.mock as mock
-    from music_fetch import ingest
-
-    fake_path = tmp_path / ".pending-removals.json"
-    old_format = [{"title": "Song A", "artist": "Artist 1", "source": "playlist-1"}]
-    fake_path.write_text(json.dumps(old_format), encoding="utf-8")
-
-    new_entries = [{"title": "Song B", "artist": "Artist 2", "source": "playlist-2"}]
-    with mock.patch.object(ingest, "PENDING_REMOVALS", fake_path):
-        _write_pending_removals(new_entries)
-
-    result = json.loads(fake_path.read_text())
-    assert result["tracks"] == old_format + new_entries
-    assert result["remove_sources"] == []
-
-
-def test_write_pending_removals_recovers_from_corrupt_file(tmp_path: Path) -> None:
-    """Corrupt existing file is discarded; new entries are still written."""
-    import unittest.mock as mock
-    from music_fetch import ingest
-
-    fake_path = tmp_path / ".pending-removals.json"
-    fake_path.write_text("not valid json", encoding="utf-8")
-
-    entries = [{"title": "Song A", "artist": "Artist 1", "source": "my-playlist"}]
-    with mock.patch.object(ingest, "PENDING_REMOVALS", fake_path):
-        _write_pending_removals(entries)
-
-    result = json.loads(fake_path.read_text())
-    assert result["tracks"] == entries
-    assert result["remove_sources"] == []
-
-
-def test_write_pending_removals_noop_when_empty(tmp_path: Path) -> None:
-    """No file created when there are no pending removals."""
-    import unittest.mock as mock
-    from music_fetch import ingest
-
-    fake_path = tmp_path / ".pending-removals.json"
-    with mock.patch.object(ingest, "PENDING_REMOVALS", fake_path):
-        _write_pending_removals([])
-
-    assert not fake_path.exists()
-
-
-def test_write_pending_removals_noop_with_only_empty_remove_sources(tmp_path: Path) -> None:
-    """No file created when remove_sources is an empty list."""
-    import unittest.mock as mock
-    from music_fetch import ingest
-
-    fake_path = tmp_path / ".pending-removals.json"
-    with mock.patch.object(ingest, "PENDING_REMOVALS", fake_path):
-        _write_pending_removals([], [])
-
-    assert not fake_path.exists()
+    assert isinstance(result, PendingRemovals)
+    assert result.remove_sources == ["gone-playlist"]
+    assert result.tracks == []
 
 
 # ---------------------------------------------------------------------------

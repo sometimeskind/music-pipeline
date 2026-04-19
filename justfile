@@ -2,7 +2,7 @@
 test:
     docker build --target dev -t music-pipeline-fetch:dev fetch
     docker run --rm music-pipeline-fetch:dev
-    docker build --target dev -t music-pipeline-scan:dev scan
+    docker build --target dev -f scan/Dockerfile -t music-pipeline-scan:dev .
     docker run --rm music-pipeline-scan:dev
 
 # Run container integration tests against the current GHCR image (no auth needed)
