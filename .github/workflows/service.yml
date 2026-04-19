@@ -64,6 +64,7 @@ jobs:
             type=sha,format=short
 
       - name: Build service image
+        id: build
         uses: docker/build-push-action@v7
         with:
           context: .
@@ -71,12 +72,15 @@ jobs:
           target: prod
           load: true
           push: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
-          tags: |
-            ${{ steps.meta.outputs.tags }}
-            music-pipeline:ci-local
+          tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+      - name: Tag image for health checks
+        env:
+          IMAGE_ID: ${{ steps.build.outputs.imageid }}
+        run: docker tag "$IMAGE_ID" music-pipeline:ci-local
 
       - name: Health check — music-pipeline entry point
         run: docker run --rm --entrypoint which music-pipeline:ci-local music-pipeline
