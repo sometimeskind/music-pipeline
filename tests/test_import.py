@@ -42,9 +42,9 @@ def test_file_drop_known_track_imported_to_library(
     )
     assert exit_code == 0, f"music-scan exited {exit_code}. Logs:\n{logs}"
 
-    library_files = ls_in_volume(docker_client, volumes, "/root/Music/library")
+    library_files = ls_in_volume(docker_client, volumes, "/root/Music/staging")
     assert library_files, (
-        "No files found in /root/Music/library after import.\n"
+        "No files found in /root/Music/staging after import.\n"
         f"Scan logs:\n{logs}"
     )
 
@@ -112,8 +112,8 @@ def test_playlist_import_m3u_generated(
     assert not any(line.startswith("/") for line in m3u.splitlines() if line), (
         f"Expected relative paths in .m3u, got absolute:\n{m3u}"
     )
-    assert "../library/" in m3u, (
-        f"Expected paths traversing to sibling library/ dir, got:\n{m3u}"
+    assert "../staging/" in m3u, (
+        f"Expected paths traversing to sibling staging/ dir, got:\n{m3u}"
     )
 
 

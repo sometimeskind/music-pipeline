@@ -168,7 +168,6 @@ def test_run_with_pending_none_skips_apply(tmp_path: Path) -> None:
          mock.patch("music_scan.scan.MusicLibrary", return_value=_make_mock_lib()), \
          mock.patch("music_scan.scan.run_beet_import"), \
          mock.patch("music_scan.scan.run_beet_update"), \
-         mock.patch("music_scan.scan.trigger_scan"), \
          mock.patch("music_scan.scan._move_asis_eligible", return_value=0), \
          mock.patch("music_scan.scan.INBOX", tmp_path), \
          mock.patch("music_scan.scan.SPOTDL_DIR", tmp_path), \

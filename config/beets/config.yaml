@@ -1,6 +1,6 @@
 # Beets configuration for music-pipeline container.
 # Paths use absolute container paths (not ~/); volumes are mounted at these locations.
-directory: /root/Music/library
+directory: /root/Music/staging
 library: /root/.config/beets/library.db
 
 ui:
