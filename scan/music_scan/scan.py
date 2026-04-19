@@ -18,7 +18,6 @@ from pathlib import Path
 from music_fetch.ingest import PendingRemovals
 from music_scan.library import MusicLibrary
 from music_scan.metrics import ScanMetrics
-from music_scan.navidrome import trigger_scan
 from music_scan.process import run_beet_import, run_beet_update
 
 logger = logging.getLogger(__name__)
@@ -248,8 +247,6 @@ def run(pending: PendingRemovals | None = None) -> None:
         metrics.quarantined_tracks = max(0, quarantined_after - quarantined_before)
 
         logger.info("==> music-scan complete")
-        if imported or asis_imported:
-            trigger_scan()
 
     except Exception:
         metrics.success = False

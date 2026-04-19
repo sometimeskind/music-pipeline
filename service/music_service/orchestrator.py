@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import os
+import subprocess
 import threading
 from pathlib import Path
 
@@ -14,6 +15,7 @@ from watchdog.observers import Observer
 
 import music_fetch.ingest as ingest
 import music_scan.scan as scan
+from music_scan.navidrome import trigger_scan
 
 logger = logging.getLogger(__name__)
 
@@ -61,7 +63,24 @@ class Orchestrator:
         """Run scan — caller must already hold self._lock."""
         logger.info("==> Scan starting")
         scan.run(pending)
+        self._push_library()
+        trigger_scan()
         logger.info("==> Scan complete")
+
+    def _push_library(self) -> None:
+        """Push staging and playlists to the configured rclone remote."""
+        remote = os.environ.get("LIBRARY_REMOTE", "")
+        if not remote:
+            logger.info("LIBRARY_REMOTE not set — skipping library push")
+            return
+
+        staging = Path(os.environ.get("MUSIC_STAGING", "/root/Music/staging"))
+        playlists = Path(os.environ.get("MUSIC_PLAYLISTS", "/root/Music/playlists"))
+
+        subprocess.run(["rclone", "copy", str(staging), remote], check=True)
+        subprocess.run(["rclone", "sync", str(playlists), f"{remote}/playlists"], check=True)
+
+        logger.info("==> Library pushed to %s", remote)
 
     # ------------------------------------------------------------------
     # Non-blocking try methods (used by HTTP trigger endpoints)
