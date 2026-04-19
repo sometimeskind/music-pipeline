@@ -1,0 +1,224 @@
+#!/usr/bin/env python3
+"""CLI client for the music-pipeline HTTP API.
+
+Reads from environment:
+  MUSIC_PIPELINE_URL   — base URL (e.g. http://music-pipeline.prins.id:8080)
+  MUSIC_PIPELINE_TOKEN — bearer token
+
+Usage:
+  music-files list-inbox
+  music-files list-quarantine
+  music-files upload <path>
+  music-files download <path>
+  music-files trigger-fetch
+  music-files trigger-scan
+"""
+
+from __future__ import annotations
+
+import argparse
+import io
+import os
+import sys
+import zipfile
+from pathlib import Path
+
+import requests
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+
+def _url(path: str) -> str:
+    """Build full URL from env base + path."""
+    base = os.environ.get("MUSIC_PIPELINE_URL", "").rstrip("/")
+    if not base:
+        print("ERROR: MUSIC_PIPELINE_URL is not set", file=sys.stderr)
+        sys.exit(1)
+    return base + path
+
+
+def _headers() -> dict:
+    """Return Authorization header dict."""
+    token = os.environ.get("MUSIC_PIPELINE_TOKEN", "")
+    if not token:
+        print("ERROR: MUSIC_PIPELINE_TOKEN is not set", file=sys.stderr)
+        sys.exit(1)
+    return {"Authorization": f"Bearer {token}"}
+
+
+def _human_size(n: int) -> str:
+    """Convert bytes to human-readable string."""
+    if n < 1024:
+        return f"{n} B"
+    for unit in ("KB", "MB", "GB"):
+        n /= 1024.0
+        if n < 1024 or unit == "GB":
+            return f"{n:.1f} {unit}"
+
+
+def _print_table(files: list[dict]) -> None:
+    """Print file listing as aligned columns: name, size, modified."""
+    if not files:
+        return
+    col_name = max(len(f["name"]) for f in files)
+    col_size = max(len(_human_size(f["size"])) for f in files)
+    for f in files:
+        name = f["name"].ljust(col_name)
+        size = _human_size(f["size"]).rjust(col_size)
+        modified = f["modified"]
+        print(f"{name}  {size}  {modified}")
+
+
+def _check_response(resp: requests.Response) -> None:
+    """Exit 1 if response is not 2xx."""
+    if not (200 <= resp.status_code < 300):
+        print(f"ERROR: HTTP {resp.status_code}: {resp.text}", file=sys.stderr)
+        sys.exit(1)
+
+
+# ---------------------------------------------------------------------------
+# Subcommands
+# ---------------------------------------------------------------------------
+
+
+def cmd_list_inbox() -> None:
+    try:
+        resp = requests.get(_url("/inbox"), headers=_headers())
+    except requests.ConnectionError as e:
+        print(f"ERROR: Connection failed: {e}", file=sys.stderr)
+        sys.exit(1)
+    _check_response(resp)
+    _print_table(resp.json())
+
+
+def cmd_list_quarantine() -> None:
+    try:
+        resp = requests.get(_url("/quarantine"), headers=_headers())
+    except requests.ConnectionError as e:
+        print(f"ERROR: Connection failed: {e}", file=sys.stderr)
+        sys.exit(1)
+    _check_response(resp)
+    _print_table(resp.json())
+
+
+def cmd_upload(path: str) -> None:
+    target = Path(path)
+    if not target.exists():
+        print(f"ERROR: path not found: {path}", file=sys.stderr)
+        sys.exit(1)
+
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+        if target.is_file():
+            zf.write(target, target.name)
+        else:
+            for f in sorted(target.rglob("*")):
+                if f.is_file():
+                    zf.write(f, f.relative_to(target))
+    buf.seek(0)
+
+    try:
+        resp = requests.post(
+            _url("/inbox/upload"),
+            headers={**_headers(), "Content-Type": "application/zip"},
+            data=buf.read(),
+        )
+    except requests.ConnectionError as e:
+        print(f"ERROR: Connection failed: {e}", file=sys.stderr)
+        sys.exit(1)
+    _check_response(resp)
+    print(f"Uploaded {path}")
+
+
+def cmd_download(path: str) -> None:
+    try:
+        resp = requests.get(_url(f"/quarantine/download/{path}"), headers=_headers())
+    except requests.ConnectionError as e:
+        print(f"ERROR: Connection failed: {e}", file=sys.stderr)
+        sys.exit(1)
+    _check_response(resp)
+
+    content_type = resp.headers.get("Content-Type", "")
+    if "application/zip" in content_type:
+        with zipfile.ZipFile(io.BytesIO(resp.content)) as zf:
+            zf.extractall(".")
+        print(f"Extracted {path}.zip in current directory")
+    else:
+        filename = Path(path).name
+        with open(filename, "wb") as fh:
+            fh.write(resp.content)
+        print(f"Saved {filename}")
+
+
+def cmd_trigger_fetch() -> None:
+    try:
+        resp = requests.post(_url("/fetch/trigger"), headers=_headers())
+    except requests.ConnectionError as e:
+        print(f"ERROR: Connection failed: {e}", file=sys.stderr)
+        sys.exit(1)
+    if resp.status_code == 202:
+        print("Fetch started")
+    elif resp.status_code == 409:
+        print("Pipeline busy")
+    else:
+        print(f"ERROR: HTTP {resp.status_code}: {resp.text}", file=sys.stderr)
+        sys.exit(1)
+
+
+def cmd_trigger_scan() -> None:
+    try:
+        resp = requests.post(_url("/scan/trigger"), headers=_headers())
+    except requests.ConnectionError as e:
+        print(f"ERROR: Connection failed: {e}", file=sys.stderr)
+        sys.exit(1)
+    if resp.status_code == 202:
+        print("Scan started")
+    elif resp.status_code == 409:
+        print("Pipeline busy")
+    else:
+        print(f"ERROR: HTTP {resp.status_code}: {resp.text}", file=sys.stderr)
+        sys.exit(1)
+
+
+# ---------------------------------------------------------------------------
+# Argument parsing
+# ---------------------------------------------------------------------------
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description="music-pipeline API client")
+    sub = parser.add_subparsers(dest="command", required=True)
+
+    sub.add_parser("list-inbox", help="List inbox files")
+    sub.add_parser("list-quarantine", help="List quarantine files")
+
+    p_upload = sub.add_parser("upload", help="Upload a file or directory")
+    p_upload.add_argument("path", help="Local file or directory to upload")
+
+    p_download = sub.add_parser("download", help="Download from quarantine")
+    p_download.add_argument("path", help="Remote path to download")
+
+    sub.add_parser("trigger-fetch", help="Trigger a fetch run")
+    sub.add_parser("trigger-scan", help="Trigger a scan run")
+
+    args = parser.parse_args()
+
+    if args.command == "list-inbox":
+        cmd_list_inbox()
+    elif args.command == "list-quarantine":
+        cmd_list_quarantine()
+    elif args.command == "upload":
+        cmd_upload(args.path)
+    elif args.command == "download":
+        cmd_download(args.path)
+    elif args.command == "trigger-fetch":
+        cmd_trigger_fetch()
+    elif args.command == "trigger-scan":
+        cmd_trigger_scan()
+
+
+if __name__ == "__main__":
+    main()
