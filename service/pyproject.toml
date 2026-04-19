@@ -1,0 +1,27 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "music-pipeline-service"
+version = "0.1.0"
+requires-python = ">=3.11"
+dependencies = [
+    "music-pipeline-fetch",
+    "music-pipeline-scan",
+    "apscheduler>=3.10,<4",
+    "watchdog>=4.0",
+    "flask>=3.0",
+    "waitress>=3.0",
+    "requests>=2.32",
+]
+
+[project.scripts]
+music-pipeline = "music_service.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["music_service*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
