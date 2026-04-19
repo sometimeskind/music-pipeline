@@ -57,7 +57,6 @@ def _human_size(n: int) -> str:
         n /= 1024.0
         if n < 1024 or unit == "GB":
             return f"{n:.1f} {unit}"
-    return f"{n:.1f} GB"  # unreachable but satisfies type checker
 
 
 def _print_table(files: list[dict]) -> None:
@@ -124,7 +123,7 @@ def cmd_upload(path: str) -> None:
     try:
         resp = requests.post(
             _url("/inbox/upload"),
-            headers=_headers(),
+            headers={**_headers(), "Content-Type": "application/zip"},
             data=buf.read(),
         )
     except requests.ConnectionError as e:

@@ -65,7 +65,7 @@ def test_human_size_gb(mod):
 def test_print_table_empty(mod, capsys):
     mod._print_table([])
     out = capsys.readouterr().out
-    assert out == "" or "name" in out.lower() or out == "\n"
+    assert out == ""
 
 
 def test_print_table_aligns_columns(mod, capsys):
@@ -161,6 +161,13 @@ def test_list_quarantine_prints_table(mod, capsys):
         mod.cmd_list_quarantine()
     out = capsys.readouterr().out
     assert "bad.m4a" in out
+
+
+def test_list_quarantine_connection_error_exits(mod):
+    with patch("requests.get", side_effect=requests.ConnectionError("refused")):
+        with pytest.raises(SystemExit) as exc_info:
+            mod.cmd_list_quarantine()
+    assert exc_info.value.code == 1
 
 
 # ---------------------------------------------------------------------------
@@ -277,6 +284,13 @@ def test_download_http_error_exits(mod):
     assert exc_info.value.code == 1
 
 
+def test_download_connection_error_exits(mod):
+    with patch("requests.get", side_effect=requests.ConnectionError("refused")):
+        with pytest.raises(SystemExit) as exc_info:
+            mod.cmd_download("bad.m4a")
+    assert exc_info.value.code == 1
+
+
 # ---------------------------------------------------------------------------
 # trigger-fetch
 # ---------------------------------------------------------------------------
@@ -290,7 +304,7 @@ def test_trigger_fetch_accepted(mod, capsys):
         mod.cmd_trigger_fetch()
 
     out = capsys.readouterr().out
-    assert "fetch" in out.lower() or "started" in out.lower() or "accepted" in out.lower()
+    assert out == "Fetch started\n"
 
 
 def test_trigger_fetch_busy(mod, capsys):
@@ -301,7 +315,7 @@ def test_trigger_fetch_busy(mod, capsys):
         mod.cmd_trigger_fetch()
 
     out = capsys.readouterr().out
-    assert "busy" in out.lower() or "pipeline" in out.lower()
+    assert out == "Pipeline busy\n"
 
 
 def test_trigger_fetch_error_exits(mod):
@@ -328,7 +342,7 @@ def test_trigger_scan_accepted(mod, capsys):
         mod.cmd_trigger_scan()
 
     out = capsys.readouterr().out
-    assert "scan" in out.lower() or "started" in out.lower() or "accepted" in out.lower()
+    assert out == "Scan started\n"
 
 
 def test_trigger_scan_busy(mod, capsys):
@@ -339,7 +353,18 @@ def test_trigger_scan_busy(mod, capsys):
         mod.cmd_trigger_scan()
 
     out = capsys.readouterr().out
-    assert "busy" in out.lower() or "pipeline" in out.lower()
+    assert out == "Pipeline busy\n"
+
+
+def test_trigger_scan_error_exits(mod):
+    mock_resp = MagicMock()
+    mock_resp.status_code = 500
+    mock_resp.text = "Server Error"
+
+    with patch("requests.post", return_value=mock_resp):
+        with pytest.raises(SystemExit) as exc_info:
+            mod.cmd_trigger_scan()
+    assert exc_info.value.code == 1
 
 
 # ---------------------------------------------------------------------------
