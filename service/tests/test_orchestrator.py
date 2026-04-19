@@ -198,14 +198,13 @@ def test_push_library_uses_default_paths_when_env_unset(monkeypatch):
 
 
 def test_run_scan_locked_calls_scan_then_push_then_trigger_in_order(monkeypatch):
-    """scan.run → _push_library → trigger_scan must execute in that order."""
-    monkeypatch.setenv("LIBRARY_REMOTE", ":webdav:")
+    """scan.run → _push_library → trigger_scan must execute in that order when push succeeds."""
     call_order: list[str] = []
 
     orc = Orchestrator()
 
     with patch("music_service.orchestrator.scan") as mock_scan, \
-         patch.object(orc, "_push_library", side_effect=lambda: call_order.append("push")), \
+         patch.object(orc, "_push_library", return_value=True, side_effect=lambda: call_order.append("push") or True), \
          patch("music_service.orchestrator.trigger_scan", side_effect=lambda: call_order.append("trigger")):
         mock_scan.run.side_effect = lambda pending=None: call_order.append("scan")
         orc._run_scan_locked()
@@ -213,18 +212,18 @@ def test_run_scan_locked_calls_scan_then_push_then_trigger_in_order(monkeypatch)
     assert call_order == ["scan", "push", "trigger"]
 
 
-def test_run_scan_locked_skips_trigger_when_no_remote(monkeypatch):
-    """With no LIBRARY_REMOTE, push is skipped but trigger_scan is still called."""
+def test_run_scan_locked_always_triggers_scan_regardless_of_remote(monkeypatch):
+    """With no LIBRARY_REMOTE, _push_library returns False and trigger_scan is skipped."""
     monkeypatch.delenv("LIBRARY_REMOTE", raising=False)
     call_order: list[str] = []
 
     orc = Orchestrator()
 
     with patch("music_service.orchestrator.scan") as mock_scan, \
-         patch.object(orc, "_push_library", side_effect=lambda: call_order.append("push")), \
+         patch.object(orc, "_push_library", return_value=False, side_effect=lambda: call_order.append("push") or False), \
          patch("music_service.orchestrator.trigger_scan", side_effect=lambda: call_order.append("trigger")):
         mock_scan.run.side_effect = lambda pending=None: call_order.append("scan")
         orc._run_scan_locked()
 
-    # push is still called (it decides internally to skip based on LIBRARY_REMOTE)
-    assert call_order == ["scan", "push", "trigger"]
+    # trigger_scan is skipped when nothing was pushed
+    assert call_order == ["scan", "push"]

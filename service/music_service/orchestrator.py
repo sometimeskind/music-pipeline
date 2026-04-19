@@ -63,16 +63,22 @@ class Orchestrator:
         """Run scan — caller must already hold self._lock."""
         logger.info("==> Scan starting")
         scan.run(pending)
-        self._push_library()
-        trigger_scan()
+        pushed = self._push_library()
+        if pushed:
+            trigger_scan()
         logger.info("==> Scan complete")
 
-    def _push_library(self) -> None:
-        """Push staging and playlists to the configured rclone remote."""
+    def _push_library(self) -> bool:
+        """Push staging and playlists to the configured rclone remote.
+
+        Returns True if a push was performed (LIBRARY_REMOTE is set), False otherwise.
+        Callers use the return value to decide whether to trigger a Navidrome rescan —
+        a rescan is only useful after files have actually been pushed somewhere.
+        """
         remote = os.environ.get("LIBRARY_REMOTE", "")
         if not remote:
             logger.info("LIBRARY_REMOTE not set — skipping library push")
-            return
+            return False
 
         staging = Path(os.environ.get("MUSIC_STAGING", "/root/Music/staging"))
         playlists = Path(os.environ.get("MUSIC_PLAYLISTS", "/root/Music/playlists"))
@@ -81,6 +87,7 @@ class Orchestrator:
         subprocess.run(["rclone", "sync", str(playlists), f"{remote}/playlists"], check=True)
 
         logger.info("==> Library pushed to %s", remote)
+        return True
 
     # ------------------------------------------------------------------
     # Non-blocking try methods (used by HTTP trigger endpoints)
