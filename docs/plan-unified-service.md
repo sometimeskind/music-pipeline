@@ -17,7 +17,7 @@ One persistent `Deployment` (`music-pipeline`) replaces:
 - `music-scan` CronJob
 - `beets-keeper` Deployment
 
-The service holds `music-data` (RWO) and `beets-data` (not RWO, held for Velero backup) permanently. Fetch runs on an internal schedule; scan is event-driven. Navidrome accesses the library via an rclone sidecar (this piece of homelab#566 is still required).
+The service holds `music-data` (RWO) and `pipeline-state` (not RWO, held for Velero backup) permanently. Fetch runs on an internal schedule; scan is event-driven. Navidrome accesses the library via an rclone sidecar (this piece of homelab#566 is still required).
 
 ---
 
@@ -25,13 +25,15 @@ The service holds `music-data` (RWO) and `beets-data` (not RWO, held for Velero 
 
 | PVC | Access mode | Sole mounter | Contains |
 |---|---|---|---|
-| `music-data` | RWO | `music-pipeline` Deployment | inbox, spotdl state, quarantine |
-| `beets-data` | not RWO | `music-pipeline` Deployment | `library.db`, `import.log` |
+| `music-data` | RWO | `music-pipeline` Deployment | inbox (user-dropped tracks + spotdl downloads), quarantine |
+| `pipeline-state` | not RWO | `music-pipeline` Deployment | `library.db`, `import.log` (subPath `beets/`); `.spotdl` snapshot files (subPath `spotdl/`) |
 | `music-library` | RWO | Navidrome pod (rclone sidecar) | library files + playlists, pushed by `music-pipeline` via rclone WebDAV |
+
+**Why spotdl state lives on `pipeline-state`:** `.spotdl` files are application state (they record which Spotify URLs have been processed and drive soft-delete logic), not user data. They belong alongside `library.db`. The PVC is mounted at two subPaths — `beets/` → `/root/.config/beets/` and `spotdl/` → `/root/Music/inbox/spotdl/`.
 
 Beets imports into an `emptyDir` volume mounted at `/root/Music/staging/`. After import, rclone pushes staging → Navidrome sidecar. The staging emptyDir is ephemeral: on pod restart it is empty, which is correct — anything already imported is in `library.db` and already pushed to Navidrome. Playlists are also written to staging and pushed.
 
-This keeps `music-data` small: it only needs to cover the inbox during a fetch run + spotdl state + quarantine. It does not need to hold the full library.
+This keeps `music-data` small: inbox during a fetch run + quarantine only.
 
 The `music-working` PVC (previously Nextcloud) is no longer needed by the pipeline once `music-data` is provisioned and data migrated. Nextcloud's ownership of inbox/quarantine is replaced by the HTTP API on the service.
 
@@ -118,13 +120,16 @@ Six endpoints, all protected by bearer token except `/health`:
 ```
 GET  /health                          — liveness/readiness probe (no auth)
 GET  /inbox                           — list audio files in inbox tree (name, size, modified)
-POST /inbox/upload                    — multipart upload; saves to /root/Music/inbox/
-                                        triggers debounced scan on completion
+POST /inbox/upload                    — accepts a zip archive; extracts into /root/Music/inbox/
+                                        preserving directory structure. triggers debounced scan.
 GET  /quarantine                      — list files in quarantine (name, size, modified)
-GET  /quarantine/download/<path:name> — stream file for download
+GET  /quarantine/download/<path:name> — if path is a file: stream directly.
+                                        if path is a directory: zip on the fly and stream.
 POST /fetch/trigger                   — enqueue fetch (returns 409 if already running)
 POST /scan/trigger                    — enqueue scan (returns 409 if already running)
 ```
+
+Upload and download both use Python's stdlib `zipfile` — no extra deps. The zip boundary aligns with how the user works: upload an album directory, download a quarantine subdirectory.
 
 Use Flask. Run with `waitress` (pure-Python WSGI server, no C deps).
 
@@ -230,15 +235,16 @@ Reads from environment:
 
 ```
 music-files list-inbox
-music-files upload <file> [<file> ...]
+music-files upload <path>          — zips <path> (file or directory) and POSTs to /inbox/upload
 music-files list-quarantine
-music-files download <filename>
+music-files download <path>        — downloads <path> from quarantine; unzips directories in place
 music-files trigger-fetch
 music-files trigger-scan
 ```
 
-`list-inbox` and `list-quarantine` output a table: filename, size, modified date.
-`download` saves to the current directory.
+`list-inbox` and `list-quarantine` output a table: name, size, modified date.
+`upload` zips transparently — caller passes a plain path, never touches zip files directly.
+`download` saves to the current directory; if the response is a zip it is extracted there.
 
 ---
 
@@ -316,8 +322,12 @@ spec:
         volumeMounts:
         - name: music-data
           mountPath: /root/Music
-        - name: beets-data
+        - name: pipeline-state
           mountPath: /root/.config/beets
+          subPath: beets
+        - name: pipeline-state
+          mountPath: /root/Music/inbox/spotdl
+          subPath: spotdl
         - name: beets-config
           mountPath: /root/.config/beets/config.yaml
           subPath: config.yaml
@@ -352,9 +362,9 @@ spec:
       - name: music-data
         persistentVolumeClaim:
           claimName: music-data
-      - name: beets-data
+      - name: pipeline-state
         persistentVolumeClaim:
-          claimName: beets-data
+          claimName: pipeline-state   # formerly beets-data; rename PVC or create new + migrate
       - name: beets-config
         configMap:
           name: music-pipeline-beets-config
@@ -449,17 +459,18 @@ The `compose.yml` gains a single `service` container replacing `fetch` and `scan
 ## Migration Steps
 
 1. Apply Navidrome rclone sidecar (homelab repo) — unblocks Navidrome from library PVC
-2. Provision `music-data` PVC (RWO, OpenEBS hostpath, sized for inbox + library + quarantine)
-3. Migrate data: copy from current `music-working` and `music-library` PVCs into `music-data`
-4. Perform package rename (Phase 0) — update imports, tests, beets config pluginpath
-5. Implement Phase 1 (remove pending-removals) and Phase 2 (service/ directory)
-6. Build and push unified image to GHCR
-7. Apply ConfigMaps, Secrets, Deployment, Service, Ingress
-8. Verify: fetch runs on schedule, scan triggers on completion and on inbox file drop, HTTP API works from laptop
-9. Delete `beets-keeper` Deployment
-10. Delete `music-ingest` CronJob
-11. Delete `music-scan` CronJob
-12. Decommission `music-working` Nextcloud PVC (once data confirmed migrated)
+2. Provision `music-data` PVC (RWO, OpenEBS hostpath, sized for inbox during fetch + quarantine)
+3. Provision `pipeline-state` PVC (or rename existing `beets-data`); migrate spotdl `.spotdl` files into `spotdl/` subPath, beets data into `beets/` subPath
+4. Migrate library files: copy from `music-library` PVC into Navidrome sidecar WebDAV (or directly on node)
+5. Perform package rename (Phase 0) — update imports, tests, beets config pluginpath
+6. Implement Phase 1 (remove pending-removals) and Phase 2 (service/ directory)
+7. Build and push unified image to GHCR
+8. Apply ConfigMaps, Secrets, Deployment, Service, Ingress
+9. Verify: fetch runs on schedule, scan triggers on completion and on inbox file drop, HTTP API + CLI work from laptop
+10. Delete `beets-keeper` Deployment
+11. Delete `music-ingest` CronJob
+12. Delete `music-scan` CronJob
+13. Decommission `music-working` Nextcloud PVC (once data confirmed migrated)
 
 ---
 
