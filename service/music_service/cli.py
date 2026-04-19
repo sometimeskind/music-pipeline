@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import os
+import signal
 import sys
 
 
@@ -34,6 +35,11 @@ def main() -> None:
     orchestrator = Orchestrator()
     orchestrator.start()
 
+    signal.signal(signal.SIGTERM, lambda *_: orchestrator.stop())
+
     app = create_app(orchestrator)
     logger.info("Starting music-pipeline service on 0.0.0.0:8080")
-    waitress.serve(app, host="0.0.0.0", port=8080)
+    try:
+        waitress.serve(app, host="0.0.0.0", port=8080)
+    finally:
+        orchestrator.stop()

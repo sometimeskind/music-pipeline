@@ -18,7 +18,6 @@ import music_scan.scan as scan
 logger = logging.getLogger(__name__)
 
 AUDIO_EXTS = {".mp3", ".flac", ".ogg", ".opus", ".m4a", ".aac", ".wav", ".wma", ".aiff", ".ape", ".mpc"}
-INBOX = Path(os.environ.get("MUSIC_INBOX", "/root/Music/inbox"))
 
 
 class _ScanEventHandler(FileSystemEventHandler):
@@ -26,10 +25,9 @@ class _ScanEventHandler(FileSystemEventHandler):
         self._orc = orchestrator
 
     def on_created(self, event: FileCreatedEvent) -> None:
-        if isinstance(event, FileCreatedEvent):
-            if Path(event.src_path).suffix.lower() in AUDIO_EXTS:
-                logger.debug("File created: %s — scheduling debounced scan", event.src_path)
-                self._orc._schedule_debounced_scan()
+        if Path(event.src_path).suffix.lower() in AUDIO_EXTS:
+            logger.debug("File created: %s — scheduling debounced scan", event.src_path)
+            self._orc._schedule_debounced_scan()
 
 
 class Orchestrator:
@@ -76,8 +74,12 @@ class Orchestrator:
         """
         if not self._lock.acquire(blocking=False):
             return False
-        t = threading.Thread(target=self._fetch_and_release, daemon=True)
-        t.start()
+        try:
+            t = threading.Thread(target=self._fetch_and_release, daemon=True)
+            t.start()
+        except Exception:
+            self._lock.release()
+            raise
         return True
 
     def try_run_scan(self) -> bool:
@@ -87,8 +89,12 @@ class Orchestrator:
         """
         if not self._lock.acquire(blocking=False):
             return False
-        t = threading.Thread(target=self._scan_and_release, daemon=True)
-        t.start()
+        try:
+            t = threading.Thread(target=self._scan_and_release, daemon=True)
+            t.start()
+        except Exception:
+            self._lock.release()
+            raise
         return True
 
     def _fetch_and_release(self) -> None:
@@ -142,7 +148,14 @@ class Orchestrator:
     def start(self) -> None:
         """Start the APScheduler and watchdog observer."""
         fetch_cron = os.environ.get("FETCH_CRON", "0 3 * * *")
-        minute, hour, day, month, day_of_week = fetch_cron.split()
+        try:
+            minute, hour, day, month, day_of_week = fetch_cron.split()
+        except ValueError:
+            logger.error(
+                "Invalid FETCH_CRON=%r — must be a 5-field cron expression (e.g. '0 3 * * *')", fetch_cron
+            )
+            raise SystemExit(1)
+
         self._scheduler.add_job(
             self.run_fetch,
             CronTrigger(minute=minute, hour=hour, day=day, month=month, day_of_week=day_of_week),
@@ -151,10 +164,11 @@ class Orchestrator:
         self._scheduler.start()
         logger.info("Scheduler started (FETCH_CRON=%s)", fetch_cron)
 
+        inbox = Path(os.environ.get("MUSIC_INBOX", "/root/Music/inbox"))
         handler = _ScanEventHandler(self)
-        self._observer.schedule(handler, str(INBOX), recursive=True)
+        self._observer.schedule(handler, str(inbox), recursive=True)
         self._observer.start()
-        logger.info("File watcher started on %s", INBOX)
+        logger.info("File watcher started on %s", inbox)
 
     def stop(self) -> None:
         """Shut down scheduler and file watcher."""

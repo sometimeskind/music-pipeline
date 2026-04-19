@@ -17,7 +17,7 @@ def setup_auth(app: Flask) -> None:
 
         token = os.environ.get("API_BEARER_TOKEN", "")
         auth_header = request.headers.get("Authorization", "")
-        if not auth_header.startswith("Bearer ") or auth_header[7:] != token:
+        if not token or not auth_header.startswith("Bearer ") or auth_header[7:] != token:
             return jsonify({"error": "unauthorized"}), 401
 
         return None
