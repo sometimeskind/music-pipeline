@@ -5,8 +5,8 @@ from pathlib import Path
 
 import pytest
 
-from pipeline.ingest import classify_failure, _collect_removals, _deadline_reached, _reconcile_playlists, _write_pending_removals
-from pipeline.spotdl_ops import find_track_in_snapshot
+from music_fetch.ingest import classify_failure, _collect_removals, _deadline_reached, _reconcile_playlists, _write_pending_removals
+from music_fetch.spotdl_ops import find_track_in_snapshot
 
 
 # ---------------------------------------------------------------------------
@@ -400,7 +400,7 @@ def test_reconcile_provisions_new_playlist(tmp_path: Path) -> None:
     with mock.patch.object(ingest, "CONF_PATH", conf), \
          mock.patch.object(ingest, "SPOTDL_DIR", spotdl_dir), \
          mock.patch.object(ingest, "COOKIE_FILE", tmp_path / "cookies.txt"), \
-         mock.patch("pipeline.ingest.save_playlist") as mock_save:
+         mock.patch("music_fetch.ingest.save_playlist") as mock_save:
         result = _reconcile_playlists()
 
     mock_save.assert_called_once()
@@ -422,7 +422,7 @@ def test_reconcile_skips_existing_spotdl(tmp_path: Path) -> None:
 
     with mock.patch.object(ingest, "CONF_PATH", conf), \
          mock.patch.object(ingest, "SPOTDL_DIR", spotdl_dir), \
-         mock.patch("pipeline.ingest.save_playlist") as mock_save:
+         mock.patch("music_fetch.ingest.save_playlist") as mock_save:
         result = _reconcile_playlists()
 
     mock_save.assert_not_called()
@@ -441,7 +441,7 @@ def test_reconcile_creates_nosync_sentinel(tmp_path: Path) -> None:
 
     with mock.patch.object(ingest, "CONF_PATH", conf), \
          mock.patch.object(ingest, "SPOTDL_DIR", spotdl_dir), \
-         mock.patch("pipeline.ingest.save_playlist"):
+         mock.patch("music_fetch.ingest.save_playlist"):
         _reconcile_playlists()
 
     assert (spotdl_dir / "frozen.nosync").exists()
@@ -460,7 +460,7 @@ def test_reconcile_removes_nosync_sentinel(tmp_path: Path) -> None:
 
     with mock.patch.object(ingest, "CONF_PATH", conf), \
          mock.patch.object(ingest, "SPOTDL_DIR", spotdl_dir), \
-         mock.patch("pipeline.ingest.save_playlist"):
+         mock.patch("music_fetch.ingest.save_playlist"):
         _reconcile_playlists()
 
     assert not (spotdl_dir / "mypl.nosync").exists()
@@ -483,7 +483,7 @@ def test_reconcile_detects_removed_playlist(tmp_path: Path) -> None:
 
     with mock.patch.object(ingest, "CONF_PATH", conf), \
          mock.patch.object(ingest, "SPOTDL_DIR", spotdl_dir), \
-         mock.patch("pipeline.ingest.save_playlist"):
+         mock.patch("music_fetch.ingest.save_playlist"):
         result = _reconcile_playlists()
 
     assert result == ["gone"]
@@ -567,7 +567,7 @@ def test_reconcile_deletes_nosync_for_removed_playlist(tmp_path: Path) -> None:
 
     with mock.patch.object(ingest, "CONF_PATH", conf), \
          mock.patch.object(ingest, "SPOTDL_DIR", spotdl_dir), \
-         mock.patch("pipeline.ingest.save_playlist"):
+         mock.patch("music_fetch.ingest.save_playlist"):
         result = _reconcile_playlists()
 
     assert result == ["gone"]

@@ -9,11 +9,11 @@ requires-python = ">=3.11"
 dependencies = []
 
 [project.scripts]
-music-ingest = "pipeline.cli:main"
+music-ingest = "music_fetch.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["pipeline*"]
+include = ["music_fetch*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

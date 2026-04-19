@@ -30,13 +30,13 @@ def test_relative_path_same_dir_file() -> None:
 
 
 def test_count_quarantine_empty(tmp_path: Path) -> None:
-    from pipeline.scan import _count_quarantine, QUARANTINE
+    from music_scan.scan import _count_quarantine, QUARANTINE
     import unittest.mock as mock
 
     fake_quarantine = tmp_path / "quarantine"
     fake_quarantine.mkdir()
 
-    with mock.patch("pipeline.scan.QUARANTINE", fake_quarantine):
+    with mock.patch("music_scan.scan.QUARANTINE", fake_quarantine):
         from pipeline import scan
         count = scan._count_quarantine()
     assert count == 0
@@ -50,14 +50,14 @@ def test_count_quarantine_with_files(tmp_path: Path) -> None:
     (fake_quarantine / "a.mp3").touch()
     (fake_quarantine / "b.m4a").touch()
 
-    with mock.patch("pipeline.scan.QUARANTINE", fake_quarantine):
+    with mock.patch("music_scan.scan.QUARANTINE", fake_quarantine):
         from pipeline import scan
         count = scan._count_quarantine()
     assert count == 2
 
 
 def test_quarantine_leftovers(tmp_path: Path) -> None:
-    from pipeline.scan import _quarantine_inbox_leftovers
+    from music_scan.scan import _quarantine_inbox_leftovers
 
     inbox = tmp_path / "inbox"
     inbox.mkdir()
@@ -72,7 +72,7 @@ def test_quarantine_leftovers(tmp_path: Path) -> None:
     # Non-audio file — must not be touched
     (inbox / "readme.txt").touch()
 
-    with mock.patch("pipeline.scan.INBOX", inbox), mock.patch("pipeline.scan.QUARANTINE", quarantine):
+    with mock.patch("music_scan.scan.INBOX", inbox), mock.patch("music_scan.scan.QUARANTINE", quarantine):
         moved = _quarantine_inbox_leftovers()
 
     assert moved == 2
@@ -87,16 +87,16 @@ def test_quarantine_leftovers(tmp_path: Path) -> None:
 
 
 def test_process_pending_removals_no_file(tmp_path: Path) -> None:
-    from pipeline.scan import _process_pending_removals
+    from music_scan.scan import _process_pending_removals
 
     fake_path = tmp_path / ".pending-removals.json"
-    with mock.patch("pipeline.scan.PENDING_REMOVALS", fake_path):
+    with mock.patch("music_scan.scan.PENDING_REMOVALS", fake_path):
         count = _process_pending_removals()
     assert count == 0
 
 
 def test_process_pending_removals_reads_and_deletes(tmp_path: Path) -> None:
-    from pipeline.scan import _process_pending_removals
+    from music_scan.scan import _process_pending_removals
 
     fake_path = tmp_path / ".pending-removals.json"
     data = {"tracks": [{"title": "Song A", "artist": "Artist 1", "source": "my-playlist"}], "remove_sources": []}
@@ -107,8 +107,8 @@ def test_process_pending_removals_reads_and_deletes(tmp_path: Path) -> None:
     mock_lib.__exit__ = mock.MagicMock(return_value=False)
     mock_lib.clear_source_tag = mock.MagicMock(return_value=True)
 
-    with mock.patch("pipeline.scan.PENDING_REMOVALS", fake_path), \
-         mock.patch("pipeline.scan.MusicLibrary", return_value=mock_lib):
+    with mock.patch("music_scan.scan.PENDING_REMOVALS", fake_path), \
+         mock.patch("music_scan.scan.MusicLibrary", return_value=mock_lib):
         count = _process_pending_removals()
 
     assert count == 1
@@ -119,12 +119,12 @@ def test_process_pending_removals_reads_and_deletes(tmp_path: Path) -> None:
 
 
 def test_process_pending_removals_empty_data(tmp_path: Path) -> None:
-    from pipeline.scan import _process_pending_removals
+    from music_scan.scan import _process_pending_removals
 
     fake_path = tmp_path / ".pending-removals.json"
     fake_path.write_text(json.dumps({"tracks": [], "remove_sources": []}), encoding="utf-8")
 
-    with mock.patch("pipeline.scan.PENDING_REMOVALS", fake_path):
+    with mock.patch("music_scan.scan.PENDING_REMOVALS", fake_path):
         count = _process_pending_removals()
 
     assert count == 0
@@ -133,12 +133,12 @@ def test_process_pending_removals_empty_data(tmp_path: Path) -> None:
 
 def test_process_pending_removals_malformed_json_deletes_file(tmp_path: Path) -> None:
     """Malformed JSON must not leave the file in place (would break every future scan run)."""
-    from pipeline.scan import _process_pending_removals
+    from music_scan.scan import _process_pending_removals
 
     fake_path = tmp_path / ".pending-removals.json"
     fake_path.write_text("not valid json {{{{", encoding="utf-8")
 
-    with mock.patch("pipeline.scan.PENDING_REMOVALS", fake_path):
+    with mock.patch("music_scan.scan.PENDING_REMOVALS", fake_path):
         count = _process_pending_removals()
 
     assert count == 0
@@ -146,7 +146,7 @@ def test_process_pending_removals_malformed_json_deletes_file(tmp_path: Path) ->
 
 
 def test_process_pending_removals_multi_track(tmp_path: Path) -> None:
-    from pipeline.scan import _process_pending_removals
+    from music_scan.scan import _process_pending_removals
 
     fake_path = tmp_path / ".pending-removals.json"
     data = {
@@ -163,8 +163,8 @@ def test_process_pending_removals_multi_track(tmp_path: Path) -> None:
     mock_lib.__exit__ = mock.MagicMock(return_value=False)
     mock_lib.clear_source_tag = mock.MagicMock(return_value=True)
 
-    with mock.patch("pipeline.scan.PENDING_REMOVALS", fake_path), \
-         mock.patch("pipeline.scan.MusicLibrary", return_value=mock_lib):
+    with mock.patch("music_scan.scan.PENDING_REMOVALS", fake_path), \
+         mock.patch("music_scan.scan.MusicLibrary", return_value=mock_lib):
         count = _process_pending_removals()
 
     assert count == 2
@@ -174,7 +174,7 @@ def test_process_pending_removals_multi_track(tmp_path: Path) -> None:
 
 def test_process_pending_removals_remove_sources(tmp_path: Path) -> None:
     """remove_sources → items_by_source called, source tags cleared, .m3u deleted."""
-    from pipeline.scan import _process_pending_removals
+    from music_scan.scan import _process_pending_removals
 
     fake_path = tmp_path / ".pending-removals.json"
     playlists_dir = tmp_path / "playlists"
@@ -191,9 +191,9 @@ def test_process_pending_removals_remove_sources(tmp_path: Path) -> None:
     mock_lib.__exit__ = mock.MagicMock(return_value=False)
     mock_lib.items_by_source = mock.MagicMock(return_value=[mock_item])
 
-    with mock.patch("pipeline.scan.PENDING_REMOVALS", fake_path), \
-         mock.patch("pipeline.scan.PLAYLISTS", playlists_dir), \
-         mock.patch("pipeline.scan.MusicLibrary", return_value=mock_lib):
+    with mock.patch("music_scan.scan.PENDING_REMOVALS", fake_path), \
+         mock.patch("music_scan.scan.PLAYLISTS", playlists_dir), \
+         mock.patch("music_scan.scan.MusicLibrary", return_value=mock_lib):
         count = _process_pending_removals()
 
     assert count == 1
@@ -206,7 +206,7 @@ def test_process_pending_removals_remove_sources(tmp_path: Path) -> None:
 
 def test_process_pending_removals_remove_source_missing_m3u(tmp_path: Path) -> None:
     """remove_sources processing doesn't fail if .m3u doesn't exist."""
-    from pipeline.scan import _process_pending_removals
+    from music_scan.scan import _process_pending_removals
 
     fake_path = tmp_path / ".pending-removals.json"
     playlists_dir = tmp_path / "playlists"
@@ -220,9 +220,9 @@ def test_process_pending_removals_remove_source_missing_m3u(tmp_path: Path) -> N
     mock_lib.__exit__ = mock.MagicMock(return_value=False)
     mock_lib.items_by_source = mock.MagicMock(return_value=[])
 
-    with mock.patch("pipeline.scan.PENDING_REMOVALS", fake_path), \
-         mock.patch("pipeline.scan.PLAYLISTS", playlists_dir), \
-         mock.patch("pipeline.scan.MusicLibrary", return_value=mock_lib):
+    with mock.patch("music_scan.scan.PENDING_REMOVALS", fake_path), \
+         mock.patch("music_scan.scan.PLAYLISTS", playlists_dir), \
+         mock.patch("music_scan.scan.MusicLibrary", return_value=mock_lib):
         count = _process_pending_removals()
 
     assert count == 1
@@ -230,7 +230,7 @@ def test_process_pending_removals_remove_source_missing_m3u(tmp_path: Path) -> N
 
 def test_process_pending_removals_backward_compat_old_list_format(tmp_path: Path) -> None:
     """Old list format is still processed correctly."""
-    from pipeline.scan import _process_pending_removals
+    from music_scan.scan import _process_pending_removals
 
     fake_path = tmp_path / ".pending-removals.json"
     old_format = [{"title": "Song A", "artist": "Artist 1", "source": "my-playlist"}]
@@ -241,8 +241,8 @@ def test_process_pending_removals_backward_compat_old_list_format(tmp_path: Path
     mock_lib.__exit__ = mock.MagicMock(return_value=False)
     mock_lib.clear_source_tag = mock.MagicMock(return_value=True)
 
-    with mock.patch("pipeline.scan.PENDING_REMOVALS", fake_path), \
-         mock.patch("pipeline.scan.MusicLibrary", return_value=mock_lib):
+    with mock.patch("music_scan.scan.PENDING_REMOVALS", fake_path), \
+         mock.patch("music_scan.scan.MusicLibrary", return_value=mock_lib):
         count = _process_pending_removals()
 
     assert count == 1
@@ -257,7 +257,7 @@ def test_process_pending_removals_backward_compat_old_list_format(tmp_path: Path
 
 
 def test_regen_playlists_writes_m3u_with_relative_paths(tmp_path: Path) -> None:
-    from pipeline.scan import _regen_playlists
+    from music_scan.scan import _regen_playlists
 
     spotdl_dir = tmp_path / "spotdl"
     spotdl_dir.mkdir()
@@ -273,10 +273,10 @@ def test_regen_playlists_writes_m3u_with_relative_paths(tmp_path: Path) -> None:
     mock_lib.__exit__ = mock.MagicMock(return_value=False)
     mock_lib.paths_by_source = mock.MagicMock(return_value=[track_path])
 
-    with mock.patch("pipeline.scan.SPOTDL_DIR", spotdl_dir), \
-         mock.patch("pipeline.scan.PLAYLISTS", playlists_dir), \
-         mock.patch("pipeline.scan.LIBRARY_DB", tmp_path / "library.db"), \
-         mock.patch("pipeline.scan.MusicLibrary", return_value=mock_lib):
+    with mock.patch("music_scan.scan.SPOTDL_DIR", spotdl_dir), \
+         mock.patch("music_scan.scan.PLAYLISTS", playlists_dir), \
+         mock.patch("music_scan.scan.LIBRARY_DB", tmp_path / "library.db"), \
+         mock.patch("music_scan.scan.MusicLibrary", return_value=mock_lib):
         _regen_playlists()
 
     m3u = playlists_dir / "my-playlist.m3u"
@@ -288,7 +288,7 @@ def test_regen_playlists_writes_m3u_with_relative_paths(tmp_path: Path) -> None:
 
 
 def test_regen_playlists_empty_playlist_writes_empty_m3u(tmp_path: Path) -> None:
-    from pipeline.scan import _regen_playlists
+    from music_scan.scan import _regen_playlists
 
     spotdl_dir = tmp_path / "spotdl"
     spotdl_dir.mkdir()
@@ -302,10 +302,10 @@ def test_regen_playlists_empty_playlist_writes_empty_m3u(tmp_path: Path) -> None
     mock_lib.__exit__ = mock.MagicMock(return_value=False)
     mock_lib.paths_by_source = mock.MagicMock(return_value=[])
 
-    with mock.patch("pipeline.scan.SPOTDL_DIR", spotdl_dir), \
-         mock.patch("pipeline.scan.PLAYLISTS", playlists_dir), \
-         mock.patch("pipeline.scan.LIBRARY_DB", tmp_path / "library.db"), \
-         mock.patch("pipeline.scan.MusicLibrary", return_value=mock_lib):
+    with mock.patch("music_scan.scan.SPOTDL_DIR", spotdl_dir), \
+         mock.patch("music_scan.scan.PLAYLISTS", playlists_dir), \
+         mock.patch("music_scan.scan.LIBRARY_DB", tmp_path / "library.db"), \
+         mock.patch("music_scan.scan.MusicLibrary", return_value=mock_lib):
         _regen_playlists()
 
     m3u = playlists_dir / "empty-playlist.m3u"
@@ -319,7 +319,7 @@ def test_regen_playlists_empty_playlist_writes_empty_m3u(tmp_path: Path) -> None
 
 
 def test_snapshot_inbox_finds_audio_files(tmp_path: Path) -> None:
-    from pipeline.scan import _snapshot_inbox
+    from music_scan.scan import _snapshot_inbox
 
     inbox = tmp_path / "inbox"
     inbox.mkdir()
@@ -328,14 +328,14 @@ def test_snapshot_inbox_finds_audio_files(tmp_path: Path) -> None:
     (inbox / "sub" / "Four Tet - Pyramid.flac").touch()
     (inbox / "readme.txt").touch()
 
-    with mock.patch("pipeline.scan.AUDIO_EXTS", {".m4a", ".flac"}):
+    with mock.patch("music_scan.scan.AUDIO_EXTS", {".m4a", ".flac"}):
         stems = _snapshot_inbox(inbox)
 
     assert stems == ["DJ Koze - Pick Up", "Four Tet - Pyramid"]
 
 
 def test_name_words_normalises_correctly() -> None:
-    from pipeline.scan import _name_words
+    from music_scan.scan import _name_words
 
     assert _name_words("DJ Koze - Pick Up") == {"koze", "pick"}
     assert _name_words("Four Tet - Pyramid") == {"four", "tet", "pyramid"}
@@ -345,13 +345,13 @@ def test_name_words_normalises_correctly() -> None:
 
 
 def test_check_import_names_no_flags_on_good_match(caplog: pytest.LogCaptureFixture) -> None:
-    from pipeline.scan import _check_import_names
+    from music_scan.scan import _check_import_names
     import logging
 
     inbox = ["DJ Koze - Pick Up", "Four Tet - Pyramid"]
     imported = [("Pick Up", "DJ Koze"), ("Pyramid", "Four Tet")]
 
-    with caplog.at_level(logging.INFO, logger="pipeline.scan"):
+    with caplog.at_level(logging.INFO, logger="music_scan.scan"):
         _check_import_names(inbox, imported)
 
     assert "Name check OK" in caplog.text
@@ -359,13 +359,13 @@ def test_check_import_names_no_flags_on_good_match(caplog: pytest.LogCaptureFixt
 
 
 def test_check_import_names_flags_bad_match(caplog: pytest.LogCaptureFixture) -> None:
-    from pipeline.scan import _check_import_names
+    from music_scan.scan import _check_import_names
     import logging
 
     inbox = ["DJ Koze - Pick Up"]
     imported = [("Never Be Like You", "Flume")]  # completely different
 
-    with caplog.at_level(logging.WARNING, logger="pipeline.scan"):
+    with caplog.at_level(logging.WARNING, logger="music_scan.scan"):
         _check_import_names(inbox, imported)
 
     assert "!!" in caplog.text
@@ -380,7 +380,7 @@ def _fake_tags(overrides: dict | None = None) -> dict:
 
 
 def test_move_asis_eligible_moves_fully_tagged_file(tmp_path: Path) -> None:
-    from pipeline.scan import _move_asis_eligible
+    from music_scan.scan import _move_asis_eligible
 
     quarantine = tmp_path / "quarantine"
     quarantine.mkdir()
@@ -397,7 +397,7 @@ def test_move_asis_eligible_moves_fully_tagged_file(tmp_path: Path) -> None:
 
 
 def test_move_asis_eligible_leaves_untagged_file(tmp_path: Path) -> None:
-    from pipeline.scan import _move_asis_eligible
+    from music_scan.scan import _move_asis_eligible
 
     quarantine = tmp_path / "quarantine"
     quarantine.mkdir()
@@ -414,7 +414,7 @@ def test_move_asis_eligible_leaves_untagged_file(tmp_path: Path) -> None:
 
 
 def test_move_asis_eligible_leaves_partially_tagged_file(tmp_path: Path) -> None:
-    from pipeline.scan import _move_asis_eligible
+    from music_scan.scan import _move_asis_eligible
 
     quarantine = tmp_path / "quarantine"
     quarantine.mkdir()
@@ -431,13 +431,13 @@ def test_move_asis_eligible_leaves_partially_tagged_file(tmp_path: Path) -> None
 
 
 def test_run_beet_import_asis_flag() -> None:
-    from pipeline.process import run_beet_import
+    from music_scan.process import run_beet_import
     import unittest.mock as mock
 
     mock_proc = mock.MagicMock()
     mock_proc.wait.return_value = 0
     with mock.patch("subprocess.Popen", return_value=mock_proc) as mock_popen, \
-         mock.patch("pipeline.process.IMPORT_LOG") as mock_log:
+         mock.patch("music_scan.process.IMPORT_LOG") as mock_log:
         mock_log.exists.return_value = False
         run_beet_import(Path("/some/dir"), asis=True)
 
@@ -447,13 +447,13 @@ def test_run_beet_import_asis_flag() -> None:
 
 
 def test_run_beet_import_no_asis_flag_by_default() -> None:
-    from pipeline.process import run_beet_import
+    from music_scan.process import run_beet_import
     import unittest.mock as mock
 
     mock_proc = mock.MagicMock()
     mock_proc.wait.return_value = 0
     with mock.patch("subprocess.Popen", return_value=mock_proc) as mock_popen, \
-         mock.patch("pipeline.process.IMPORT_LOG") as mock_log:
+         mock.patch("music_scan.process.IMPORT_LOG") as mock_log:
         mock_log.exists.return_value = False
         run_beet_import(Path("/some/dir"))
 
@@ -464,7 +464,7 @@ def test_run_beet_import_no_asis_flag_by_default() -> None:
 
 def test_process_pending_removals_file_deleted_before_processing(tmp_path: Path) -> None:
     """File is unlinked before processing so an exception mid-processing doesn't re-block scans."""
-    from pipeline.scan import _process_pending_removals
+    from music_scan.scan import _process_pending_removals
 
     fake_path = tmp_path / ".pending-removals.json"
     data = {"tracks": [{"title": "Song A", "artist": "Artist 1", "source": "my-playlist"}], "remove_sources": []}
@@ -475,8 +475,8 @@ def test_process_pending_removals_file_deleted_before_processing(tmp_path: Path)
     mock_lib.__exit__ = mock.MagicMock(return_value=False)
     mock_lib.clear_source_tag = mock.MagicMock(side_effect=RuntimeError("beets exploded"))
 
-    with mock.patch("pipeline.scan.PENDING_REMOVALS", fake_path), \
-         mock.patch("pipeline.scan.MusicLibrary", return_value=mock_lib):
+    with mock.patch("music_scan.scan.PENDING_REMOVALS", fake_path), \
+         mock.patch("music_scan.scan.MusicLibrary", return_value=mock_lib):
         with pytest.raises(RuntimeError):
             _process_pending_removals()
 

@@ -30,7 +30,7 @@ paths:
   comp: Various Artists/$album/$track - $title
 
 pluginpath:
-  - /app/pipeline
+  - /app/music_scan
 
 plugins: musicbrainz chroma fromfilename fetchart embedart scrub duplicates music_pipeline
 

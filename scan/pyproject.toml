@@ -9,11 +9,11 @@ requires-python = ">=3.11"
 dependencies = []
 
 [project.scripts]
-music-scan = "pipeline.cli:main"
+music-scan = "music_scan.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["pipeline*"]
+include = ["music_scan*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

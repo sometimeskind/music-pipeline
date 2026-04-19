@@ -2,7 +2,7 @@
 
 import pytest
 
-from pipeline.metrics import ScanMetrics, _gauge
+from music_scan.metrics import ScanMetrics, _gauge
 
 
 # ---------------------------------------------------------------------------
@@ -31,7 +31,7 @@ def test_gauge_float_value() -> None:
 
 def test_scan_metrics_success_body(monkeypatch: pytest.MonkeyPatch) -> None:
     pushed: list[str] = []
-    monkeypatch.setattr("pipeline.metrics._push", lambda body, job: pushed.append(body))
+    monkeypatch.setattr("music_scan.metrics._push", lambda body, job: pushed.append(body))
 
     m = ScanMetrics(success=True, duration_seconds=30, quarantined_tracks=2)
     m.push()
@@ -46,7 +46,7 @@ def test_scan_metrics_success_body(monkeypatch: pytest.MonkeyPatch) -> None:
 
 def test_scan_metrics_failure_includes_reason(monkeypatch: pytest.MonkeyPatch) -> None:
     pushed: list[str] = []
-    monkeypatch.setattr("pipeline.metrics._push", lambda body, job: pushed.append(body))
+    monkeypatch.setattr("music_scan.metrics._push", lambda body, job: pushed.append(body))
 
     m = ScanMetrics(success=False, failure_reason="disk_full")
     m.push()
@@ -58,14 +58,14 @@ def test_scan_metrics_failure_includes_reason(monkeypatch: pytest.MonkeyPatch) -
 
 def test_push_job_label_scan(monkeypatch: pytest.MonkeyPatch) -> None:
     jobs: list[str] = []
-    monkeypatch.setattr("pipeline.metrics._push", lambda body, job: jobs.append(job))
+    monkeypatch.setattr("music_scan.metrics._push", lambda body, job: jobs.append(job))
     ScanMetrics().push()
     assert jobs == ["music_scan"]
 
 
 def test_scan_metrics_tracks_imported(monkeypatch: pytest.MonkeyPatch) -> None:
     pushed: list[str] = []
-    monkeypatch.setattr("pipeline.metrics._push", lambda body, job: pushed.append(body))
+    monkeypatch.setattr("music_scan.metrics._push", lambda body, job: pushed.append(body))
 
     m = ScanMetrics(tracks_imported=15, tracks_removed=3)
     m.push()
@@ -77,7 +77,7 @@ def test_scan_metrics_tracks_imported(monkeypatch: pytest.MonkeyPatch) -> None:
 
 def test_scan_metrics_track_counters_default_zero(monkeypatch: pytest.MonkeyPatch) -> None:
     pushed: list[str] = []
-    monkeypatch.setattr("pipeline.metrics._push", lambda body, job: pushed.append(body))
+    monkeypatch.setattr("music_scan.metrics._push", lambda body, job: pushed.append(body))
 
     ScanMetrics().push()
 
