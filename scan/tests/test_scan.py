@@ -37,7 +37,7 @@ def test_count_quarantine_empty(tmp_path: Path) -> None:
     fake_quarantine.mkdir()
 
     with mock.patch("music_scan.scan.QUARANTINE", fake_quarantine):
-        from pipeline import scan
+        from music_scan import scan
         count = scan._count_quarantine()
     assert count == 0
 
@@ -51,7 +51,7 @@ def test_count_quarantine_with_files(tmp_path: Path) -> None:
     (fake_quarantine / "b.m4a").touch()
 
     with mock.patch("music_scan.scan.QUARANTINE", fake_quarantine):
-        from pipeline import scan
+        from music_scan import scan
         count = scan._count_quarantine()
     assert count == 2
 
