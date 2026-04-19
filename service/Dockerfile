@@ -43,6 +43,7 @@ FROM prod AS dev
 COPY service/requirements-dev.txt /tmp/reqs-dev.txt
 RUN pip install --no-cache-dir -r /tmp/reqs-dev.txt
 COPY service/tests/ /app/tests/
+COPY scripts/ /app/scripts/
 WORKDIR /app
 ENTRYPOINT []
-CMD ["pytest"]
+CMD ["pytest", "tests/", "scripts/tests/"]
