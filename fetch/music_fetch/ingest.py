@@ -1,4 +1,4 @@
-"""music-ingest: reconcile playlists.conf → daily spotdl sync loop → write pending-removals.
+"""music-ingest: reconcile playlists.conf → daily spotdl sync loop → return pending removals.
 
 On each run:
 1. Reconcile disk state with playlists.conf:
@@ -9,12 +9,13 @@ On each run:
 2. For each remaining .spotdl playlist:
    a. Diff old vs new Spotify URL sets to find removed tracks.
    b. Download new tracks (overwrite=skip ignores already-downloaded files).
-   c. Write removed track info to .pending-removals.json on the shared volume.
-   music-scan reads this file to clear beets source tags (soft delete — files stay in library).
+3. Return a PendingRemovals dataclass for the caller (e.g. the service orchestrator) to
+   pass to music-scan for beets source-tag cleanup (soft delete — files stay in library).
 """
 
 from __future__ import annotations
 
+import dataclasses
 import json
 import logging
 import os
@@ -31,8 +32,13 @@ logger = logging.getLogger(__name__)
 
 SPOTDL_DIR = Path("/root/Music/inbox/spotdl")
 COOKIE_FILE = Path("/root/.config/spotdl/cookies.txt")
-PENDING_REMOVALS = Path("/root/Music/inbox/.pending-removals.json")
 CONF_PATH = Path("/root/.config/music-pipeline/playlists.conf")
+
+
+@dataclasses.dataclass
+class PendingRemovals:
+    tracks: list[dict]
+    remove_sources: list[str]
 
 
 def _deadline_reached(elapsed: float, timeout: int | None) -> bool:
@@ -167,60 +173,8 @@ def _collect_removals(
         pending.append({"title": title, "artist": artist, "source": playlist_name})
 
 
-def _write_pending_removals(pending: list[dict], remove_sources: list[str] | None = None) -> None:
-    """Write pending source-tag removals to the shared volume for music-scan.
-
-    Writes {"tracks": [...], "remove_sources": [...]} format.
-    Merges with any existing file so multiple fetch runs before a scan don't
-    overwrite each other.  Supports merging with old list-format files.
-    """
-    remove_sources = remove_sources or []
-    if not pending and not remove_sources:
-        return
-
-    PENDING_REMOVALS.parent.mkdir(parents=True, exist_ok=True)
-
-    # Load and merge — safe if fetch runs multiple times before scan processes the file.
-    existing_tracks: list[dict] = []
-    existing_remove_sources: list[str] = []
-    if PENDING_REMOVALS.exists():
-        try:
-            with open(PENDING_REMOVALS, encoding="utf-8") as fh:
-                existing = json.load(fh)
-            if isinstance(existing, list):
-                # Old format: just a list of track entries.
-                existing_tracks = existing
-            else:
-                existing_tracks = existing.get("tracks", [])
-                existing_remove_sources = existing.get("remove_sources", [])
-        except (json.JSONDecodeError, OSError) as exc:
-            logger.error("Could not read %s — discarding prior pending removals: %s", PENDING_REMOVALS, exc)
-
-    merged_tracks = existing_tracks + pending
-    merged_remove_sources = existing_remove_sources + remove_sources
-
-    # Atomic write: write to a temp file then rename so a mid-write failure never
-    # truncates the existing file.
-    tmp = PENDING_REMOVALS.with_suffix(".tmp")
-    with open(tmp, "w", encoding="utf-8") as fh:
-        json.dump(
-            {"tracks": merged_tracks, "remove_sources": merged_remove_sources},
-            fh,
-            indent=2,
-            ensure_ascii=False,
-        )
-    tmp.replace(PENDING_REMOVALS)
-
-    logger.info(
-        "==> Wrote %d pending track removal(s) and %d source removal(s) to %s",
-        len(pending),
-        len(remove_sources),
-        PENDING_REMOVALS,
-    )
-
-
-def run() -> None:
-    """Execute the full ingest pipeline, push metrics on completion."""
+def run() -> PendingRemovals:
+    """Execute the full ingest pipeline, push metrics on completion, return pending removals."""
     metrics = IngestMetrics()
     start = time.monotonic()
 
@@ -346,9 +300,8 @@ def run() -> None:
             # Brief pause between playlists — avoid hammering Spotify/YouTube APIs.
             time.sleep(5)
 
-        _write_pending_removals(pending_removals, remove_sources)
-
         logger.info("==> music-ingest complete. Run music-scan for local import and playlist generation.")
+        return PendingRemovals(tracks=pending_removals, remove_sources=remove_sources)
 
     except SystemExit:
         raise
