@@ -36,8 +36,15 @@ CONF_PATH = Path("/root/.config/music-pipeline/playlists.conf")
 
 
 @dataclasses.dataclass
+class RemovedTrack:
+    title: str
+    artist: str
+    source: str
+
+
+@dataclasses.dataclass
 class PendingRemovals:
-    tracks: list[dict]
+    tracks: list[RemovedTrack]
     remove_sources: list[str]
 
 
@@ -146,7 +153,7 @@ def _reconcile_playlists() -> list[str]:
 
 
 def _collect_removals(
-    pending: list[dict],
+    pending: list[RemovedTrack],
     removed_urls: set[str],
     old_songs: list[dict],
     playlist_name: str,
@@ -170,7 +177,7 @@ def _collect_removals(
         artists = entry.get("artists", [])
         artist = artists[0] if artists else ""
         logger.info("  Scheduling unlink: %s — %s", title, artist)
-        pending.append({"title": title, "artist": artist, "source": playlist_name})
+        pending.append(RemovedTrack(title=title, artist=artist, source=playlist_name))
 
 
 def run() -> PendingRemovals:
@@ -226,7 +233,7 @@ def run() -> PendingRemovals:
         if not spotdl_files:
             logger.info("No .spotdl files found in %s", SPOTDL_DIR)
 
-        pending_removals: list[dict] = []
+        pending_removals: list[RemovedTrack] = []
 
         for spotdl_file in spotdl_files:
             name = spotdl_file.stem

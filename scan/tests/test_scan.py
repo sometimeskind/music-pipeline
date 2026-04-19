@@ -1,6 +1,5 @@
 """Tests for pipeline.scan — pure-Python logic."""
 
-import contextlib
 import json
 import os
 from pathlib import Path
@@ -8,7 +7,7 @@ import unittest.mock as mock
 
 import pytest
 
-from music_fetch.ingest import PendingRemovals
+from music_fetch.ingest import PendingRemovals, RemovedTrack
 
 
 def _relative_path(track_path: Path, playlists_dir: Path) -> str:
@@ -85,7 +84,7 @@ def test_quarantine_leftovers(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# run() — PendingRemovals parameter
+# _apply_pending_removals
 # ---------------------------------------------------------------------------
 
 
@@ -100,95 +99,85 @@ def _make_mock_lib() -> mock.MagicMock:
     return mock_lib
 
 
-def _scan_run_patches(tmp_path: Path, mock_lib: mock.MagicMock) -> list:
-    """Return a list of context managers for the standard scan.run() test patches."""
-    inbox = tmp_path / "inbox"
-    inbox.mkdir(exist_ok=True)
-    spotdl_dir = tmp_path / "spotdl"
-    spotdl_dir.mkdir(exist_ok=True)
-    quarantine = tmp_path / "quarantine"
-    quarantine.mkdir(exist_ok=True)
-    playlists = tmp_path / "playlists"
-    playlists.mkdir(exist_ok=True)
-
-    return [
-        mock.patch("music_scan.scan.INBOX", inbox),
-        mock.patch("music_scan.scan.SPOTDL_DIR", spotdl_dir),
-        mock.patch("music_scan.scan.QUARANTINE", quarantine),
-        mock.patch("music_scan.scan.PLAYLISTS", playlists),
-        mock.patch("music_scan.scan.LIBRARY_DB", tmp_path / "library.db"),
-        mock.patch("music_scan.scan.MusicLibrary", return_value=mock_lib),
-        mock.patch("music_scan.scan.run_beet_import"),
-        mock.patch("music_scan.scan.run_beet_update"),
-        mock.patch("music_scan.scan.trigger_scan"),
-        mock.patch("music_scan.scan._move_asis_eligible", return_value=0),
-        mock.patch("music_scan.scan.ScanMetrics"),
-    ]
-
-
-def test_run_with_pending_none_skips_removals(tmp_path: Path) -> None:
-    """run(pending=None) completes without touching the library for removals."""
-    from music_scan import scan
-
-    mock_lib = _make_mock_lib()
-    patches = _scan_run_patches(tmp_path, mock_lib)
-
-    with contextlib.ExitStack() as stack:
-        for p in patches:
-            stack.enter_context(p)
-        scan.run(pending=None)
-
-    mock_lib.clear_source_tag.assert_not_called()
-    mock_lib.items_by_source.assert_not_called()
-
-
-def test_run_with_pending_processes_track_removals(tmp_path: Path) -> None:
-    """run(pending=PendingRemovals(...)) clears source tags for removed tracks."""
-    from music_scan import scan
+def test_apply_pending_removals_clears_source_tags(tmp_path: Path) -> None:
+    """Track removals call lib.clear_source_tag with typed fields."""
+    from music_scan.scan import _apply_pending_removals
 
     pending = PendingRemovals(
-        tracks=[{"title": "Song A", "artist": "Artist 1", "source": "my-playlist"}],
+        tracks=[RemovedTrack(title="Song A", artist="Artist 1", source="my-playlist")],
         remove_sources=[],
     )
-
     mock_lib = _make_mock_lib()
-    patches = _scan_run_patches(tmp_path, mock_lib)
 
-    with contextlib.ExitStack() as stack:
-        for p in patches:
-            stack.enter_context(p)
-        scan.run(pending=pending)
+    count = _apply_pending_removals(pending, mock_lib)
 
+    assert count == 1
     mock_lib.clear_source_tag.assert_called_once_with(
         title="Song A", artist="Artist 1", source="my-playlist"
     )
 
 
-def test_run_with_pending_processes_remove_sources(tmp_path: Path) -> None:
-    """run(pending=PendingRemovals(...)) removes all tracks from removed playlists."""
-    from music_scan import scan
+def test_apply_pending_removals_remove_sources(tmp_path: Path) -> None:
+    """Source removals call items_by_source, clear tags, and delete the .m3u."""
+    from music_scan.scan import _apply_pending_removals
 
     playlists = tmp_path / "playlists"
-    playlists.mkdir(exist_ok=True)
+    playlists.mkdir()
     m3u = playlists / "old-playlist.m3u"
     m3u.touch()
 
     pending = PendingRemovals(tracks=[], remove_sources=["old-playlist"])
-
     mock_item = mock.MagicMock()
     mock_lib = _make_mock_lib()
     mock_lib.items_by_source = mock.MagicMock(return_value=[mock_item])
-    patches = _scan_run_patches(tmp_path, mock_lib)
 
-    with contextlib.ExitStack() as stack:
-        for p in patches:
-            stack.enter_context(p)
-        scan.run(pending=pending)
+    with mock.patch("music_scan.scan.PLAYLISTS", playlists):
+        count = _apply_pending_removals(pending, mock_lib)
 
+    assert count == 1
     mock_lib.items_by_source.assert_called_once_with("old-playlist")
     mock_item.__setitem__.assert_called_once_with("source", "")
     mock_item.store.assert_called_once()
     assert not m3u.exists()
+
+
+def test_apply_pending_removals_returns_total_count() -> None:
+    """Return value is tracks + sources combined."""
+    from music_scan.scan import _apply_pending_removals
+
+    pending = PendingRemovals(
+        tracks=[
+            RemovedTrack(title="A", artist="X", source="pl1"),
+            RemovedTrack(title="B", artist="Y", source="pl2"),
+        ],
+        remove_sources=["gone-pl"],
+    )
+    mock_lib = _make_mock_lib()
+
+    with mock.patch("music_scan.scan.PLAYLISTS", mock.MagicMock()):
+        count = _apply_pending_removals(pending, mock_lib)
+
+    assert count == 3
+
+
+def test_run_with_pending_none_skips_apply(tmp_path: Path) -> None:
+    """run(pending=None) never calls _apply_pending_removals."""
+    from music_scan import scan
+
+    with mock.patch("music_scan.scan._apply_pending_removals") as mock_apply, \
+         mock.patch("music_scan.scan.MusicLibrary", return_value=_make_mock_lib()), \
+         mock.patch("music_scan.scan.run_beet_import"), \
+         mock.patch("music_scan.scan.run_beet_update"), \
+         mock.patch("music_scan.scan.trigger_scan"), \
+         mock.patch("music_scan.scan._move_asis_eligible", return_value=0), \
+         mock.patch("music_scan.scan.INBOX", tmp_path), \
+         mock.patch("music_scan.scan.SPOTDL_DIR", tmp_path), \
+         mock.patch("music_scan.scan.QUARANTINE", tmp_path), \
+         mock.patch("music_scan.scan.PLAYLISTS", tmp_path), \
+         mock.patch("music_scan.scan.ScanMetrics"):
+        scan.run(pending=None)
+
+    mock_apply.assert_not_called()
 
 
 # ---------------------------------------------------------------------------

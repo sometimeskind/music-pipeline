@@ -12,7 +12,7 @@ RUN apt-get update && apt-get install -y \
 # Install the fetch package first — music_scan imports PendingRemovals from it.
 COPY fetch/music_fetch/ /app/fetch/music_fetch/
 COPY fetch/pyproject.toml /app/fetch/pyproject.toml
-RUN pip install --no-cache-dir -e /app/fetch
+RUN pip install --no-cache-dir /app/fetch
 
 # Python dependencies
 COPY scan/requirements.txt /requirements.txt

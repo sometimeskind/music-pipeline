@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from music_fetch.ingest import classify_failure, _collect_removals, _deadline_reached, _reconcile_playlists, PendingRemovals
+from music_fetch.ingest import classify_failure, _collect_removals, _deadline_reached, _reconcile_playlists, PendingRemovals, RemovedTrack
 from music_fetch.spotdl_ops import find_track_in_snapshot
 
 
@@ -212,27 +212,27 @@ SNAPSHOT = [
 
 
 def test_collect_removals_normal_case() -> None:
-    pending: list[dict] = []
+    pending: list[RemovedTrack] = []
     _collect_removals(pending, {"https://spotify.com/track/A"}, SNAPSHOT, "my-playlist")
-    assert pending == [{"title": "Song A", "artist": "Artist 1", "source": "my-playlist"}]
+    assert pending == [RemovedTrack(title="Song A", artist="Artist 1", source="my-playlist")]
 
 
 def test_collect_removals_url_not_in_snapshot() -> None:
     """URL missing from snapshot → entry is skipped, no crash."""
-    pending: list[dict] = []
+    pending: list[RemovedTrack] = []
     _collect_removals(pending, {"https://spotify.com/track/Z"}, SNAPSHOT, "my-playlist")
     assert pending == []
 
 
 def test_collect_removals_empty_artists() -> None:
     """artists=[] → artist field defaults to empty string."""
-    pending: list[dict] = []
+    pending: list[RemovedTrack] = []
     _collect_removals(pending, {"https://spotify.com/track/B"}, SNAPSHOT, "my-playlist")
-    assert pending == [{"title": "Song B", "artist": "", "source": "my-playlist"}]
+    assert pending == [RemovedTrack(title="Song B", artist="", source="my-playlist")]
 
 
 def test_collect_removals_no_removed_urls() -> None:
-    pending: list[dict] = []
+    pending: list[RemovedTrack] = []
     _collect_removals(pending, set(), SNAPSHOT, "my-playlist")
     assert pending == []
 

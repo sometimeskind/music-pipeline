@@ -151,6 +151,39 @@ def _regen_playlists() -> None:
             m3u.write_text("\n".join(lines) + ("\n" if lines else ""), encoding="utf-8")
 
 
+def _apply_pending_removals(pending: PendingRemovals, lib: MusicLibrary) -> int:
+    """Clear beets source tags for tracks and playlists in *pending*. Returns entry count."""
+    logger.info(
+        "==> Processing pending removals: %d track(s), %d source(s)...",
+        len(pending.tracks),
+        len(pending.remove_sources),
+    )
+    total = 0
+    for track in pending.tracks:
+        found = lib.clear_source_tag(title=track.title, artist=track.artist, source=track.source)
+        if not found:
+            logger.warning(
+                "  WARNING: not found in beets — may need manual cleanup: %s by %s (source=%s)",
+                track.title,
+                track.artist,
+                track.source,
+            )
+        total += 1
+
+    for source_name in pending.remove_sources:
+        logger.info("==> Removing all tracks from playlist: %s", source_name)
+        items = lib.items_by_source(source_name)
+        for item in items:
+            item["source"] = ""
+            item.store()
+        m3u = PLAYLISTS / f"{source_name}.m3u"
+        m3u.unlink(missing_ok=True)
+        logger.info("  Cleared %d item(s) and removed .m3u for source=%s", len(items), source_name)
+        total += 1
+
+    return total
+
+
 def run(pending: PendingRemovals | None = None) -> None:
     """Execute the full scan pipeline, push metrics on completion."""
     metrics = ScanMetrics()
@@ -159,39 +192,10 @@ def run(pending: PendingRemovals | None = None) -> None:
     try:
         logger.info("==> music-scan starting")
 
+        metrics.tracks_removed = 0
         if pending is not None:
-            logger.info(
-                "==> Processing pending removals: %d track(s), %d source(s)...",
-                len(pending.tracks),
-                len(pending.remove_sources),
-            )
-            total = 0
             with MusicLibrary(LIBRARY_DB) as lib:
-                for entry in pending.tracks:
-                    title = entry.get("title", "")
-                    artist = entry.get("artist", "")
-                    source = entry.get("source", "")
-                    found = lib.clear_source_tag(title=title, artist=artist, source=source)
-                    if not found:
-                        logger.warning(
-                            "  WARNING: not found in beets — may need manual cleanup: %s by %s (source=%s)",
-                            title,
-                            artist,
-                            source,
-                        )
-                    total += 1
-
-                for source_name in pending.remove_sources:
-                    logger.info("==> Removing all tracks from playlist: %s", source_name)
-                    items = lib.items_by_source(source_name)
-                    for item in items:
-                        item["source"] = ""
-                        item.store()
-                    m3u = PLAYLISTS / f"{source_name}.m3u"
-                    m3u.unlink(missing_ok=True)
-                    logger.info("  Cleared %d item(s) and removed .m3u for source=%s", len(items), source_name)
-                    total += 1
-            metrics.tracks_removed = total
+                metrics.tracks_removed = _apply_pending_removals(pending, lib)
 
         quarantined_before = _count_quarantine()
 
