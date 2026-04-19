@@ -1,5 +1,6 @@
 """Tests for pipeline.scan — pure-Python logic."""
 
+import contextlib
 import json
 import os
 from pathlib import Path
@@ -132,7 +133,7 @@ def test_run_with_pending_none_skips_removals(tmp_path: Path) -> None:
     mock_lib = _make_mock_lib()
     patches = _scan_run_patches(tmp_path, mock_lib)
 
-    with mock.ExitStack() as stack:
+    with contextlib.ExitStack() as stack:
         for p in patches:
             stack.enter_context(p)
         scan.run(pending=None)
@@ -153,7 +154,7 @@ def test_run_with_pending_processes_track_removals(tmp_path: Path) -> None:
     mock_lib = _make_mock_lib()
     patches = _scan_run_patches(tmp_path, mock_lib)
 
-    with mock.ExitStack() as stack:
+    with contextlib.ExitStack() as stack:
         for p in patches:
             stack.enter_context(p)
         scan.run(pending=pending)
@@ -179,7 +180,7 @@ def test_run_with_pending_processes_remove_sources(tmp_path: Path) -> None:
     mock_lib.items_by_source = mock.MagicMock(return_value=[mock_item])
     patches = _scan_run_patches(tmp_path, mock_lib)
 
-    with mock.ExitStack() as stack:
+    with contextlib.ExitStack() as stack:
         for p in patches:
             stack.enter_context(p)
         scan.run(pending=pending)

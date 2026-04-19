@@ -27,7 +27,8 @@ services:
 
   scan:
     build:
-      context: scan
+      context: .
+      dockerfile: scan/Dockerfile
       target: prod
     image: ghcr.io/sometimeskind/music-pipeline-scan:latest
     volumes:

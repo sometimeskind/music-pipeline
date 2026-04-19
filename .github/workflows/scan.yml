@@ -24,7 +24,9 @@ jobs:
 
       - name: Install dependencies
         working-directory: scan
-        run: pip install -r requirements.txt -r requirements-dev.txt -e .
+        run: |
+          pip install -e ../fetch
+          pip install -r requirements.txt -r requirements-dev.txt -e .
 
       - name: Run tests
         working-directory: scan
@@ -64,7 +66,8 @@ jobs:
       - name: Build scan image
         uses: docker/build-push-action@v7
         with:
-          context: scan
+          context: .
+          file: scan/Dockerfile
           target: prod
           push: false
           load: true
@@ -101,7 +104,8 @@ jobs:
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         uses: docker/build-push-action@v7
         with:
-          context: scan
+          context: .
+          file: scan/Dockerfile
           target: prod
           push: true
           tags: ${{ steps.meta.outputs.tags }}
