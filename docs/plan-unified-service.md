@@ -248,7 +248,32 @@ music-files trigger-scan
 
 ---
 
-## Phase 5 — Kubernetes Resources
+## Phase 5 — Namespace Split
+
+Currently `media` namespace contains Nextcloud, Navidrome, and music-pipeline. Nextcloud now has no connection to the music services — the inbox/quarantine handoff via Nextcloud WebDAV is being replaced by the HTTP API. Splitting into separate namespaces removes the coupling and makes each service independently manageable.
+
+**Split:**
+- `music` namespace: music-pipeline Deployment + Navidrome (tightly coupled via rclone sidecar + Subsonic API)
+- `media` namespace: Nextcloud + Redis (no change to existing manifests)
+
+**Homelab changes required:**
+- Create `kubernetes/music/namespace.yaml` — new `music` namespace with same pod-security labels as current `media`
+- Move `kubernetes/music-pipeline/` resources to `music` namespace
+- Move `kubernetes/navidrome/` resources to `music` namespace — update all `namespace: media` → `namespace: music`
+- Update Velero backup schedule: add `music` to `includedNamespaces`, keep `media` (for Nextcloud)
+- Update `NAVIDROME_URL` env var in music-pipeline Deployment: `http://navidrome.music.svc`
+- Update `PUSHGATEWAY_URL` references (still `monitoring` namespace — no change needed there)
+- NetworkPolicy for the rclone sidecar is scoped within the new `music` namespace (simplifies selector)
+
+**Migration note:** Service DNS names change from `*.media.svc` to `*.music.svc`. Navidrome's HTTPRoute namespace label changes; nothing outside the namespace references it directly. The `music-library` PVC is currently in `media` — it must be recreated in `music` (PVCs are namespace-scoped). Because the PVC is RWO and bound to a pre-provisioned LVM PV (`volumeName: pvc-45ab61ec-...`), the procedure is: delete the old PVC in `media`, recreate it in `music` referencing the same `volumeName`. The LV on the node is untouched; the new PVC binds to it immediately.
+
+---
+
+## Phase 6 — Kubernetes Resources
+
+### Namespace
+
+All resources in `music` namespace (per Phase 5).
 
 ### ConfigMaps
 
@@ -266,6 +291,9 @@ All config previously bind-mounted is promoted to ConfigMaps:
 # music-pipeline-spotdl-config
 # key: config.json
 # source: config/spotdl/config.json
+# Note: current CronJob mounts this at /root/.spotdl/config.json (legacy path).
+# Deployment below mounts at /root/.config/spotdl/config.json — confirm which
+# path the image reads before deploying (or set SPOTDL_CONFIG env var).
 
 # music-pipeline-playlists
 # key: playlists.conf
@@ -294,28 +322,43 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: music-pipeline
+  namespace: music              # Phase 5 namespace split
 spec:
   replicas: 1
   strategy:
     type: Recreate          # RWO PVC — only one pod at a time
   template:
+    metadata:
+      annotations:
+        # inbox/quarantine is transient — exclude from Velero fs-backup.
+        # pipeline-state (beets db, spotdl files) is included by default.
+        # staging is emptyDir — auto-excluded by Velero.
+        backup.velero.io/backup-volumes-excludes: music-data
     spec:
       containers:
       - name: music-pipeline
         image: ghcr.io/sometimeskind/music-pipeline:latest
         ports:
         - containerPort: 8080   # HTTP API
+        resources:
+          requests:
+            cpu: "100m"
+            memory: "256Mi"
+          limits:
+            memory: "2Gi"       # fetch can spike to ~2Gi; carry over from fetch CronJob limit
         env:
         - name: FETCH_CRON
           value: "0 3 * * *"
         - name: PUSHGATEWAY_URL
-          value: "http://pushgateway:9091"
+          value: "http://prometheus-pushgateway.monitoring.svc.cluster.local:9091"
         - name: NAVIDROME_URL
-          value: "http://navidrome:4533"
+          value: "http://navidrome.music.svc"   # music namespace (Phase 5)
         - name: SYNC_TRACK_LIMIT
           value: ""
         - name: SYNC_JITTER_SECONDS
           value: ""
+        - name: SYNC_TIMEOUT_SECONDS
+          value: "6300"
         envFrom:
         - secretRef:
             name: music-pipeline-credentials
@@ -390,6 +433,7 @@ apiVersion: v1
 kind: Service
 metadata:
   name: music-pipeline
+  namespace: music
 spec:
   selector:
     app: music-pipeline
@@ -399,13 +443,35 @@ spec:
     targetPort: 8080
 ```
 
-### Ingress
+### HTTPRoute
 
-Expose via existing homelab Ingress controller for VPN-accessible URL. Auth is the bearer token — no additional Ingress-level auth needed given VPN constraint.
+The homelab uses Gateway API, not traditional Ingress. Use an `HTTPRoute` on the `private` gateway:
+
+```yaml
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: music-pipeline
+  namespace: music
+spec:
+  parentRefs:
+  - name: private
+    namespace: gateways
+  hostnames:
+  - music-pipeline.prins.id    # TBD — confirm hostname
+  rules:
+  - backendRefs:
+    - name: music-pipeline
+      port: 8080
+```
+
+Auth is the bearer token — no additional gateway-level auth needed given VPN constraint.
+
+**Required after applying:** Add OPNsense DNS host override for the chosen hostname → `192.168.11.21` (IPv4) and `fd00:0:3::2` (IPv6).
 
 ---
 
-## Phase 6 — justfile Updates
+## Phase 7 — justfile Updates
 
 ```makefile
 # Build unified service image
@@ -438,13 +504,17 @@ The `compose.yml` gains a single `service` container replacing `fetch` and `scan
 
 ---
 
-## Phase 7 — What to Retain from homelab#566
+## Phase 8 — What to Retain from homelab#566
 
 **Still needed:**
-- Navidrome rclone sidecar (rclone serve webdav on music-library PVC)
-- NetworkPolicy restricting sidecar WebDAV to music-pipeline pod only
-- ConfigMaps for beets config, spotdl config, playlists.conf (per Phase 5 above)
-- Provision new `music-data` PVC (RWO, OpenEBS hostpath)
+
+- **Navidrome rclone sidecar** — add to `kubernetes/navidrome/navidrome.yaml`: a second container running `rclone serve webdav /music --addr :8081`, mounting `music-library`. music-pipeline pushes via `rclone copy --webdav-url http://navidrome.music.svc:8081`. Navidrome itself continues to read from the mounted PVC volume directly (no change to its mount or config).
+
+- **NetworkPolicy** — add `kubernetes/music/network-policy.yaml` restricting inbound to the rclone sidecar port (8081) to only pods with `app: music-pipeline` in the `music` namespace. With the namespace split, the selector is clean and self-contained.
+
+- **ConfigMaps** for beets config, spotdl config, playlists.conf (per Phase 6 above)
+
+- **Provision new `music-data` PVC** (RWO, `openebs-hostpath`, sized for inbox during fetch + quarantine — 50Gi is sufficient given `music-working` is 50Gi today)
 
 **No longer needed:**
 - Kubernetes Lease + shell entrypoint scripts for mutual exclusion
@@ -458,22 +528,47 @@ The `compose.yml` gains a single `service` container replacing `fetch` and `scan
 
 ## Migration Steps
 
-1. Apply Navidrome rclone sidecar (homelab repo) — unblocks Navidrome from library PVC
-2. Provision `music-data` PVC (RWO, OpenEBS hostpath, sized for inbox during fetch + quarantine)
-3. Provision `pipeline-state` PVC (or rename existing `beets-data`); migrate spotdl `.spotdl` files into `spotdl/` subPath, beets data into `beets/` subPath
-4. Migrate library files: copy from `music-library` PVC into Navidrome sidecar WebDAV (or directly on node)
-5. Perform package rename (Phase 0) — update imports, tests, beets config pluginpath
-6. Implement Phase 1 (remove pending-removals) and Phase 2 (service/ directory)
-7. Build and push unified image to GHCR
-8. Apply ConfigMaps, Secrets, Deployment, Service, Ingress
-9. Verify: fetch runs on schedule, scan triggers on completion and on inbox file drop, HTTP API + CLI work from laptop
-10. Delete `beets-keeper` Deployment
-11. Delete `music-ingest` CronJob
-12. Delete `music-scan` CronJob
-13. Decommission `music-working` Nextcloud PVC (once data confirmed migrated)
+1. **Create `music` namespace** (homelab repo) — `kubernetes/music/namespace.yaml` with pod-security labels
+
+2. **Apply Navidrome rclone sidecar** (homelab repo) — add sidecar container and NetworkPolicy to Navidrome manifests; move Navidrome to `music` namespace (requires deleting and recreating the `music-library` PVC in `music` — see Phase 5 note on LVM PV rebind). Update Velero schedule to include `music` namespace.
+
+3. **Migrate `music-library` PVC to `music` namespace:**
+   a. Scale Navidrome to 0 replicas
+   b. Delete `music-library` PVC in `media` (the underlying LV on the node is untouched)
+   c. Recreate `music-library` PVC in `music`, with the same `volumeName: pvc-45ab61ec-...` to rebind to the existing LV
+   d. Redeploy Navidrome in `music` namespace
+
+4. **Provision `music-data` PVC** (`openebs-hostpath`, RWO, 50Gi, in `music` namespace)
+
+5. **Provision `pipeline-state` PVC** — `openebs-hostpath`, RWO. `beets-data` cannot be renamed in place; procedure:
+   a. Scale `beets-keeper` to 0
+   b. Create new `pipeline-state` PVC in `music` namespace
+   c. Run a one-off copy pod mounting both `beets-data` and `pipeline-state`; copy beets state to `beets/` subPath, migrate existing spotdl `.spotdl` files to `spotdl/` subPath
+   d. Verify contents, then proceed
+
+6. **Migrate inbox/quarantine data** from `music-working` to `music-data` via a one-off copy pod
+
+7. **Seal new combined secret** `music-pipeline-credentials` (Spotify + bearer token + Navidrome creds); update `scripts/reseal-all.sh` and `kubernetes/secrets/RESEAL.md`; delete old `music-pipeline-spotify` and `music-pipeline-navidrome` sealed secrets
+
+8. **Perform package rename** (Phase 0) — update imports, tests, beets config pluginpath
+
+9. **Implement Phase 1** (remove pending-removals) **and Phase 2** (service/ directory)
+
+10. **Build and push** unified image to GHCR
+
+11. **Apply** ConfigMaps, Secrets, Deployment, Service, HTTPRoute in `music` namespace; **add OPNsense DNS host override** for the pipeline hostname
+
+12. **Verify:** fetch runs on schedule, scan triggers on completion and on inbox file drop, HTTP API + CLI work from laptop
+
+13. **Delete** `beets-keeper` Deployment, `music-ingest` CronJob, `music-scan` CronJob (from `media` namespace)
+
+14. **Decommission `music-working` PVC** (once inbox data confirmed migrated) — delete PVC in `media`, then clean up the underlying LVM LV on the node
+
+15. **Clean up `beets-data` PVC** in `media` once `pipeline-state` is verified
 
 ---
 
 ## Open Questions
 
-- **Ingress hostname**: TBD based on homelab ingress setup.
+- **HTTPRoute hostname**: TBD — `music-pipeline.prins.id` is a reasonable default. Requires OPNsense host override once chosen.
+- **spotdl config path**: Confirm whether the container image reads `/root/.spotdl/config.json` (legacy) or `/root/.config/spotdl/config.json` before finalising the volume mount. May require updating the Dockerfile or setting `SPOTDL_CONFIG` env var.
