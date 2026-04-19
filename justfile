@@ -4,6 +4,12 @@ test:
     docker run --rm music-pipeline-fetch:dev
     docker build --target dev -f scan/Dockerfile -t music-pipeline-scan:dev .
     docker run --rm music-pipeline-scan:dev
+    docker build --target dev -f service/Dockerfile -t music-pipeline-service:dev .
+    docker run --rm music-pipeline-service:dev
+
+# Build the unified service image
+build:
+    docker build -f service/Dockerfile -t music-pipeline:local .
 
 # Run container integration tests against the current GHCR image (no auth needed)
 # Override the image with: SCAN_IMAGE=music-pipeline-scan:local just test-integration
@@ -23,19 +29,19 @@ test-auth:
 hooks:
     git config core.hooksPath .githooks
 
-# Run spotdl sync (fetch container: Spotify/YouTube → inbox)
+# Run spotdl sync (fetch via service container)
 fetch:
-    op run --env-file .env.tpl -- docker compose run --rm fetch
+    op run --env-file .env.tpl -- docker compose run --rm service music-ingest
 
-# Run a local scan: import inbox → .m3u (no Spotify/YouTube)
+# Run a local scan
 scan:
-    docker compose run --rm scan
+    docker compose run --rm service music-scan
 
-# Run full ingest: spotdl sync → import → .m3u
+# Run full ingest
 sync:
     just fetch && just scan
 
 # Dump beets DB and export JSON from the container
 backup:
-    docker compose run --rm scan sh -c "beet export > /root/.config/beets/library-export.json"
-    docker compose run --rm scan sh -c "sqlite3 /root/.config/beets/library.db .dump > /root/.config/beets/library-dump.sql"
+    docker compose run --rm service sh -c "beet export > /root/.config/beets/library-export.json"
+    docker compose run --rm service sh -c "sqlite3 /root/.config/beets/library.db .dump > /root/.config/beets/library-dump.sql"

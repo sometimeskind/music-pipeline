@@ -1,16 +1,16 @@
-name: scan CI
+name: service CI
 
 on:
   push:
     branches: [main]
-    paths: ["fetch/**", "scan/**", "tests/**", "config/beets/**", "compose.yml", "justfile", ".github/workflows/scan.yml"]
+    paths: ["service/**", "fetch/**", "scan/**", "config/**", "compose.yml", "justfile", ".github/workflows/service.yml"]
   pull_request:
     branches: [main]
-    paths: ["fetch/**", "scan/**", "tests/**", "config/beets/**", "compose.yml", "justfile", ".github/workflows/scan.yml"]
+    paths: ["service/**", "fetch/**", "scan/**", "config/**", "compose.yml", "justfile", ".github/workflows/service.yml"]
 
 jobs:
   test:
-    name: Unit Tests (scan)
+    name: Unit Tests (service)
     runs-on: ubuntu-latest
 
     steps:
@@ -23,17 +23,17 @@ jobs:
           python-version: "3.12"
 
       - name: Install dependencies
-        working-directory: scan
         run: |
-          pip install -e ../fetch
-          pip install -r requirements.txt -r requirements-dev.txt -e .
+          pip install -e fetch
+          pip install -e scan
+          pip install -r service/requirements.txt -r service/requirements-dev.txt -e service
 
       - name: Run tests
-        working-directory: scan
+        working-directory: service
         run: pytest
 
   build-and-check:
-    name: Build, Health Check & Push (scan)
+    name: Build, Health Check & Push (service)
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -54,58 +54,57 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Extract metadata (scan)
+      - name: Extract metadata (service)
         id: meta
         uses: docker/metadata-action@v6
         with:
-          images: ghcr.io/${{ github.repository_owner }}/music-pipeline-scan
+          images: ghcr.io/${{ github.repository_owner }}/music-pipeline
           tags: |
             type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' }}
             type=sha,format=short
 
-      - name: Build scan image
+      - name: Build service image
         uses: docker/build-push-action@v7
         with:
           context: .
-          file: scan/Dockerfile
+          file: service/Dockerfile
           target: prod
           push: false
           load: true
           tags: |
             ${{ steps.meta.outputs.tags }}
-            music-pipeline-scan:ci-local
+            music-pipeline:ci-local
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
-      - name: Health check — beet
-        run: docker run --rm --entrypoint beet music-pipeline-scan:ci-local version
+      - name: Health check — music-pipeline entry point
+        run: docker run --rm --entrypoint which music-pipeline:ci-local music-pipeline
 
-      - name: Health check — ffmpeg
-        run: docker run --rm --entrypoint ffmpeg music-pipeline-scan:ci-local -version
+      - name: Health check — music-ingest entry point
+        run: docker run --rm --entrypoint which music-pipeline:ci-local music-ingest
+
+      - name: Health check — music-scan entry point
+        run: docker run --rm --entrypoint which music-pipeline:ci-local music-scan
+
+      - name: Health check — rclone
+        run: docker run --rm --entrypoint rclone music-pipeline:ci-local version
+
+      - name: Health check — beet
+        run: docker run --rm --entrypoint beet music-pipeline:ci-local version
+
+      - name: Health check — spotdl
+        run: docker run --rm --entrypoint spotdl music-pipeline:ci-local --version
 
       - name: Health check — fpcalc
-        run: docker run --rm --entrypoint fpcalc music-pipeline-scan:ci-local -version
+        run: docker run --rm --entrypoint fpcalc music-pipeline:ci-local -version
 
-      - name: Health check — default command
-        run: docker run --rm --entrypoint which music-pipeline-scan:ci-local music-scan
-
-      - name: Set up Python for integration tests
-        uses: actions/setup-python@v6
-        with:
-          python-version: "3.12"
-
-      - name: Integration tests (scan)
-        run: |
-          pip install -r tests/requirements.txt
-          SCAN_IMAGE=music-pipeline-scan:ci-local pytest tests/ -m "not auth" -v
-
-      - name: Push scan image to GHCR
+      - name: Push service image to GHCR
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         uses: docker/build-push-action@v7
         with:
           context: .
-          file: scan/Dockerfile
+          file: service/Dockerfile
           target: prod
           push: true
           tags: ${{ steps.meta.outputs.tags }}
