@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 
-from pipeline.spotdl_ops import save_playlist, sync_playlist
+from music_fetch.spotdl_ops import save_playlist, sync_playlist
 
 
 # ---------------------------------------------------------------------------
@@ -73,7 +73,7 @@ def test_sync_playlist_after_stub_downloads_all_songs(tmp_path: Path) -> None:
     mock_spotdl.search.return_value = songs
     mock_spotdl.download_songs.return_value = [(s, Path(f"/tmp/{i}.m4a")) for i, s in enumerate(songs)]
 
-    with mock.patch("pipeline.spotdl_ops._make_spotdl", return_value=mock_spotdl):
+    with mock.patch("music_fetch.spotdl_ops._make_spotdl", return_value=mock_spotdl):
         removed_urls, tracks_sent = sync_playlist(
             spotdl_file=spotdl_file,
             output_dir=output_dir,
@@ -118,7 +118,7 @@ def test_sync_playlist_second_run_skips_known_songs(tmp_path: Path) -> None:
     mock_spotdl.search.return_value = new_songs
     mock_spotdl.download_songs.return_value = [(s, Path(f"/tmp/{i}.m4a")) for i, s in enumerate(new_only)]
 
-    with mock.patch("pipeline.spotdl_ops._make_spotdl", return_value=mock_spotdl):
+    with mock.patch("music_fetch.spotdl_ops._make_spotdl", return_value=mock_spotdl):
         removed_urls, tracks_sent = sync_playlist(
             spotdl_file=spotdl_file,
             output_dir=output_dir,
@@ -164,7 +164,7 @@ def test_sync_playlist_detects_removed_tracks(tmp_path: Path) -> None:
     mock_spotdl.search.return_value = [_make_mock_song("https://open.spotify.com/track/A")]
     mock_spotdl.download_songs.return_value = []  # nothing new to download
 
-    with mock.patch("pipeline.spotdl_ops._make_spotdl", return_value=mock_spotdl):
+    with mock.patch("music_fetch.spotdl_ops._make_spotdl", return_value=mock_spotdl):
         removed_urls, tracks_sent = sync_playlist(
             spotdl_file=spotdl_file,
             output_dir=output_dir,
@@ -199,7 +199,7 @@ def test_sync_playlist_failed_downloads_not_persisted(tmp_path: Path) -> None:
         (songs[3], None),
     ]
 
-    with mock.patch("pipeline.spotdl_ops._make_spotdl", return_value=mock_spotdl):
+    with mock.patch("music_fetch.spotdl_ops._make_spotdl", return_value=mock_spotdl):
         removed_urls, tracks_sent = sync_playlist(
             spotdl_file=spotdl_file,
             output_dir=output_dir,

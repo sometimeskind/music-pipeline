@@ -5,8 +5,8 @@ from pathlib import Path
 
 import pytest
 
-from pipeline.ingest import classify_failure, _collect_removals, _deadline_reached, _reconcile_playlists, _write_pending_removals
-from pipeline.spotdl_ops import find_track_in_snapshot
+from music_fetch.ingest import classify_failure, _collect_removals, _deadline_reached, _reconcile_playlists, _write_pending_removals
+from music_fetch.spotdl_ops import find_track_in_snapshot
 
 
 # ---------------------------------------------------------------------------
@@ -244,7 +244,7 @@ def test_collect_removals_no_removed_urls() -> None:
 
 def test_write_pending_removals_creates_file(tmp_path: Path) -> None:
     import unittest.mock as mock
-    from pipeline import ingest
+    from music_fetch import ingest
 
     fake_path = tmp_path / ".pending-removals.json"
     entries = [{"title": "Song A", "artist": "Artist 1", "source": "my-playlist"}]
@@ -259,7 +259,7 @@ def test_write_pending_removals_creates_file(tmp_path: Path) -> None:
 
 def test_write_pending_removals_with_remove_sources(tmp_path: Path) -> None:
     import unittest.mock as mock
-    from pipeline import ingest
+    from music_fetch import ingest
 
     fake_path = tmp_path / ".pending-removals.json"
     tracks = [{"title": "Song A", "artist": "Artist 1", "source": "pl-1"}]
@@ -275,7 +275,7 @@ def test_write_pending_removals_with_remove_sources(tmp_path: Path) -> None:
 def test_write_pending_removals_appends_to_existing(tmp_path: Path) -> None:
     """The append-safe merge is the key correctness guarantee of the cross-container handoff."""
     import unittest.mock as mock
-    from pipeline import ingest
+    from music_fetch import ingest
 
     fake_path = tmp_path / ".pending-removals.json"
     existing = {"tracks": [{"title": "Song A", "artist": "Artist 1", "source": "playlist-1"}], "remove_sources": []}
@@ -293,7 +293,7 @@ def test_write_pending_removals_appends_to_existing(tmp_path: Path) -> None:
 def test_write_pending_removals_merges_remove_sources(tmp_path: Path) -> None:
     """remove_sources from multiple fetch runs are accumulated."""
     import unittest.mock as mock
-    from pipeline import ingest
+    from music_fetch import ingest
 
     fake_path = tmp_path / ".pending-removals.json"
     existing = {"tracks": [], "remove_sources": ["old-playlist"]}
@@ -309,7 +309,7 @@ def test_write_pending_removals_merges_remove_sources(tmp_path: Path) -> None:
 def test_write_pending_removals_merges_with_old_format_file(tmp_path: Path) -> None:
     """Old list-format file is read and merged into the new dict format."""
     import unittest.mock as mock
-    from pipeline import ingest
+    from music_fetch import ingest
 
     fake_path = tmp_path / ".pending-removals.json"
     old_format = [{"title": "Song A", "artist": "Artist 1", "source": "playlist-1"}]
@@ -327,7 +327,7 @@ def test_write_pending_removals_merges_with_old_format_file(tmp_path: Path) -> N
 def test_write_pending_removals_recovers_from_corrupt_file(tmp_path: Path) -> None:
     """Corrupt existing file is discarded; new entries are still written."""
     import unittest.mock as mock
-    from pipeline import ingest
+    from music_fetch import ingest
 
     fake_path = tmp_path / ".pending-removals.json"
     fake_path.write_text("not valid json", encoding="utf-8")
@@ -344,7 +344,7 @@ def test_write_pending_removals_recovers_from_corrupt_file(tmp_path: Path) -> No
 def test_write_pending_removals_noop_when_empty(tmp_path: Path) -> None:
     """No file created when there are no pending removals."""
     import unittest.mock as mock
-    from pipeline import ingest
+    from music_fetch import ingest
 
     fake_path = tmp_path / ".pending-removals.json"
     with mock.patch.object(ingest, "PENDING_REMOVALS", fake_path):
@@ -356,7 +356,7 @@ def test_write_pending_removals_noop_when_empty(tmp_path: Path) -> None:
 def test_write_pending_removals_noop_with_only_empty_remove_sources(tmp_path: Path) -> None:
     """No file created when remove_sources is an empty list."""
     import unittest.mock as mock
-    from pipeline import ingest
+    from music_fetch import ingest
 
     fake_path = tmp_path / ".pending-removals.json"
     with mock.patch.object(ingest, "PENDING_REMOVALS", fake_path):
@@ -379,7 +379,7 @@ def _make_conf(tmp_path: Path, lines: list[str]) -> Path:
 def test_reconcile_no_conf(tmp_path: Path) -> None:
     """Returns empty list if playlists.conf does not exist."""
     import unittest.mock as mock
-    from pipeline import ingest
+    from music_fetch import ingest
 
     missing = tmp_path / "playlists.conf"
     with mock.patch.object(ingest, "CONF_PATH", missing):
@@ -391,7 +391,7 @@ def test_reconcile_no_conf(tmp_path: Path) -> None:
 def test_reconcile_provisions_new_playlist(tmp_path: Path) -> None:
     """New playlist entry → save_playlist is called; .spotdl file is created."""
     import unittest.mock as mock
-    from pipeline import ingest
+    from music_fetch import ingest
 
     spotdl_dir = tmp_path / "spotdl"
     spotdl_dir.mkdir()
@@ -400,7 +400,7 @@ def test_reconcile_provisions_new_playlist(tmp_path: Path) -> None:
     with mock.patch.object(ingest, "CONF_PATH", conf), \
          mock.patch.object(ingest, "SPOTDL_DIR", spotdl_dir), \
          mock.patch.object(ingest, "COOKIE_FILE", tmp_path / "cookies.txt"), \
-         mock.patch("pipeline.ingest.save_playlist") as mock_save:
+         mock.patch("music_fetch.ingest.save_playlist") as mock_save:
         result = _reconcile_playlists()
 
     mock_save.assert_called_once()
@@ -413,7 +413,7 @@ def test_reconcile_provisions_new_playlist(tmp_path: Path) -> None:
 def test_reconcile_skips_existing_spotdl(tmp_path: Path) -> None:
     """Playlist whose .spotdl already exists is not re-provisioned."""
     import unittest.mock as mock
-    from pipeline import ingest
+    from music_fetch import ingest
 
     spotdl_dir = tmp_path / "spotdl"
     spotdl_dir.mkdir()
@@ -422,7 +422,7 @@ def test_reconcile_skips_existing_spotdl(tmp_path: Path) -> None:
 
     with mock.patch.object(ingest, "CONF_PATH", conf), \
          mock.patch.object(ingest, "SPOTDL_DIR", spotdl_dir), \
-         mock.patch("pipeline.ingest.save_playlist") as mock_save:
+         mock.patch("music_fetch.ingest.save_playlist") as mock_save:
         result = _reconcile_playlists()
 
     mock_save.assert_not_called()
@@ -432,7 +432,7 @@ def test_reconcile_skips_existing_spotdl(tmp_path: Path) -> None:
 def test_reconcile_creates_nosync_sentinel(tmp_path: Path) -> None:
     """Playlist marked nosync in config → sentinel file is created."""
     import unittest.mock as mock
-    from pipeline import ingest
+    from music_fetch import ingest
 
     spotdl_dir = tmp_path / "spotdl"
     spotdl_dir.mkdir()
@@ -441,7 +441,7 @@ def test_reconcile_creates_nosync_sentinel(tmp_path: Path) -> None:
 
     with mock.patch.object(ingest, "CONF_PATH", conf), \
          mock.patch.object(ingest, "SPOTDL_DIR", spotdl_dir), \
-         mock.patch("pipeline.ingest.save_playlist"):
+         mock.patch("music_fetch.ingest.save_playlist"):
         _reconcile_playlists()
 
     assert (spotdl_dir / "frozen.nosync").exists()
@@ -450,7 +450,7 @@ def test_reconcile_creates_nosync_sentinel(tmp_path: Path) -> None:
 def test_reconcile_removes_nosync_sentinel(tmp_path: Path) -> None:
     """Playlist with nosync removed from config → sentinel file is deleted."""
     import unittest.mock as mock
-    from pipeline import ingest
+    from music_fetch import ingest
 
     spotdl_dir = tmp_path / "spotdl"
     spotdl_dir.mkdir()
@@ -460,7 +460,7 @@ def test_reconcile_removes_nosync_sentinel(tmp_path: Path) -> None:
 
     with mock.patch.object(ingest, "CONF_PATH", conf), \
          mock.patch.object(ingest, "SPOTDL_DIR", spotdl_dir), \
-         mock.patch("pipeline.ingest.save_playlist"):
+         mock.patch("music_fetch.ingest.save_playlist"):
         _reconcile_playlists()
 
     assert not (spotdl_dir / "mypl.nosync").exists()
@@ -469,7 +469,7 @@ def test_reconcile_removes_nosync_sentinel(tmp_path: Path) -> None:
 def test_reconcile_detects_removed_playlist(tmp_path: Path) -> None:
     """Playlist on disk but absent from config → queued for removal, files deleted."""
     import unittest.mock as mock
-    from pipeline import ingest
+    from music_fetch import ingest
 
     spotdl_dir = tmp_path / "spotdl"
     spotdl_dir.mkdir()
@@ -483,7 +483,7 @@ def test_reconcile_detects_removed_playlist(tmp_path: Path) -> None:
 
     with mock.patch.object(ingest, "CONF_PATH", conf), \
          mock.patch.object(ingest, "SPOTDL_DIR", spotdl_dir), \
-         mock.patch("pipeline.ingest.save_playlist"):
+         mock.patch("music_fetch.ingest.save_playlist"):
         result = _reconcile_playlists()
 
     assert result == ["gone"]
@@ -499,7 +499,7 @@ def test_reconcile_detects_removed_playlist(tmp_path: Path) -> None:
 
 def test_preflight_missing_cookies(tmp_path: Path) -> None:
     import unittest.mock as mock
-    from pipeline import ingest
+    from music_fetch import ingest
 
     with mock.patch.object(ingest, "COOKIE_FILE", tmp_path / "cookies.txt"), \
          mock.patch.dict("os.environ", {"SPOTIFY_CLIENT_ID": "id", "SPOTIFY_CLIENT_SECRET": "secret"}):
@@ -510,7 +510,7 @@ def test_preflight_missing_cookies(tmp_path: Path) -> None:
 
 def test_preflight_missing_spotify_env(tmp_path: Path) -> None:
     import unittest.mock as mock
-    from pipeline import ingest
+    from music_fetch import ingest
 
     cookie_file = tmp_path / "cookies.txt"
     cookie_file.touch()
@@ -525,7 +525,7 @@ def test_preflight_missing_spotify_env(tmp_path: Path) -> None:
 def test_preflight_disk_full(tmp_path: Path) -> None:
     import shutil
     import unittest.mock as mock
-    from pipeline import ingest
+    from music_fetch import ingest
 
     cookie_file = tmp_path / "cookies.txt"
     cookie_file.touch()
@@ -541,7 +541,7 @@ def test_preflight_disk_full(tmp_path: Path) -> None:
 
 def test_preflight_ok(tmp_path: Path) -> None:
     import unittest.mock as mock
-    from pipeline import ingest
+    from music_fetch import ingest
 
     cookie_file = tmp_path / "cookies.txt"
     cookie_file.touch()
@@ -557,7 +557,7 @@ def test_preflight_ok(tmp_path: Path) -> None:
 def test_reconcile_deletes_nosync_for_removed_playlist(tmp_path: Path) -> None:
     """Removed playlist's .nosync sentinel is also deleted."""
     import unittest.mock as mock
-    from pipeline import ingest
+    from music_fetch import ingest
 
     spotdl_dir = tmp_path / "spotdl"
     spotdl_dir.mkdir()
@@ -567,7 +567,7 @@ def test_reconcile_deletes_nosync_for_removed_playlist(tmp_path: Path) -> None:
 
     with mock.patch.object(ingest, "CONF_PATH", conf), \
          mock.patch.object(ingest, "SPOTDL_DIR", spotdl_dir), \
-         mock.patch("pipeline.ingest.save_playlist"):
+         mock.patch("music_fetch.ingest.save_playlist"):
         result = _reconcile_playlists()
 
     assert result == ["gone"]

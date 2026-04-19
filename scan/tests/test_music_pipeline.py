@@ -4,7 +4,7 @@ from unittest.mock import MagicMock, patch
 
 from beets import importer as beets_importer
 
-from pipeline.music_pipeline import (
+from music_scan.music_pipeline import (
     MusicPipelinePlugin,
     _all_via_spotdl,
     _playlist_from_path,
@@ -338,7 +338,7 @@ def test_handle_duplicates_manual_duplicate_sets_skip() -> None:
     task = _task(item=item)
     task.find_duplicates.return_value = [_dup(via="")]  # no via = manual
 
-    with patch("pipeline.music_pipeline.Path"):
+    with patch("music_scan.music_pipeline.Path"):
         plugin.handle_duplicates(session=MagicMock(), task=task)
 
     task.set_choice.assert_called_once_with(beets_importer.Action.SKIP)
@@ -350,7 +350,7 @@ def test_handle_duplicates_manual_duplicate_deletes_inbox_file() -> None:
     task = _task(item=item)
     task.find_duplicates.return_value = [_dup(via="")]
 
-    with patch("pipeline.music_pipeline.Path") as mock_path:
+    with patch("music_scan.music_pipeline.Path") as mock_path:
         plugin.handle_duplicates(session=MagicMock(), task=task)
 
     mock_path.return_value.unlink.assert_called_once_with(missing_ok=True)

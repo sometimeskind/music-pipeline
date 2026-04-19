@@ -22,8 +22,8 @@ def clear_navidrome_env(monkeypatch):
 
 def test_no_url_skips_http_call():
     """When NAVIDROME_URL is unset, no HTTP request is made."""
-    with mock.patch("pipeline.navidrome.requests.get") as mock_get:
-        from pipeline.navidrome import trigger_scan
+    with mock.patch("music_scan.navidrome.requests.get") as mock_get:
+        from music_scan.navidrome import trigger_scan
         trigger_scan()
     mock_get.assert_not_called()
 
@@ -32,10 +32,10 @@ def test_url_without_credentials_logs_warning(monkeypatch, caplog):
     """When URL is set but credentials are missing, log a warning and skip."""
     monkeypatch.setenv("NAVIDROME_URL", "http://navidrome.example.com")
 
-    with mock.patch("pipeline.navidrome.requests.get") as mock_get:
+    with mock.patch("music_scan.navidrome.requests.get") as mock_get:
         import logging
-        with caplog.at_level(logging.WARNING, logger="pipeline.navidrome"):
-            from pipeline.navidrome import trigger_scan
+        with caplog.at_level(logging.WARNING, logger="music_scan.navidrome"):
+            from music_scan.navidrome import trigger_scan
             trigger_scan()
 
     mock_get.assert_not_called()
@@ -47,10 +47,10 @@ def test_url_with_only_user_logs_warning(monkeypatch, caplog):
     monkeypatch.setenv("NAVIDROME_URL", "http://navidrome.example.com")
     monkeypatch.setenv("NAVIDROME_USER", "admin")
 
-    with mock.patch("pipeline.navidrome.requests.get") as mock_get:
+    with mock.patch("music_scan.navidrome.requests.get") as mock_get:
         import logging
-        with caplog.at_level(logging.WARNING, logger="pipeline.navidrome"):
-            from pipeline.navidrome import trigger_scan
+        with caplog.at_level(logging.WARNING, logger="music_scan.navidrome"):
+            from music_scan.navidrome import trigger_scan
             trigger_scan()
 
     mock_get.assert_not_called()
@@ -66,10 +66,10 @@ def test_successful_scan_logs_info(monkeypatch, caplog):
     mock_resp = mock.Mock()
     mock_resp.json.return_value = _make_subsonic_response("ok")
 
-    with mock.patch("pipeline.navidrome.requests.get", return_value=mock_resp) as mock_get:
+    with mock.patch("music_scan.navidrome.requests.get", return_value=mock_resp) as mock_get:
         import logging
-        with caplog.at_level(logging.INFO, logger="pipeline.navidrome"):
-            from pipeline.navidrome import trigger_scan
+        with caplog.at_level(logging.INFO, logger="music_scan.navidrome"):
+            from music_scan.navidrome import trigger_scan
             trigger_scan()
 
     mock_get.assert_called_once()
@@ -89,8 +89,8 @@ def test_trailing_slash_in_url_is_normalized(monkeypatch):
     mock_resp = mock.Mock()
     mock_resp.json.return_value = _make_subsonic_response("ok")
 
-    with mock.patch("pipeline.navidrome.requests.get", return_value=mock_resp) as mock_get:
-        from pipeline.navidrome import trigger_scan
+    with mock.patch("music_scan.navidrome.requests.get", return_value=mock_resp) as mock_get:
+        from music_scan.navidrome import trigger_scan
         trigger_scan()
 
     url_called = mock_get.call_args[0][0]
@@ -106,10 +106,10 @@ def test_non_ok_subsonic_status_logs_warning(monkeypatch, caplog):
     mock_resp = mock.Mock()
     mock_resp.json.return_value = _make_subsonic_response("failed")
 
-    with mock.patch("pipeline.navidrome.requests.get", return_value=mock_resp):
+    with mock.patch("music_scan.navidrome.requests.get", return_value=mock_resp):
         import logging
-        with caplog.at_level(logging.WARNING, logger="pipeline.navidrome"):
-            from pipeline.navidrome import trigger_scan
+        with caplog.at_level(logging.WARNING, logger="music_scan.navidrome"):
+            from music_scan.navidrome import trigger_scan
             trigger_scan()
 
     assert "non-ok status" in caplog.text
@@ -122,12 +122,12 @@ def test_http_error_logs_warning(monkeypatch, caplog):
     monkeypatch.setenv("NAVIDROME_PASSWORD", "secret")
 
     with mock.patch(
-        "pipeline.navidrome.requests.get",
+        "music_scan.navidrome.requests.get",
         side_effect=requests.ConnectionError("connection refused"),
     ):
         import logging
-        with caplog.at_level(logging.WARNING, logger="pipeline.navidrome"):
-            from pipeline.navidrome import trigger_scan
+        with caplog.at_level(logging.WARNING, logger="music_scan.navidrome"):
+            from music_scan.navidrome import trigger_scan
             trigger_scan()
 
     assert "Failed to trigger Navidrome rescan" in caplog.text

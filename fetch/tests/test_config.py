@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from pipeline.config import PlaylistConfig, load_playlists
+from music_fetch.config import PlaylistConfig, load_playlists
 
 
 def write_conf(tmp_path: Path, content: str) -> Path:

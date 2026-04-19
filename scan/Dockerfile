@@ -13,7 +13,7 @@ COPY requirements.txt /requirements.txt
 RUN pip install --no-cache-dir -r /requirements.txt
 
 # Install the pipeline package — entry points land in /usr/local/bin/
-COPY pipeline/ /app/pipeline/
+COPY music_scan/ /app/music_scan/
 COPY pyproject.toml /app/pyproject.toml
 RUN pip install --no-cache-dir -e /app
 

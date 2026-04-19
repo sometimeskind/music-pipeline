@@ -2,7 +2,7 @@
 
 import pytest
 
-from pipeline.metrics import IngestMetrics, _gauge
+from music_fetch.metrics import IngestMetrics, _gauge
 
 
 # ---------------------------------------------------------------------------
@@ -31,7 +31,7 @@ def test_gauge_float_value() -> None:
 
 def test_ingest_metrics_success_body(monkeypatch: pytest.MonkeyPatch) -> None:
     pushed: list[str] = []
-    monkeypatch.setattr("pipeline.metrics._push", lambda body, job: pushed.append(body))
+    monkeypatch.setattr("music_fetch.metrics._push", lambda body, job: pushed.append(body))
 
     m = IngestMetrics(success=True, duration_seconds=120, playlists_total=3, playlists_skipped=1)
     m.push()
@@ -46,7 +46,7 @@ def test_ingest_metrics_success_body(monkeypatch: pytest.MonkeyPatch) -> None:
 
 def test_ingest_metrics_failure_includes_reason(monkeypatch: pytest.MonkeyPatch) -> None:
     pushed: list[str] = []
-    monkeypatch.setattr("pipeline.metrics._push", lambda body, job: pushed.append(body))
+    monkeypatch.setattr("music_fetch.metrics._push", lambda body, job: pushed.append(body))
 
     m = IngestMetrics(success=False, failure_reason="rate_limited")
     m.push()
@@ -58,14 +58,14 @@ def test_ingest_metrics_failure_includes_reason(monkeypatch: pytest.MonkeyPatch)
 
 def test_push_job_label_ingest(monkeypatch: pytest.MonkeyPatch) -> None:
     jobs: list[str] = []
-    monkeypatch.setattr("pipeline.metrics._push", lambda body, job: jobs.append(job))
+    monkeypatch.setattr("music_fetch.metrics._push", lambda body, job: jobs.append(job))
     IngestMetrics().push()
     assert jobs == ["music_ingest"]
 
 
 def test_ingest_metrics_tracks_downloaded(monkeypatch: pytest.MonkeyPatch) -> None:
     pushed: list[str] = []
-    monkeypatch.setattr("pipeline.metrics._push", lambda body, job: pushed.append(body))
+    monkeypatch.setattr("music_fetch.metrics._push", lambda body, job: pushed.append(body))
 
     m = IngestMetrics(tracks_downloaded=42)
     m.push()
@@ -75,7 +75,7 @@ def test_ingest_metrics_tracks_downloaded(monkeypatch: pytest.MonkeyPatch) -> No
 
 def test_ingest_metrics_cookies_expired_true(monkeypatch: pytest.MonkeyPatch) -> None:
     pushed: list[str] = []
-    monkeypatch.setattr("pipeline.metrics._push", lambda body, job: pushed.append(body))
+    monkeypatch.setattr("music_fetch.metrics._push", lambda body, job: pushed.append(body))
 
     m = IngestMetrics(cookies_expired=True)
     m.push()
@@ -85,7 +85,7 @@ def test_ingest_metrics_cookies_expired_true(monkeypatch: pytest.MonkeyPatch) ->
 
 def test_ingest_metrics_cookies_expired_false_by_default(monkeypatch: pytest.MonkeyPatch) -> None:
     pushed: list[str] = []
-    monkeypatch.setattr("pipeline.metrics._push", lambda body, job: pushed.append(body))
+    monkeypatch.setattr("music_fetch.metrics._push", lambda body, job: pushed.append(body))
 
     IngestMetrics().push()
 
