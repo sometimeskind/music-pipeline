@@ -1,48 +1,30 @@
 services:
-  fetch:
+  service:
     build:
-      context: fetch
+      context: .
+      dockerfile: service/Dockerfile
       target: prod
-    image: ghcr.io/sometimeskind/music-pipeline-fetch:latest
+    image: ghcr.io/sometimeskind/music-pipeline:latest
     volumes:
-      # Music data: inbox shared with scan container for downloaded files and pending-removals.json
       - /home/tom/Music:/root/Music
-      # spotdl config (from this repo)
+      - beets-data:/root/.config/beets
+      - ./config/beets/config.yaml:/root/.config/beets/config.yaml:ro
       - ./config/spotdl/config.json:/root/.config/spotdl/config.json:ro
-      # Playlist registry (from this repo; k8s: mount as ConfigMap)
       - ./config/playlists.conf:/root/.config/music-pipeline/playlists.conf:ro
       # YouTube Premium cookies — NOT committed; export from browser and place here
-      # See README for export instructions. Expires periodically.
       - ./cookies.txt:/root/.config/spotdl/cookies.txt:ro
     environment:
       # Inject Spotify credentials at runtime via: op run --env-file=.env.tpl -- docker compose run ...
       - SPOTIFY_CLIENT_ID=${SPOTIFY_CLIENT_ID}
       - SPOTIFY_CLIENT_SECRET=${SPOTIFY_CLIENT_SECRET}
-      # Optional: cap total new downloads per run across all playlists
+      - API_BEARER_TOKEN=${API_BEARER_TOKEN:-dev-token}
       - SYNC_TRACK_LIMIT=${SYNC_TRACK_LIMIT:-}
-      # Optional: random delay before syncing to spread load (seconds)
       - SYNC_JITTER_SECONDS=${SYNC_JITTER_SECONDS:-}
-      # Optional: Prometheus Pushgateway URL for job metrics
       - PUSHGATEWAY_URL=${PUSHGATEWAY_URL:-}
-
-  scan:
-    build:
-      context: .
-      dockerfile: scan/Dockerfile
-      target: prod
-    image: ghcr.io/sometimeskind/music-pipeline-scan:latest
-    volumes:
-      # Music data: inbox shared with fetch container, plus library/quarantine/playlists
-      - /home/tom/Music:/root/Music
-      # Beets database and import log (SQLite — back this up)
-      - beets-data:/root/.config/beets
-      # Beets config (from this repo)
-      - ./config/beets/config.yaml:/root/.config/beets/config.yaml:ro
-    environment:
-      # Optional: Prometheus Pushgateway URL for job metrics
-      - PUSHGATEWAY_URL=${PUSHGATEWAY_URL:-}
-      # Optional: stop beet import after N skips (for threshold testing)
       - BEET_SKIP_LIMIT=${BEET_SKIP_LIMIT:-}
+      - LIBRARY_REMOTE=${LIBRARY_REMOTE:-}
+    ports:
+      - "8080:8080"
 
 volumes:
   beets-data:

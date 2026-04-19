@@ -3,10 +3,10 @@ name: scan CI
 on:
   push:
     branches: [main]
-    paths: ["scan/**", "tests/**", "config/beets/**", "compose.yml", "justfile", ".github/workflows/scan.yml"]
+    paths: ["fetch/**", "scan/**", "tests/**", "config/beets/**", "compose.yml", "justfile", ".github/workflows/scan.yml"]
   pull_request:
     branches: [main]
-    paths: ["scan/**", "tests/**", "config/beets/**", "compose.yml", "justfile", ".github/workflows/scan.yml"]
+    paths: ["fetch/**", "scan/**", "tests/**", "config/beets/**", "compose.yml", "justfile", ".github/workflows/scan.yml"]
 
 jobs:
   test:
@@ -20,7 +20,7 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v6
         with:
-          python-version: "3.12"
+          python-version: "3.13"
 
       - name: Install dependencies
         working-directory: scan
@@ -93,7 +93,7 @@ jobs:
       - name: Set up Python for integration tests
         uses: actions/setup-python@v6
         with:
-          python-version: "3.12"
+          python-version: "3.13"
 
       - name: Integration tests (scan)
         run: |
