@@ -194,52 +194,79 @@ image and API triggers instead of separate container runs.
 
 ```
 tests/
-  test_service_smoke.py   — Layer 1
-  test_service_api.py     — Layer 2 + 3
-  test_service_push.py    — Layer 4
-  test_service_e2e.py     — Layer 5 (auth-required)
+  test_service_smoke.py   — Layer 1  ✅ implemented (2026-04-20)
+  test_service_api.py     — Layer 2  ✅ implemented (2026-04-20)
+  test_service_api.py     — Layer 3  (scan-via-service tests not yet added)
+  test_service_push.py    — Layer 4  (not yet implemented)
+  test_service_e2e.py     — Layer 5  (not yet implemented, auth-required)
 ```
 
 ### conftest.py Changes
 
-- Add `SERVICE_IMAGE` constant (env var override like `SCAN_IMAGE`/`FETCH_IMAGE`)
-- Add `running_service` fixture: starts service container, waits for health,
-  yields `(base_url, headers, volumes)`, tears down
-- Add `service_exec` helper: runs a command inside the running service container
-  (uses `docker exec` via the SDK's `container.exec_run()`)
-- Existing fixtures and helpers remain unchanged — scan/fetch integration tests
-  continue to work as-is
+Implemented (2026-04-20):
+- `SERVICE_IMAGE` constant (env var override, defaults to
+  `ghcr.io/sometimeskind/music-pipeline:latest`)
+- `running_service` fixture: starts service container with `network_mode="host"`,
+  waits for `/health` to return 200 (30 s timeout), yields
+  `{base_url, headers, container, volumes}`, tears down
+- `service_in_container()` helper: runs a command inside the running container
+  via `container.exec_run()`
+- `wait_for_log()` helper: streams container logs until a sentinel string
+  appears or timeout elapses (for use in Layer 3+)
+- Existing fixtures and helpers unchanged
+
+**Networking note:** Docker bridge port mapping and host→container-IP routing
+are both non-functional in this environment (iptables issue). The fixture uses
+`network_mode="host"` so the service binds directly to localhost:8080. This
+means only one service container can run at a time — fine for sequential tests,
+but incompatible with parallel test execution. If CI ever runs tests in
+parallel, port selection logic will be needed.
 
 ### Waiting for Async Operations
 
-The service's trigger endpoints return 202 immediately while the operation runs
-in a background thread. Tests need to wait for completion. Options:
+The `wait_for_log()` helper (already in `conftest.py`) implements option 2
+below. Use it for Layer 3+ tests.
 
 1. **Poll the lock** — Re-POST the same trigger endpoint. 202 means the
    previous operation finished (new one started). 409 means still running.
    Simple but imprecise.
-2. **Poll container logs** — Watch for `Scan complete` or `Fetch complete`
-   log lines via `container.logs(stream=True)`. More reliable.
+2. **Poll container logs** — Watch for `==> Scan complete` or `==> Fetch
+   complete` log lines via `container.logs(stream=True)`. More reliable.
 3. **Timeout wrapper** — Wrap either approach in a retry loop with a hard
    timeout (60s for scan, 300s for fetch with Spotify).
 
-Recommended: option 2 (log polling) with a timeout wrapper.
+Recommended: option 2 (log polling) with a timeout wrapper. Implemented
+in `wait_for_log()`.
 
 ### Port Allocation
 
-Use Docker's random port mapping (`ports={"8080/tcp": None}`) and read the
-assigned port from the container's `attrs` to avoid conflicts when tests run
-in parallel.
+~~Use Docker's random port mapping (`ports={"8080/tcp": None}`) and read the
+assigned port from the container's `attrs`.~~
+
+Replaced by `network_mode="host"` (see networking note above). Random port
+mapping was the original plan but doesn't work in this environment.
+
+### Path Traversal Testing
+
+`requests` normalises URLs before sending (e.g. `../../etc/passwd` →
+`/etc/passwd`), causing Flask to 404 rather than triggering the server-side
+`resolve()` guard. The traversal test uses `http.client` directly to send the
+raw path, and accepts either 403 (guard fired) or 404 (route not matched) as
+a passing assertion.
 
 ### justfile Updates
+
+Implemented (`test-service` recipe added):
 
 ```just
 # Run service integration tests (no auth needed)
 test-service:
     [ -d .venv ] || python3 -m venv .venv
     .venv/bin/pip install -q -r tests/requirements.txt
-    .venv/bin/pytest tests/test_service_*.py -m "not auth" -v
+    .venv/bin/pytest tests/test_service_smoke.py tests/test_service_api.py -m "not auth" -v
 ```
+
+Update the pattern to `tests/test_service_*.py` once Layer 3+ files are added.
 
 The existing `test-integration` recipe can be kept as-is (runs all non-auth
 tests including the new service tests) or updated to exclude the old
@@ -259,8 +286,9 @@ only the unified service image is deployed:
 
 ## Execution Order
 
-1. Implement Layer 1 (smoke) and Layer 2 (API) first — they need no external
-   services and validate the most critical functionality.
-2. Add Layer 3 (scan-via-service) — validates the orchestrator path.
-3. Add Layer 4 (push) — validates the rclone integration.
-4. Add Layer 5 (full e2e) last — requires manual testing setup.
+1. ✅ **Layer 1 (smoke)** — implemented, 9 tests, all passing (commit `c69a10c`)
+2. ✅ **Layer 2 (HTTP API)** — implemented, 15 tests, all passing (commit `c69a10c`,
+   path traversal fix `6c3a9c5`)
+3. **Layer 3 (scan-via-service)** — next up; add to `test_service_api.py`
+4. **Layer 4 (push)** — add `test_service_push.py`; rclone with local path remote
+5. **Layer 5 (full e2e)** — add `test_service_e2e.py`; requires manual setup
