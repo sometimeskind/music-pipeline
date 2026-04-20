@@ -1,10 +1,12 @@
-"""Layer 2 — HTTP API Tests.
+"""Layer 2 and Layer 3 — HTTP API and Scan-via-Service Tests.
 
-Exercise every HTTP endpoint against a live service container. No audio
-processing — these tests validate routing, auth, and basic request handling.
+Layer 2: Exercise every HTTP endpoint against a live service container. No
+audio processing — these tests validate routing, auth, and basic request
+handling. All tests use the `running_service` fixture from conftest.py.
 
-All tests use the `running_service` fixture from conftest.py, which starts
-the service container, waits for /health, and tears down afterwards.
+Layer 3: Verify the full scan pipeline runs correctly when triggered through
+the service HTTP API. Uses `running_service_asis` (asis beets config) to avoid
+MusicBrainz network calls.
 """
 
 from __future__ import annotations
@@ -13,6 +15,8 @@ import io
 import zipfile
 
 import requests
+
+from conftest import service_in_container, wait_for_log
 
 
 # ---------------------------------------------------------------------------
@@ -208,4 +212,82 @@ def test_fetch_trigger_busy(running_service):
     assert r1.status_code == 202
     assert r2.status_code in (202, 409), (
         f"Expected second /fetch/trigger to return 202 or 409, got {r2.status_code}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Layer 3: Scan-via-service
+# ---------------------------------------------------------------------------
+
+
+def _upload_zip(svc: dict, zip_contents: dict[str, bytes]) -> None:
+    """Build and upload a zip to /inbox/upload. zip_contents maps arcname → data."""
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as zf:
+        for arcname, data in zip_contents.items():
+            zf.writestr(arcname, data)
+    buf.seek(0)
+    resp = requests.post(
+        f"{svc['base_url']}/inbox/upload",
+        headers=svc["headers"],
+        data=buf.read(),
+        timeout=10,
+    )
+    assert resp.status_code == 200, f"Upload failed: {resp.status_code} {resp.text}"
+
+
+def test_upload_and_scan_imports_track(running_service_asis, fixture_audio):
+    """Upload an audio file via the API, trigger a scan, verify the track is imported."""
+    svc = running_service_asis
+
+    _upload_zip(svc, {fixture_audio.name: fixture_audio.read_bytes()})
+
+    trigger = requests.post(
+        f"{svc['base_url']}/scan/trigger",
+        headers=svc["headers"],
+        timeout=10,
+    )
+    assert trigger.status_code in (202, 409), (
+        f"Unexpected /scan/trigger response: {trigger.status_code}"
+    )
+
+    found = wait_for_log(svc["container"], "==> Scan complete", timeout=60)
+    assert found, "Scan did not complete within 60s"
+
+    exit_code, output = service_in_container(svc["container"], ["beet", "ls"])
+    assert exit_code == 0
+    assert "7 Ghosts I" in output, f"Track not found in beet ls output:\n{output}"
+
+
+def test_upload_and_scan_generates_playlist(running_service_asis, fixture_audio):
+    """Upload a spotdl playlist structure, trigger scan, verify .m3u is generated."""
+    svc = running_service_asis
+    playlist_name = "test-playlist"
+
+    # The zip must reproduce the spotdl inbox layout so the plugin assigns source=
+    # and _regen_playlists() finds the .spotdl sentinel file.
+    _upload_zip(svc, {
+        f"spotdl/{playlist_name}.spotdl": b"[]",
+        f"spotdl/{playlist_name}/{fixture_audio.name}": fixture_audio.read_bytes(),
+    })
+
+    trigger = requests.post(
+        f"{svc['base_url']}/scan/trigger",
+        headers=svc["headers"],
+        timeout=10,
+    )
+    assert trigger.status_code in (202, 409), (
+        f"Unexpected /scan/trigger response: {trigger.status_code}"
+    )
+
+    found = wait_for_log(svc["container"], "==> Scan complete", timeout=60)
+    assert found, "Scan did not complete within 60s"
+
+    exit_code, output = service_in_container(
+        svc["container"],
+        ["find", "/root/Music/playlists", "-name", "*.m3u"],
+    )
+    assert exit_code == 0
+    assert playlist_name in output, (
+        f"Expected {playlist_name}.m3u in /root/Music/playlists/, got:\n{output}"
     )

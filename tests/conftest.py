@@ -334,61 +334,76 @@ _SERVICE_ENV_BASE = {
 }
 
 
-@pytest.fixture
-def running_service(docker_client, volumes):
-    """Start the service container and wait for /health to return 200.
+def _start_service(docker_client, volumes, beets_config_path):
+    """Context manager: start service container, wait for health, yield svc dict.
 
     Yields a dict with:
-      - base_url: http://localhost:<port>
+      - base_url: http://localhost:8080
       - headers:  Authorization bearer headers for authenticated requests
       - container: the running Container object (for logs / exec_run)
       - volumes:  the vol_names dict
     """
     import time
     import requests as _requests
+    from contextlib import contextmanager
 
-    container = docker_client.containers.run(
-        SERVICE_IMAGE,
-        command=["music-pipeline"],
-        detach=True,
-        network_mode="host",
-        environment=_SERVICE_ENV_BASE,
-        volumes={
-            volumes["music"]: {"bind": "/root/Music", "mode": "rw"},
-            volumes["beets"]: {"bind": "/root/.config/beets", "mode": "rw"},
-            BEETS_CONFIG: {"bind": "/root/.config/beets/config.yaml", "mode": "ro"},
-        },
-    )
+    @contextmanager
+    def _ctx():
+        container = docker_client.containers.run(
+            SERVICE_IMAGE,
+            command=["music-pipeline"],
+            detach=True,
+            network_mode="host",
+            environment=_SERVICE_ENV_BASE,
+            volumes={
+                volumes["music"]: {"bind": "/root/Music", "mode": "rw"},
+                volumes["beets"]: {"bind": "/root/.config/beets", "mode": "rw"},
+                beets_config_path: {"bind": "/root/.config/beets/config.yaml", "mode": "ro"},
+            },
+        )
+        try:
+            base_url = "http://localhost:8080"
+            deadline = time.monotonic() + 30
+            last_exc = None
+            while time.monotonic() < deadline:
+                try:
+                    resp = _requests.get(f"{base_url}/health", timeout=2)
+                    if resp.status_code == 200:
+                        break
+                except Exception as exc:
+                    last_exc = exc
+                time.sleep(0.5)
+            else:
+                logs = container.logs(stdout=True, stderr=True).decode()
+                raise RuntimeError(
+                    f"Service did not become healthy within 30s "
+                    f"(last error: {last_exc}).\nContainer logs:\n{logs}"
+                )
+            yield {
+                "base_url": base_url,
+                "headers": {"Authorization": "Bearer test-token"},
+                "container": container,
+                "volumes": volumes,
+            }
+        finally:
+            container.stop(timeout=5)
+            container.remove(force=True)
 
-    try:
-        base_url = "http://localhost:8080"
+    return _ctx()
 
-        deadline = time.monotonic() + 30
-        last_exc = None
-        while time.monotonic() < deadline:
-            try:
-                resp = _requests.get(f"{base_url}/health", timeout=2)
-                if resp.status_code == 200:
-                    break
-            except Exception as exc:
-                last_exc = exc
-            time.sleep(0.5)
-        else:
-            logs = container.logs(stdout=True, stderr=True).decode()
-            raise RuntimeError(
-                f"Service did not become healthy within 30s "
-                f"(last error: {last_exc}).\nContainer logs:\n{logs}"
-            )
 
-        yield {
-            "base_url": base_url,
-            "headers": {"Authorization": "Bearer test-token"},
-            "container": container,
-            "volumes": volumes,
-        }
-    finally:
-        container.stop(timeout=5)
-        container.remove(force=True)
+@pytest.fixture
+def running_service(docker_client, volumes):
+    """Start the service container with the production beets config."""
+    with _start_service(docker_client, volumes, BEETS_CONFIG) as svc:
+        yield svc
+
+
+@pytest.fixture
+def running_service_asis(docker_client, volumes, beets_asis_config):
+    """Start the service container with asis beets config (no MusicBrainz calls)."""
+    with _start_service(docker_client, volumes, beets_asis_config) as svc:
+        yield svc
 
 
 def service_in_container(container, command: list[str]) -> tuple[int, str]:
