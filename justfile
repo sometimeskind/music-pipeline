@@ -23,7 +23,7 @@ test-integration:
 test-service:
     [ -d .venv ] || python3 -m venv .venv
     .venv/bin/pip install -q -r tests/requirements.txt
-    .venv/bin/pytest tests/test_service_smoke.py tests/test_service_api.py -m "not auth" -v
+    .venv/bin/pytest tests/test_service_*.py -m "not auth" -v
 
 # Run auth-required integration tests (local only; requires Spotify credentials via 1Password)
 # Set TEST_PLAYLIST_URL to a small playlist before running: export TEST_PLAYLIST_URL=https://...
