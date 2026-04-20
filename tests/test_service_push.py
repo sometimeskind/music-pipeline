@@ -159,8 +159,11 @@ def test_scan_pushes_to_remote(docker_client, running_service_push, fixture_audi
     assert found, "Scan did not complete within 90s"
 
     remote_files = _ls_remote(docker_client, svc["remote_vol"])
-    assert any(fixture_audio.stem in f for f in remote_files), (
-        f"Imported track not found in remote after push.\nRemote files: {remote_files}"
+
+    # beets renames files on import, so check for any audio file outside /remote/playlists/
+    audio_files = [f for f in remote_files if f.endswith(".mp3") and "/playlists/" not in f]
+    assert audio_files, (
+        f"No imported audio found in remote after push.\nRemote files: {remote_files}"
     )
 
     playlist_files = [f for f in remote_files if f.endswith(".m3u")]
