@@ -23,6 +23,7 @@ import pytest
 
 from conftest import (
     COOKIES_PATH,
+    SERVICE_IMAGE,
     beet_ls,
     cat_in_volume,
     ls_in_volume,
@@ -89,18 +90,28 @@ def test_full_ingest_spotify(docker_client, volumes, beets_asis_config):
     inbox_files = ls_in_volume(
         docker_client, volumes,
         f"/root/Music/inbox/spotdl/{_TEST_PLAYLIST_NAME}",
+        image=SERVICE_IMAGE,
     )
     assert inbox_files, (
         "No files downloaded to inbox after music-ingest.\n"
         f"Fetch logs:\n{fetch_logs}"
     )
 
-    # Run scan with asis config: this test validates auth and download, not MusicBrainz matching
-    scan_exit, scan_logs = run_scan(docker_client, volumes, binds=scan_binds_test(volumes, beets_asis_config))
+    # Run scan with asis config using the service image (which has the correct
+    # plugin path); the standalone scan image in GHCR may be stale.
+    scan_exit, scan_logs = run_scan(
+        docker_client, volumes,
+        binds=scan_binds_test(volumes, beets_asis_config),
+        image=SERVICE_IMAGE,
+    )
     assert scan_exit == 0, f"music-scan exited {scan_exit}. Logs:\n{scan_logs}"
 
     # All downloaded tracks should be tagged with the correct source
-    tagged = beet_ls(docker_client, volumes, f"source:{_TEST_PLAYLIST_NAME}")
+    tagged = beet_ls(
+        docker_client, volumes,
+        f"source:{_TEST_PLAYLIST_NAME}",
+        image=SERVICE_IMAGE,
+    )
     assert tagged.strip(), (
         f"No tracks tagged source={_TEST_PLAYLIST_NAME} after scan.\n"
         f"Scan logs:\n{scan_logs}"
@@ -110,6 +121,7 @@ def test_full_ingest_spotify(docker_client, volumes, beets_asis_config):
     m3u = cat_in_volume(
         docker_client, volumes,
         f"/root/Music/playlists/{_TEST_PLAYLIST_NAME}.m3u",
+        image=SERVICE_IMAGE,
     )
     assert m3u.strip(), (
         f"{_TEST_PLAYLIST_NAME}.m3u is empty after scan.\n"

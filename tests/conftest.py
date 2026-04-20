@@ -242,15 +242,22 @@ def mkdir_in_volume(client, vol_names: dict, container_path: str) -> None:
 
 
 def run_scan(
-    client, vol_names: dict, env: dict | None = None, binds: dict | None = None
+    client,
+    vol_names: dict,
+    env: dict | None = None,
+    binds: dict | None = None,
+    image: str | None = None,
 ) -> tuple[int, str]:
     """Run music-scan to completion. Returns (exit_code, combined_logs).
 
     Pass `binds=scan_binds_test(vol_names, beets_test_config)` to use the
     test beets config instead of the production one.
+    Pass `image=SERVICE_IMAGE` to run against the unified service image instead
+    of the standalone scan image.
     """
     c = client.containers.create(
-        SCAN_IMAGE,
+        image or SCAN_IMAGE,
+        command=["music-scan"],
         environment={"PUSHGATEWAY_URL": "", **(env or {})},
         volumes=binds if binds is not None else scan_binds(vol_names),
     )
@@ -280,10 +287,12 @@ def run_fetch(
     return exit_code, logs
 
 
-def ls_in_volume(client, vol_names: dict, container_path: str) -> list[str]:
+def ls_in_volume(
+    client, vol_names: dict, container_path: str, image: str | None = None
+) -> list[str]:
     """Return file paths found under container_path in the music volume."""
     result = client.containers.run(
-        SCAN_IMAGE,
+        image or SCAN_IMAGE,
         command=["find", container_path, "-type", "f"],
         volumes={vol_names["music"]: {"bind": "/root/Music", "mode": "ro"}},
         remove=True,
@@ -292,14 +301,14 @@ def ls_in_volume(client, vol_names: dict, container_path: str) -> list[str]:
     return [line for line in lines if line]
 
 
-def beet_ls(client, vol_names: dict, query: str) -> str:
+def beet_ls(client, vol_names: dict, query: str, image: str | None = None) -> str:
     """Run `beet ls <query>` inside the scan container and return stdout.
 
     Queries items (not albums) so that item-level flexible attributes such as
     source= are matched correctly.
     """
     c = client.containers.create(
-        SCAN_IMAGE,
+        image or SCAN_IMAGE,
         entrypoint=["beet"],
         command=["ls", query],
         volumes=scan_binds(vol_names),
@@ -311,10 +320,12 @@ def beet_ls(client, vol_names: dict, query: str) -> str:
     return output
 
 
-def cat_in_volume(client, vol_names: dict, container_path: str) -> str:
+def cat_in_volume(
+    client, vol_names: dict, container_path: str, image: str | None = None
+) -> str:
     """Return the text content of a file in the music volume."""
     result = client.containers.run(
-        SCAN_IMAGE,
+        image or SCAN_IMAGE,
         command=["cat", container_path],
         volumes={vol_names["music"]: {"bind": "/root/Music", "mode": "ro"}},
         remove=True,

@@ -198,7 +198,7 @@ tests/
   test_service_api.py     — Layer 2  ✅ implemented (2026-04-20)
   test_service_api.py     — Layer 3  ✅ implemented (2026-04-20)
   test_service_push.py    — Layer 4  ✅ implemented (2026-04-20)
-  test_service_e2e.py     — Layer 5  (not yet implemented, auth-required)
+  test_service_e2e.py     — Layer 5  ✅ implemented (2026-04-20)
 ```
 
 ### Layer 3 Implementation Notes (2026-04-20)
@@ -323,4 +323,4 @@ only the unified service image is deployed:
 3. ✅ **Layer 3 (scan-via-service)** — implemented, 2 tests (commit `8187a64`);
    uses `running_service_asis` fixture (asis beets config, no MusicBrainz calls)
 4. ✅ **Layer 4 (push)** — implemented, 2 tests (commit TBD); rclone with local path remote
-5. **Layer 5 (full e2e)** — add `test_service_e2e.py`; requires manual setup
+5. ✅ **Layer 5 (full e2e)** — implemented (2026-04-20); 1 test, requires manual setup with Spotify creds + cookies.txt + TEST_PLAYLIST_URL
