@@ -19,7 +19,7 @@ COPY scan/pyproject.toml /build/scan/pyproject.toml
 COPY scan/requirements.txt /build/scan/requirements.txt
 RUN pip install --no-cache-dir -r /build/scan/requirements.txt /build/scan
 # Expose scan source at the beets pluginpath location expected by config.yaml
-RUN cp -r /build/scan/music_scan /app/music_scan
+RUN mkdir -p /app && cp -r /build/scan/music_scan /app/music_scan
 
 COPY service/music_service/ /build/service/music_service/
 COPY service/pyproject.toml /build/service/pyproject.toml
