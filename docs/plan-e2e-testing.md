@@ -149,6 +149,45 @@ image and API triggers instead of separate container runs.
 
 **Marker:** `@pytest.mark.auth` — excluded from CI, run via `just test-auth`.
 
+## Implementation Notes (Review Notes)
+
+### Findings from code review (2026-04-20)
+
+1. **Upload triggers a debounced scan (30 s delay)** — `inbox_upload` calls
+   `orchestrator.schedule_scan()`, which arms a 30-second debounce timer.
+   Layer 3 tests that POST to `/inbox/upload` and then immediately POST to
+   `/scan/trigger` will have *two* scans racing: the explicit trigger and the
+   deferred one. Tests must tolerate this (or set `debounce_delay=0` via a
+   constructor override, though that's not currently exposed as an env var).
+   Simplest mitigation: just POST `/scan/trigger` explicitly and poll for
+   completion; if the debounced scan fires first, the result is the same.
+
+2. **Log-polling target strings** — The orchestrator logs `==> Scan complete`
+   and `==> Fetch complete` (confirmed in `orchestrator.py`). Use these as
+   completion sentinels when log-polling.
+
+3. **`fixture_audio` uses `SCAN_IMAGE`** — The session-scoped fixture in
+   `conftest.py` generates the silent MP3 by running ffmpeg inside `SCAN_IMAGE`.
+   Layer 3 tests need this fixture, but will use `SERVICE_IMAGE` for the
+   running service. Since the service image also includes ffmpeg, the fixture
+   generator can stay pointed at `SCAN_IMAGE` (or `SERVICE_IMAGE` — either
+   works). No change needed.
+
+4. **`test_fetch_trigger_busy` is non-deterministic** — A rapid double-POST to
+   `/fetch/trigger` races against the background thread acquiring the lock.
+   If the first fetch completes before the second POST arrives (unlikely but
+   possible), both return 202 and the 409 assertion fails. Options: accept the
+   test as best-effort, use a sentinel file to slow down fetch in testing, or
+   drop the test and rely on the unit tests for busy-lock coverage.
+
+5. **Layer 4 `LIBRARY_REMOTE` with a local path** — rclone accepts a bare
+   directory path as a remote target. The `/remote` volume mount described in
+   the plan is correct, but the rclone invocation in `_push_library` runs
+   `rclone copy <staging> <remote>` (not `rclone copy <staging> <remote>:`).
+   A bare path (e.g. `/remote`) works with rclone's local backend without a
+   trailing colon. No code change needed, but worth noting when writing the
+   fixture.
+
 ## Implementation Notes
 
 ### New Files

@@ -26,6 +26,9 @@ SCAN_IMAGE = os.environ.get(
 FETCH_IMAGE = os.environ.get(
     "FETCH_IMAGE", "ghcr.io/sometimeskind/music-pipeline-fetch:latest"
 )
+SERVICE_IMAGE = os.environ.get(
+    "SERVICE_IMAGE", "ghcr.io/sometimeskind/music-pipeline:latest"
+)
 
 REPO_ROOT = Path(__file__).parent.parent
 BEETS_CONFIG = str(REPO_ROOT / "config" / "beets" / "config.yaml")
@@ -317,3 +320,97 @@ def cat_in_volume(client, vol_names: dict, container_path: str) -> str:
         remove=True,
     )
     return result.decode()
+
+
+# ---------------------------------------------------------------------------
+# Service container fixtures and helpers
+# ---------------------------------------------------------------------------
+
+
+_SERVICE_ENV_BASE = {
+    "API_BEARER_TOKEN": "test-token",
+    "SPOTIFY_CLIENT_ID": "fake",
+    "SPOTIFY_CLIENT_SECRET": "fake",
+}
+
+
+@pytest.fixture
+def running_service(docker_client, volumes):
+    """Start the service container and wait for /health to return 200.
+
+    Yields a dict with:
+      - base_url: http://localhost:<port>
+      - headers:  Authorization bearer headers for authenticated requests
+      - container: the running Container object (for logs / exec_run)
+      - volumes:  the vol_names dict
+    """
+    import time
+    import requests as _requests
+
+    container = docker_client.containers.run(
+        SERVICE_IMAGE,
+        command=["music-pipeline"],
+        detach=True,
+        network_mode="host",
+        environment=_SERVICE_ENV_BASE,
+        volumes={
+            volumes["music"]: {"bind": "/root/Music", "mode": "rw"},
+            volumes["beets"]: {"bind": "/root/.config/beets", "mode": "rw"},
+            BEETS_CONFIG: {"bind": "/root/.config/beets/config.yaml", "mode": "ro"},
+        },
+    )
+
+    try:
+        base_url = "http://localhost:8080"
+
+        deadline = time.monotonic() + 30
+        last_exc = None
+        while time.monotonic() < deadline:
+            try:
+                resp = _requests.get(f"{base_url}/health", timeout=2)
+                if resp.status_code == 200:
+                    break
+            except Exception as exc:
+                last_exc = exc
+            time.sleep(0.5)
+        else:
+            logs = container.logs(stdout=True, stderr=True).decode()
+            raise RuntimeError(
+                f"Service did not become healthy within 30s "
+                f"(last error: {last_exc}).\nContainer logs:\n{logs}"
+            )
+
+        yield {
+            "base_url": base_url,
+            "headers": {"Authorization": "Bearer test-token"},
+            "container": container,
+            "volumes": volumes,
+        }
+    finally:
+        container.stop(timeout=5)
+        container.remove(force=True)
+
+
+def service_in_container(container, command: list[str]) -> tuple[int, str]:
+    """Run a command inside a running service container via the Docker SDK.
+
+    Returns (exit_code, output).
+    """
+    result = container.exec_run(command, stdout=True, stderr=True)
+    return result.exit_code, result.output.decode()
+
+
+def wait_for_log(container, sentinel: str, timeout: float = 60) -> bool:
+    """Stream container logs until *sentinel* appears or *timeout* seconds elapse.
+
+    Returns True if the sentinel was found, False on timeout.
+    """
+    import time
+
+    deadline = time.monotonic() + timeout
+    for chunk in container.logs(stream=True, follow=True):
+        if sentinel.encode() in chunk:
+            return True
+        if time.monotonic() > deadline:
+            break
+    return False

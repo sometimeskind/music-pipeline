@@ -18,6 +18,13 @@ test-integration:
     .venv/bin/pip install -q -r tests/requirements.txt
     .venv/bin/pytest tests/ -m "not auth" -v
 
+# Run service integration tests (no auth needed)
+# Override the image with: SERVICE_IMAGE=music-pipeline:local just test-service
+test-service:
+    [ -d .venv ] || python3 -m venv .venv
+    .venv/bin/pip install -q -r tests/requirements.txt
+    .venv/bin/pytest tests/test_service_smoke.py tests/test_service_api.py -m "not auth" -v
+
 # Run auth-required integration tests (local only; requires Spotify credentials via 1Password)
 # Set TEST_PLAYLIST_URL to a small playlist before running: export TEST_PLAYLIST_URL=https://...
 test-auth:
