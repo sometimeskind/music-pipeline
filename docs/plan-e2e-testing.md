@@ -201,6 +201,32 @@ tests/
   test_service_e2e.py     — Layer 5  ✅ implemented (2026-04-20)
 ```
 
+### Layer 5 Implementation Notes (2026-04-20)
+
+- Uses `beets_asis_config` (asis beets config, no MusicBrainz calls) to keep
+  the scan deterministic even with real Spotify downloads.
+- Mounts `cookies.txt`, `SPOTDL_CONFIG`, and a temp `playlists.conf` into the
+  service container alongside the standard music/beets volumes.
+- Sets `LIBRARY_REMOTE=/remote` and mounts a fresh Docker volume there to
+  verify the push step end-to-end.
+- `wait_for_log("==> Scan complete", timeout=600)` covers both the fetch phase
+  (spotdl is slow) and the chained scan. Logs are dumped on timeout or on empty
+  inbox to make fetch failures diagnosable.
+- Passes with working network in ~3:43 (1 track, 1 spotdl download).
+- **Bug found during Layer 5 implementation:**
+  The standalone `SCAN_IMAGE` on GHCR was stale: code at `/app/pipeline/`
+  (old package name) while `config.yaml` `pluginpath` pointed at `/app/music_scan/`.
+  beets adds `pluginpath` entries to `sys.path` and imports `beetsplug.<name>`,
+  so the plugin file must live under a `beetsplug/` subdirectory of the
+  pluginpath. Fixed two ways:
+  1. `scan/music_scan/beetsplug/music_pipeline.py` — shim re-exporting
+     `MusicPipelinePlugin`; included automatically by the `COPY scan/music_scan/`
+     instruction in both Dockerfiles. Takes effect on next image build.
+  2. `test_auth.py` scan operations (`run_scan`, `beet_ls`, `ls_in_volume`,
+     `cat_in_volume`) now pass `image=SERVICE_IMAGE` — SERVICE_IMAGE is already
+     correct and verified by Layer 3/4. Partial migration of the old test to the
+     unified image (see Migration Path below).
+
 ### Layer 3 Implementation Notes (2026-04-20)
 
 - Uses `running_service_asis` fixture (asis beets config, no MusicBrainz/AcoustID)
@@ -244,7 +270,14 @@ Implemented (2026-04-20):
   via `container.exec_run()`
 - `wait_for_log()` helper: streams container logs until a sentinel string
   appears or timeout elapses (for use in Layer 3+)
-- Existing fixtures and helpers unchanged
+
+Updated (2026-04-20, Layer 5):
+- `run_scan`, `ls_in_volume`, `beet_ls`, `cat_in_volume` now accept an optional
+  `image=` keyword argument (defaults to `SCAN_IMAGE`). Callers can pass
+  `SERVICE_IMAGE` to route through the unified image without changing the default
+  behaviour for other tests.
+- `run_scan` now always specifies `command=["music-scan"]` explicitly, so it
+  works regardless of which image's default CMD is set.
 
 **Networking note:** Docker bridge port mapping and host→container-IP routing
 are both non-functional in this environment (iptables issue). The fixture uses
@@ -297,11 +330,9 @@ test-service:
     .venv/bin/pytest tests/test_service_smoke.py tests/test_service_api.py -m "not auth" -v
 ```
 
-Update the pattern to `tests/test_service_*.py` once Layer 3+ files are added.
-
-The existing `test-integration` recipe can be kept as-is (runs all non-auth
-tests including the new service tests) or updated to exclude the old
-scan-only tests if they become redundant.
+The `test-service` recipe already uses `tests/test_service_*.py` which covers
+all five layers (minus auth). The `test-integration` recipe runs all non-auth
+tests, including both old and new service tests.
 
 ## Migration Path
 
@@ -309,11 +340,15 @@ The existing scan/fetch integration tests (`test_smoke.py`, `test_import.py`,
 `test_auth.py`) should be kept until the old images are fully retired. Once
 only the unified service image is deployed:
 
-1. Update `test_smoke.py` and `test_import.py` to use `SERVICE_IMAGE` instead
+1. ~~Update `test_auth.py` scan operations to use `SERVICE_IMAGE`~~ — **done**
+   (commit `2eb0195`); `run_scan`, `beet_ls`, `ls_in_volume`, `cat_in_volume`
+   now accept `image=` and `test_auth.py` passes `SERVICE_IMAGE`.
+2. Update `test_smoke.py` and `test_import.py` to use `SERVICE_IMAGE` instead
    of `SCAN_IMAGE` (the service image contains all the same tools).
-2. Update `test_auth.py` to use the service API instead of running separate
-   fetch/scan containers.
-3. Remove `SCAN_IMAGE` and `FETCH_IMAGE` references from `conftest.py`.
+3. Update `test_auth.py` fetch step to use the service API (`POST /fetch/trigger`)
+   instead of `run_fetch` / `FETCH_IMAGE` directly — see `test_service_e2e.py`
+   for the pattern.
+4. Remove `SCAN_IMAGE` and `FETCH_IMAGE` references from `conftest.py`.
 
 ## Execution Order
 
@@ -322,5 +357,7 @@ only the unified service image is deployed:
    path traversal fix `6c3a9c5`)
 3. ✅ **Layer 3 (scan-via-service)** — implemented, 2 tests (commit `8187a64`);
    uses `running_service_asis` fixture (asis beets config, no MusicBrainz calls)
-4. ✅ **Layer 4 (push)** — implemented, 2 tests (commit TBD); rclone with local path remote
-5. ✅ **Layer 5 (full e2e)** — implemented (2026-04-20); 1 test, requires manual setup with Spotify creds + cookies.txt + TEST_PLAYLIST_URL
+4. ✅ **Layer 4 (push)** — implemented, 2 tests (commit `3db6166`); rclone with local path remote
+5. ✅ **Layer 5 (full e2e)** — implemented, 1 test (commit `2eb0195`); verified
+   passing in ~3:43 with working network; requires `op run --env-file .env.tpl`
+   + `TEST_PLAYLIST_URL` + `cookies.txt`
