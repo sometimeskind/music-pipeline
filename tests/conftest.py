@@ -117,23 +117,23 @@ def fixture_audio(docker_client, tmp_path_factory):
 
 @pytest.fixture(scope="session")
 def beets_asis_config(tmp_path_factory):
-    """Production config with autotag=False and chroma removed.
+    """Production config stripped down for network-free asis testing.
 
-    ASIS mode: beets imports files using embedded tags without any MusicBrainz
-    or AcoustID network calls. import_task_created still fires (it fires in all
-    modes), so the music_pipeline plugin writes source= and via= to the library.
-    import_task_choice (duplicate handling) does NOT fire in ASIS mode — beets
-    applies duplicate_action from config directly instead. Fully network-free.
+    Changes from the production config:
+    - autotag=False: import uses embedded tags, no MusicBrainz lookups
+    - plugins reduced to [music_pipeline]: fetchart, chroma, embedart, scrub,
+      etc. are removed to avoid any network calls (fetchart auto-fetches art
+      from musicbrainz.org / fanart.tv even with autotag=False)
+
+    import_task_created still fires (it fires in all modes), so the
+    music_pipeline plugin writes source= and via= to the library.
+    Duplicate handling uses duplicate_action from config (beets built-in).
     """
     with open(BEETS_CONFIG) as f:
         config = yaml.safe_load(f)
 
     config.setdefault("import", {})["autotag"] = False
-
-    plugins = config.get("plugins", [])
-    if isinstance(plugins, str):
-        plugins = plugins.split()
-    config["plugins"] = [p for p in plugins if p != "chroma"]
+    config["plugins"] = ["music_pipeline"]
 
     tmp = tmp_path_factory.mktemp("beets-cfg-asis") / "config.yaml"
     tmp.write_text(yaml.dump(config))
