@@ -340,7 +340,11 @@ The existing scan/fetch integration tests (`test_smoke.py`, `test_import.py`,
 `test_auth.py`) should be kept until the old images are fully retired. Once
 only the unified service image is deployed:
 
-1. ~~Update `test_auth.py` scan operations to use `SERVICE_IMAGE`~~ — **done**
+1. **Rebuild and push `music-pipeline-scan` to GHCR** — the `beetsplug/` shim
+   (`scan/music_scan/beetsplug/music_pipeline.py`) is in source but the running
+   GHCR image is stale. Will be fixed automatically on next CI push that builds
+   the scan image.
+2. ~~Update `test_auth.py` scan operations to use `SERVICE_IMAGE`~~ — **done**
    (commit `2eb0195`); `run_scan`, `beet_ls`, `ls_in_volume`, `cat_in_volume`
    now accept `image=` and `test_auth.py` passes `SERVICE_IMAGE`.
 2. Update `test_smoke.py` and `test_import.py` to use `SERVICE_IMAGE` instead
