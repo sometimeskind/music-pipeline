@@ -18,13 +18,23 @@ IMPORT_LOG = Path("/root/.config/beets/import.log")
 
 @contextmanager
 def _forward_sigterm(proc: subprocess.Popen) -> Generator[None, None, None]:
-    """Context manager: while active, SIGTERM is forwarded to *proc*."""
+    """Context manager: while active, SIGTERM is forwarded to *proc*.
 
+    signal.signal() only works in the main thread. When called from a
+    background thread (e.g. the orchestrator scan thread), we skip SIGTERM
+    forwarding — the process will be reaped normally when it finishes.
+    """
     def _handler(sig: int, frame: object) -> None:
         logger.info("Shutdown signal received — forwarding to child process (pid %d)", proc.pid)
         proc.send_signal(signal.SIGTERM)
 
-    old = signal.signal(signal.SIGTERM, _handler)
+    try:
+        old = signal.signal(signal.SIGTERM, _handler)
+    except ValueError:
+        # Not in the main thread — SIGTERM forwarding unavailable; run without it.
+        yield
+        return
+
     try:
         yield
     finally:
