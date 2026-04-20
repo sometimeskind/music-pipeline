@@ -419,13 +419,25 @@ def wait_for_log(container, sentinel: str, timeout: float = 60) -> bool:
     """Stream container logs until *sentinel* appears or *timeout* seconds elapse.
 
     Returns True if the sentinel was found, False on timeout.
-    """
-    import time
 
-    deadline = time.monotonic() + timeout
-    for chunk in container.logs(stream=True, follow=True):
-        if sentinel.encode() in chunk:
-            return True
-        if time.monotonic() > deadline:
-            break
-    return False
+    Uses a daemon thread so the timeout is enforced even when the container is
+    idle (no log chunks arriving). Without a thread the timeout check only fires
+    after each chunk, which can hang indefinitely if the container goes quiet.
+    """
+    import threading
+
+    found = threading.Event()
+
+    def _stream():
+        try:
+            for chunk in container.logs(stream=True, follow=True):
+                if sentinel.encode() in chunk:
+                    found.set()
+                    return
+                if found.is_set():
+                    return
+        except Exception:
+            pass
+
+    threading.Thread(target=_stream, daemon=True).start()
+    return found.wait(timeout=timeout)

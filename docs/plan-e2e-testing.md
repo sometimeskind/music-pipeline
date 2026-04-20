@@ -196,10 +196,24 @@ image and API triggers instead of separate container runs.
 tests/
   test_service_smoke.py   — Layer 1  ✅ implemented (2026-04-20)
   test_service_api.py     — Layer 2  ✅ implemented (2026-04-20)
-  test_service_api.py     — Layer 3  (scan-via-service tests not yet added)
+  test_service_api.py     — Layer 3  ✅ implemented (2026-04-20)
   test_service_push.py    — Layer 4  (not yet implemented)
   test_service_e2e.py     — Layer 5  (not yet implemented, auth-required)
 ```
+
+### Layer 3 Implementation Notes (2026-04-20)
+
+- Uses `running_service_asis` fixture (asis beets config, no MusicBrainz/AcoustID)
+  to keep tests network-free and deterministic.
+- `_start_service()` context manager extracted from `running_service` to allow
+  both `running_service` (prod config) and `running_service_asis` (asis config)
+  without duplication.
+- For the playlist test, the zip must include both the `.spotdl` sentinel file
+  (at `spotdl/<name>.spotdl`) and the audio file (at `spotdl/<name>/<file>`).
+  Without the sentinel, `_regen_playlists()` skips m3u generation entirely.
+- `/scan/trigger` accepts 202 or 409 — if the debounced scan (30 s, armed by
+  the upload) somehow fires before the explicit trigger, the trigger sees 409.
+  Either way, `wait_for_log("==> Scan complete")` catches the result.
 
 ### conftest.py Changes
 
@@ -289,6 +303,7 @@ only the unified service image is deployed:
 1. ✅ **Layer 1 (smoke)** — implemented, 9 tests, all passing (commit `c69a10c`)
 2. ✅ **Layer 2 (HTTP API)** — implemented, 15 tests, all passing (commit `c69a10c`,
    path traversal fix `6c3a9c5`)
-3. **Layer 3 (scan-via-service)** — next up; add to `test_service_api.py`
+3. ✅ **Layer 3 (scan-via-service)** — implemented, 2 tests (commit `8187a64`);
+   uses `running_service_asis` fixture (asis beets config, no MusicBrainz calls)
 4. **Layer 4 (push)** — add `test_service_push.py`; rclone with local path remote
 5. **Layer 5 (full e2e)** — add `test_service_e2e.py`; requires manual setup
