@@ -214,6 +214,23 @@ tests/
 - `/scan/trigger` accepts 202 or 409 — if the debounced scan (30 s, armed by
   the upload) somehow fires before the explicit trigger, the trigger sees 409.
   Either way, `wait_for_log("==> Scan complete")` catches the result.
+- `beets_asis_config` keeps only `[music_pipeline]` in plugins — `fetchart`
+  makes network calls (musicbrainz.org / fanart.tv) even with `autotag: false`,
+  causing 60 s+ timeouts.
+- **Bugs found during Layer 3 implementation:**
+  1. Service Dockerfile copied scan source to `/build/scan/music_scan/` but
+     `config.yaml` `pluginpath` expected `/app/music_scan/`. Fixed by adding
+     `mkdir -p /app && cp -r /build/scan/music_scan /app/music_scan`.
+  2. `_forward_sigterm()` in `process.py` called `signal.signal()` which raises
+     `ValueError` in non-main threads. The orchestrator runs `scan.run()` in a
+     daemon thread, so every scan failed silently. Fixed by catching `ValueError`
+     and skipping SIGTERM forwarding when not in the main thread.
+  3. `wait_for_log()` used `container.logs(stream=True, follow=True)` in a loop
+     with a timeout check after each chunk — hangs indefinitely when the container
+     goes quiet. Fixed with a daemon thread + `threading.Event.wait(timeout=)`.
+  4. Scan CI was not building the service image before running integration tests,
+     so Layer 3 tests always ran against a potentially stale GHCR image. Fixed by
+     adding a "Build service image" step and passing `SERVICE_IMAGE=music-pipeline:ci-local`.
 
 ### conftest.py Changes
 

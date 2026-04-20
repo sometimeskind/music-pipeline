@@ -14,7 +14,6 @@ from __future__ import annotations
 import io
 import zipfile
 
-import pytest
 import requests
 
 from conftest import service_in_container, wait_for_log
@@ -253,9 +252,7 @@ def test_upload_and_scan_imports_track(running_service_asis, fixture_audio):
     )
 
     found = wait_for_log(svc["container"], "==> Scan complete", timeout=60)
-    if not found:
-        logs = svc["container"].logs(stdout=True, stderr=True).decode(errors="replace")
-        pytest.fail(f"Scan did not complete within 60s. Container logs:\n{logs}")
+    assert found, "Scan did not complete within 60s"
 
     exit_code, output = service_in_container(svc["container"], ["beet", "ls"])
     assert exit_code == 0
@@ -284,9 +281,7 @@ def test_upload_and_scan_generates_playlist(running_service_asis, fixture_audio)
     )
 
     found = wait_for_log(svc["container"], "==> Scan complete", timeout=60)
-    if not found:
-        logs = svc["container"].logs(stdout=True, stderr=True).decode(errors="replace")
-        pytest.fail(f"Scan did not complete within 60s. Container logs:\n{logs}")
+    assert found, "Scan did not complete within 60s"
 
     exit_code, output = service_in_container(
         svc["container"],
