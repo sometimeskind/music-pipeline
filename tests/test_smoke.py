@@ -7,7 +7,7 @@ scan container image starts, runs, and has all required dependencies intact.
 from __future__ import annotations
 
 from conftest import (
-    SCAN_IMAGE,
+    SERVICE_IMAGE,
     run_scan,
     scan_binds,
 )
@@ -35,7 +35,7 @@ def test_smoke_empty_inbox(docker_client, volumes):
 def test_fpcalc_installed(docker_client):
     """fpcalc binary (from libchromaprint-tools) is present and functional."""
     result = docker_client.containers.run(
-        SCAN_IMAGE,
+        SERVICE_IMAGE,
         command=["fpcalc", "-version"],
         remove=True,
     )
@@ -46,7 +46,7 @@ def test_fpcalc_installed(docker_client):
 def test_acoustid_importable(docker_client):
     """pyacoustid is importable and exposes the fingerprint function."""
     docker_client.containers.run(
-        SCAN_IMAGE,
+        SERVICE_IMAGE,
         command=["python", "-c", "import acoustid; assert hasattr(acoustid, 'fingerprint')"],
         remove=True,
     )
@@ -55,7 +55,7 @@ def test_acoustid_importable(docker_client):
 def test_beet_version_includes_chroma(docker_client, volumes):
     """beet version lists the chroma plugin — confirms it loaded without errors."""
     c = docker_client.containers.create(
-        SCAN_IMAGE,
+        SERVICE_IMAGE,
         entrypoint=["beet"],
         command=["version"],
         volumes=scan_binds(volumes),

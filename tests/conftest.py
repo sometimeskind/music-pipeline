@@ -1,8 +1,8 @@
 """Shared fixtures and helpers for container integration tests.
 
 Tests orchestrate real Docker containers from the host. The image under test is
-controlled by the SCAN_IMAGE / FETCH_IMAGE environment variables so CI can point
-them at a freshly-built local image before the push to GHCR.
+controlled by the SERVICE_IMAGE environment variable so CI can point tests at a
+freshly-built local image before the push to GHCR.
 """
 
 from __future__ import annotations
@@ -20,12 +20,6 @@ import yaml
 # Image names — override via environment for CI
 # ---------------------------------------------------------------------------
 
-SCAN_IMAGE = os.environ.get(
-    "SCAN_IMAGE", "ghcr.io/sometimeskind/music-pipeline-scan:latest"
-)
-FETCH_IMAGE = os.environ.get(
-    "FETCH_IMAGE", "ghcr.io/sometimeskind/music-pipeline-fetch:latest"
-)
 SERVICE_IMAGE = os.environ.get(
     "SERVICE_IMAGE", "ghcr.io/sometimeskind/music-pipeline:latest"
 )
@@ -92,7 +86,7 @@ def fixture_audio(docker_client, tmp_path_factory):
     dest_dir = tmp_path_factory.mktemp("audio")
     dest = dest_dir / _FIXTURE_FILENAME
     docker_client.containers.run(
-        SCAN_IMAGE,
+        SERVICE_IMAGE,
         command=[
             "ffmpeg",
             "-f", "lavfi", "-i", "anullsrc=r=44100:cl=stereo",
@@ -163,18 +157,6 @@ def scan_binds_test(vol_names: dict, config_path: str) -> dict:
     }
 
 
-def fetch_binds(vol_names: dict, playlists_conf: str | None = None) -> dict:
-    """Standard volume/mount mapping for the fetch container."""
-    return {
-        vol_names["music"]: {"bind": "/root/Music", "mode": "rw"},
-        SPOTDL_CONFIG: {"bind": "/root/.config/spotdl/config.json", "mode": "ro"},
-        (playlists_conf or PLAYLISTS_CONF): {
-            "bind": "/root/.config/music-pipeline/playlists.conf",
-            "mode": "ro",
-        },
-        str(COOKIES_PATH): {"bind": "/root/.config/spotdl/cookies.txt", "mode": "ro"},
-    }
-
 
 # ---------------------------------------------------------------------------
 # File injection helpers
@@ -189,7 +171,7 @@ def put_file(client, vol_names: dict, container_dir: str, local_path: Path) -> N
     buf.seek(0)
 
     helper = client.containers.create(
-        SCAN_IMAGE,
+        SERVICE_IMAGE,
         command=["sleep", "infinity"],
         volumes={vol_names["music"]: {"bind": "/root/Music", "mode": "rw"}},
     )
@@ -214,7 +196,7 @@ def put_bytes(
     buf.seek(0)
 
     helper = client.containers.create(
-        SCAN_IMAGE,
+        SERVICE_IMAGE,
         command=["sleep", "infinity"],
         volumes={vol_names["music"]: {"bind": "/root/Music", "mode": "rw"}},
     )
@@ -229,7 +211,7 @@ def put_bytes(
 def mkdir_in_volume(client, vol_names: dict, container_path: str) -> None:
     """Create a directory (and parents) inside the music volume."""
     client.containers.run(
-        SCAN_IMAGE,
+        SERVICE_IMAGE,
         command=["mkdir", "-p", container_path],
         volumes={vol_names["music"]: {"bind": "/root/Music", "mode": "rw"}},
         remove=True,
@@ -256,7 +238,7 @@ def run_scan(
     of the standalone scan image.
     """
     c = client.containers.create(
-        image or SCAN_IMAGE,
+        image or SERVICE_IMAGE,
         command=["music-scan"],
         environment={"PUSHGATEWAY_URL": "", **(env or {})},
         volumes=binds if binds is not None else scan_binds(vol_names),
@@ -268,31 +250,13 @@ def run_scan(
     return exit_code, logs
 
 
-def run_fetch(
-    client,
-    vol_names: dict,
-    env: dict,
-    playlists_conf: str | None = None,
-) -> tuple[int, str]:
-    """Run music-ingest to completion. Returns (exit_code, combined_logs)."""
-    c = client.containers.create(
-        FETCH_IMAGE,
-        environment={"PUSHGATEWAY_URL": "", **env},
-        volumes=fetch_binds(vol_names, playlists_conf=playlists_conf),
-    )
-    c.start()
-    exit_code = c.wait()["StatusCode"]
-    logs = c.logs(stdout=True, stderr=True).decode()
-    c.remove(force=True)
-    return exit_code, logs
-
 
 def ls_in_volume(
     client, vol_names: dict, container_path: str, image: str | None = None
 ) -> list[str]:
     """Return file paths found under container_path in the music volume."""
     result = client.containers.run(
-        image or SCAN_IMAGE,
+        image or SERVICE_IMAGE,
         command=["find", container_path, "-type", "f"],
         volumes={vol_names["music"]: {"bind": "/root/Music", "mode": "ro"}},
         remove=True,
@@ -308,7 +272,7 @@ def beet_ls(client, vol_names: dict, query: str, image: str | None = None) -> st
     source= are matched correctly.
     """
     c = client.containers.create(
-        image or SCAN_IMAGE,
+        image or SERVICE_IMAGE,
         entrypoint=["beet"],
         command=["ls", query],
         volumes=scan_binds(vol_names),
@@ -325,7 +289,7 @@ def cat_in_volume(
 ) -> str:
     """Return the text content of a file in the music volume."""
     result = client.containers.run(
-        image or SCAN_IMAGE,
+        image or SERVICE_IMAGE,
         command=["cat", container_path],
         volumes={vol_names["music"]: {"bind": "/root/Music", "mode": "ro"}},
         remove=True,

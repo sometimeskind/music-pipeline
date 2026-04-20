@@ -12,7 +12,7 @@ from __future__ import annotations
 import json
 
 from conftest import (
-    SCAN_IMAGE,
+    SERVICE_IMAGE,
     beet_ls,
     cat_in_volume,
     ls_in_volume,
@@ -54,7 +54,7 @@ def test_file_drop_noise_goes_to_quarantine(docker_client, volumes):
     and stays there — the asis pass skips files without sufficient embedded metadata."""
     # Generate a short noise file inside the container using ffmpeg
     docker_client.containers.run(
-        SCAN_IMAGE,
+        SERVICE_IMAGE,
         command=[
             "ffmpeg", "-f", "lavfi", "-i", "anoisesrc=d=5",
             "-ar", "44100", "-y", "/root/Music/inbox/noise.mp3",

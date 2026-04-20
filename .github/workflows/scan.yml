@@ -110,7 +110,7 @@ jobs:
       - name: Integration tests (scan)
         run: |
           pip install -r tests/requirements.txt
-          SCAN_IMAGE=music-pipeline-scan:ci-local SERVICE_IMAGE=music-pipeline:ci-local pytest tests/ -m "not auth" -v
+          SERVICE_IMAGE=music-pipeline:ci-local pytest tests/ -m "not auth" -v
 
       - name: Push scan image to GHCR
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
