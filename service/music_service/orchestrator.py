@@ -14,6 +14,7 @@ from watchdog.events import FileCreatedEvent, FileSystemEventHandler
 from watchdog.observers import Observer
 
 import music_fetch.ingest as ingest
+import music_scan.reconcile as reconcile
 import music_scan.scan as scan
 from music_scan.navidrome import trigger_scan
 
@@ -63,6 +64,8 @@ class Orchestrator:
         """Run scan — caller must already hold self._lock."""
         logger.info("==> Scan starting")
         scan.run(pending)
+        logger.info("==> Reconciling snapshots against library")
+        reconcile.reconcile_all()
         pushed = self._push_library()
         if pushed:
             trigger_scan()
