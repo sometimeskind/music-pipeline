@@ -36,6 +36,10 @@ class MusicLibrary:
         """All items whose source flexible-attribute matches *source*."""
         return list(self._lib.items(f"source:{source}"))
 
+    def item_count(self) -> int:
+        """Return the total number of items in the library."""
+        return sum(1 for _ in self._lib.items())
+
     def items_added_since(self, since: float) -> list[tuple[str, str]]:
         """Return (title, artist) for items added to the library after *since* (Unix timestamp)."""
         return [
