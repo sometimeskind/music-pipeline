@@ -96,7 +96,7 @@ def _jitter() -> None:
         time.sleep(delay)
 
 
-def _reconcile_playlists() -> list[str]:
+def reconcile_playlists() -> list[str]:
     """Reconcile disk state with playlists.conf; return list of removed source names.
 
     - Provisions new playlist entries (spotdl save for entries without .spotdl).
@@ -180,6 +180,130 @@ def _collect_removals(
         pending.append(RemovedTrack(title=title, artist=artist, source=playlist_name))
 
 
+def sync_playlists(
+    remove_sources: list[str],
+    metrics: IngestMetrics,
+    start: float | None = None,
+) -> PendingRemovals:
+    """Run the spotdl download loop for all active playlists. Returns pending removals.
+
+    *start* is the monotonic time the overall run began, used for soft-timeout
+    accounting.  Defaults to now if not provided (standalone use).
+    """
+    if start is None:
+        start = time.monotonic()
+
+    track_limit_str = os.environ.get("SYNC_TRACK_LIMIT", "")
+    session_budget: int | None = None
+    if track_limit_str.strip():
+        try:
+            session_budget = int(track_limit_str.strip())
+        except ValueError:
+            logger.error("SYNC_TRACK_LIMIT must be a positive integer, got %r — ignoring", track_limit_str)
+    if session_budget is not None and session_budget <= 0:
+        logger.error("SYNC_TRACK_LIMIT must be a positive integer, got %d — ignoring", session_budget)
+        session_budget = None
+    remaining: int | None = session_budget
+
+    if session_budget is not None:
+        logger.info("Session track budget: %d new tracks across all playlists", session_budget)
+
+    timeout_str = os.environ.get("SYNC_TIMEOUT_SECONDS", "")
+    soft_timeout: int | None = None
+    if timeout_str.strip():
+        try:
+            soft_timeout = int(timeout_str.strip())
+        except ValueError:
+            logger.error("SYNC_TIMEOUT_SECONDS must be a positive integer, got %r — ignoring", timeout_str)
+    if soft_timeout is not None and soft_timeout <= 0:
+        logger.error("SYNC_TIMEOUT_SECONDS must be a positive integer, got %d — ignoring", soft_timeout)
+        soft_timeout = None
+
+    if soft_timeout is not None:
+        logger.info("Soft timeout: %ds — will stop before Kubernetes deadline fires", soft_timeout)
+
+    spotdl_files = sorted(SPOTDL_DIR.glob("*.spotdl"))
+    if not spotdl_files:
+        logger.info("No .spotdl files found in %s", SPOTDL_DIR)
+
+    pending_removals: list[RemovedTrack] = []
+
+    for spotdl_file in spotdl_files:
+        name = spotdl_file.stem
+
+        # .nosync: skip spotdl sync for frozen playlists
+        if (SPOTDL_DIR / f"{name}.nosync").exists():
+            logger.info("==> Skipping sync for static playlist: %s (.nosync present)", name)
+            metrics.playlists_skipped += 1
+            metrics.playlists_total += 1
+            continue
+
+        # Budget exhausted: defer remaining playlists to the next session.
+        if remaining is not None and remaining <= 0:
+            logger.info("==> Track budget exhausted — deferring %s to next session", name)
+            metrics.playlists_deferred += 1
+            metrics.playlists_total += 1
+            continue
+
+        # Soft timeout: stop before the Kubernetes activeDeadlineSeconds fires.
+        if _deadline_reached(time.monotonic() - start, soft_timeout):
+            logger.info(
+                "==> Soft timeout reached (%ds/%ds) — deferring %s to next session",
+                int(time.monotonic() - start),
+                soft_timeout,
+                name,
+            )
+            metrics.playlists_deferred += 1
+            metrics.playlists_total += 1
+            continue
+
+        # Validate JSON before we attempt a sync
+        try:
+            with open(spotdl_file, encoding="utf-8") as fh:
+                sync_data = json.load(fh)
+        except json.JSONDecodeError:
+            logger.warning("WARNING: %s is not valid JSON — skipping", spotdl_file)
+            metrics.playlists_total += 1
+            continue
+
+        old_songs: list[dict] = sync_data if isinstance(sync_data, list) else []
+
+        logger.info("==> Syncing playlist: %s", name)
+        metrics.playlists_total += 1
+        output_dir = SPOTDL_DIR / name
+        output_dir.mkdir(parents=True, exist_ok=True)
+
+        try:
+            removed_urls, tracks_sent = sync_playlist(
+                spotdl_file=spotdl_file,
+                output_dir=output_dir,
+                cookie_file=COOKIE_FILE,
+                track_limit=remaining,
+            )
+        except Exception as exc:
+            reason = classify_failure(str(exc))
+            logger.error(
+                "ERROR: spotdl sync failed for %s (reason=%s): %s", name, reason, exc
+            )
+            metrics.success = False
+            metrics.failure_reason = reason
+            if reason == "auth_youtube":
+                metrics.cookies_expired = True
+            raise
+
+        metrics.tracks_downloaded += tracks_sent
+        if remaining is not None:
+            remaining -= tracks_sent
+
+        _collect_removals(pending_removals, removed_urls, old_songs, name)
+
+        # Brief pause between playlists — avoid hammering Spotify/YouTube APIs.
+        time.sleep(5)
+
+    logger.info("==> music-ingest complete. Run music-scan for local import and playlist generation.")
+    return PendingRemovals(tracks=pending_removals, remove_sources=remove_sources)
+
+
 def run() -> PendingRemovals:
     """Execute the full ingest pipeline, push metrics on completion, return pending removals."""
     metrics = IngestMetrics()
@@ -198,117 +322,17 @@ def run() -> PendingRemovals:
     try:
         logger.info("==> music-ingest starting")
 
-        remove_sources = _reconcile_playlists()
+        logger.info("==> Reconciling playlists...")
+        try:
+            remove_sources = reconcile_playlists()
+        except Exception:
+            metrics.success = False
+            metrics.failure_reason = "reconcile_error"
+            logger.exception("Reconciliation step failed")
+            raise
 
-        track_limit_str = os.environ.get("SYNC_TRACK_LIMIT", "")
-        session_budget: int | None = None
-        if track_limit_str.strip():
-            try:
-                session_budget = int(track_limit_str.strip())
-            except ValueError:
-                logger.error("SYNC_TRACK_LIMIT must be a positive integer, got %r — ignoring", track_limit_str)
-        if session_budget is not None and session_budget <= 0:
-            logger.error("SYNC_TRACK_LIMIT must be a positive integer, got %d — ignoring", session_budget)
-            session_budget = None
-        remaining: int | None = session_budget
-
-        if session_budget is not None:
-            logger.info("Session track budget: %d new tracks across all playlists", session_budget)
-
-        timeout_str = os.environ.get("SYNC_TIMEOUT_SECONDS", "")
-        soft_timeout: int | None = None
-        if timeout_str.strip():
-            try:
-                soft_timeout = int(timeout_str.strip())
-            except ValueError:
-                logger.error("SYNC_TIMEOUT_SECONDS must be a positive integer, got %r — ignoring", timeout_str)
-        if soft_timeout is not None and soft_timeout <= 0:
-            logger.error("SYNC_TIMEOUT_SECONDS must be a positive integer, got %d — ignoring", soft_timeout)
-            soft_timeout = None
-
-        if soft_timeout is not None:
-            logger.info("Soft timeout: %ds — will stop before Kubernetes deadline fires", soft_timeout)
-
-        spotdl_files = sorted(SPOTDL_DIR.glob("*.spotdl"))
-        if not spotdl_files:
-            logger.info("No .spotdl files found in %s", SPOTDL_DIR)
-
-        pending_removals: list[RemovedTrack] = []
-
-        for spotdl_file in spotdl_files:
-            name = spotdl_file.stem
-
-            # .nosync: skip spotdl sync for frozen playlists
-            if (SPOTDL_DIR / f"{name}.nosync").exists():
-                logger.info("==> Skipping sync for static playlist: %s (.nosync present)", name)
-                metrics.playlists_skipped += 1
-                metrics.playlists_total += 1
-                continue
-
-            # Budget exhausted: defer remaining playlists to the next session.
-            if remaining is not None and remaining <= 0:
-                logger.info("==> Track budget exhausted — deferring %s to next session", name)
-                metrics.playlists_deferred += 1
-                metrics.playlists_total += 1
-                continue
-
-            # Soft timeout: stop before the Kubernetes activeDeadlineSeconds fires.
-            if _deadline_reached(time.monotonic() - start, soft_timeout):
-                logger.info(
-                    "==> Soft timeout reached (%ds/%ds) — deferring %s to next session",
-                    int(time.monotonic() - start),
-                    soft_timeout,
-                    name,
-                )
-                metrics.playlists_deferred += 1
-                metrics.playlists_total += 1
-                continue
-
-            # Validate JSON before we attempt a sync
-            try:
-                with open(spotdl_file, encoding="utf-8") as fh:
-                    sync_data = json.load(fh)
-            except json.JSONDecodeError:
-                logger.warning("WARNING: %s is not valid JSON — skipping", spotdl_file)
-                metrics.playlists_total += 1
-                continue
-
-            old_songs: list[dict] = sync_data if isinstance(sync_data, list) else []
-
-            logger.info("==> Syncing playlist: %s", name)
-            metrics.playlists_total += 1
-            output_dir = SPOTDL_DIR / name
-            output_dir.mkdir(parents=True, exist_ok=True)
-
-            try:
-                removed_urls, tracks_sent = sync_playlist(
-                    spotdl_file=spotdl_file,
-                    output_dir=output_dir,
-                    cookie_file=COOKIE_FILE,
-                    track_limit=remaining,
-                )
-            except Exception as exc:
-                reason = classify_failure(str(exc))
-                logger.error(
-                    "ERROR: spotdl sync failed for %s (reason=%s): %s", name, reason, exc
-                )
-                metrics.success = False
-                metrics.failure_reason = reason
-                if reason == "auth_youtube":
-                    metrics.cookies_expired = True
-                raise
-
-            metrics.tracks_downloaded += tracks_sent
-            if remaining is not None:
-                remaining -= tracks_sent
-
-            _collect_removals(pending_removals, removed_urls, old_songs, name)
-
-            # Brief pause between playlists — avoid hammering Spotify/YouTube APIs.
-            time.sleep(5)
-
-        logger.info("==> music-ingest complete. Run music-scan for local import and playlist generation.")
-        return PendingRemovals(tracks=pending_removals, remove_sources=remove_sources)
+        logger.info("==> Syncing playlists...")
+        return sync_playlists(remove_sources, metrics, start=start)
 
     except SystemExit:
         raise

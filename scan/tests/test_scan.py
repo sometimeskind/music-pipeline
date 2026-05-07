@@ -11,7 +11,7 @@ from music_fetch.ingest import PendingRemovals, RemovedTrack
 
 
 def _relative_path(track_path: Path, playlists_dir: Path) -> str:
-    """Replicate the relative-path logic used in _regen_playlists."""
+    """Replicate the relative-path logic used in regen_playlists."""
     return os.path.relpath(track_path, playlists_dir)
 
 
@@ -247,13 +247,58 @@ def test_run_pending_removals_failure_continues_to_import(tmp_path: Path) -> Non
     assert import_called, "import should proceed even when pending-removals raises"
 
 
+def test_run_asis_import_failure_continues_to_beet_update(tmp_path: Path) -> None:
+    """A failure in import_asis_from_quarantine is logged but does not suppress beet update."""
+    from music_scan import scan
+
+    update_called = []
+
+    with mock.patch("music_scan.scan.import_asis_from_quarantine", side_effect=RuntimeError("staging error")), \
+         mock.patch("music_scan.scan.MusicLibrary", return_value=_make_mock_lib()), \
+         mock.patch("music_scan.scan.run_beet_import"), \
+         mock.patch("music_scan.scan.run_beet_update", side_effect=lambda: update_called.append(True)), \
+         mock.patch("music_scan.scan.INBOX", tmp_path), \
+         mock.patch("music_scan.scan.SPOTDL_DIR", tmp_path), \
+         mock.patch("music_scan.scan.QUARANTINE", tmp_path), \
+         mock.patch("music_scan.scan.PLAYLISTS", tmp_path), \
+         mock.patch("music_scan.scan.LIBRARY_DIR", tmp_path), \
+         mock.patch("music_scan.scan.ScanMetrics"), \
+         mock.patch("music_scan.scan.trigger_scan"):
+        scan.run(pending=None)
+
+    assert update_called, "beet update should proceed even when asis-import raises"
+
+
+def test_run_library_update_failure_continues_to_regen_playlists(tmp_path: Path) -> None:
+    """A failure in update_library is logged but does not suppress playlist regeneration."""
+    from music_scan import scan
+
+    regen_called = []
+
+    with mock.patch("music_scan.scan.update_library", side_effect=RuntimeError("db gone")), \
+         mock.patch("music_scan.scan.MusicLibrary", return_value=_make_mock_lib()), \
+         mock.patch("music_scan.scan.run_beet_import"), \
+         mock.patch("music_scan.scan.regen_playlists", side_effect=lambda: regen_called.append(True)), \
+         mock.patch("music_scan.scan.import_asis_from_quarantine", return_value=0), \
+         mock.patch("music_scan.scan.INBOX", tmp_path), \
+         mock.patch("music_scan.scan.SPOTDL_DIR", tmp_path), \
+         mock.patch("music_scan.scan.QUARANTINE", tmp_path), \
+         mock.patch("music_scan.scan.PLAYLISTS", tmp_path), \
+         mock.patch("music_scan.scan.LIBRARY_DIR", tmp_path), \
+         mock.patch("music_scan.scan.ScanMetrics"), \
+         mock.patch("music_scan.scan.trigger_scan"):
+        scan.run(pending=None)
+
+    assert regen_called, "regen_playlists should proceed even when update_library raises"
+
+
 # ---------------------------------------------------------------------------
-# _regen_playlists
+# regen_playlists
 # ---------------------------------------------------------------------------
 
 
 def test_regen_playlists_writes_m3u_with_relative_paths(tmp_path: Path) -> None:
-    from music_scan.scan import _regen_playlists
+    from music_scan.scan import regen_playlists
 
     spotdl_dir = tmp_path / "spotdl"
     spotdl_dir.mkdir()
@@ -273,7 +318,7 @@ def test_regen_playlists_writes_m3u_with_relative_paths(tmp_path: Path) -> None:
          mock.patch("music_scan.scan.PLAYLISTS", playlists_dir), \
          mock.patch("music_scan.scan.LIBRARY_DB", tmp_path / "library.db"), \
          mock.patch("music_scan.scan.MusicLibrary", return_value=mock_lib):
-        _regen_playlists()
+        regen_playlists()
 
     m3u = playlists_dir / "my-playlist.m3u"
     assert m3u.exists()
@@ -284,7 +329,7 @@ def test_regen_playlists_writes_m3u_with_relative_paths(tmp_path: Path) -> None:
 
 
 def test_regen_playlists_empty_playlist_writes_empty_m3u(tmp_path: Path) -> None:
-    from music_scan.scan import _regen_playlists
+    from music_scan.scan import regen_playlists
 
     spotdl_dir = tmp_path / "spotdl"
     spotdl_dir.mkdir()
@@ -302,7 +347,7 @@ def test_regen_playlists_empty_playlist_writes_empty_m3u(tmp_path: Path) -> None
          mock.patch("music_scan.scan.PLAYLISTS", playlists_dir), \
          mock.patch("music_scan.scan.LIBRARY_DB", tmp_path / "library.db"), \
          mock.patch("music_scan.scan.MusicLibrary", return_value=mock_lib):
-        _regen_playlists()
+        regen_playlists()
 
     m3u = playlists_dir / "empty-playlist.m3u"
     assert m3u.exists()
