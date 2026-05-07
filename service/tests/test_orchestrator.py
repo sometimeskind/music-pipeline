@@ -67,7 +67,8 @@ def test_run_fetch_calls_ingest_then_scan_with_pending():
     mock_pending = MagicMock()
 
     with patch("music_service.orchestrator.ingest") as mock_ingest, \
-         patch("music_service.orchestrator.scan") as mock_scan:
+         patch("music_service.orchestrator.scan") as mock_scan, \
+         patch("music_service.orchestrator.reconcile"):
         mock_ingest.run.return_value = mock_pending
         orc.run_fetch()
         mock_ingest.run.assert_called_once()
@@ -78,14 +79,16 @@ def test_run_scan_calls_scan_run():
     orc = Orchestrator(debounce_delay=30.0)
     mock_pending = MagicMock()
 
-    with patch("music_service.orchestrator.scan") as mock_scan:
+    with patch("music_service.orchestrator.scan") as mock_scan, \
+         patch("music_service.orchestrator.reconcile"):
         orc.run_scan(mock_pending)
         mock_scan.run.assert_called_once_with(mock_pending)
 
 
 def test_run_scan_no_pending():
     orc = Orchestrator(debounce_delay=30.0)
-    with patch("music_service.orchestrator.scan") as mock_scan:
+    with patch("music_service.orchestrator.scan") as mock_scan, \
+         patch("music_service.orchestrator.reconcile"):
         orc.run_scan()
         mock_scan.run.assert_called_once_with(None)
 
@@ -198,18 +201,20 @@ def test_push_library_uses_default_paths_when_env_unset(monkeypatch):
 
 
 def test_run_scan_locked_calls_scan_then_push_then_trigger_in_order(monkeypatch):
-    """scan.run → _push_library → trigger_scan must execute in that order when push succeeds."""
+    """scan.run → reconcile → _push_library → trigger_scan must execute in that order."""
     call_order: list[str] = []
 
     orc = Orchestrator()
 
     with patch("music_service.orchestrator.scan") as mock_scan, \
+         patch("music_service.orchestrator.reconcile") as mock_reconcile, \
          patch.object(orc, "_push_library", return_value=True, side_effect=lambda: call_order.append("push") or True), \
          patch("music_service.orchestrator.trigger_scan", side_effect=lambda: call_order.append("trigger")):
         mock_scan.run.side_effect = lambda pending=None: call_order.append("scan")
+        mock_reconcile.reconcile_all.side_effect = lambda: call_order.append("reconcile")
         orc._run_scan_locked()
 
-    assert call_order == ["scan", "push", "trigger"]
+    assert call_order == ["scan", "reconcile", "push", "trigger"]
 
 
 def test_run_scan_locked_always_triggers_scan_regardless_of_remote(monkeypatch):
@@ -220,10 +225,12 @@ def test_run_scan_locked_always_triggers_scan_regardless_of_remote(monkeypatch):
     orc = Orchestrator()
 
     with patch("music_service.orchestrator.scan") as mock_scan, \
+         patch("music_service.orchestrator.reconcile") as mock_reconcile, \
          patch.object(orc, "_push_library", return_value=False, side_effect=lambda: call_order.append("push") or False), \
          patch("music_service.orchestrator.trigger_scan", side_effect=lambda: call_order.append("trigger")):
         mock_scan.run.side_effect = lambda pending=None: call_order.append("scan")
+        mock_reconcile.reconcile_all.side_effect = lambda: call_order.append("reconcile")
         orc._run_scan_locked()
 
     # trigger_scan is skipped when nothing was pushed
-    assert call_order == ["scan", "push"]
+    assert call_order == ["scan", "reconcile", "push"]
