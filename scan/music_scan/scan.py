@@ -18,6 +18,7 @@ from pathlib import Path
 from music_fetch.ingest import PendingRemovals
 from music_scan.library import MusicLibrary
 from music_scan.metrics import ScanMetrics
+from music_scan.navidrome import trigger_scan
 from music_scan.process import run_beet_import, run_beet_update
 
 logger = logging.getLogger(__name__)
@@ -246,13 +247,21 @@ def run(pending: PendingRemovals | None = None) -> None:
         quarantined_after = _count_quarantine()
         metrics.quarantined_tracks = max(0, quarantined_after - quarantined_before)
 
-        logger.info("==> music-scan complete")
+        logger.info("==> music-scan import complete")
 
     except Exception:
         metrics.success = False
         metrics.failure_reason = "unexpected_error"
         logger.exception("music-scan failed")
         raise
+    else:
+        try:
+            trigger_scan()
+        except Exception as exc:
+            metrics.success = False
+            metrics.failure_reason = "navidrome_trigger_failed"
+            logger.error("Navidrome rescan trigger failed — tracks may not appear in Navidrome: %s", exc)
+            raise
     finally:
         metrics.duration_seconds = int(time.monotonic() - start)
         metrics.push()

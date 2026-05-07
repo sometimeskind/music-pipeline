@@ -22,8 +22,8 @@ def test_smoke_empty_inbox(docker_client, volumes):
     """Scan against empty volumes exits 0 and reaches the completion log line."""
     exit_code, logs = run_scan(docker_client, volumes)
     assert exit_code == 0, f"music-scan exited {exit_code}. Logs:\n{logs}"
-    assert "music-scan complete" in logs, (
-        "Expected 'music-scan complete' in logs. Logs:\n" + logs
+    assert "music-scan import complete" in logs, (
+        "Expected 'music-scan import complete' in logs. Logs:\n" + logs
     )
 
 

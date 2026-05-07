@@ -160,6 +160,43 @@ def test_apply_pending_removals_returns_total_count() -> None:
     assert count == 3
 
 
+def test_run_trigger_scan_failure_sets_success_false(tmp_path: Path) -> None:
+    """When trigger_scan raises, last_run_success=0 is pushed and the exception propagates."""
+    from music_scan import scan
+
+    captured: list = []
+
+    class FakeMetrics:
+        def __init__(self):
+            self.success = True
+            self.failure_reason = ""
+            self.tracks_imported = 0
+            self.tracks_removed = 0
+            self.quarantined_tracks = 0
+            self.duration_seconds = 0
+            captured.append(self)
+
+        def push(self):
+            pass
+
+    with mock.patch("music_scan.scan.MusicLibrary", return_value=_make_mock_lib()), \
+         mock.patch("music_scan.scan.run_beet_import"), \
+         mock.patch("music_scan.scan.run_beet_update"), \
+         mock.patch("music_scan.scan._move_asis_eligible", return_value=0), \
+         mock.patch("music_scan.scan.INBOX", tmp_path), \
+         mock.patch("music_scan.scan.SPOTDL_DIR", tmp_path), \
+         mock.patch("music_scan.scan.QUARANTINE", tmp_path), \
+         mock.patch("music_scan.scan.PLAYLISTS", tmp_path), \
+         mock.patch("music_scan.scan.ScanMetrics", FakeMetrics), \
+         mock.patch("music_scan.scan.trigger_scan", side_effect=RuntimeError("connection refused")):
+        with pytest.raises(RuntimeError, match="connection refused"):
+            scan.run(pending=None)
+
+    assert len(captured) == 1
+    assert captured[0].success is False
+    assert captured[0].failure_reason == "navidrome_trigger_failed"
+
+
 def test_run_with_pending_none_skips_apply(tmp_path: Path) -> None:
     """run(pending=None) never calls _apply_pending_removals."""
     from music_scan import scan
