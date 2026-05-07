@@ -18,6 +18,14 @@ logger = logging.getLogger(__name__)
 _spotdl_instance = None  # process-wide singleton (SpotifyClient + ProgressHandler can't be reinitialised)
 
 
+def _song_label(song) -> str:
+    """Format 'Artist - Title' from a Song or Song-like object for log output."""
+    j = song.json
+    name = j.get("name", "?")
+    artists = j.get("artists", [])
+    return f"{artists[0] if artists else '?'} - {name}"
+
+
 def _make_downloader_settings(
     cookie_file: Path,
     output_dir: Path | None = None,
@@ -140,21 +148,40 @@ def sync_playlist(
     if removed_urls:
         logger.info("%d track(s) removed from Spotify playlist", len(removed_urls))
 
+    # Log SKIP for tracks already in the snapshot (not re-attempted this session).
+    for song in new_songs:
+        if song.url in old_urls:
+            logger.info("[SKIP] %s", _song_label(song))
+
     # Identify tracks not yet downloaded (absent from the previous snapshot).
     truly_new = [s for s in new_songs if s.url not in old_urls]
     total_new = len(truly_new)
 
     if track_limit is not None and total_new > track_limit:
+        deferred = truly_new[track_limit:]
+        truly_new = truly_new[:track_limit]
         logger.info(
             "Track budget: downloading %d of %d new track(s) this session (%d deferred to next run)",
             track_limit,
             total_new,
             total_new - track_limit,
         )
-        truly_new = truly_new[:track_limit]
+        for song in deferred:
+            logger.info("[DEFER] %s", _song_label(song))
 
     # Download only the new batch; existing tracks are already on disk (overwrite=skip).
     results = spotdl_obj.download_songs(truly_new)
+
+    # Log per-track outcomes.
+    # MISS vs FAIL: if song.download_url is None, spotdl found no YouTube source (LookupError);
+    # if it's set, a source was found but the download itself failed (AudioProviderError).
+    for song, path in results:
+        if path is not None:
+            logger.info("[OK]   %s", _song_label(song))
+        elif getattr(song, "download_url", None):
+            logger.info("[FAIL] %s → download failed", _song_label(song))
+        else:
+            logger.info("[MISS] %s → no source found", _song_label(song))
 
     # Only persist songs that were actually downloaded (path is not None).
     # Songs where spotdl returned None failed silently — exclude them from the snapshot

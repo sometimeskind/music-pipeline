@@ -45,10 +45,11 @@ def test_save_playlist_overwrites_existing_file(tmp_path: Path) -> None:
 # ---------------------------------------------------------------------------
 
 
-def _make_mock_song(url: str, title: str = "Song") -> mock.Mock:
+def _make_mock_song(url: str, title: str = "Song", download_url: str | None = None) -> mock.Mock:
     song = mock.Mock()
     song.url = url
     song.json = {"url": url, "name": title, "artists": ["Artist"]}
+    song.download_url = download_url
     return song
 
 
@@ -219,3 +220,122 @@ def test_sync_playlist_failed_downloads_not_persisted(tmp_path: Path) -> None:
     # Failed tracks (1 and 3) must be absent — they will be retried next run
     assert "https://open.spotify.com/track/1" not in persisted_urls
     assert "https://open.spotify.com/track/3" not in persisted_urls
+
+
+# ---------------------------------------------------------------------------
+# Per-track outcome logging
+# ---------------------------------------------------------------------------
+
+
+def _setup_sync(tmp_path: Path):
+    """Return (spotdl_file, output_dir, cookie_file) pointing into tmp_path."""
+    spotdl_file = tmp_path / "mypl.spotdl"
+    output_dir = tmp_path / "mypl"
+    output_dir.mkdir()
+    cookie_file = tmp_path / "cookies.txt"
+    return spotdl_file, output_dir, cookie_file
+
+
+def test_outcome_ok_logged_for_successful_download(tmp_path: Path, caplog) -> None:
+    """[OK] is logged for each track successfully downloaded."""
+    import logging
+    spotdl_file, output_dir, cookie_file = _setup_sync(tmp_path)
+    save_playlist(url="https://open.spotify.com/playlist/abc", spotdl_file=spotdl_file)
+
+    song = _make_mock_song("https://open.spotify.com/track/1", title="Break Right")
+    mock_spotdl = mock.Mock()
+    mock_spotdl.search.return_value = [song]
+    mock_spotdl.download_songs.return_value = [(song, Path("/tmp/1.m4a"))]
+
+    with mock.patch("music_fetch.spotdl_ops._make_spotdl", return_value=mock_spotdl), \
+         caplog.at_level(logging.INFO, logger="music_fetch.spotdl_ops"):
+        sync_playlist(spotdl_file=spotdl_file, output_dir=output_dir, cookie_file=cookie_file)
+
+    assert "[OK]" in caplog.text
+    assert "Break Right" in caplog.text
+
+
+def test_outcome_skip_logged_for_known_track(tmp_path: Path, caplog) -> None:
+    """[SKIP] is logged for tracks already present in the snapshot."""
+    import logging
+    spotdl_file, output_dir, cookie_file = _setup_sync(tmp_path)
+    existing = _make_mock_song("https://open.spotify.com/track/1", title="Protocol")
+    spotdl_file.write_text(
+        json.dumps({"type": "sync", "query": ["https://open.spotify.com/playlist/abc"], "songs": [existing.json]}),
+        encoding="utf-8",
+    )
+
+    mock_spotdl = mock.Mock()
+    mock_spotdl.search.return_value = [existing]
+    mock_spotdl.download_songs.return_value = []
+
+    with mock.patch("music_fetch.spotdl_ops._make_spotdl", return_value=mock_spotdl), \
+         caplog.at_level(logging.INFO, logger="music_fetch.spotdl_ops"):
+        sync_playlist(spotdl_file=spotdl_file, output_dir=output_dir, cookie_file=cookie_file)
+
+    assert "[SKIP]" in caplog.text
+    assert "Protocol" in caplog.text
+
+
+def test_outcome_miss_logged_when_no_source_found(tmp_path: Path, caplog) -> None:
+    """[MISS] is logged when spotdl returns path=None and download_url is unset (LookupError)."""
+    import logging
+    spotdl_file, output_dir, cookie_file = _setup_sync(tmp_path)
+    save_playlist(url="https://open.spotify.com/playlist/abc", spotdl_file=spotdl_file)
+
+    song = _make_mock_song("https://open.spotify.com/track/1", title="Three Drums", download_url=None)
+    mock_spotdl = mock.Mock()
+    mock_spotdl.search.return_value = [song]
+    mock_spotdl.download_songs.return_value = [(song, None)]
+
+    with mock.patch("music_fetch.spotdl_ops._make_spotdl", return_value=mock_spotdl), \
+         caplog.at_level(logging.INFO, logger="music_fetch.spotdl_ops"):
+        sync_playlist(spotdl_file=spotdl_file, output_dir=output_dir, cookie_file=cookie_file)
+
+    assert "[MISS]" in caplog.text
+    assert "Three Drums" in caplog.text
+    assert "[FAIL]" not in caplog.text
+
+
+def test_outcome_fail_logged_when_download_error(tmp_path: Path, caplog) -> None:
+    """[FAIL] is logged when spotdl returns path=None but download_url is set (AudioProviderError)."""
+    import logging
+    spotdl_file, output_dir, cookie_file = _setup_sync(tmp_path)
+    save_playlist(url="https://open.spotify.com/playlist/abc", spotdl_file=spotdl_file)
+
+    song = _make_mock_song(
+        "https://open.spotify.com/track/1",
+        title="Errored Track",
+        download_url="https://www.youtube.com/watch?v=abc",
+    )
+    mock_spotdl = mock.Mock()
+    mock_spotdl.search.return_value = [song]
+    mock_spotdl.download_songs.return_value = [(song, None)]
+
+    with mock.patch("music_fetch.spotdl_ops._make_spotdl", return_value=mock_spotdl), \
+         caplog.at_level(logging.INFO, logger="music_fetch.spotdl_ops"):
+        sync_playlist(spotdl_file=spotdl_file, output_dir=output_dir, cookie_file=cookie_file)
+
+    assert "[FAIL]" in caplog.text
+    assert "Errored Track" in caplog.text
+    assert "[MISS]" not in caplog.text
+
+
+def test_outcome_defer_logged_for_budget_limited_tracks(tmp_path: Path, caplog) -> None:
+    """[DEFER] is logged for tracks not attempted due to track budget."""
+    import logging
+    spotdl_file, output_dir, cookie_file = _setup_sync(tmp_path)
+    save_playlist(url="https://open.spotify.com/playlist/abc", spotdl_file=spotdl_file)
+
+    songs = [_make_mock_song(f"https://open.spotify.com/track/{i}", title=f"Track {i}") for i in range(3)]
+    mock_spotdl = mock.Mock()
+    mock_spotdl.search.return_value = songs
+    mock_spotdl.download_songs.return_value = [(songs[0], Path("/tmp/0.m4a"))]
+
+    with mock.patch("music_fetch.spotdl_ops._make_spotdl", return_value=mock_spotdl), \
+         caplog.at_level(logging.INFO, logger="music_fetch.spotdl_ops"):
+        sync_playlist(spotdl_file=spotdl_file, output_dir=output_dir, cookie_file=cookie_file, track_limit=1)
+
+    assert "[DEFER]" in caplog.text
+    assert "Track 1" in caplog.text
+    assert "Track 2" in caplog.text
