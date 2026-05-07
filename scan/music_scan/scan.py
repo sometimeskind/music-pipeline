@@ -29,6 +29,7 @@ QUARANTINE = Path("/root/Music/quarantine")
 PLAYLISTS = Path("/root/Music/playlists")
 INBOX = Path("/root/Music/inbox")
 LIBRARY_DB = Path("/root/.config/beets/library.db")
+LIBRARY_DIR = Path("/root/Music/staging")
 
 
 _STOP_WORDS = frozenset({"the", "and", "for", "feat", "ft", "vs", "with", "a", "an", "of", "in", "on"})
@@ -78,6 +79,12 @@ def _check_import_names(inbox_stems: list[str], imported: list[tuple[str, str]])
             logger.warning("  !! %s — %s  (best inbox overlap: %.0f%%)", title, artist, score * 100)
     else:
         logger.info("==> Name check OK: all %d imported tracks resemble their inbox source files", len(imported))
+
+
+def _count_library_audio(library_dir: Path) -> int:
+    if not library_dir.is_dir():
+        return 0
+    return sum(1 for f in library_dir.rglob("*") if f.is_file() and f.suffix.lower() in AUDIO_EXTS)
 
 
 def _count_quarantine() -> int:
@@ -239,7 +246,19 @@ def run(pending: PendingRemovals | None = None) -> None:
         metrics.tracks_imported = len(imported) + len(asis_imported)
 
         logger.info("==> Refreshing library metadata...")
-        run_beet_update()
+        lib_audio_count = _count_library_audio(LIBRARY_DIR)
+        with MusicLibrary(LIBRARY_DB) as lib:
+            db_item_count = lib.item_count()
+        if lib_audio_count == 0 and db_item_count > 0:
+            logger.error(
+                "staging appears empty but library has %d items — skipping beet update to prevent DB corruption"
+                " (staging_files=%d, library_items=%d)",
+                db_item_count, lib_audio_count, db_item_count,
+            )
+            metrics.success = False
+            metrics.failure_reason = "empty_library_dir"
+        else:
+            run_beet_update()
 
         logger.info("==> Regenerating playlists...")
         _regen_playlists()
