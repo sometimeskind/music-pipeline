@@ -188,6 +188,7 @@ def test_run_trigger_scan_failure_sets_success_false(tmp_path: Path) -> None:
          mock.patch("music_scan.scan.SPOTDL_DIR", tmp_path), \
          mock.patch("music_scan.scan.QUARANTINE", tmp_path), \
          mock.patch("music_scan.scan.PLAYLISTS", tmp_path), \
+         mock.patch("music_scan.scan.LIBRARY_DIR", tmp_path), \
          mock.patch("music_scan.scan.ScanMetrics", FakeMetrics), \
          mock.patch("music_scan.scan.trigger_scan", side_effect=RuntimeError("connection refused")):
         with pytest.raises(RuntimeError, match="connection refused"):
@@ -211,6 +212,7 @@ def test_run_with_pending_none_skips_apply(tmp_path: Path) -> None:
          mock.patch("music_scan.scan.SPOTDL_DIR", tmp_path), \
          mock.patch("music_scan.scan.QUARANTINE", tmp_path), \
          mock.patch("music_scan.scan.PLAYLISTS", tmp_path), \
+         mock.patch("music_scan.scan.LIBRARY_DIR", tmp_path), \
          mock.patch("music_scan.scan.ScanMetrics"):
         scan.run(pending=None)
 
