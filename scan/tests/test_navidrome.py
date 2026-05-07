@@ -28,33 +28,29 @@ def test_no_url_skips_http_call():
     mock_get.assert_not_called()
 
 
-def test_url_without_credentials_logs_warning(monkeypatch, caplog):
-    """When URL is set but credentials are missing, log a warning and skip."""
+def test_url_without_credentials_raises(monkeypatch):
+    """When URL is set but credentials are missing, RuntimeError is raised."""
     monkeypatch.setenv("NAVIDROME_URL", "http://navidrome.example.com")
 
     with mock.patch("music_scan.navidrome.requests.get") as mock_get:
-        import logging
-        with caplog.at_level(logging.WARNING, logger="music_scan.navidrome"):
-            from music_scan.navidrome import trigger_scan
+        from music_scan.navidrome import trigger_scan
+        with pytest.raises(RuntimeError, match="NAVIDROME_USER or NAVIDROME_PASSWORD is missing"):
             trigger_scan()
 
     mock_get.assert_not_called()
-    assert "NAVIDROME_USER or NAVIDROME_PASSWORD is missing" in caplog.text
 
 
-def test_url_with_only_user_logs_warning(monkeypatch, caplog):
-    """When URL and user are set but password is missing, still warns."""
+def test_url_with_only_user_raises(monkeypatch):
+    """When URL and user are set but password is missing, RuntimeError is raised."""
     monkeypatch.setenv("NAVIDROME_URL", "http://navidrome.example.com")
     monkeypatch.setenv("NAVIDROME_USER", "admin")
 
     with mock.patch("music_scan.navidrome.requests.get") as mock_get:
-        import logging
-        with caplog.at_level(logging.WARNING, logger="music_scan.navidrome"):
-            from music_scan.navidrome import trigger_scan
+        from music_scan.navidrome import trigger_scan
+        with pytest.raises(RuntimeError, match="NAVIDROME_USER or NAVIDROME_PASSWORD is missing"):
             trigger_scan()
 
     mock_get.assert_not_called()
-    assert "NAVIDROME_USER or NAVIDROME_PASSWORD is missing" in caplog.text
 
 
 def test_successful_scan_logs_info(monkeypatch, caplog):
@@ -97,8 +93,8 @@ def test_trailing_slash_in_url_is_normalized(monkeypatch):
     assert "//" not in url_called.replace("http://", "")
 
 
-def test_non_ok_subsonic_status_logs_warning(monkeypatch, caplog):
-    """When Subsonic returns a non-ok status, a warning is logged."""
+def test_non_ok_subsonic_status_raises(monkeypatch):
+    """When Subsonic returns a non-ok status, RuntimeError is raised."""
     monkeypatch.setenv("NAVIDROME_URL", "http://navidrome.example.com")
     monkeypatch.setenv("NAVIDROME_USER", "admin")
     monkeypatch.setenv("NAVIDROME_PASSWORD", "secret")
@@ -107,16 +103,13 @@ def test_non_ok_subsonic_status_logs_warning(monkeypatch, caplog):
     mock_resp.json.return_value = _make_subsonic_response("failed")
 
     with mock.patch("music_scan.navidrome.requests.get", return_value=mock_resp):
-        import logging
-        with caplog.at_level(logging.WARNING, logger="music_scan.navidrome"):
-            from music_scan.navidrome import trigger_scan
+        from music_scan.navidrome import trigger_scan
+        with pytest.raises(RuntimeError, match="non-ok status"):
             trigger_scan()
 
-    assert "non-ok status" in caplog.text
 
-
-def test_http_error_logs_warning(monkeypatch, caplog):
-    """When requests raises a RequestException, a warning is logged (not raised)."""
+def test_http_error_raises(monkeypatch):
+    """When requests raises a RequestException, RuntimeError is raised."""
     monkeypatch.setenv("NAVIDROME_URL", "http://navidrome.example.com")
     monkeypatch.setenv("NAVIDROME_USER", "admin")
     monkeypatch.setenv("NAVIDROME_PASSWORD", "secret")
@@ -125,9 +118,6 @@ def test_http_error_logs_warning(monkeypatch, caplog):
         "music_scan.navidrome.requests.get",
         side_effect=requests.ConnectionError("connection refused"),
     ):
-        import logging
-        with caplog.at_level(logging.WARNING, logger="music_scan.navidrome"):
-            from music_scan.navidrome import trigger_scan
+        from music_scan.navidrome import trigger_scan
+        with pytest.raises(RuntimeError, match="Failed to trigger Navidrome rescan"):
             trigger_scan()
-
-    assert "Failed to trigger Navidrome rescan" in caplog.text

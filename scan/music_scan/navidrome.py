@@ -25,8 +25,9 @@ def trigger_scan() -> None:
         return
 
     if not user or not password:
-        logger.warning("NAVIDROME_URL is set but NAVIDROME_USER or NAVIDROME_PASSWORD is missing — skipping rescan")
-        return
+        raise RuntimeError(
+            "NAVIDROME_URL is set but NAVIDROME_USER or NAVIDROME_PASSWORD is missing"
+        )
 
     endpoint = f"{url.rstrip('/')}/rest/startScan.view"
     params = {
@@ -39,11 +40,10 @@ def trigger_scan() -> None:
     try:
         resp = requests.get(endpoint, params=params, timeout=10)
         resp.raise_for_status()
-        data = resp.json()
-        status = data.get("subsonic-response", {}).get("status")
-        if status != "ok":
-            logger.warning("Navidrome rescan returned non-ok status: %s", data)
-        else:
-            logger.info("==> Navidrome library rescan triggered")
     except requests.RequestException as exc:
-        logger.warning("Failed to trigger Navidrome rescan: %s", exc)
+        raise RuntimeError(f"Failed to trigger Navidrome rescan: {exc}") from exc
+    data = resp.json()
+    status = data.get("subsonic-response", {}).get("status")
+    if status != "ok":
+        raise RuntimeError(f"Navidrome rescan returned non-ok status: {data}")
+    logger.info("==> Navidrome library rescan triggered")
