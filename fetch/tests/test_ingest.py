@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from music_fetch.ingest import classify_failure, _collect_removals, _deadline_reached, _reconcile_playlists, PendingRemovals, RemovedTrack
+from music_fetch.ingest import classify_failure, _collect_removals, _deadline_reached, reconcile_playlists, PendingRemovals, RemovedTrack
 from music_fetch.spotdl_ops import find_track_in_snapshot
 
 
@@ -267,7 +267,7 @@ def test_run_returns_pending_removals_empty(tmp_path: Path) -> None:
 
 
 def test_run_returns_pending_removals_with_remove_sources(tmp_path: Path) -> None:
-    """run() returns PendingRemovals with remove_sources from _reconcile_playlists."""
+    """run() returns PendingRemovals with remove_sources from reconcile_playlists."""
     import unittest.mock as mock
     from music_fetch import ingest
 
@@ -280,7 +280,7 @@ def test_run_returns_pending_removals_with_remove_sources(tmp_path: Path) -> Non
          mock.patch.object(ingest, "COOKIE_FILE", cookie_file), \
          mock.patch.dict("os.environ", {"SPOTIFY_CLIENT_ID": "id", "SPOTIFY_CLIENT_SECRET": "secret"}), \
          mock.patch("shutil.disk_usage", return_value=mock.Mock(free=10 * 1024**3)), \
-         mock.patch("music_fetch.ingest._reconcile_playlists", return_value=["gone-playlist"]), \
+         mock.patch("music_fetch.ingest.reconcile_playlists", return_value=["gone-playlist"]), \
          mock.patch("music_fetch.ingest.IngestMetrics"), \
          mock.patch("music_fetch.ingest._jitter"):
         result = ingest.run()
@@ -290,8 +290,46 @@ def test_run_returns_pending_removals_with_remove_sources(tmp_path: Path) -> Non
     assert result.tracks == []
 
 
+def test_run_reconcile_failure_sets_reconcile_error_reason(tmp_path: Path) -> None:
+    """A reconcile_playlists failure sets failure_reason='reconcile_error', not 'unexpected_error'."""
+    import unittest.mock as mock
+    from music_fetch import ingest
+
+    cookie_file = tmp_path / "cookies.txt"
+    cookie_file.touch()
+
+    captured: list = []
+
+    class FakeMetrics:
+        def __init__(self):
+            self.success = True
+            self.failure_reason = ""
+            self.tracks_downloaded = 0
+            self.playlists_total = 0
+            self.playlists_skipped = 0
+            self.playlists_deferred = 0
+            self.cookies_expired = False
+            self.duration_seconds = 0
+            captured.append(self)
+
+        def push(self):
+            pass
+
+    with mock.patch.object(ingest, "COOKIE_FILE", cookie_file), \
+         mock.patch.dict("os.environ", {"SPOTIFY_CLIENT_ID": "id", "SPOTIFY_CLIENT_SECRET": "secret"}), \
+         mock.patch("shutil.disk_usage", return_value=mock.Mock(free=10 * 1024**3)), \
+         mock.patch("music_fetch.ingest.reconcile_playlists", side_effect=RuntimeError("conf error")), \
+         mock.patch("music_fetch.ingest.IngestMetrics", FakeMetrics), \
+         mock.patch("music_fetch.ingest._jitter"):
+        with pytest.raises(RuntimeError):
+            ingest.run()
+
+    assert len(captured) == 1
+    assert captured[0].failure_reason == "reconcile_error"
+
+
 # ---------------------------------------------------------------------------
-# _reconcile_playlists
+# reconcile_playlists
 # ---------------------------------------------------------------------------
 
 
@@ -308,7 +346,7 @@ def test_reconcile_no_conf(tmp_path: Path) -> None:
 
     missing = tmp_path / "playlists.conf"
     with mock.patch.object(ingest, "CONF_PATH", missing):
-        result = _reconcile_playlists()
+        result = reconcile_playlists()
 
     assert result == []
 
@@ -326,7 +364,7 @@ def test_reconcile_provisions_new_playlist(tmp_path: Path) -> None:
          mock.patch.object(ingest, "SPOTDL_DIR", spotdl_dir), \
          mock.patch.object(ingest, "COOKIE_FILE", tmp_path / "cookies.txt"), \
          mock.patch("music_fetch.ingest.save_playlist") as mock_save:
-        result = _reconcile_playlists()
+        result = reconcile_playlists()
 
     mock_save.assert_called_once()
     call_kwargs = mock_save.call_args[1]
@@ -348,7 +386,7 @@ def test_reconcile_skips_existing_spotdl(tmp_path: Path) -> None:
     with mock.patch.object(ingest, "CONF_PATH", conf), \
          mock.patch.object(ingest, "SPOTDL_DIR", spotdl_dir), \
          mock.patch("music_fetch.ingest.save_playlist") as mock_save:
-        result = _reconcile_playlists()
+        result = reconcile_playlists()
 
     mock_save.assert_not_called()
     assert result == []
@@ -367,7 +405,7 @@ def test_reconcile_creates_nosync_sentinel(tmp_path: Path) -> None:
     with mock.patch.object(ingest, "CONF_PATH", conf), \
          mock.patch.object(ingest, "SPOTDL_DIR", spotdl_dir), \
          mock.patch("music_fetch.ingest.save_playlist"):
-        _reconcile_playlists()
+        reconcile_playlists()
 
     assert (spotdl_dir / "frozen.nosync").exists()
 
@@ -386,7 +424,7 @@ def test_reconcile_removes_nosync_sentinel(tmp_path: Path) -> None:
     with mock.patch.object(ingest, "CONF_PATH", conf), \
          mock.patch.object(ingest, "SPOTDL_DIR", spotdl_dir), \
          mock.patch("music_fetch.ingest.save_playlist"):
-        _reconcile_playlists()
+        reconcile_playlists()
 
     assert not (spotdl_dir / "mypl.nosync").exists()
 
@@ -409,7 +447,7 @@ def test_reconcile_detects_removed_playlist(tmp_path: Path) -> None:
     with mock.patch.object(ingest, "CONF_PATH", conf), \
          mock.patch.object(ingest, "SPOTDL_DIR", spotdl_dir), \
          mock.patch("music_fetch.ingest.save_playlist"):
-        result = _reconcile_playlists()
+        result = reconcile_playlists()
 
     assert result == ["gone"]
     assert not (spotdl_dir / "gone.spotdl").exists()
@@ -493,7 +531,7 @@ def test_reconcile_deletes_nosync_for_removed_playlist(tmp_path: Path) -> None:
     with mock.patch.object(ingest, "CONF_PATH", conf), \
          mock.patch.object(ingest, "SPOTDL_DIR", spotdl_dir), \
          mock.patch("music_fetch.ingest.save_playlist"):
-        result = _reconcile_playlists()
+        result = reconcile_playlists()
 
     assert result == ["gone"]
     assert not (spotdl_dir / "gone.nosync").exists()

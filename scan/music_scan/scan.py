@@ -140,7 +140,53 @@ def _move_asis_eligible(quarantine: Path, staging: Path) -> int:
     return moved
 
 
-def _regen_playlists() -> None:
+def import_asis_from_quarantine() -> int:
+    """Import quarantine files that have sufficient existing tags (--asis).
+
+    Moves eligible files to a temp staging dir, runs ``beet import --asis``,
+    and returns any beet-skipped files back to quarantine.  Returns the count
+    of tracks imported.
+    """
+    asis_start = time.time()
+    with tempfile.TemporaryDirectory(prefix="asis-staging-") as staging_str:
+        staging = Path(staging_str)
+        staged = _move_asis_eligible(QUARANTINE, staging)
+        logger.info("Asis eligible : %d file(s) with sufficient tags", staged)
+        if staged:
+            run_beet_import(staging, asis=True)
+            for remaining in staging.rglob("*"):
+                if remaining.is_file() and remaining.suffix.lower() in AUDIO_EXTS:
+                    dest = QUARANTINE / remaining.relative_to(staging)
+                    dest.parent.mkdir(parents=True, exist_ok=True)
+                    shutil.move(str(remaining), dest)
+    with MusicLibrary(LIBRARY_DB) as lib:
+        asis_imported = lib.items_added_since(asis_start)
+    logger.info("Asis pass     : %d track(s) imported from quarantine", len(asis_imported))
+    return len(asis_imported)
+
+
+def update_library() -> str | None:
+    """Refresh beets library metadata.
+
+    Skips beet update if the staging dir is empty but the DB has items, to
+    prevent DB corruption.  Returns a failure-reason string in that case, else
+    None.
+    """
+    lib_audio_count = _count_library_audio(LIBRARY_DIR)
+    with MusicLibrary(LIBRARY_DB) as lib:
+        db_item_count = lib.item_count()
+    if lib_audio_count == 0 and db_item_count > 0:
+        logger.error(
+            "staging appears empty but library has %d items — skipping beet update to prevent DB corruption"
+            " (staging_files=%d, library_items=%d)",
+            db_item_count, lib_audio_count, db_item_count,
+        )
+        return "empty_library_dir"
+    run_beet_update()
+    return None
+
+
+def regen_playlists() -> None:
     """Regenerate .m3u files for every .spotdl playlist."""
     PLAYLISTS.mkdir(parents=True, exist_ok=True)
     spotdl_files = sorted(SPOTDL_DIR.glob("*.spotdl"))
@@ -231,41 +277,27 @@ def run(pending: PendingRemovals | None = None) -> None:
         logger.info("Log         : ~/.config/beets/import.log")
 
         logger.info("==> Importing quarantine with existing tags (--asis)...")
-        asis_start = time.time()
-        with tempfile.TemporaryDirectory(prefix="asis-staging-") as staging_str:
-            staging = Path(staging_str)
-            staged = _move_asis_eligible(QUARANTINE, staging)
-            logger.info("Asis eligible : %d file(s) with sufficient tags", staged)
-            if staged:
-                run_beet_import(staging, asis=True)
-                # Return any files beet skipped (e.g. duplicates) to quarantine
-                for remaining in staging.rglob("*"):
-                    if remaining.is_file() and remaining.suffix.lower() in AUDIO_EXTS:
-                        dest = QUARANTINE / remaining.relative_to(staging)
-                        dest.parent.mkdir(parents=True, exist_ok=True)
-                        shutil.move(str(remaining), dest)
-        with MusicLibrary(LIBRARY_DB) as lib:
-            asis_imported = lib.items_added_since(asis_start)
-        logger.info("Asis pass     : %d track(s) imported from quarantine", len(asis_imported))
-        metrics.tracks_imported = len(imported) + len(asis_imported)
+        asis_count = 0
+        try:
+            asis_count = import_asis_from_quarantine()
+        except Exception:
+            logger.error("Asis-import step failed — continuing with library update", exc_info=True)
+        metrics.tracks_imported = len(imported) + asis_count
 
         logger.info("==> Refreshing library metadata...")
-        lib_audio_count = _count_library_audio(LIBRARY_DIR)
-        with MusicLibrary(LIBRARY_DB) as lib:
-            db_item_count = lib.item_count()
-        if lib_audio_count == 0 and db_item_count > 0:
-            logger.error(
-                "staging appears empty but library has %d items — skipping beet update to prevent DB corruption"
-                " (staging_files=%d, library_items=%d)",
-                db_item_count, lib_audio_count, db_item_count,
-            )
-            metrics.success = False
-            metrics.failure_reason = "empty_library_dir"
-        else:
-            run_beet_update()
+        try:
+            guard_reason = update_library()
+            if guard_reason:
+                metrics.success = False
+                metrics.failure_reason = guard_reason
+        except Exception:
+            logger.error("Library-update step failed — continuing with playlist regeneration", exc_info=True)
 
         logger.info("==> Regenerating playlists...")
-        _regen_playlists()
+        try:
+            regen_playlists()
+        except Exception:
+            logger.error("Playlist-regeneration step failed", exc_info=True)
 
         quarantined_after = _count_quarantine()
         metrics.quarantined_tracks = max(0, quarantined_after - quarantined_before)
