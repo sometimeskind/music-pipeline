@@ -176,8 +176,44 @@ def test_push_library_calls_rclone_copy_then_sync(monkeypatch, tmp_path):
 
     assert mock_sub.run.call_count == 2
     copy_call, sync_call = mock_sub.run.call_args_list
-    assert copy_call == call(["rclone", "copy", str(staging), remote], check=True)
+    assert copy_call == call(["rclone", "copy", str(staging), f"{remote}/tracks"], check=True)
     assert sync_call == call(["rclone", "sync", str(playlists), f"{remote}/playlists"], check=True)
+
+
+def test_push_library_uses_tracks_remote_when_set(monkeypatch, tmp_path):
+    """LIBRARY_TRACKS_REMOTE overrides LIBRARY_REMOTE for the rclone copy."""
+    staging = tmp_path / "staging"
+    playlists = tmp_path / "playlists"
+    monkeypatch.setenv("LIBRARY_REMOTE", "navidrome:")
+    monkeypatch.setenv("LIBRARY_TRACKS_REMOTE", "navidrome:tracks")
+    monkeypatch.setenv("MUSIC_STAGING", str(staging))
+    monkeypatch.setenv("MUSIC_PLAYLISTS", str(playlists))
+
+    orc = Orchestrator()
+    with patch("music_service.orchestrator.subprocess") as mock_sub:
+        orc._push_library()
+
+    copy_call, sync_call = mock_sub.run.call_args_list
+    assert copy_call == call(["rclone", "copy", str(staging), "navidrome:tracks"], check=True)
+    assert sync_call == call(["rclone", "sync", str(playlists), "navidrome:/playlists"], check=True)
+
+
+def test_push_library_uses_playlists_remote_when_set(monkeypatch, tmp_path):
+    """LIBRARY_PLAYLISTS_REMOTE overrides the default {LIBRARY_REMOTE}/playlists destination."""
+    staging = tmp_path / "staging"
+    playlists = tmp_path / "playlists"
+    monkeypatch.setenv("LIBRARY_REMOTE", "navidrome:")
+    monkeypatch.setenv("LIBRARY_PLAYLISTS_REMOTE", "navidrome:playlists")
+    monkeypatch.setenv("MUSIC_STAGING", str(staging))
+    monkeypatch.setenv("MUSIC_PLAYLISTS", str(playlists))
+
+    orc = Orchestrator()
+    with patch("music_service.orchestrator.subprocess") as mock_sub:
+        orc._push_library()
+
+    copy_call, sync_call = mock_sub.run.call_args_list
+    assert copy_call == call(["rclone", "copy", str(staging), "navidrome:/tracks"], check=True)
+    assert sync_call == call(["rclone", "sync", str(playlists), "navidrome:playlists"], check=True)
 
 
 def test_push_library_uses_default_paths_when_env_unset(monkeypatch):
@@ -191,7 +227,7 @@ def test_push_library_uses_default_paths_when_env_unset(monkeypatch):
         orc._push_library()
 
     copy_call, sync_call = mock_sub.run.call_args_list
-    assert copy_call == call(["rclone", "copy", "/root/Music/staging", ":webdav:"], check=True)
+    assert copy_call == call(["rclone", "copy", "/root/Music/staging", ":webdav:/tracks"], check=True)
     assert sync_call == call(["rclone", "sync", "/root/Music/playlists", ":webdav:/playlists"], check=True)
 
 

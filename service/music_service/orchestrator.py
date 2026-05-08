@@ -83,13 +83,15 @@ class Orchestrator:
             logger.info("LIBRARY_REMOTE not set — skipping library push")
             return False
 
+        tracks_remote = os.environ.get("LIBRARY_TRACKS_REMOTE", f"{remote}/tracks")
+        playlists_remote = os.environ.get("LIBRARY_PLAYLISTS_REMOTE", f"{remote}/playlists")
         staging = Path(os.environ.get("MUSIC_STAGING", "/root/Music/staging"))
         playlists = Path(os.environ.get("MUSIC_PLAYLISTS", "/root/Music/playlists"))
 
-        subprocess.run(["rclone", "copy", str(staging), remote], check=True)
-        subprocess.run(["rclone", "sync", str(playlists), f"{remote}/playlists"], check=True)
+        subprocess.run(["rclone", "copy", str(staging), tracks_remote], check=True)
+        subprocess.run(["rclone", "sync", str(playlists), playlists_remote], check=True)
 
-        logger.info("==> Library pushed to %s", remote)
+        logger.info("==> Library pushed to %s", tracks_remote)
         return True
 
     # ------------------------------------------------------------------
