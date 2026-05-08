@@ -297,22 +297,47 @@ def test_run_library_update_failure_continues_to_regen_playlists(tmp_path: Path)
 # ---------------------------------------------------------------------------
 
 
+def _make_mock_item(title: str, artist: str, path: Path) -> mock.MagicMock:
+    item = mock.MagicMock()
+    item.title = title
+    item.artist = artist
+    item.albumartist = ""
+    item.path = str(path).encode()
+    return item
+
+
+def _write_spotdl(path: Path, songs: list[tuple[str, str]]) -> None:
+    data = {
+        "query": "https://open.spotify.com/playlist/test",
+        "songs": [
+            {"name": name, "artists": [artist], "url": f"url-{i}"}
+            for i, (name, artist) in enumerate(songs)
+        ],
+    }
+    path.write_text(json.dumps(data), encoding="utf-8")
+
+
+def _regen_lib(spotdl_dir: Path, playlists_dir: Path, items: list) -> mock.MagicMock:
+    mock_lib = mock.MagicMock()
+    mock_lib.__enter__ = mock.MagicMock(return_value=mock_lib)
+    mock_lib.__exit__ = mock.MagicMock(return_value=False)
+    mock_lib.items_by_source = mock.MagicMock(return_value=items)
+    return mock_lib
+
+
 def test_regen_playlists_writes_m3u_with_relative_paths(tmp_path: Path) -> None:
     from music_scan.scan import regen_playlists
 
     spotdl_dir = tmp_path / "spotdl"
     spotdl_dir.mkdir()
-    (spotdl_dir / "my-playlist.spotdl").touch()
+    # Empty songs list → falls back to alphabetical
+    _write_spotdl(spotdl_dir / "my-playlist.spotdl", [])
 
     playlists_dir = tmp_path / "playlists"
     playlists_dir.mkdir()
 
     track_path = tmp_path / "library" / "Artist" / "Album" / "01 - Song.m4a"
-
-    mock_lib = mock.MagicMock()
-    mock_lib.__enter__ = mock.MagicMock(return_value=mock_lib)
-    mock_lib.__exit__ = mock.MagicMock(return_value=False)
-    mock_lib.paths_by_source = mock.MagicMock(return_value=[track_path])
+    mock_lib = _regen_lib(spotdl_dir, playlists_dir, [_make_mock_item("Song", "Artist", track_path)])
 
     with mock.patch("music_scan.scan.SPOTDL_DIR", spotdl_dir), \
          mock.patch("music_scan.scan.PLAYLISTS", playlists_dir), \
@@ -325,7 +350,7 @@ def test_regen_playlists_writes_m3u_with_relative_paths(tmp_path: Path) -> None:
     content = m3u.read_text(encoding="utf-8")
     expected_rel = os.path.relpath(track_path, playlists_dir)
     assert content == expected_rel + "\n"
-    mock_lib.paths_by_source.assert_called_once_with("my-playlist")
+    mock_lib.items_by_source.assert_called_once_with("my-playlist")
 
 
 def test_regen_playlists_empty_playlist_writes_empty_m3u(tmp_path: Path) -> None:
@@ -333,15 +358,12 @@ def test_regen_playlists_empty_playlist_writes_empty_m3u(tmp_path: Path) -> None
 
     spotdl_dir = tmp_path / "spotdl"
     spotdl_dir.mkdir()
-    (spotdl_dir / "empty-playlist.spotdl").touch()
+    _write_spotdl(spotdl_dir / "empty-playlist.spotdl", [])
 
     playlists_dir = tmp_path / "playlists"
     playlists_dir.mkdir()
 
-    mock_lib = mock.MagicMock()
-    mock_lib.__enter__ = mock.MagicMock(return_value=mock_lib)
-    mock_lib.__exit__ = mock.MagicMock(return_value=False)
-    mock_lib.paths_by_source = mock.MagicMock(return_value=[])
+    mock_lib = _regen_lib(spotdl_dir, playlists_dir, [])
 
     with mock.patch("music_scan.scan.SPOTDL_DIR", spotdl_dir), \
          mock.patch("music_scan.scan.PLAYLISTS", playlists_dir), \
@@ -352,6 +374,139 @@ def test_regen_playlists_empty_playlist_writes_empty_m3u(tmp_path: Path) -> None
     m3u = playlists_dir / "empty-playlist.m3u"
     assert m3u.exists()
     assert m3u.read_text(encoding="utf-8") == ""
+
+
+def test_regen_playlists_spotify_order(tmp_path: Path) -> None:
+    """Tracks are emitted in .spotdl order when all library tracks match."""
+    from music_scan.scan import regen_playlists
+
+    lib_root = tmp_path / "library"
+    path_a = lib_root / "Alpha.m4a"
+    path_b = lib_root / "Bravo.m4a"
+    path_c = lib_root / "Charlie.m4a"
+
+    spotdl_dir = tmp_path / "spotdl"
+    spotdl_dir.mkdir()
+    # Spotify order: C, A, B
+    _write_spotdl(spotdl_dir / "pl.spotdl", [("Charlie", "Art"), ("Alpha", "Art"), ("Bravo", "Art")])
+
+    playlists_dir = tmp_path / "playlists"
+    playlists_dir.mkdir()
+
+    items = [
+        _make_mock_item("Alpha", "Art", path_a),
+        _make_mock_item("Bravo", "Art", path_b),
+        _make_mock_item("Charlie", "Art", path_c),
+    ]
+    mock_lib = _regen_lib(spotdl_dir, playlists_dir, items)
+
+    with mock.patch("music_scan.scan.SPOTDL_DIR", spotdl_dir), \
+         mock.patch("music_scan.scan.PLAYLISTS", playlists_dir), \
+         mock.patch("music_scan.scan.LIBRARY_DB", tmp_path / "library.db"), \
+         mock.patch("music_scan.scan.MusicLibrary", return_value=mock_lib):
+        regen_playlists()
+
+    lines = (playlists_dir / "pl.m3u").read_text(encoding="utf-8").splitlines()
+    assert lines == [
+        os.path.relpath(path_c, playlists_dir),
+        os.path.relpath(path_a, playlists_dir),
+        os.path.relpath(path_b, playlists_dir),
+    ]
+
+
+def test_regen_playlists_spotdl_missing_from_library_skipped(tmp_path: Path) -> None:
+    """Tracks in .spotdl but absent from the library are silently skipped."""
+    from music_scan.scan import regen_playlists
+
+    lib_root = tmp_path / "library"
+    path_a = lib_root / "Alpha.m4a"
+    # Bravo is in .spotdl but NOT in the library
+
+    spotdl_dir = tmp_path / "spotdl"
+    spotdl_dir.mkdir()
+    _write_spotdl(spotdl_dir / "pl.spotdl", [("Alpha", "Art"), ("Bravo", "Art")])
+
+    playlists_dir = tmp_path / "playlists"
+    playlists_dir.mkdir()
+
+    mock_lib = _regen_lib(spotdl_dir, playlists_dir, [_make_mock_item("Alpha", "Art", path_a)])
+
+    with mock.patch("music_scan.scan.SPOTDL_DIR", spotdl_dir), \
+         mock.patch("music_scan.scan.PLAYLISTS", playlists_dir), \
+         mock.patch("music_scan.scan.LIBRARY_DB", tmp_path / "library.db"), \
+         mock.patch("music_scan.scan.MusicLibrary", return_value=mock_lib):
+        regen_playlists()
+
+    lines = (playlists_dir / "pl.m3u").read_text(encoding="utf-8").splitlines()
+    assert lines == [os.path.relpath(path_a, playlists_dir)]
+
+
+def test_regen_playlists_library_extras_appended_alphabetically(tmp_path: Path) -> None:
+    """Library tracks not in .spotdl are appended after ordered tracks, sorted."""
+    from music_scan.scan import regen_playlists
+
+    lib_root = tmp_path / "library"
+    path_a = lib_root / "Alpha.m4a"
+    path_b = lib_root / "Bravo.m4a"   # in .spotdl
+    path_c = lib_root / "Charlie.m4a"  # NOT in .spotdl (legacy import)
+
+    spotdl_dir = tmp_path / "spotdl"
+    spotdl_dir.mkdir()
+    _write_spotdl(spotdl_dir / "pl.spotdl", [("Bravo", "Art"), ("Alpha", "Art")])
+
+    playlists_dir = tmp_path / "playlists"
+    playlists_dir.mkdir()
+
+    items = [
+        _make_mock_item("Alpha", "Art", path_a),
+        _make_mock_item("Bravo", "Art", path_b),
+        _make_mock_item("Charlie", "Legacy", path_c),
+    ]
+    mock_lib = _regen_lib(spotdl_dir, playlists_dir, items)
+
+    with mock.patch("music_scan.scan.SPOTDL_DIR", spotdl_dir), \
+         mock.patch("music_scan.scan.PLAYLISTS", playlists_dir), \
+         mock.patch("music_scan.scan.LIBRARY_DB", tmp_path / "library.db"), \
+         mock.patch("music_scan.scan.MusicLibrary", return_value=mock_lib):
+        regen_playlists()
+
+    lines = (playlists_dir / "pl.m3u").read_text(encoding="utf-8").splitlines()
+    assert lines == [
+        os.path.relpath(path_b, playlists_dir),  # ordered first
+        os.path.relpath(path_a, playlists_dir),  # ordered second
+        os.path.relpath(path_c, playlists_dir),  # unmatched, appended alphabetically
+    ]
+
+
+def test_regen_playlists_no_spotdl_songs_falls_back_to_alphabetical(tmp_path: Path) -> None:
+    """Empty songs list in .spotdl yields alphabetical order (same as before)."""
+    from music_scan.scan import regen_playlists
+
+    lib_root = tmp_path / "library"
+    path_b = lib_root / "B.m4a"
+    path_a = lib_root / "A.m4a"
+
+    spotdl_dir = tmp_path / "spotdl"
+    spotdl_dir.mkdir()
+    _write_spotdl(spotdl_dir / "pl.spotdl", [])  # no songs
+
+    playlists_dir = tmp_path / "playlists"
+    playlists_dir.mkdir()
+
+    items = [_make_mock_item("B", "Art", path_b), _make_mock_item("A", "Art", path_a)]
+    mock_lib = _regen_lib(spotdl_dir, playlists_dir, items)
+
+    with mock.patch("music_scan.scan.SPOTDL_DIR", spotdl_dir), \
+         mock.patch("music_scan.scan.PLAYLISTS", playlists_dir), \
+         mock.patch("music_scan.scan.LIBRARY_DB", tmp_path / "library.db"), \
+         mock.patch("music_scan.scan.MusicLibrary", return_value=mock_lib):
+        regen_playlists()
+
+    lines = (playlists_dir / "pl.m3u").read_text(encoding="utf-8").splitlines()
+    assert lines == [
+        os.path.relpath(path_a, playlists_dir),
+        os.path.relpath(path_b, playlists_dir),
+    ]
 
 
 # ---------------------------------------------------------------------------
