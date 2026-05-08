@@ -7,6 +7,7 @@ No Spotify or YouTube calls.
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 import re
@@ -186,6 +187,21 @@ def update_library() -> str | None:
     return None
 
 
+def _spotdl_order(spotdl_file: Path) -> list[tuple[str, str]]:
+    """Return ordered (name, first_artist) pairs from a .spotdl file's songs list.
+
+    Returns [] if the file is absent, unreadable, or has no songs.
+    """
+    try:
+        data = json.loads(spotdl_file.read_text(encoding="utf-8"))
+        return [
+            (song.get("name", ""), (song.get("artists") or [""])[0])
+            for song in data.get("songs", [])
+        ]
+    except Exception:
+        return []
+
+
 def regen_playlists() -> None:
     """Regenerate .m3u files for every .spotdl playlist."""
     PLAYLISTS.mkdir(parents=True, exist_ok=True)
@@ -199,8 +215,32 @@ def regen_playlists() -> None:
             name = spotdl_file.stem
             m3u = PLAYLISTS / f"{name}.m3u"
             logger.info("    Generating: %s", m3u)
-            paths = lib.paths_by_source(name)
-            lines = [os.path.relpath(p, PLAYLISTS) for p in sorted(paths)]
+
+            items = lib.items_by_source(name)
+            # Build key → path lookup for fuzzy title+artist matching
+            by_key: dict[frozenset, Path] = {}
+            all_paths: list[Path] = []
+            for item in items:
+                p = Path(item.path.decode() if isinstance(item.path, bytes) else item.path)
+                all_paths.append(p)
+                key = _name_words(f"{item.title or ''} {item.artist or item.albumartist or ''}")
+                if key and key not in by_key:
+                    by_key[key] = p
+
+            # Emit in Spotify (.spotdl) order
+            ordered: list[Path] = []
+            matched: set[Path] = set()
+            for song_name, song_artist in _spotdl_order(spotdl_file):
+                key = _name_words(f"{song_name} {song_artist}")
+                if key and key in by_key:
+                    p = by_key[key]
+                    if p not in matched:
+                        ordered.append(p)
+                        matched.add(p)
+
+            # Append library tracks not matched by .spotdl, alphabetically
+            unmatched = sorted(p for p in all_paths if p not in matched)
+            lines = [os.path.relpath(p, PLAYLISTS) for p in ordered + unmatched]
             m3u.write_text("\n".join(lines) + ("\n" if lines else ""), encoding="utf-8")
 
 
