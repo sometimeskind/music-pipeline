@@ -12,9 +12,13 @@ that reconcile can verify them without re-reading file tags.
 Run once after deploying the fix for #100:
     just backfill-spotify-urls [-- --dry-run] [-- --playlist <name>]
 
-The script matches on normalised title (lowercase, punctuation stripped).
-When a title is ambiguous (multiple library items match a single Spotify
-title) it skips — manual review is safer than a wrong URL.
+Matching strategy (two passes):
+  1. Normalised title (lowercase, punctuation stripped) — fast, unambiguous.
+  2. Duration fallback (±2 s) + normalised first artist — catches tracks whose
+     MusicBrainz title diverged from the Spotify name.  Skipped if ambiguous.
+
+When a match is ambiguous (multiple candidates) it is skipped — manual
+review is safer than assigning the wrong URL.
 
 Exit codes: 0 = success, 1 = error.
 """
@@ -35,6 +39,9 @@ def _norm(s: str) -> str:
     return re.sub(r"[^\w\s]", "", s.lower()).strip()
 
 
+_DURATION_TOLERANCE = 2.0  # seconds
+
+
 def backfill_playlist(lib, playlist_name: str, dry_run: bool) -> tuple[int, int, int]:
     """Backfill spotify_url for one playlist. Returns (updated, skipped_ambiguous, no_match)."""
     spotdl_file = SPOTDL_DIR / f"{playlist_name}.spotdl"
@@ -46,12 +53,19 @@ def backfill_playlist(lib, playlist_name: str, dry_run: bool) -> tuple[int, int,
         data = json.load(fh)
     songs = data.get("songs", []) if isinstance(data, dict) else data
 
-    url_by_norm: dict[str, str] = {}
+    url_by_norm_title: dict[str, str] = {}
+    # (norm_artist, duration_seconds) → url  — for the duration fallback pass
+    duration_index: list[tuple[str, float, str]] = []
     for song in songs:
         name = song.get("name") or ""
         url = song.get("url") or ""
-        if name and url:
-            url_by_norm[_norm(name)] = url
+        if not (name and url):
+            continue
+        url_by_norm_title[_norm(name)] = url
+        artist = ((song.get("artists") or [""]) + [""])[0]
+        duration = song.get("duration")
+        if duration is not None:
+            duration_index.append((_norm(artist), float(duration), url))
 
     items = list(lib.items(f"source:{playlist_name}"))
     needs_url = [item for item in items if not (item.get("spotify_url") or "")]
@@ -70,13 +84,13 @@ def backfill_playlist(lib, playlist_name: str, dry_run: bool) -> tuple[int, int,
             title_map.setdefault(key, []).append(item)
 
     updated = skipped_ambiguous = no_match = 0
+    unmatched_after_title: list = []
 
+    # Pass 1 — normalised title
     for norm_title, candidates in sorted(title_map.items()):
-        url = url_by_norm.get(norm_title)
+        url = url_by_norm_title.get(norm_title)
         if not url:
-            no_match += len(candidates)
-            for item in candidates:
-                print(f"  [NO MATCH] {item.title!r} — {item.artist!r}")
+            unmatched_after_title.extend(candidates)
             continue
 
         if len(candidates) > 1:
@@ -93,6 +107,38 @@ def backfill_playlist(lib, playlist_name: str, dry_run: bool) -> tuple[int, int,
             item["spotify_url"] = url
             item.store()
         updated += 1
+
+    # Pass 2 — duration fallback for items that didn't match by title
+    for item in unmatched_after_title:
+        item_duration = getattr(item, "length", None)
+        item_artist = _norm(item.artist or item.albumartist or "")
+        if item_duration is None or not duration_index:
+            no_match += 1
+            print(f"  [NO MATCH] {item.title!r} — {item.artist!r}")
+            continue
+
+        matches = [
+            url for (norm_artist, dur, url) in duration_index
+            if abs(dur - item_duration) <= _DURATION_TOLERANCE
+            and norm_artist == item_artist
+        ]
+        # Deduplicate while preserving order
+        seen: set[str] = set()
+        unique_matches = [u for u in matches if not (u in seen or seen.add(u))]  # type: ignore[func-returns-value]
+
+        if len(unique_matches) == 1:
+            action = "DRY-RUN" if dry_run else "DURATION MATCH"
+            print(f"  [{action}] spotify_url → {item.title!r} — {item.artist!r}  (duration ≈ {item_duration:.0f}s)")
+            if not dry_run:
+                item["spotify_url"] = unique_matches[0]
+                item.store()
+            updated += 1
+        elif len(unique_matches) > 1:
+            skipped_ambiguous += 1
+            print(f"  [AMBIGUOUS DURATION] {item.title!r} — {item.artist!r}  ({len(unique_matches)} duration candidates)")
+        else:
+            no_match += 1
+            print(f"  [NO MATCH] {item.title!r} — {item.artist!r}")
 
     return updated, skipped_ambiguous, no_match
 
