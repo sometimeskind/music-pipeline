@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import threading
 import time
-from unittest.mock import MagicMock, call, patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -148,125 +148,20 @@ def test_schedule_scan_public_method():
 
 
 # ---------------------------------------------------------------------------
-# _push_library
+# _run_scan_locked — execution order
 # ---------------------------------------------------------------------------
 
 
-def test_push_library_skips_when_no_remote(monkeypatch):
-    """_push_library() is a no-op when LIBRARY_REMOTE is not set."""
-    monkeypatch.delenv("LIBRARY_REMOTE", raising=False)
-    orc = Orchestrator()
-    with patch("music_service.orchestrator.subprocess") as mock_sub:
-        orc._push_library()
-        mock_sub.run.assert_not_called()
-
-
-def test_push_library_calls_rclone_copy_then_sync(monkeypatch, tmp_path):
-    """_push_library() runs rclone copy (staging) then rclone sync (playlists)."""
-    remote = ":webdav:"
-    staging = tmp_path / "staging"
-    playlists = tmp_path / "playlists"
-    monkeypatch.setenv("LIBRARY_REMOTE", remote)
-    monkeypatch.setenv("MUSIC_STAGING", str(staging))
-    monkeypatch.setenv("MUSIC_PLAYLISTS", str(playlists))
-
-    orc = Orchestrator()
-    with patch("music_service.orchestrator.subprocess") as mock_sub:
-        orc._push_library()
-
-    assert mock_sub.run.call_count == 2
-    copy_call, sync_call = mock_sub.run.call_args_list
-    assert copy_call == call(["rclone", "copy", str(staging), f"{remote}/tracks"], check=True)
-    assert sync_call == call(["rclone", "sync", str(playlists), f"{remote}/playlists"], check=True)
-
-
-def test_push_library_uses_tracks_remote_when_set(monkeypatch, tmp_path):
-    """LIBRARY_TRACKS_REMOTE overrides LIBRARY_REMOTE for the rclone copy."""
-    staging = tmp_path / "staging"
-    playlists = tmp_path / "playlists"
-    monkeypatch.setenv("LIBRARY_REMOTE", "navidrome:")
-    monkeypatch.setenv("LIBRARY_TRACKS_REMOTE", "navidrome:tracks")
-    monkeypatch.setenv("MUSIC_STAGING", str(staging))
-    monkeypatch.setenv("MUSIC_PLAYLISTS", str(playlists))
-
-    orc = Orchestrator()
-    with patch("music_service.orchestrator.subprocess") as mock_sub:
-        orc._push_library()
-
-    copy_call, sync_call = mock_sub.run.call_args_list
-    assert copy_call == call(["rclone", "copy", str(staging), "navidrome:tracks"], check=True)
-    assert sync_call == call(["rclone", "sync", str(playlists), "navidrome:/playlists"], check=True)
-
-
-def test_push_library_uses_playlists_remote_when_set(monkeypatch, tmp_path):
-    """LIBRARY_PLAYLISTS_REMOTE overrides the default {LIBRARY_REMOTE}/playlists destination."""
-    staging = tmp_path / "staging"
-    playlists = tmp_path / "playlists"
-    monkeypatch.setenv("LIBRARY_REMOTE", "navidrome:")
-    monkeypatch.setenv("LIBRARY_PLAYLISTS_REMOTE", "navidrome:playlists")
-    monkeypatch.setenv("MUSIC_STAGING", str(staging))
-    monkeypatch.setenv("MUSIC_PLAYLISTS", str(playlists))
-
-    orc = Orchestrator()
-    with patch("music_service.orchestrator.subprocess") as mock_sub:
-        orc._push_library()
-
-    copy_call, sync_call = mock_sub.run.call_args_list
-    assert copy_call == call(["rclone", "copy", str(staging), "navidrome:/tracks"], check=True)
-    assert sync_call == call(["rclone", "sync", str(playlists), "navidrome:playlists"], check=True)
-
-
-def test_push_library_uses_default_paths_when_env_unset(monkeypatch):
-    """_push_library() falls back to /root/Music/staging and /root/Music/playlists."""
-    monkeypatch.setenv("LIBRARY_REMOTE", ":webdav:")
-    monkeypatch.delenv("MUSIC_STAGING", raising=False)
-    monkeypatch.delenv("MUSIC_PLAYLISTS", raising=False)
-
-    orc = Orchestrator()
-    with patch("music_service.orchestrator.subprocess") as mock_sub:
-        orc._push_library()
-
-    copy_call, sync_call = mock_sub.run.call_args_list
-    assert copy_call == call(["rclone", "copy", "/root/Music/staging", ":webdav:/tracks"], check=True)
-    assert sync_call == call(["rclone", "sync", "/root/Music/playlists", ":webdav:/playlists"], check=True)
-
-
-# ---------------------------------------------------------------------------
-# _run_scan_locked — push + trigger ordering
-# ---------------------------------------------------------------------------
-
-
-def test_run_scan_locked_calls_scan_then_push_then_trigger_in_order(monkeypatch):
-    """scan.run → reconcile → _push_library → trigger_scan must execute in that order."""
+def test_run_scan_locked_calls_scan_then_reconcile_in_order(monkeypatch):
+    """scan.run → reconcile must execute in that order; orchestrator does not call trigger_scan."""
     call_order: list[str] = []
 
     orc = Orchestrator()
 
     with patch("music_service.orchestrator.scan") as mock_scan, \
-         patch("music_service.orchestrator.reconcile") as mock_reconcile, \
-         patch.object(orc, "_push_library", return_value=True, side_effect=lambda: call_order.append("push") or True), \
-         patch("music_service.orchestrator.trigger_scan", side_effect=lambda: call_order.append("trigger")):
+         patch("music_service.orchestrator.reconcile") as mock_reconcile:
         mock_scan.run.side_effect = lambda pending=None: call_order.append("scan")
         mock_reconcile.reconcile_all.side_effect = lambda: call_order.append("reconcile")
         orc._run_scan_locked()
 
-    assert call_order == ["scan", "reconcile", "push", "trigger"]
-
-
-def test_run_scan_locked_always_triggers_scan_regardless_of_remote(monkeypatch):
-    """With no LIBRARY_REMOTE, _push_library returns False and trigger_scan is skipped."""
-    monkeypatch.delenv("LIBRARY_REMOTE", raising=False)
-    call_order: list[str] = []
-
-    orc = Orchestrator()
-
-    with patch("music_service.orchestrator.scan") as mock_scan, \
-         patch("music_service.orchestrator.reconcile") as mock_reconcile, \
-         patch.object(orc, "_push_library", return_value=False, side_effect=lambda: call_order.append("push") or False), \
-         patch("music_service.orchestrator.trigger_scan", side_effect=lambda: call_order.append("trigger")):
-        mock_scan.run.side_effect = lambda pending=None: call_order.append("scan")
-        mock_reconcile.reconcile_all.side_effect = lambda: call_order.append("reconcile")
-        orc._run_scan_locked()
-
-    # trigger_scan is skipped when nothing was pushed
-    assert call_order == ["scan", "reconcile", "push"]
+    assert call_order == ["scan", "reconcile"]

@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import logging
 import os
-import subprocess
 import threading
 from pathlib import Path
 
@@ -16,7 +15,6 @@ from watchdog.observers import Observer
 import music_fetch.ingest as ingest
 import music_scan.reconcile as reconcile
 import music_scan.scan as scan
-from music_scan.navidrome import trigger_scan
 
 logger = logging.getLogger(__name__)
 
@@ -66,33 +64,7 @@ class Orchestrator:
         scan.run(pending)
         logger.info("==> Reconciling snapshots against library")
         reconcile.reconcile_all()
-        pushed = self._push_library()
-        if pushed:
-            trigger_scan()
         logger.info("==> Scan complete")
-
-    def _push_library(self) -> bool:
-        """Push staging and playlists to the configured rclone remote.
-
-        Returns True if a push was performed (LIBRARY_REMOTE is set), False otherwise.
-        Callers use the return value to decide whether to trigger a Navidrome rescan —
-        a rescan is only useful after files have actually been pushed somewhere.
-        """
-        remote = os.environ.get("LIBRARY_REMOTE", "")
-        if not remote:
-            logger.info("LIBRARY_REMOTE not set — skipping library push")
-            return False
-
-        tracks_remote = os.environ.get("LIBRARY_TRACKS_REMOTE", f"{remote}/tracks")
-        playlists_remote = os.environ.get("LIBRARY_PLAYLISTS_REMOTE", f"{remote}/playlists")
-        staging = Path(os.environ.get("MUSIC_STAGING", "/root/Music/staging"))
-        playlists = Path(os.environ.get("MUSIC_PLAYLISTS", "/root/Music/playlists"))
-
-        subprocess.run(["rclone", "copy", str(staging), tracks_remote], check=True)
-        subprocess.run(["rclone", "sync", str(playlists), playlists_remote], check=True)
-
-        logger.info("==> Library pushed to %s", tracks_remote)
-        return True
 
     # ------------------------------------------------------------------
     # Non-blocking try methods (used by HTTP trigger endpoints)

@@ -188,7 +188,6 @@ def test_run_trigger_scan_failure_sets_success_false(tmp_path: Path) -> None:
          mock.patch("music_scan.scan.SPOTDL_DIR", tmp_path), \
          mock.patch("music_scan.scan.QUARANTINE", tmp_path), \
          mock.patch("music_scan.scan.PLAYLISTS", tmp_path), \
-         mock.patch("music_scan.scan.LIBRARY_DIR", tmp_path), \
          mock.patch("music_scan.scan.ScanMetrics", FakeMetrics), \
          mock.patch("music_scan.scan.trigger_scan", side_effect=RuntimeError("connection refused")):
         with pytest.raises(RuntimeError, match="connection refused"):
@@ -212,7 +211,6 @@ def test_run_with_pending_none_skips_apply(tmp_path: Path) -> None:
          mock.patch("music_scan.scan.SPOTDL_DIR", tmp_path), \
          mock.patch("music_scan.scan.QUARANTINE", tmp_path), \
          mock.patch("music_scan.scan.PLAYLISTS", tmp_path), \
-         mock.patch("music_scan.scan.LIBRARY_DIR", tmp_path), \
          mock.patch("music_scan.scan.ScanMetrics"):
         scan.run(pending=None)
 
@@ -239,7 +237,6 @@ def test_run_pending_removals_failure_continues_to_import(tmp_path: Path) -> Non
          mock.patch("music_scan.scan.SPOTDL_DIR", tmp_path), \
          mock.patch("music_scan.scan.QUARANTINE", tmp_path), \
          mock.patch("music_scan.scan.PLAYLISTS", tmp_path), \
-         mock.patch("music_scan.scan.LIBRARY_DIR", tmp_path), \
          mock.patch("music_scan.scan.ScanMetrics"), \
          mock.patch("music_scan.scan.trigger_scan"):
         scan.run(pending=pending)
@@ -261,7 +258,6 @@ def test_run_asis_import_failure_continues_to_beet_update(tmp_path: Path) -> Non
          mock.patch("music_scan.scan.SPOTDL_DIR", tmp_path), \
          mock.patch("music_scan.scan.QUARANTINE", tmp_path), \
          mock.patch("music_scan.scan.PLAYLISTS", tmp_path), \
-         mock.patch("music_scan.scan.LIBRARY_DIR", tmp_path), \
          mock.patch("music_scan.scan.ScanMetrics"), \
          mock.patch("music_scan.scan.trigger_scan"):
         scan.run(pending=None)
@@ -269,13 +265,13 @@ def test_run_asis_import_failure_continues_to_beet_update(tmp_path: Path) -> Non
     assert update_called, "beet update should proceed even when asis-import raises"
 
 
-def test_run_library_update_failure_continues_to_regen_playlists(tmp_path: Path) -> None:
-    """A failure in update_library is logged but does not suppress playlist regeneration."""
+def test_run_beet_update_failure_continues_to_regen_playlists(tmp_path: Path) -> None:
+    """A failure in run_beet_update is logged but does not suppress playlist regeneration."""
     from music_scan import scan
 
     regen_called = []
 
-    with mock.patch("music_scan.scan.update_library", side_effect=RuntimeError("db gone")), \
+    with mock.patch("music_scan.scan.run_beet_update", side_effect=RuntimeError("db gone")), \
          mock.patch("music_scan.scan.MusicLibrary", return_value=_make_mock_lib()), \
          mock.patch("music_scan.scan.run_beet_import"), \
          mock.patch("music_scan.scan.regen_playlists", side_effect=lambda: regen_called.append(True)), \
@@ -284,12 +280,11 @@ def test_run_library_update_failure_continues_to_regen_playlists(tmp_path: Path)
          mock.patch("music_scan.scan.SPOTDL_DIR", tmp_path), \
          mock.patch("music_scan.scan.QUARANTINE", tmp_path), \
          mock.patch("music_scan.scan.PLAYLISTS", tmp_path), \
-         mock.patch("music_scan.scan.LIBRARY_DIR", tmp_path), \
          mock.patch("music_scan.scan.ScanMetrics"), \
          mock.patch("music_scan.scan.trigger_scan"):
         scan.run(pending=None)
 
-    assert regen_called, "regen_playlists should proceed even when update_library raises"
+    assert regen_called, "regen_playlists should proceed even when beet update raises"
 
 
 # ---------------------------------------------------------------------------
@@ -658,86 +653,3 @@ def test_run_beet_import_no_asis_flag_by_default() -> None:
     assert "--quiet" in cmd
 
 
-# ---------------------------------------------------------------------------
-# beet update guard: empty library dir
-# ---------------------------------------------------------------------------
-
-def _run_with_patches(tmp_path: Path, library_dir: Path, mock_lib: mock.MagicMock) -> tuple:
-    """Run scan.run(pending=None) with standard patches and return (captured_metrics, mock_update)."""
-    from music_scan import scan
-
-    captured: list = []
-
-    class FakeMetrics:
-        def __init__(self):
-            self.success = True
-            self.failure_reason = ""
-            self.tracks_imported = 0
-            self.tracks_removed = 0
-            self.quarantined_tracks = 0
-            self.duration_seconds = 0
-            captured.append(self)
-
-        def push(self):
-            pass
-
-    mock_update = mock.MagicMock()
-
-    with mock.patch("music_scan.scan.MusicLibrary", return_value=mock_lib), \
-         mock.patch("music_scan.scan.run_beet_import"), \
-         mock.patch("music_scan.scan.run_beet_update", mock_update), \
-         mock.patch("music_scan.scan._move_asis_eligible", return_value=0), \
-         mock.patch("music_scan.scan.INBOX", tmp_path), \
-         mock.patch("music_scan.scan.SPOTDL_DIR", tmp_path), \
-         mock.patch("music_scan.scan.QUARANTINE", tmp_path), \
-         mock.patch("music_scan.scan.PLAYLISTS", tmp_path), \
-         mock.patch("music_scan.scan.LIBRARY_DIR", library_dir), \
-         mock.patch("music_scan.scan.ScanMetrics", FakeMetrics), \
-         mock.patch("music_scan.scan.trigger_scan"):
-        scan.run(pending=None)
-
-    return captured, mock_update
-
-
-def test_beet_update_skipped_when_staging_empty_and_db_nonempty(tmp_path: Path) -> None:
-    """Guard fires: staging dir has no audio files but DB has items — beet update is skipped."""
-    mock_lib = _make_mock_lib()
-    mock_lib.item_count = mock.MagicMock(return_value=42)
-
-    # library_dir = tmp_path has no audio files
-    captured, mock_update = _run_with_patches(tmp_path, tmp_path, mock_lib)
-
-    assert len(captured) == 1
-    assert captured[0].success is False
-    assert captured[0].failure_reason == "empty_library_dir"
-    mock_update.assert_not_called()
-
-
-def test_beet_update_runs_when_staging_has_audio(tmp_path: Path) -> None:
-    """Normal operation: staging has at least one audio file — beet update runs."""
-    library_dir = tmp_path / "staging"
-    library_dir.mkdir()
-    (library_dir / "Artist" / "Album").mkdir(parents=True)
-    (library_dir / "Artist" / "Album" / "01 - Track.m4a").touch()
-
-    mock_lib = _make_mock_lib()
-    mock_lib.item_count = mock.MagicMock(return_value=42)
-
-    captured, mock_update = _run_with_patches(tmp_path, library_dir, mock_lib)
-
-    assert len(captured) == 1
-    assert captured[0].success is True
-    mock_update.assert_called_once()
-
-
-def test_beet_update_runs_on_first_run_with_empty_staging_and_empty_db(tmp_path: Path) -> None:
-    """First run: staging is empty and DB is empty — nothing to protect, beet update runs."""
-    mock_lib = _make_mock_lib()
-    mock_lib.item_count = mock.MagicMock(return_value=0)
-
-    # library_dir = tmp_path has no audio files; DB also has 0 items
-    captured, mock_update = _run_with_patches(tmp_path, tmp_path, mock_lib)
-
-    assert len(captured) == 1
-    assert captured[0].success is True
-    mock_update.assert_called_once()
