@@ -56,6 +56,14 @@ class MusicLibrary:
             for item in items
         ]
 
+    def spotify_urls_by_source(self, source: str) -> frozenset[str]:
+        """Spotify URLs stored as flex attr for all items with the given source tag."""
+        return frozenset(
+            item.get("spotify_url")
+            for item in self.items_by_source(source)
+            if item.get("spotify_url")
+        )
+
     # ------------------------------------------------------------------
     # Modification helpers
     # ------------------------------------------------------------------

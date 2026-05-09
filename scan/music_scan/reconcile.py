@@ -71,18 +71,7 @@ def reconcile_snapshot(
 
     playlist_name = spotdl_file.stem
 
-    # Build verified URL set from beets library paths for this playlist.
-    library_urls: set[str] = set()
-    for path in library.paths_by_source(playlist_name):
-        if not path.exists():
-            logger.warning("Beets has stale path for %s: %s", playlist_name, path)
-            continue
-        url = _read_spotify_url(path)
-        if url:
-            library_urls.add(url)
-        else:
-            logger.warning("Could not read Spotify URL from library file: %s", path)
-
+    library_urls = library.spotify_urls_by_source(playlist_name)
     all_safe = library_urls | safe_urls
 
     kept: list[dict] = []
