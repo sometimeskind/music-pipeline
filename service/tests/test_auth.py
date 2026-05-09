@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
+from unittest.mock import patch
+
 import pytest
-from unittest.mock import MagicMock
 
 from music_service.api import create_app
 
@@ -11,10 +12,7 @@ from music_service.api import create_app
 @pytest.fixture
 def app(monkeypatch):
     monkeypatch.setenv("API_BEARER_TOKEN", "test-secret")
-    orc = MagicMock()
-    orc.try_run_fetch.return_value = True
-    orc.try_run_scan.return_value = True
-    flask_app = create_app(orc)
+    flask_app = create_app()
     flask_app.config["TESTING"] = True
     return flask_app
 
@@ -40,5 +38,6 @@ def test_protected_wrong_token_returns_401(client):
 
 
 def test_protected_correct_token_returns_202(client):
-    resp = client.post("/fetch/trigger", headers={"Authorization": "Bearer test-secret"})
+    with patch("music_service.prefect_client.trigger_fetch", return_value=True):
+        resp = client.post("/fetch/trigger", headers={"Authorization": "Bearer test-secret"})
     assert resp.status_code == 202

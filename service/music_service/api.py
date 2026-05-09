@@ -7,6 +7,7 @@ import os
 import zipfile
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Callable
 
 from flask import Flask, jsonify, request, send_file
 
@@ -30,8 +31,12 @@ def _list_dir(root: Path) -> list[dict]:
     return files
 
 
-def create_app(orchestrator) -> Flask:
-    """Application factory.  Inject an Orchestrator instance for testability."""
+def create_app(schedule_scan: Callable[[], None] | None = None) -> Flask:
+    """Application factory.
+
+    *schedule_scan* is called (fire-and-forget) when a zip upload arrives, to
+    schedule a debounced scan run via the Prefect deployment.
+    """
     app = Flask(__name__)
     setup_auth(app)
 
@@ -64,7 +69,8 @@ def create_app(orchestrator) -> Flask:
                 zf.extractall(inbox)
         except zipfile.BadZipFile:
             return jsonify({"error": "invalid zip"}), 400
-        orchestrator.schedule_scan()
+        if schedule_scan is not None:
+            schedule_scan()
         return jsonify({}), 200
 
     # ------------------------------------------------------------------
@@ -77,7 +83,6 @@ def create_app(orchestrator) -> Flask:
 
     @app.get("/quarantine/download/<path:name>")
     def quarantine_download(name: str):
-        # Guard against path traversal
         try:
             target = (quarantine / name).resolve()
         except Exception:
@@ -93,7 +98,6 @@ def create_app(orchestrator) -> Flask:
         if target.is_file():
             return send_file(target)
 
-        # Directory: zip on-the-fly
         buf = io.BytesIO()
         with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
             for f in sorted(target.rglob("*")):
@@ -108,19 +112,20 @@ def create_app(orchestrator) -> Flask:
         )
 
     # ------------------------------------------------------------------
-    # Triggers
+    # Triggers — submit a Prefect deployment run and return 202 immediately.
     # ------------------------------------------------------------------
 
     @app.post("/fetch/trigger")
     def fetch_trigger():
-        if not orchestrator.try_run_fetch():
-            return jsonify({"error": "busy"}), 409
+        from music_service.prefect_client import trigger_fetch
+        if not trigger_fetch():
+            return jsonify({"error": "failed to submit run — is the Prefect server reachable?"}), 503
         return jsonify({}), 202
 
     @app.post("/scan/trigger")
     def scan_trigger():
-        if not orchestrator.try_run_scan():
-            return jsonify({"error": "busy"}), 409
+        from music_service.prefect_client import trigger_scan
+        trigger_scan()
         return jsonify({}), 202
 
     return app
