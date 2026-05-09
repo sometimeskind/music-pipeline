@@ -16,21 +16,13 @@ AUTH = {"Authorization": "Bearer test-secret"}
 
 
 @pytest.fixture
-def orc():
-    m = MagicMock()
-    m.try_run_fetch.return_value = True
-    m.try_run_scan.return_value = True
-    return m
-
-
-@pytest.fixture
-def app(monkeypatch, tmp_path, orc):
+def app(monkeypatch, tmp_path):
     monkeypatch.setenv("API_BEARER_TOKEN", "test-secret")
     monkeypatch.setenv("MUSIC_INBOX", str(tmp_path / "inbox"))
     monkeypatch.setenv("MUSIC_QUARANTINE", str(tmp_path / "quarantine"))
     (tmp_path / "inbox").mkdir()
     (tmp_path / "quarantine").mkdir()
-    flask_app = create_app(orc)
+    flask_app = create_app()
     flask_app.config["TESTING"] = True
     return flask_app
 
@@ -79,7 +71,7 @@ def test_inbox_list_nested(client, tmp_path):
 # ---------------------------------------------------------------------------
 
 
-def test_inbox_upload_extracts_zip(client, tmp_path, orc):
+def test_inbox_upload_extracts_zip(client, tmp_path):
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w") as zf:
         zf.writestr("track.m4a", b"audio-data")
@@ -93,14 +85,25 @@ def test_inbox_upload_extracts_zip(client, tmp_path, orc):
     assert extracted.read_bytes() == b"audio-data"
 
 
-def test_inbox_upload_triggers_debounced_scan(client, tmp_path, orc):
+def test_inbox_upload_calls_schedule_scan(tmp_path, monkeypatch):
+    monkeypatch.setenv("API_BEARER_TOKEN", "test-secret")
+    monkeypatch.setenv("MUSIC_INBOX", str(tmp_path / "inbox"))
+    monkeypatch.setenv("MUSIC_QUARANTINE", str(tmp_path / "quarantine"))
+    (tmp_path / "inbox").mkdir()
+    (tmp_path / "quarantine").mkdir()
+
+    schedule_scan = MagicMock()
+    flask_app = create_app(schedule_scan=schedule_scan)
+    flask_app.config["TESTING"] = True
+    client = flask_app.test_client()
+
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w") as zf:
         zf.writestr("track.m4a", b"x")
     buf.seek(0)
 
     client.post("/inbox/upload", data=buf.read(), headers=AUTH, content_type="application/zip")
-    orc.schedule_scan.assert_called_once()
+    schedule_scan.assert_called_once()
 
 
 def test_inbox_upload_empty_body_returns_400(client):
@@ -173,16 +176,16 @@ def test_quarantine_download_path_traversal_blocked(client):
 # ---------------------------------------------------------------------------
 
 
-def test_fetch_trigger_returns_202(client, orc):
-    resp = client.post("/fetch/trigger", headers=AUTH)
+def test_fetch_trigger_returns_202(client):
+    with patch("music_service.prefect_client.trigger_fetch", return_value=True):
+        resp = client.post("/fetch/trigger", headers=AUTH)
     assert resp.status_code == 202
-    orc.try_run_fetch.assert_called_once()
 
 
-def test_fetch_trigger_returns_409_when_busy(client, orc):
-    orc.try_run_fetch.return_value = False
-    resp = client.post("/fetch/trigger", headers=AUTH)
-    assert resp.status_code == 409
+def test_fetch_trigger_returns_503_when_prefect_unreachable(client):
+    with patch("music_service.prefect_client.trigger_fetch", return_value=False):
+        resp = client.post("/fetch/trigger", headers=AUTH)
+    assert resp.status_code == 503
 
 
 # ---------------------------------------------------------------------------
@@ -190,13 +193,7 @@ def test_fetch_trigger_returns_409_when_busy(client, orc):
 # ---------------------------------------------------------------------------
 
 
-def test_scan_trigger_returns_202(client, orc):
-    resp = client.post("/scan/trigger", headers=AUTH)
+def test_scan_trigger_returns_202(client):
+    with patch("music_service.prefect_client.trigger_scan"):
+        resp = client.post("/scan/trigger", headers=AUTH)
     assert resp.status_code == 202
-    orc.try_run_scan.assert_called_once()
-
-
-def test_scan_trigger_returns_409_when_busy(client, orc):
-    orc.try_run_scan.return_value = False
-    resp = client.post("/scan/trigger", headers=AUTH)
-    assert resp.status_code == 409

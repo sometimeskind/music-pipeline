@@ -1,10 +1,31 @@
 services:
+  prefect-server:
+    image: prefecthq/prefect:3-latest
+    command: prefect server start
+    environment:
+      PREFECT_SERVER_API_HOST: 0.0.0.0
+      # Tells the browser-side UI where to find the API (host-accessible URL).
+      PREFECT_UI_API_URL: http://localhost:4200/api
+    ports:
+      - "4200:4200"
+    volumes:
+      - prefect-data:/root/.prefect
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request as u; u.urlopen('http://localhost:4200/api/health', timeout=2)"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 30s
+
   service:
     build:
       context: .
       dockerfile: service/Dockerfile
       target: prod
     image: ghcr.io/sometimeskind/music-pipeline:latest
+    depends_on:
+      prefect-server:
+        condition: service_healthy
     volumes:
       - /home/tom/Music:/root/Music
       - beets-data:/root/.config/beets
@@ -22,8 +43,11 @@ services:
       - SYNC_JITTER_SECONDS=${SYNC_JITTER_SECONDS:-}
       - PUSHGATEWAY_URL=${PUSHGATEWAY_URL:-}
       - BEET_SKIP_LIMIT=${BEET_SKIP_LIMIT:-}
+      - PREFECT_API_URL=http://prefect-server:4200/api
+      - FETCH_CRON=${FETCH_CRON:-0 3 * * *}
     ports:
       - "8080:8080"
 
 volumes:
   beets-data:
+  prefect-data:

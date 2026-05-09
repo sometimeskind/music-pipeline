@@ -1,45 +1,82 @@
-"""Console entry point: music-pipeline."""
+"""Entry point: music-pipeline service."""
 
 from __future__ import annotations
 
 import logging
 import os
-import signal
 import sys
-
+import threading
+from pathlib import Path
 
 logging.basicConfig(
     level=logging.INFO,
     format="[%(asctime)s] %(message)s",
     datefmt="%Y-%m-%dT%H:%M:%S%z",
 )
-
 logger = logging.getLogger(__name__)
+
+_AUDIO_EXTS = {".mp3", ".flac", ".ogg", ".opus", ".m4a", ".aac", ".wav", ".wma", ".aiff", ".ape", ".mpc"}
+
+
+def _start_file_watcher(on_audio_created):
+    from watchdog.events import FileSystemEventHandler
+    from watchdog.observers import Observer
+
+    class _Handler(FileSystemEventHandler):
+        def on_created(self, event):
+            if Path(event.src_path).suffix.lower() in _AUDIO_EXTS:
+                logger.debug("File created: %s — scheduling debounced scan", event.src_path)
+                on_audio_created()
+
+    inbox = Path(os.environ.get("MUSIC_INBOX", "/root/Music/inbox"))
+    observer = Observer()
+    observer.schedule(_Handler(), str(inbox), recursive=True)
+    observer.start()
+    logger.info("File watcher started on %s", inbox)
+    return observer
 
 
 def main() -> None:
-    """Entry point: music-pipeline."""
-    missing = [
-        v for v in ("SPOTIFY_CLIENT_ID", "SPOTIFY_CLIENT_SECRET", "API_BEARER_TOKEN")
-        if not os.environ.get(v)
-    ]
+    missing = [v for v in ("SPOTIFY_CLIENT_ID", "SPOTIFY_CLIENT_SECRET", "API_BEARER_TOKEN") if not os.environ.get(v)]
     if missing:
         for var in missing:
             logger.error("Required environment variable not set: %s", var)
         sys.exit(1)
 
-    from music_service.orchestrator import Orchestrator  # noqa: PLC0415
-    from music_service.api import create_app  # noqa: PLC0415
-    import waitress  # noqa: PLC0415
+    from prefect import serve as prefect_serve
 
-    orchestrator = Orchestrator()
-    orchestrator.start()
+    from music_service.api import create_app
+    from music_service.debounce import Debouncer
+    from music_service.flows import fetch_and_scan_flow, scan_flow
+    from music_service.prefect_client import trigger_scan
+    import waitress
 
-    signal.signal(signal.SIGTERM, lambda *_: orchestrator.stop())
+    fetch_cron = os.environ.get("FETCH_CRON", "0 3 * * *")
 
-    app = create_app(orchestrator)
-    logger.info("Starting music-pipeline service on 0.0.0.0:8080")
+    debouncer = Debouncer(delay=30.0, callback=trigger_scan)
+
+    # Flask API in a background daemon thread.
+    app = create_app(schedule_scan=debouncer.trigger)
+    flask_thread = threading.Thread(
+        target=lambda: waitress.serve(app, host="0.0.0.0", port=8080),
+        daemon=True,
+    )
+    flask_thread.start()
+    logger.info("Flask API started on 0.0.0.0:8080")
+
+    # File watcher in background (watchdog starts its own threads).
+    observer = _start_file_watcher(debouncer.trigger)
+
+    fetch_deployment = fetch_and_scan_flow.to_deployment(
+        name="fetch-and-scan",
+        cron=fetch_cron,
+    )
+    scan_deployment = scan_flow.to_deployment(name="scan")
+
+    logger.info("Starting Prefect runner (FETCH_CRON=%s)", fetch_cron)
     try:
-        waitress.serve(app, host="0.0.0.0", port=8080)
+        prefect_serve(fetch_deployment, scan_deployment)
     finally:
-        orchestrator.stop()
+        debouncer.cancel()
+        observer.stop()
+        observer.join()

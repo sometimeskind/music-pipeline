@@ -9,7 +9,7 @@ requires-python = ">=3.11"
 dependencies = [
     "music-pipeline-fetch",
     "music-pipeline-scan",
-    "apscheduler>=3.10,<4",
+    "prefect>=3.7,<4",
     "watchdog>=4.0",
     "flask>=3.0",
     "waitress>=3.0",
