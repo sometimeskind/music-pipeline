@@ -48,6 +48,13 @@ scan:
 sync:
     just fetch && just scan
 
+# One-time migration: populate spotify_url flex attr for items imported before #100 fix.
+# Pass --dry-run to preview, --playlist <name> to limit to one playlist.
+backfill-spotify-urls *args:
+    docker compose run --rm \
+        --volume {{justfile_directory()}}/scripts/backfill-spotify-urls.py:/tmp/backfill-spotify-urls.py \
+        service python3 /tmp/backfill-spotify-urls.py {{args}}
+
 # Dump beets DB and export JSON from the container
 backup:
     docker compose run --rm service sh -c "beet export > /root/.config/beets/library-export.json"

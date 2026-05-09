@@ -24,6 +24,7 @@ def _make_plugin() -> MusicPipelinePlugin:
     plugin = MusicPipelinePlugin.__new__(MusicPipelinePlugin)
     plugin._log = MagicMock()
     plugin._pending_sources = {}
+    plugin._pending_spotify_urls = {}
     return plugin
 
 
@@ -354,3 +355,87 @@ def test_handle_duplicates_manual_duplicate_deletes_inbox_file() -> None:
         plugin.handle_duplicates(session=MagicMock(), task=task)
 
     mock_path.return_value.unlink.assert_called_once_with(missing_ok=True)
+
+
+# ---------------------------------------------------------------------------
+# MusicPipelinePlugin.tag_source_on_created — spotify_url capture
+# ---------------------------------------------------------------------------
+
+
+def test_tag_source_on_created_sets_spotify_url_and_caches() -> None:
+    """Spotify URL read from the inbox file is set on the item and cached."""
+    plugin = _make_plugin()
+    item = _item("/root/Music/inbox/spotdl/jazz/Artist - My Track.m4a", title="My Track")
+    task = _task(item=item)
+
+    with patch("music_scan.music_pipeline._read_spotify_url", return_value="https://open.spotify.com/track/X"):
+        plugin.tag_source_on_created(session=MagicMock(), task=task)
+
+    item.__setitem__.assert_any_call("spotify_url", "https://open.spotify.com/track/X")
+    assert plugin._pending_spotify_urls["Artist - My Track.m4a"] == "https://open.spotify.com/track/X"
+    assert plugin._pending_spotify_urls["my track"] == "https://open.spotify.com/track/X"
+
+
+def test_tag_source_on_created_no_spotify_url_does_not_set_or_cache() -> None:
+    """When no Spotify URL is in the inbox file, spotify_url is not set."""
+    plugin = _make_plugin()
+    item = _item("/root/Music/inbox/spotdl/jazz/track.m4a", title="Track")
+    task = _task(item=item)
+
+    with patch("music_scan.music_pipeline._read_spotify_url", return_value=None):
+        plugin.tag_source_on_created(session=MagicMock(), task=task)
+
+    written_keys = [c[0][0] for c in item.__setitem__.call_args_list]
+    assert "spotify_url" not in written_keys
+    assert plugin._pending_spotify_urls == {}
+
+
+# ---------------------------------------------------------------------------
+# MusicPipelinePlugin.tag_source_on_stored — spotify_url persistence
+# ---------------------------------------------------------------------------
+
+
+def test_tag_source_on_stored_persists_spotify_url_via_title_key() -> None:
+    """spotify_url is persisted via the title key (common case after beets renames the file)."""
+    plugin = _make_plugin()
+    plugin._pending_sources = {
+        "Artist - My Track.m4a": "jazz",
+        "my track": "jazz",
+    }
+    plugin._pending_spotify_urls = {
+        "Artist - My Track.m4a": "https://open.spotify.com/track/X",
+        "my track": "https://open.spotify.com/track/X",
+    }
+    item = _item("/root/Music/library/Artist/Album/03 - My Track.m4a", title="My Track")
+
+    plugin.tag_source_on_stored(lib=MagicMock(), item=item)
+
+    item.__setitem__.assert_any_call("spotify_url", "https://open.spotify.com/track/X")
+    item.store.assert_called_once()
+
+
+def test_tag_source_on_stored_persists_spotify_url_via_filename_key() -> None:
+    """spotify_url is persisted via the filename key when the file was not renamed."""
+    plugin = _make_plugin()
+    plugin._pending_sources = {"track.m4a": "jazz"}
+    plugin._pending_spotify_urls = {"track.m4a": "https://open.spotify.com/track/Y"}
+    item = _item("/root/Music/library/Artist/Album/track.m4a", title="Track")
+
+    plugin.tag_source_on_stored(lib=MagicMock(), item=item)
+
+    item.__setitem__.assert_any_call("spotify_url", "https://open.spotify.com/track/Y")
+    item.store.assert_called_once()
+
+
+def test_tag_source_on_stored_no_spotify_url_does_not_set() -> None:
+    """When no spotify_url was cached (e.g. file had no WOAS tag), it is not written."""
+    plugin = _make_plugin()
+    plugin._pending_sources = {"track.m4a": "jazz"}
+    # _pending_spotify_urls intentionally empty
+    item = _item("/root/Music/library/Artist/Album/track.m4a", title="Track")
+
+    plugin.tag_source_on_stored(lib=MagicMock(), item=item)
+
+    written_keys = [c[0][0] for c in item.__setitem__.call_args_list]
+    assert "spotify_url" not in written_keys
+    item.store.assert_called_once()
