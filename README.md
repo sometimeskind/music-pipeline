@@ -6,12 +6,70 @@ Dockerized music pipeline: Spotify playlists → spotdl downloads → beets impo
 Spotify playlists → spotdl → beets → ~/Music/library
 ```
 
-Two jobs run on separate schedules:
+Two top-level jobs run on separate schedules:
 
 | Job | Default schedule | Does |
 |---|---|---|
-| `music-scan` | Every 5 min | Import inbox → beets, refresh metadata, regenerate m3u |
-| `music-ingest` | Daily 03:00 UTC | spotdl sync all playlists → writes pending removals for music-scan |
+| `music-ingest` | Daily 03:00 UTC | Spotify/YouTube sync — downloads new tracks, queues removals |
+| `music-scan` | Every 5 min | Import inbox → beets, refresh metadata, regenerate .m3u |
+
+---
+
+## Pipeline internals
+
+A full sync cycle (`music-ingest` followed by `music-scan`) runs 8 discrete steps. Steps 1–2 are the **fetch phase**; steps 3–8 are the **scan phase**.
+
+```
+┌─ FETCH PHASE (music-ingest) ──────────────────────────────────────────┐
+│                                                                        │
+│  [1] Playlist reconciliation                                           │
+│        Reads playlists.conf; provisions new .spotdl files, syncs      │
+│        .nosync sentinels, queues playlists removed from config.        │
+│        │                                                               │
+│        ▼                                                               │
+│  [2] spotdl sync                                                       │
+│        Downloads new tracks from Spotify/YouTube into inbox/.          │
+│        Diffs snapshot URLs to detect tracks removed from Spotify.      │
+│        Returns a PendingRemovals struct (removed tracks + playlists).  │
+│                                                                        │
+└────────────────────────────────────────┬───────────────────────────────┘
+                                         │ PendingRemovals
+┌─ SCAN PHASE (music-scan) ─────────────▼───────────────────────────────┐
+│                                                                        │
+│  [3] Pending-removal cleanup           ◄── (no-op if scan runs alone) │
+│        Clears beets source= tags for tracks/playlists that were        │
+│        removed from Spotify or from playlists.conf.                    │
+│        │                                                               │
+│        ▼                                                               │
+│  [4] Beets import                                                      │
+│        Matches inbox audio to MusicBrainz/AcoustID; moves matched      │
+│        files to library/. Low-confidence matches go to quarantine/.    │
+│        │                                                               │
+│        ▼                                                               │
+│  [5] Quarantine + asis pass                                            │
+│        Moves unmatched inbox leftovers to quarantine/. Then attempts   │
+│        a second beet import --asis for quarantine files that already   │
+│        have sufficient embedded tags (title, artist, album, track#).   │
+│        │                                                               │
+│        ▼                                                               │
+│  [6] Library metadata refresh                                          │
+│        Runs beet update to refresh metadata on existing library items. │
+│        │                                                               │
+│        ▼                                                               │
+│  [7] Snapshot reconciliation                                           │
+│        Diffs each .spotdl file against the beets library + quarantine. │
+│        Drops URLs absent from both so spotdl re-downloads them next    │
+│        fetch rather than silently skipping forever.                    │
+│        │                                                               │
+│        ▼                                                               │
+│  [8] Playlist generation + Navidrome trigger                           │
+│        Regenerates .m3u files (in Spotify playlist order). Calls the   │
+│        Navidrome Subsonic API to trigger a library rescan.             │
+│                                                                        │
+└────────────────────────────────────────────────────────────────────────┘
+```
+
+Steps 3, 7, and 8 are no-ops when `music-scan` runs on its 5-minute schedule with no preceding fetch (no removals to apply, Navidrome already up to date). The scan phase is idempotent and safe to run at any time.
 
 ---
 
