@@ -16,29 +16,111 @@ def prefect_test_env():
         yield
 
 
-def test_fetch_task_calls_ingest_run():
-    from music_service.flows import fetch_task
-    mock_pending = MagicMock()
+# ---------------------------------------------------------------------------
+# Fetch tasks
+# ---------------------------------------------------------------------------
+
+
+def test_preflight_task_succeeds_when_no_reason():
+    from music_service.flows import preflight_task
     with patch("music_service.flows.ingest") as mock_ingest:
-        mock_ingest.run.return_value = mock_pending
-        result = fetch_task()
-        mock_ingest.run.assert_called_once()
-        assert result is mock_pending
+        mock_ingest.preflight.return_value = None
+        preflight_task()
+        mock_ingest.preflight.assert_called_once()
 
 
-def test_scan_task_calls_scan_run():
-    from music_service.flows import scan_task
+def test_preflight_task_raises_on_failure():
+    from music_service.flows import preflight_task
+    with patch("music_service.flows.ingest") as mock_ingest:
+        mock_ingest.preflight.return_value = "missing_cookies"
+        with pytest.raises(RuntimeError, match="missing_cookies"):
+            preflight_task()
+
+
+def test_reconcile_playlists_task_returns_remove_sources():
+    from music_service.flows import reconcile_playlists_task
+    with patch("music_service.flows.ingest") as mock_ingest:
+        mock_ingest.reconcile_playlists.return_value = ["old-playlist"]
+        result = reconcile_playlists_task()
+        assert result == ["old-playlist"]
+
+
+def test_spotdl_sync_task_returns_pending_and_pushes_metrics():
+    from music_service.flows import spotdl_sync_task
     mock_pending = MagicMock()
-    with patch("music_service.flows.scan") as mock_scan:
-        scan_task(mock_pending)
-        mock_scan.run.assert_called_once_with(mock_pending)
+    mock_metrics = MagicMock()
+    with patch("music_service.flows.ingest") as mock_ingest, \
+         patch("music_service.flows.IngestMetrics", return_value=mock_metrics):
+        mock_ingest.sync_playlists.return_value = mock_pending
+        result = spotdl_sync_task([])
+        assert result is mock_pending
+        mock_metrics.push.assert_called_once()
 
 
-def test_scan_task_with_no_pending():
-    from music_service.flows import scan_task
+def test_spotdl_sync_task_pushes_metrics_on_failure():
+    from music_service.flows import spotdl_sync_task
+    mock_metrics = MagicMock()
+    with patch("music_service.flows.ingest") as mock_ingest, \
+         patch("music_service.flows.IngestMetrics", return_value=mock_metrics):
+        mock_ingest.sync_playlists.side_effect = RuntimeError("boom")
+        with pytest.raises(RuntimeError):
+            spotdl_sync_task([])
+        mock_metrics.push.assert_called_once()
+        assert mock_metrics.success is False
+
+
+# ---------------------------------------------------------------------------
+# Scan tasks
+# ---------------------------------------------------------------------------
+
+
+def test_apply_removals_task_skips_when_none():
+    from music_service.flows import apply_removals_task
     with patch("music_service.flows.scan") as mock_scan:
-        scan_task(None)
-        mock_scan.run.assert_called_once_with(None)
+        apply_removals_task(None)
+        mock_scan.apply_pending_removals.assert_not_called()
+
+
+def test_apply_removals_task_calls_apply_pending_removals():
+    from music_service.flows import apply_removals_task
+    mock_pending = MagicMock()
+    mock_lib = MagicMock()
+    with patch("music_service.flows.scan") as mock_scan, \
+         patch("music_scan.library.MusicLibrary") as MockLib:
+        MockLib.return_value.__enter__ = lambda s: mock_lib
+        MockLib.return_value.__exit__ = MagicMock(return_value=False)
+        apply_removals_task(mock_pending)
+        mock_scan.apply_pending_removals.assert_called_once()
+
+
+def test_beet_import_task_returns_imported():
+    from music_service.flows import beet_import_task
+    with patch("music_service.flows.scan") as mock_scan:
+        mock_scan.run_inbox_import.return_value = [("Title", "Artist")]
+        result = beet_import_task()
+        assert result == [("Title", "Artist")]
+        mock_scan.run_inbox_import.assert_called_once()
+
+
+def test_quarantine_task_calls_quarantine():
+    from music_service.flows import quarantine_task
+    with patch("music_service.flows.scan") as mock_scan:
+        quarantine_task()
+        mock_scan.quarantine_inbox_leftovers.assert_called_once()
+
+
+def test_asis_import_task_calls_asis_import():
+    from music_service.flows import asis_import_task
+    with patch("music_service.flows.scan") as mock_scan:
+        asis_import_task()
+        mock_scan.import_asis_from_quarantine.assert_called_once()
+
+
+def test_regen_playlists_task_calls_regen():
+    from music_service.flows import regen_playlists_task
+    with patch("music_service.flows.scan") as mock_scan:
+        regen_playlists_task()
+        mock_scan.regen_playlists.assert_called_once()
 
 
 def test_reconcile_task_calls_reconcile_all():
@@ -48,29 +130,66 @@ def test_reconcile_task_calls_reconcile_all():
         mock_reconcile.reconcile_all.assert_called_once()
 
 
-def test_fetch_and_scan_flow_chains_fetch_then_scan_then_reconcile():
+# ---------------------------------------------------------------------------
+# Flows
+# ---------------------------------------------------------------------------
+
+
+def test_fetch_and_scan_flow_runs_all_steps_in_order():
     from music_service.flows import fetch_and_scan_flow
-    mock_pending = MagicMock()
     call_order: list[str] = []
+    mock_pending = MagicMock()
+    mock_metrics = MagicMock()
 
     with patch("music_service.flows.ingest") as mock_ingest, \
          patch("music_service.flows.scan") as mock_scan, \
-         patch("music_service.flows.reconcile") as mock_reconcile:
-        mock_ingest.run.side_effect = lambda: (call_order.append("fetch"), mock_pending)[1]
-        mock_scan.run.side_effect = lambda p: call_order.append("scan")
-        mock_reconcile.reconcile_all.side_effect = lambda: call_order.append("reconcile")
+         patch("music_service.flows.reconcile") as mock_reconcile, \
+         patch("music_service.flows.IngestMetrics", return_value=mock_metrics):
+        mock_ingest.preflight.side_effect = lambda: call_order.append("preflight")
+        mock_ingest.reconcile_playlists.side_effect = lambda: (call_order.append("reconcile-playlists"), [])[1]
+        mock_ingest.sync_playlists.side_effect = lambda rs, m: (call_order.append("spotdl-sync"), mock_pending)[1]
+        mock_scan.apply_pending_removals.side_effect = lambda p, l: call_order.append("apply-removals")
+        mock_scan.run_inbox_import.side_effect = lambda: (call_order.append("beet-import"), [])[1]
+        mock_scan.quarantine_inbox_leftovers.side_effect = lambda: call_order.append("quarantine")
+        mock_scan.import_asis_from_quarantine.side_effect = lambda: call_order.append("asis-import")
+        mock_scan.regen_playlists.side_effect = lambda: call_order.append("regen-playlists")
+        mock_reconcile.reconcile_all.side_effect = lambda: call_order.append("reconcile-snapshots")
 
-        fetch_and_scan_flow()
+        with patch("music_scan.library.MusicLibrary") as MockLib, \
+             patch("music_scan.process.run_beet_update") as mock_update, \
+             patch("music_scan.navidrome.trigger_scan") as mock_navidrome:
+            MockLib.return_value.__enter__ = lambda s: MagicMock()
+            MockLib.return_value.__exit__ = MagicMock(return_value=False)
+            mock_update.side_effect = lambda: call_order.append("beet-update")
+            mock_navidrome.side_effect = lambda: call_order.append("navidrome")
 
-        assert call_order == ["fetch", "scan", "reconcile"]
-        mock_scan.run.assert_called_once_with(mock_pending)
+            fetch_and_scan_flow()
+
+    assert call_order == [
+        "preflight",
+        "reconcile-playlists",
+        "spotdl-sync",
+        "apply-removals",
+        "beet-import",
+        "quarantine",
+        "asis-import",
+        "beet-update",
+        "regen-playlists",
+        "navidrome",
+        "reconcile-snapshots",
+    ]
 
 
-def test_scan_flow_skips_fetch():
+def test_scan_flow_skips_fetch_tasks():
     from music_service.flows import scan_flow
     with patch("music_service.flows.ingest") as mock_ingest, \
          patch("music_service.flows.scan") as mock_scan, \
          patch("music_service.flows.reconcile"):
-        scan_flow()
-        mock_ingest.run.assert_not_called()
-        mock_scan.run.assert_called_once_with(None)
+        mock_scan.run_inbox_import.return_value = []
+        with patch("music_scan.process.run_beet_update"), \
+             patch("music_scan.navidrome.trigger_scan"):
+            scan_flow()
+        mock_ingest.preflight.assert_not_called()
+        mock_ingest.reconcile_playlists.assert_not_called()
+        mock_ingest.sync_playlists.assert_not_called()
+        mock_scan.run_inbox_import.assert_called_once()
