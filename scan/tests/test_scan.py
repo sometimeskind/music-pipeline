@@ -59,7 +59,7 @@ def test_count_quarantine_with_files(tmp_path: Path) -> None:
 
 
 def test_quarantine_leftovers(tmp_path: Path) -> None:
-    from music_scan.scan import _quarantine_inbox_leftovers
+    from music_scan.scan import quarantine_inbox_leftovers
 
     inbox = tmp_path / "inbox"
     inbox.mkdir()
@@ -75,7 +75,7 @@ def test_quarantine_leftovers(tmp_path: Path) -> None:
     (inbox / "readme.txt").touch()
 
     with mock.patch("music_scan.scan.INBOX", inbox), mock.patch("music_scan.scan.QUARANTINE", quarantine):
-        moved = _quarantine_inbox_leftovers()
+        moved = quarantine_inbox_leftovers()
 
     assert moved == 2
     assert (quarantine / "unmatched.m4a").exists()

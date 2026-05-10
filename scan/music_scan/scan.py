@@ -81,13 +81,31 @@ def _check_import_names(inbox_stems: list[str], imported: list[tuple[str, str]])
         logger.info("==> Name check OK: all %d imported tracks resemble their inbox source files", len(imported))
 
 
+def run_inbox_import(skip_limit: int | None = None) -> list[tuple[str, str]]:
+    """Snapshot inbox, run beet import, check names. Returns (title, artist) pairs."""
+    if skip_limit is None:
+        skip_limit_env = os.environ.get("BEET_SKIP_LIMIT")
+        skip_limit = int(skip_limit_env) if skip_limit_env else None
+    if skip_limit is not None:
+        logger.info("Skip limit    : %d (early termination enabled)", skip_limit)
+    inbox_snapshot = _snapshot_inbox(INBOX)
+    logger.info("Inbox snapshot : %d audio file(s) queued for import", len(inbox_snapshot))
+    import_start = time.time()
+    run_beet_import(INBOX, skip_limit=skip_limit)
+    with MusicLibrary(LIBRARY_DB) as lib:
+        imported = lib.items_added_since(import_start)
+    logger.info("Newly imported : %d track(s)", len(imported))
+    _check_import_names(inbox_snapshot, imported)
+    return imported
+
+
 def _count_quarantine() -> int:
     if not QUARANTINE.exists():
         return 0
     return sum(1 for _ in QUARANTINE.rglob("*") if _.is_file())
 
 
-def _quarantine_inbox_leftovers() -> int:
+def quarantine_inbox_leftovers() -> int:
     """Move any audio files still anywhere in the inbox tree to quarantine.
 
     After ``beet import`` has processed everything it can, un-matched audio
@@ -269,22 +287,10 @@ def run(pending: PendingRemovals | None = None) -> None:
         quarantined_before = _count_quarantine()
 
         logger.info("==> Importing from inbox...")
-        skip_limit_env = os.environ.get("BEET_SKIP_LIMIT")
-        skip_limit = int(skip_limit_env) if skip_limit_env else None
-        if skip_limit is not None:
-            logger.info("Skip limit    : %d (early termination enabled)", skip_limit)
-        inbox_snapshot = _snapshot_inbox(INBOX)
-        logger.info("Inbox snapshot : %d audio file(s) queued for import", len(inbox_snapshot))
-        import_start = time.time()
-        run_beet_import(INBOX, skip_limit=skip_limit)
-
-        with MusicLibrary(LIBRARY_DB) as lib:
-            imported = lib.items_added_since(import_start)
-        logger.info("Newly imported : %d track(s)", len(imported))
-        _check_import_names(inbox_snapshot, imported)
+        imported = run_inbox_import()
 
         logger.info("==> Quarantining skipped files...")
-        moved = _quarantine_inbox_leftovers()
+        moved = quarantine_inbox_leftovers()
         logger.info("Quarantined : %d file(s) → %s", moved, QUARANTINE)
         logger.info("Log         : ~/.config/beets/import.log")
 

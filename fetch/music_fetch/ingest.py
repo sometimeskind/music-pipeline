@@ -65,7 +65,7 @@ def classify_failure(error_msg: str) -> str:
     return "spotdl_error"
 
 
-def _preflight() -> str | None:
+def preflight() -> str | None:
     """Return a failure-reason string if pre-flight checks fail, else None."""
     if not COOKIE_FILE.exists():
         logger.error("Error: YouTube Premium cookies not found at %s", COOKIE_FILE)
@@ -309,7 +309,7 @@ def run() -> PendingRemovals:
     metrics = IngestMetrics()
     start = time.monotonic()
 
-    failure_reason = _preflight()
+    failure_reason = preflight()
     if failure_reason:
         metrics.success = False
         metrics.failure_reason = failure_reason

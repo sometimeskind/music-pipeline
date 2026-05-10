@@ -466,7 +466,7 @@ def test_preflight_missing_cookies(tmp_path: Path) -> None:
 
     with mock.patch.object(ingest, "COOKIE_FILE", tmp_path / "cookies.txt"), \
          mock.patch.dict("os.environ", {"SPOTIFY_CLIENT_ID": "id", "SPOTIFY_CLIENT_SECRET": "secret"}):
-        result = ingest._preflight()
+        result = ingest.preflight()
 
     assert result == "missing_cookies"
 
@@ -480,7 +480,7 @@ def test_preflight_missing_spotify_env(tmp_path: Path) -> None:
 
     with mock.patch.object(ingest, "COOKIE_FILE", cookie_file), \
          mock.patch.dict("os.environ", {}, clear=True):
-        result = ingest._preflight()
+        result = ingest.preflight()
 
     assert result == "auth_spotify"
 
@@ -497,7 +497,7 @@ def test_preflight_disk_full(tmp_path: Path) -> None:
     with mock.patch.object(ingest, "COOKIE_FILE", cookie_file), \
          mock.patch.dict("os.environ", {"SPOTIFY_CLIENT_ID": "id", "SPOTIFY_CLIENT_SECRET": "secret"}), \
          mock.patch("shutil.disk_usage", return_value=mock.Mock(free=512 * 1024 * 1024)):  # 0.5 GB
-        result = ingest._preflight()
+        result = ingest.preflight()
 
     assert result == "disk_full"
 
@@ -512,7 +512,7 @@ def test_preflight_ok(tmp_path: Path) -> None:
     with mock.patch.object(ingest, "COOKIE_FILE", cookie_file), \
          mock.patch.dict("os.environ", {"SPOTIFY_CLIENT_ID": "id", "SPOTIFY_CLIENT_SECRET": "secret"}), \
          mock.patch("shutil.disk_usage", return_value=mock.Mock(free=10 * 1024**3)):  # 10 GB
-        result = ingest._preflight()
+        result = ingest.preflight()
 
     assert result is None
 
