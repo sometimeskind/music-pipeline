@@ -49,6 +49,14 @@ scan:
 sync:
     just fetch && just scan
 
+# Show tracks currently in MISS backoff (backed off after repeated 'no source found' failures)
+list-failures:
+    docker compose run --rm service sh -c "cat /root/Music/inbox/.spotdl-failures.json 2>/dev/null | python3 -m json.tool || echo '(no backoff state)'"
+
+# Clear all MISS backoff state — all tracks will be retried on the next run
+clear-failures:
+    docker compose run --rm service sh -c "rm -f /root/Music/inbox/.spotdl-failures.json && echo Cleared"
+
 # One-time migration: populate spotify_url flex attr for items imported before #100 fix.
 # Pass --dry-run to preview, --playlist <name> to limit to one playlist.
 backfill-spotify-urls *args:

@@ -31,6 +31,7 @@ from music_fetch.spotdl_ops import find_track_in_snapshot, save_playlist, sync_p
 logger = logging.getLogger(__name__)
 
 SPOTDL_DIR = Path("/root/Music/inbox/spotdl")
+FAILURES_FILE = SPOTDL_DIR.parent / ".spotdl-failures.json"
 COOKIE_FILE = Path("/root/.config/spotdl/cookies.txt")
 CONF_PATH = Path("/root/.config/music-pipeline/playlists.conf")
 
@@ -279,6 +280,7 @@ def sync_playlists(
                 output_dir=output_dir,
                 cookie_file=COOKIE_FILE,
                 track_limit=remaining,
+                failures_file=FAILURES_FILE,
             )
         except Exception as exc:
             reason = classify_failure(str(exc))
@@ -321,6 +323,7 @@ def run() -> PendingRemovals:
 
     try:
         logger.info("==> music-ingest starting")
+        logger.info("MISS backoff state: %s", FAILURES_FILE)
 
         logger.info("==> Reconciling playlists...")
         try:

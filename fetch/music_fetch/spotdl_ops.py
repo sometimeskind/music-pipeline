@@ -11,11 +11,32 @@ from __future__ import annotations
 import json
 import logging
 import os
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
 _spotdl_instance = None  # process-wide singleton (SpotifyClient + ProgressHandler can't be reinitialised)
+
+_BACKOFF_SCHEDULE = [7, 14, 28]  # days; last value repeats indefinitely
+
+
+def _backoff_days(attempts: int) -> int:
+    return _BACKOFF_SCHEDULE[min(attempts, len(_BACKOFF_SCHEDULE)) - 1]
+
+
+def _load_failures(failures_file: Path) -> dict:
+    if not failures_file.exists():
+        return {}
+    try:
+        return json.loads(failures_file.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        logger.warning("Could not read %s — treating as empty", failures_file)
+        return {}
+
+
+def _save_failures(failures_file: Path, data: dict) -> None:
+    failures_file.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
 
 
 def _song_label(song) -> str:
@@ -101,6 +122,7 @@ def sync_playlist(
     output_dir: Path,
     cookie_file: Path,
     track_limit: int | None = None,
+    failures_file: Path | None = None,
 ) -> tuple[set[str], int]:
     """Sync a playlist from its .spotdl file.
 
@@ -155,6 +177,25 @@ def sync_playlist(
 
     # Identify tracks not yet downloaded (absent from the previous snapshot).
     truly_new = [s for s in new_songs if s.url not in old_urls]
+
+    # Apply MISS backoff: filter out tracks whose retry window hasn't expired yet.
+    failures: dict = {}
+    if failures_file is not None:
+        failures = _load_failures(failures_file)
+        for url in removed_urls:
+            failures.pop(url, None)
+        now = datetime.now(timezone.utc)
+        due, backed_off = [], []
+        for song in truly_new:
+            entry = failures.get(song.url)
+            if entry and datetime.fromisoformat(entry["retry_after"]) > now:
+                backed_off.append(song)
+            else:
+                due.append(song)
+        for song in backed_off:
+            logger.info("[BACK] %s → backed off until %s", _song_label(song), failures[song.url]["retry_after"][:10])
+        truly_new = due
+
     total_new = len(truly_new)
 
     if track_limit is not None and total_new > track_limit:
@@ -178,10 +219,19 @@ def sync_playlist(
     for song, path in results:
         if path is not None:
             logger.info("[OK]   %s", _song_label(song))
+            failures.pop(song.url, None)
         elif getattr(song, "download_url", None):
             logger.info("[FAIL] %s → download failed", _song_label(song))
         else:
-            logger.info("[MISS] %s → no source found", _song_label(song))
+            entry = failures.get(song.url, {"attempts": 0})
+            attempts = entry["attempts"] + 1
+            days = _backoff_days(attempts)
+            retry_after = (datetime.now(timezone.utc) + timedelta(days=days)).replace(microsecond=0).isoformat()
+            failures[song.url] = {"attempts": attempts, "retry_after": retry_after}
+            logger.info("[MISS] %s → no source found; backing off %d days (attempt %d)", _song_label(song), days, attempts)
+
+    if failures_file is not None:
+        _save_failures(failures_file, failures)
 
     # Only persist songs that were actually downloaded (path is not None).
     # Songs where spotdl returned None failed silently — exclude them from the snapshot
