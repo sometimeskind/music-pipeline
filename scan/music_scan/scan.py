@@ -192,19 +192,19 @@ def _spotdl_order(spotdl_file: Path) -> list[tuple[str, str]]:
         return []
 
 
-def regen_playlists() -> None:
-    """Regenerate .m3u files for every .spotdl playlist."""
+def regen_playlists() -> dict[str, int]:
+    """Regenerate .m3u files for every .spotdl playlist. Returns {name: track_count}."""
     PLAYLISTS.mkdir(parents=True, exist_ok=True)
     spotdl_files = sorted(SPOTDL_DIR.glob("*.spotdl"))
     if not spotdl_files:
         logger.debug("No .spotdl files found — no playlists to generate")
-        return
+        return {}
 
+    counts: dict[str, int] = {}
     with MusicLibrary(LIBRARY_DB) as lib:
         for spotdl_file in spotdl_files:
             name = spotdl_file.stem
             m3u = PLAYLISTS / f"{name}.m3u"
-            logger.info("    Generating: %s", m3u)
 
             items = lib.items_by_source(name)
             # Build key → path lookup for fuzzy title+artist matching
@@ -232,6 +232,9 @@ def regen_playlists() -> None:
             unmatched = sorted(p for p in all_paths if p not in matched)
             lines = [os.path.relpath(p, PLAYLISTS) for p in ordered + unmatched]
             m3u.write_text("\n".join(lines) + ("\n" if lines else ""), encoding="utf-8")
+            counts[name] = len(lines)
+
+    return counts
 
 
 def apply_pending_removals(pending: PendingRemovals, lib: MusicLibrary) -> int:

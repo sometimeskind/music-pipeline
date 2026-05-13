@@ -7,6 +7,7 @@ import io
 import os
 import sys
 import zipfile
+from importlib.machinery import SourceFileLoader
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -22,7 +23,8 @@ SCRIPT_PATH = Path(__file__).parent.parent / "music-files"
 
 @pytest.fixture(scope="session")
 def mod():
-    spec = importlib.util.spec_from_file_location("music_files", SCRIPT_PATH)
+    loader = SourceFileLoader("music_files", str(SCRIPT_PATH))
+    spec = importlib.util.spec_from_file_location("music_files", SCRIPT_PATH, loader=loader)
     m = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(m)
     return m
