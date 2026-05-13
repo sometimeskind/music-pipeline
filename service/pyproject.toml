@@ -25,3 +25,6 @@ include = ["music_service*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+
+[tool.pyright]
+reportMissingImports = false
