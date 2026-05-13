@@ -12,15 +12,18 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 LIBRARY_DB = Path("/root/.config/beets/library.db")
+LIBRARY_DIR = Path("/root/Music/library")
 
 
 class MusicLibrary:
     """Context-manager wrapper around beets.library.Library."""
 
-    def __init__(self, db_path: Path = LIBRARY_DB) -> None:
+    def __init__(self, db_path: Path = LIBRARY_DB, directory: Path = LIBRARY_DIR) -> None:
         from beets.library import Library  # deferred — not available in tests without beets
 
-        self._lib = Library(str(db_path))
+        # Pass directory explicitly: beets >=2.10.0 stores paths relative to the
+        # library root and needs this to reconstruct absolute paths correctly.
+        self._lib = Library(str(db_path), directory=str(directory))
 
     def __enter__(self) -> "MusicLibrary":
         return self
