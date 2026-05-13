@@ -29,6 +29,7 @@ SPOTDL_DIR = Path("/root/Music/inbox/spotdl")
 QUARANTINE = Path("/root/Music/quarantine")
 PLAYLISTS = Path("/root/Music/playlists")
 INBOX = Path("/root/Music/inbox")
+LIBRARY = Path("/root/Music/library")
 LIBRARY_DB = Path("/root/.config/beets/library.db")
 
 
@@ -211,7 +212,8 @@ def regen_playlists() -> dict[str, int]:
             by_key: dict[frozenset, Path] = {}
             all_paths: list[Path] = []
             for item in items:
-                p = Path(item.path.decode() if isinstance(item.path, bytes) else item.path)
+                raw = item.path.decode() if isinstance(item.path, bytes) else item.path
+                p = Path(raw) if Path(raw).is_absolute() else LIBRARY / raw
                 all_paths.append(p)
                 key = _name_words(f"{item.title or ''} {item.artist or item.albumartist or ''}")
                 if key and key not in by_key:
