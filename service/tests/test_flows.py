@@ -87,7 +87,7 @@ def test_apply_removals_task_calls_apply_pending_removals():
     mock_lib = MagicMock()
     with patch("music_service.flows.scan") as mock_scan, \
          patch("music_scan.library.MusicLibrary") as MockLib:
-        MockLib.return_value.__enter__ = lambda s: mock_lib
+        MockLib.return_value.__enter__ = lambda _: mock_lib
         MockLib.return_value.__exit__ = MagicMock(return_value=False)
         apply_removals_task(mock_pending)
         mock_scan.apply_pending_removals.assert_called_once()
@@ -95,11 +95,15 @@ def test_apply_removals_task_calls_apply_pending_removals():
 
 def test_beet_import_task_returns_imported():
     from music_service.flows import beet_import_task
-    with patch("music_service.flows.scan") as mock_scan:
+    with patch("music_service.flows.concurrency") as mock_concurrency, \
+         patch("music_service.flows.scan") as mock_scan:
+        mock_concurrency.return_value.__enter__.return_value = None
+        mock_concurrency.return_value.__exit__.return_value = False
         mock_scan.run_inbox_import.return_value = [("Title", "Artist")]
         result = beet_import_task()
         assert result == [("Title", "Artist")]
         mock_scan.run_inbox_import.assert_called_once()
+        mock_concurrency.assert_called_once_with("beet-import", occupy=1)
 
 
 def test_quarantine_task_calls_quarantine():
@@ -147,8 +151,8 @@ def test_fetch_and_scan_flow_runs_all_steps_in_order():
          patch("music_service.flows.IngestMetrics", return_value=mock_metrics):
         mock_ingest.preflight.side_effect = lambda: call_order.append("preflight")
         mock_ingest.reconcile_playlists.side_effect = lambda: (call_order.append("reconcile-playlists"), [])[1]
-        mock_ingest.sync_playlists.side_effect = lambda rs, m: (call_order.append("spotdl-sync"), mock_pending)[1]
-        mock_scan.apply_pending_removals.side_effect = lambda p, l: call_order.append("apply-removals")
+        mock_ingest.sync_playlists.side_effect = lambda *_: (call_order.append("spotdl-sync"), mock_pending)[1]
+        mock_scan.apply_pending_removals.side_effect = lambda *_: call_order.append("apply-removals")
         mock_scan.run_inbox_import.side_effect = lambda: (call_order.append("beet-import"), [])[1]
         mock_scan.quarantine_inbox_leftovers.side_effect = lambda: call_order.append("quarantine")
         mock_scan.import_asis_from_quarantine.side_effect = lambda: call_order.append("asis-import")
@@ -158,7 +162,7 @@ def test_fetch_and_scan_flow_runs_all_steps_in_order():
         with patch("music_scan.library.MusicLibrary") as MockLib, \
              patch("music_scan.process.run_beet_update") as mock_update, \
              patch("music_scan.navidrome.trigger_scan") as mock_navidrome:
-            MockLib.return_value.__enter__ = lambda s: MagicMock()
+            MockLib.return_value.__enter__ = lambda _: MagicMock()
             MockLib.return_value.__exit__ = MagicMock(return_value=False)
             mock_update.side_effect = lambda: call_order.append("beet-update")
             mock_navidrome.side_effect = lambda: call_order.append("navidrome")

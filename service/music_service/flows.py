@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import time
 
-from prefect import flow, task
+from prefect import concurrency, flow, task
 
 import music_fetch.ingest as ingest
 import music_scan.reconcile as reconcile
@@ -67,7 +67,8 @@ def apply_removals_task(pending=None) -> None:
 @task(name="beet-import", log_prints=True)
 def beet_import_task() -> list:
     """Import inbox audio files into the beets library."""
-    return scan.run_inbox_import()
+    with concurrency("beet-import", occupy=1):
+        return scan.run_inbox_import()
 
 
 @task(name="quarantine-leftovers", log_prints=True)
