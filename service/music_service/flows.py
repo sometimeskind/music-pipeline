@@ -4,7 +4,8 @@ from __future__ import annotations
 
 import time
 
-from prefect import concurrency, flow, get_run_logger, task
+from prefect import flow, get_run_logger, task
+from prefect.concurrency.sync import concurrency
 
 import music_fetch.ingest as ingest
 import music_scan.reconcile as reconcile
