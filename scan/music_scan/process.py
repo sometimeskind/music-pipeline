@@ -79,7 +79,17 @@ def run_beet_import(inbox_dir: Path, skip_limit: int | None = None, asis: bool =
     logger.debug("Running: %s", " ".join(cmd))
 
     log_start = IMPORT_LOG.stat().st_size if IMPORT_LOG.exists() else 0
-    proc = subprocess.Popen(cmd)
+    proc = subprocess.Popen(cmd, stderr=subprocess.PIPE)
+
+    stderr_buf: list[bytes] = []
+
+    def _drain_stderr() -> None:
+        assert proc.stderr is not None
+        for line in proc.stderr:
+            stderr_buf.append(line)
+
+    stderr_thread = threading.Thread(target=_drain_stderr, daemon=True)
+    stderr_thread.start()
 
     stop = threading.Event()
     if skip_limit is not None:
@@ -93,9 +103,12 @@ def run_beet_import(inbox_dir: Path, skip_limit: int | None = None, asis: bool =
     with _forward_sigterm(proc):
         rc = proc.wait()
     stop.set()
+    stderr_thread.join()
 
     # rc=-15 (SIGTERM) is expected when skip_limit fires — not an error
     if rc not in (0, -15):
+        if stderr_buf:
+            logger.error("beet stderr:\n%s", b"".join(stderr_buf).decode(errors="replace"))
         raise subprocess.CalledProcessError(rc, cmd)
 
 
