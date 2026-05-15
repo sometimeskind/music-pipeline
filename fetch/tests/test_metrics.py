@@ -30,13 +30,15 @@ def test_gauge_float_value() -> None:
 # ---------------------------------------------------------------------------
 
 def test_ingest_metrics_success_body(monkeypatch: pytest.MonkeyPatch) -> None:
-    pushed: list[str] = []
-    monkeypatch.setattr("music_fetch.metrics._push", lambda body, job: pushed.append(body))
+    calls: list[tuple[str, str]] = []
+    monkeypatch.setattr("music_fetch.metrics._push", lambda body, job: calls.append((body, job)))
 
     m = IngestMetrics(success=True, duration_seconds=120, playlists_total=3, playlists_skipped=1)
     m.push()
 
-    body = pushed[0]
+    assert len(calls) == 1
+    body, job = calls[0]
+    assert job == "music_ingest"
     assert "music_ingest_last_run_success 1" in body
     assert "music_ingest_duration_seconds 120" in body
     assert "music_ingest_playlists_total 3" in body
@@ -45,15 +47,21 @@ def test_ingest_metrics_success_body(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def test_ingest_metrics_failure_includes_reason(monkeypatch: pytest.MonkeyPatch) -> None:
-    pushed: list[str] = []
-    monkeypatch.setattr("music_fetch.metrics._push", lambda body, job: pushed.append(body))
+    calls: list[tuple[str, str]] = []
+    monkeypatch.setattr("music_fetch.metrics._push", lambda body, job: calls.append((body, job)))
 
     m = IngestMetrics(success=False, failure_reason="rate_limited")
     m.push()
 
-    body = pushed[0]
+    assert len(calls) == 2
+    body, job = calls[0]
+    assert job == "music_ingest"
     assert "music_ingest_last_run_success 0" in body
     assert 'reason="rate_limited"' in body
+
+    failure_body, failure_job = calls[1]
+    assert failure_job == "music_ingest_failure"
+    assert "music_ingest_failure_marker 1" in failure_body
 
 
 def test_push_job_label_ingest(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -61,6 +69,13 @@ def test_push_job_label_ingest(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr("music_fetch.metrics._push", lambda body, job: jobs.append(job))
     IngestMetrics().push()
     assert jobs == ["music_ingest"]
+
+
+def test_failure_push_sends_two_jobs(monkeypatch: pytest.MonkeyPatch) -> None:
+    jobs: list[str] = []
+    monkeypatch.setattr("music_fetch.metrics._push", lambda body, job: jobs.append(job))
+    IngestMetrics(success=False).push()
+    assert jobs == ["music_ingest", "music_ingest_failure"]
 
 
 def test_ingest_metrics_tracks_downloaded(monkeypatch: pytest.MonkeyPatch) -> None:
