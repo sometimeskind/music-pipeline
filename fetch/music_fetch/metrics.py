@@ -57,3 +57,5 @@ class IngestMetrics:
                 _gauge("music_ingest_last_failure_reason", 1, {"reason": self.failure_reason})
             )
         _push("\n".join(lines), "music_ingest")
+        if not self.success:
+            _push(_gauge("music_ingest_failure_marker", 1), "music_ingest_failure")
