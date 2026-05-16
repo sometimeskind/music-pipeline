@@ -48,7 +48,7 @@ def main() -> None:
     from music_service.api import create_app
     from music_service.debounce import Debouncer
     from music_service.flows import fetch_and_scan_flow, scan_flow
-    from music_service.prefect_client import trigger_scan
+    from music_service.prefect_client import ensure_concurrency_limits, trigger_scan
     import waitress
 
     fetch_cron = os.environ.get("FETCH_CRON", "0 3 * * *")
@@ -72,6 +72,8 @@ def main() -> None:
         cron=fetch_cron,
     )
     scan_deployment = scan_flow.to_deployment(name="scan")
+
+    ensure_concurrency_limits()
 
     logger.info("Starting Prefect runner (FETCH_CRON=%s)", fetch_cron)
     try:

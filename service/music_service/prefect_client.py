@@ -115,3 +115,27 @@ def trigger_scan() -> None:
             logger.error("Failed to submit scan: %s", exc)
     else:
         _direct(_run_scan)
+
+
+async def _upsert_limits() -> None:
+    from prefect import get_client
+    async with get_client() as client:
+        await client.upsert_global_concurrency_limit_by_name(
+            name="beet-import",
+            limit=1,
+        )
+
+
+def ensure_concurrency_limits() -> None:
+    """Create/update Prefect global concurrency limits required by the flows.
+
+    No-op when PREFECT_API_URL is not set (direct/test mode uses a threading
+    lock instead).
+    """
+    if not _has_server():
+        return
+    try:
+        asyncio.run(_upsert_limits())
+        logger.info("Prefect concurrency limit 'beet-import' ensured (limit=1)")
+    except Exception as exc:
+        logger.warning("Could not upsert Prefect concurrency limit: %s", exc)
