@@ -22,23 +22,7 @@ MIN_SCORE = 0.85
 REQUEST_DELAY = 0.35
 
 
-def _resolve_path(raw: str) -> str:
-    """Return the filesystem path for a beets item path.
-
-    Handles the case where the beets DB recorded paths under /root/Music/ but
-    the files were later moved/placed under /root/Music/library/.
-    """
-    import os
-    if os.path.exists(raw):
-        return raw
-    # Try inserting library/ after /root/Music/
-    alt = raw.replace("/root/Music/", "/root/Music/library/", 1)
-    if os.path.exists(alt):
-        return alt
-    return raw  # return original so the error message is meaningful
-
-
-def run(library_db: str = LIBRARY_DB) -> None:
+def run(library_db: str = LIBRARY_DB, library_dir: str = LIBRARY_DIR) -> None:
     import acoustid
     import beets.library
 
@@ -46,7 +30,8 @@ def run(library_db: str = LIBRARY_DB) -> None:
     if not api_key:
         raise RuntimeError("ACOUSTID_APIKEY env var is not set")
 
-    lib = beets.library.Library(library_db)
+    # directory must be passed explicitly — without it Library defaults to ~/Music
+    lib = beets.library.Library(library_db, directory=library_dir)
     try:
         items = [i for i in lib.items() if not i.mb_trackid]
         total = len(items)
@@ -54,8 +39,7 @@ def run(library_db: str = LIBRARY_DB) -> None:
 
         tagged = no_match = errors = 0
         for n, item in enumerate(items, 1):
-            raw = item.path.decode() if isinstance(item.path, bytes) else item.path
-            path = _resolve_path(raw)
+            path = item.path.decode() if isinstance(item.path, bytes) else item.path
             label = f"{item.artist or item.albumartist or '?'} – {item.title or '?'}"
             try:
                 results = list(acoustid.match(api_key, path))
