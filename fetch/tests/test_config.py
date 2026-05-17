@@ -83,3 +83,63 @@ def test_malformed_lines_skipped(tmp_path: Path) -> None:
 def test_empty_file(tmp_path: Path) -> None:
     conf = write_conf(tmp_path, "")
     assert load_playlists(conf) == []
+
+
+def test_clash_raises_for_substring(tmp_path: Path) -> None:
+    conf = write_conf(
+        tmp_path,
+        """
+        rock       https://open.spotify.com/playlist/AAA
+        hard-rock  https://open.spotify.com/playlist/BBB
+        """,
+    )
+    with pytest.raises(ValueError, match="clash"):
+        load_playlists(conf)
+
+
+def test_clash_raises_for_prefix(tmp_path: Path) -> None:
+    conf = write_conf(
+        tmp_path,
+        """
+        pop       https://open.spotify.com/playlist/AAA
+        pop-hits  https://open.spotify.com/playlist/BBB
+        """,
+    )
+    with pytest.raises(ValueError, match="clash"):
+        load_playlists(conf)
+
+
+def test_clash_raises_for_suffix(tmp_path: Path) -> None:
+    conf = write_conf(
+        tmp_path,
+        """
+        hits      https://open.spotify.com/playlist/AAA
+        pop-hits  https://open.spotify.com/playlist/BBB
+        """,
+    )
+    with pytest.raises(ValueError, match="clash"):
+        load_playlists(conf)
+
+
+def test_clash_raises_for_exact_duplicate(tmp_path: Path) -> None:
+    conf = write_conf(
+        tmp_path,
+        """
+        rock  https://open.spotify.com/playlist/AAA
+        rock  https://open.spotify.com/playlist/BBB
+        """,
+    )
+    with pytest.raises(ValueError, match="clash"):
+        load_playlists(conf)
+
+
+def test_no_clash_for_distinct_names(tmp_path: Path) -> None:
+    conf = write_conf(
+        tmp_path,
+        """
+        rock-classics  https://open.spotify.com/playlist/AAA
+        pop-hits       https://open.spotify.com/playlist/BBB
+        """,
+    )
+    playlists = load_playlists(conf)
+    assert len(playlists) == 2

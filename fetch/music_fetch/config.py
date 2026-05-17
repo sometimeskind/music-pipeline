@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import itertools
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -37,4 +38,11 @@ def load_playlists(path: Path = DEFAULT_CONF) -> list[PlaylistConfig]:
                 nosync=len(parts) >= 3 and parts[2] == "nosync",
             )
         )
+    names = [pl.name for pl in playlists]
+    for a, b in itertools.combinations(names, 2):
+        if a in b or b in a:
+            raise ValueError(
+                f"Playlist name clash: '{a}' is a substring of '{b}' — "
+                "beets substring queries would produce false positives"
+            )
     return playlists
