@@ -44,8 +44,10 @@ CMD ["music-pipeline"]
 FROM prod AS dev
 COPY service/requirements-dev.txt /tmp/reqs-dev.txt
 RUN pip install --no-cache-dir -r /tmp/reqs-dev.txt
+COPY fetch/tests/ /app/fetch_tests/
+COPY scan/tests/ /app/scan_tests/
 COPY service/tests/ /app/tests/
 COPY scripts/ /app/scripts/
 WORKDIR /app
 ENTRYPOINT []
-CMD ["pytest", "tests/", "scripts/tests/"]
+CMD ["pytest", "fetch_tests/", "scan_tests/", "tests/", "scripts/tests/"]

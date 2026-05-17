@@ -1,10 +1,6 @@
-# Run the test suite in dev containers (never pushed to registry)
-# --network=host: build containers share host network stack so systemd-resolved DNS works
+# Run the test suite in a dev container (never pushed to registry)
+# --network=host: build container shares host network stack so systemd-resolved DNS works
 test:
-    docker build --network=host --target dev -t music-pipeline-fetch:dev fetch
-    docker run --rm music-pipeline-fetch:dev
-    docker build --network=host --target dev -f scan/Dockerfile -t music-pipeline-scan:dev .
-    docker run --rm music-pipeline-scan:dev
     docker build --network=host --target dev -f service/Dockerfile -t music-pipeline-service:dev .
     docker run --rm music-pipeline-service:dev
 
