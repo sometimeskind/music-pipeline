@@ -6,12 +6,12 @@ Dockerized music pipeline: Spotify playlists → spotdl downloads → beets impo
 Spotify playlists → spotdl → beets → ~/Music/library
 ```
 
-Two top-level jobs run on separate schedules:
+A single long-running service container orchestrates everything via Prefect. Two flows run on configurable schedules:
 
-| Job | Default schedule | Does |
+| Flow | Default schedule | Does |
 |---|---|---|
-| `music-ingest` | Daily 03:00 UTC | Spotify/YouTube sync — downloads new tracks, queues removals |
-| `music-scan` | Every 5 min | Import inbox → beets, refresh metadata, regenerate .m3u |
+| `fetch-and-scan` | Daily 03:00 UTC (`FETCH_CRON`) | Spotify/YouTube sync — downloads new tracks, queues removals |
+| `scan` | On demand (file watcher or HTTP API) | Import inbox → beets, refresh metadata, regenerate .m3u |
 
 ---
 
@@ -141,10 +141,10 @@ This provisions `.spotdl` files for all entries in `playlists.conf` and begins d
 ### 6. Start the service
 
 ```bash
-just up
+op run --env-file=.env.tpl -- docker compose up
 ```
 
-The container runs two cron jobs: `music-scan` every 5 minutes and `music-ingest` daily at 03:00 UTC. Override with `SCAN_CRON_SCHEDULE` and `SYNC_CRON_SCHEDULE` env vars.
+This starts the Prefect server and the `music-pipeline` service. The fetch-and-scan flow runs daily at 03:00 UTC by default — override with the `FETCH_CRON` env var. The scan flow runs automatically whenever new audio files arrive in the inbox.
 
 To avoid rate limiting on large playlists, set `SYNC_TRACK_LIMIT` to cap total new downloads per session across all playlists. The pipeline resumes where it left off on the next run.
 
@@ -192,32 +192,16 @@ The canonical manifests live in the homelab repo.
 
 ### Architecture
 
-Two `CronJob` resources sharing two `PersistentVolumeClaim`s:
+One long-running `Deployment` for the `music-pipeline` service, plus an optional `Deployment` for the Prefect server (for the UI and flow run history). Scheduling is handled internally by Prefect via the `FETCH_CRON` env var — no k8s CronJobs needed.
 
-| CronJob | Schedule | Command |
-|---|---|---|
-| `music-scan` | `*/5 * * * *` | `/usr/local/bin/music-scan` |
-| `music-ingest` | `0 3 * * *` | `/usr/local/bin/music-ingest` |
+Without `PREFECT_API_URL` set, the service runs in direct mode: flows execute in-process and the Prefect server is not required. Use this for a simpler deployment with no UI.
 
 ### PersistentVolumeClaims
 
 | PVC name | Contents | Notes |
 |---|---|---|
-| `music-working` | `inbox/`, `quarantine/` | Ephemeral working data; shared between fetch and scan |
-| `music-library` | `library/`, `playlists/` | Permanent library; back this up |
+| `music-data` | `inbox/`, `library/`, `quarantine/`, `playlists/` | Full music volume; back up `library/` |
 | `beets-data` | `library.db`, `import.log` | Small SQLite DB; back this up |
-
-Mounted with `subPath` so each PVC root maps to the correct sub-directory under `/root/Music`:
-
-| PVC | `subPath` | `mountPath` | Pods |
-|---|---|---|---|
-| `music-working` | `inbox` | `/root/Music/inbox` | fetch, scan |
-| `music-working` | `quarantine` | `/root/Music/quarantine` | scan only |
-| `music-library` | `library` | `/root/Music/library` | scan only |
-| `music-library` | `playlists` | `/root/Music/playlists` | scan only |
-| `beets-data` | _(none)_ | `/root/.config/beets` | scan only |
-
-The fetch container only needs `music-working` (inbox mount). The scan container mounts all five.
 
 ### ConfigMaps
 
@@ -235,93 +219,60 @@ All three ConfigMaps should be mounted `readOnly: true`.
 |---|---|---|---|
 | `music-pipeline-spotify` | `client-id` | `SPOTIFY_CLIENT_ID` | Spotify Developer app client ID |
 | `music-pipeline-spotify` | `client-secret` | `SPOTIFY_CLIENT_SECRET` | Spotify Developer app client secret |
+| `music-pipeline-api` | `bearer-token` | `API_BEARER_TOKEN` | Bearer token for the HTTP API |
+| `music-pipeline-cookies` | `cookies.txt` | _(file mount)_ | YouTube Premium cookies — expires; re-export from browser |
 
-### Environment variables (all pods)
+Mount `cookies.txt` at `/root/.config/spotdl/cookies.txt` read-only. Update by patching the Secret; the next pod restart picks it up.
+
+### Environment variables
 
 | Variable | Source | Default | Notes |
 |---|---|---|---|
-| `SPOTIFY_CLIENT_ID` | Secret `music-pipeline-spotify/client-id` | — | Required for music-ingest pods |
-| `SPOTIFY_CLIENT_SECRET` | Secret `music-pipeline-spotify/client-secret` | — | Required for music-ingest pods |
+| `SPOTIFY_CLIENT_ID` | Secret | — | Required |
+| `SPOTIFY_CLIENT_SECRET` | Secret | — | Required |
+| `API_BEARER_TOKEN` | Secret | — | Required |
+| `PREFECT_API_URL` | Plain value | unset | Set to reach the Prefect server (e.g. `http://prefect-server:4200/api`). Unset = direct mode. |
+| `FETCH_CRON` | Plain value | `0 3 * * *` | Cron expression for the fetch-and-scan flow |
 | `PUSHGATEWAY_URL` | Plain value | `""` | e.g. `http://prometheus-pushgateway.monitoring:9091` |
-| `SYNC_JITTER_SECONDS` | Plain value | `"300"` | Random pre-sync sleep to stagger retries |
-| `SYNC_TRACK_LIMIT` | Plain value | `""` | Max new tracks downloaded across all playlists per session. Unset = no limit. Useful for large playlists (e.g. liked songs); the pipeline resumes where it left off next run. Fetch pods only. |
-| `BEET_SKIP_LIMIT` | Plain value | `""` | Terminate beet import early after this many skipped tracks. Unset = no limit. Useful for threshold testing or capping import time per run. Scan pods only. |
-
-`SCAN_CRON_SCHEDULE` and `SYNC_CRON_SCHEDULE` are only relevant to Docker Compose (written to `/etc/cron.d`). In k8s, the schedule is set on the `CronJob` spec directly.
-
-### Volume: YouTube cookies
-
-`cookies.txt` is **not** managed as a ConfigMap (it's binary-adjacent and expires frequently).
-Mount it as a `Secret`:
-
-| Secret name | Key | Mount path |
-|---|---|---|
-| `music-pipeline-cookies` | `cookies.txt` | `/root/.config/spotdl/cookies.txt` |
-
-Mount `readOnly: true`. Update by patching the Secret; the next pod start picks it up.
-
-### CronJob spec notes
-
-```yaml
-# music-scan CronJob
-schedule: "*/5 * * * *"
-concurrencyPolicy: Forbid          # never run two scans at once
-successfulJobsHistoryLimit: 3
-failedJobsHistoryLimit: 3
-spec:
-  backoffLimit: 0                  # don't retry scans; next cron run will retry
-  activeDeadlineSeconds: 240       # kill if scan takes > 4 min
-  containers:
-    - command: ["/usr/local/bin/music-scan"]
-      # Spotify credentials NOT needed — music-scan makes no network calls
-
-# music-ingest CronJob
-schedule: "0 3 * * *"
-concurrencyPolicy: Forbid
-successfulJobsHistoryLimit: 3
-failedJobsHistoryLimit: 7          # keep a week of failures for debugging
-spec:
-  backoffLimit: 2                  # retry up to 2x on rate-limit/transient failures
-  activeDeadlineSeconds: 7200      # 2-hour hard deadline
-  containers:
-    - command: ["/usr/local/bin/music-ingest"]
-      # Needs: SPOTIFY_CLIENT_ID, SPOTIFY_CLIENT_SECRET, cookies Secret
-```
+| `SYNC_JITTER_SECONDS` | Plain value | `""` | Random pre-sync sleep (seconds) to stagger retries |
+| `SYNC_TRACK_LIMIT` | Plain value | `""` | Cap new tracks downloaded per run. Pipeline resumes next run. |
+| `BEET_SKIP_LIMIT` | Plain value | `""` | Terminate beet import after this many skipped tracks |
 
 ### Typical k8s playlist workflow
 
-Playlist management is fully declarative: edit `config/playlists.conf` and update the `music-pipeline-playlists` ConfigMap. The next `music-ingest` CronJob run reconciles disk state automatically.
+Playlist management is fully declarative: edit `config/playlists.conf` and update the `music-pipeline-playlists` ConfigMap. The next fetch-and-scan flow run reconciles disk state automatically.
 
 **Add a new playlist:**
 1. Add the entry to `config/playlists.conf`, commit and push.
 2. Update the `music-pipeline-playlists` ConfigMap (or let GitOps do it).
-3. The next `music-ingest` CronJob run provisions the `.spotdl` file and begins syncing.
+3. The next scheduled fetch run provisions the `.spotdl` file and begins syncing.
 
 **Freeze a playlist (stop syncing):**
 1. Add `nosync` as the third field on the playlist's line in `config/playlists.conf`.
 2. Update the `music-pipeline-playlists` ConfigMap.
-3. The next `music-ingest` run creates the `.nosync` sentinel automatically.
+3. The next fetch run creates the `.nosync` sentinel automatically.
 
 **Remove a playlist:**
 1. Remove the entry from `config/playlists.conf`, commit and push.
 2. Update the `music-pipeline-playlists` ConfigMap.
-3. The next `music-ingest` run queues beets tag cleanup and deletes the `.spotdl` file.
+3. The next fetch run queues beets tag cleanup and deletes the `.spotdl` file.
 
-**Run a manual ingest now:**
+**Trigger a manual fetch now:**
 ```bash
-kubectl create job music-ingest-manual --from=cronjob/music-ingest
-kubectl logs -f job/music-ingest-manual
+kubectl exec -n <ns> deploy/music-pipeline -- \
+  curl -s -X POST http://localhost:8080/fetch/trigger \
+    -H "Authorization: Bearer <token>"
 ```
 
 **Recover after PVC loss:**
 1. Restore `beets-data` PVC from backup (restores `library.db`).
-2. `kubectl create job music-ingest-recovery --from=cronjob/music-ingest` — re-provisions all `.spotdl` files from `playlists.conf` and re-downloads.
+2. Trigger a fetch — it re-provisions all `.spotdl` files from `playlists.conf` and re-downloads.
 
 ---
 
 ## Notes and gotchas
 
-- **`source` is single-value.** A track imported by two playlists only carries the source from whichever ran first.
+- **`sources` is comma-separated.** A track imported by multiple playlists carries all playlist names (e.g. `sources=playlist-a,playlist-b`). It will appear in all relevant `.m3u` files once each playlist has been synced at least once.
 - **`beet update` does not prune deleted files.** Use `beet remove <query>` with a specific query. Never run `beet remove` without a query.
 - **Cookies expire.** Re-export from browser when downloads fail at quality.
 - **Spotify rate limits.** Always use your own app credentials — the spotdl defaults are shared and hit limits quickly. For large playlists, set `SYNC_TRACK_LIMIT` to cap new downloads per session (e.g. `50`); the pipeline picks up where it left off each run.
