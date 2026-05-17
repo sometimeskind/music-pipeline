@@ -64,6 +64,11 @@ backfill-spotify-urls *args:
         --volume {{justfile_directory()}}/scripts/backfill-spotify-urls.py:/tmp/backfill-spotify-urls.py \
         service python3 /tmp/backfill-spotify-urls.py {{args}}
 
+# Fingerprint all beets items lacking mb_trackid via AcoustID. Requires ACOUSTID_APIKEY env var.
+# Safe to re-run: skips items that already have mb_trackid.
+mb-fingerprint:
+    op run --env-file .env.tpl -- docker compose run --rm service music-mb-fingerprint
+
 # Dump beets DB and export JSON from the container
 backup:
     docker compose run --rm service sh -c "beet export > /root/.config/beets/library-export.json"
