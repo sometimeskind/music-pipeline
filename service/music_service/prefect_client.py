@@ -48,27 +48,25 @@ def _via_api(deployment_name: str) -> bool:
 
 def _run_fetch_and_scan() -> None:
     import music_fetch.ingest as ingest
-    import music_scan.reconcile as reconcile
-    import music_scan.scan as scan
     try:
         logger.info("==> Fetch starting")
         pending = ingest.run()
-        logger.info("==> Scan starting")
-        scan.run(pending)
-        reconcile.reconcile_all()
-        logger.info("==> Scan complete")
+        ingest.save_pending_removals(pending)
+        logger.info("==> Fetch complete")
     except Exception:
-        logger.exception("fetch-and-scan failed")
+        logger.exception("fetch failed")
     finally:
         _lock.release()
 
 
 def _run_scan() -> None:
+    import music_fetch.ingest as ingest
     import music_scan.reconcile as reconcile
     import music_scan.scan as scan
     try:
         logger.info("==> Scan starting")
-        scan.run(None)
+        pending = ingest.load_and_clear_pending_removals()
+        scan.run(pending)
         reconcile.reconcile_all()
         logger.info("==> Scan complete")
     except Exception:

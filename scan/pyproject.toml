@@ -10,6 +10,7 @@ dependencies = ["music-pipeline-fetch"]
 
 [project.scripts]
 music-scan = "music_scan.cli:main"
+music-mb-fingerprint = "music_scan.mb_fingerprint:main"
 
 [tool.setuptools.packages.find]
 where = ["."]

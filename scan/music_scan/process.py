@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import os
 import signal
 import subprocess
 import threading
@@ -14,6 +15,24 @@ from typing import Generator
 logger = logging.getLogger(__name__)
 
 IMPORT_LOG = Path("/root/.config/beets/import.log")
+_ACOUSTID_CONFIG = Path("/tmp/beets-acoustid.yaml")
+_acoustid_config_written = False
+
+
+def _extra_beet_args() -> list[str]:
+    """Return [-c, path] args for beet if ACOUSTID_APIKEY is set, else [].
+
+    Writes a supplementary beets config with the AcoustID key on first call so
+    the key never has to be embedded in the ConfigMap.
+    """
+    global _acoustid_config_written
+    key = os.environ.get("ACOUSTID_APIKEY")
+    if not key:
+        return []
+    if not _acoustid_config_written:
+        _ACOUSTID_CONFIG.write_text(f"acoustid:\n  apikey: {key}\n", encoding="utf-8")
+        _acoustid_config_written = True
+    return ["-c", str(_ACOUSTID_CONFIG)]
 
 
 @contextmanager
@@ -72,7 +91,7 @@ def run_beet_import(inbox_dir: Path, skip_limit: int | None = None, asis: bool =
         asis: If True, pass ``--asis`` to import using existing embedded tags without
               MusicBrainz lookups.
     """
-    cmd = ["beet", "import", "--quiet"]
+    cmd = ["beet"] + _extra_beet_args() + ["import", "--quiet"]
     if asis:
         cmd.append("-A")
     cmd.append(str(inbox_dir))
@@ -81,14 +100,14 @@ def run_beet_import(inbox_dir: Path, skip_limit: int | None = None, asis: bool =
     log_start = IMPORT_LOG.stat().st_size if IMPORT_LOG.exists() else 0
     proc = subprocess.Popen(cmd, stderr=subprocess.PIPE)
 
-    stderr_buf: list[bytes] = []
-
-    def _drain_stderr() -> None:
+    def _stream_stderr() -> None:
         assert proc.stderr is not None
         for line in proc.stderr:
-            stderr_buf.append(line)
+            text = line.decode(errors="replace").rstrip()
+            if text:
+                logger.warning("beet: %s", text)
 
-    stderr_thread = threading.Thread(target=_drain_stderr, daemon=True)
+    stderr_thread = threading.Thread(target=_stream_stderr, daemon=True)
     stderr_thread.start()
 
     stop = threading.Event()
@@ -107,13 +126,11 @@ def run_beet_import(inbox_dir: Path, skip_limit: int | None = None, asis: bool =
 
     # rc=-15 (SIGTERM) is expected when skip_limit fires — not an error
     if rc not in (0, -15):
-        if stderr_buf:
-            logger.error("beet stderr:\n%s", b"".join(stderr_buf).decode(errors="replace"))
         raise subprocess.CalledProcessError(rc, cmd)
 
 
 def run_beet_update() -> None:
     """Run ``beet update`` (non-fatal on failure)."""
-    result = subprocess.run(["beet", "update"], check=False)
+    result = subprocess.run(["beet"] + _extra_beet_args() + ["update"], check=False)
     if result.returncode != 0:
         logger.warning("beet update exited with code %d (non-fatal)", result.returncode)
