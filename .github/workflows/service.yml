@@ -1,16 +1,16 @@
-name: service CI
+name: CI
 
 on:
   push:
     branches: [main]
-    paths: ["service/**", "fetch/**", "scan/**", "config/**", "compose.yml", "justfile", ".github/workflows/service.yml"]
+    paths: ["service/**", "fetch/**", "scan/**", "scripts/**", "tests/**", "config/**", "compose.yml", "justfile", ".github/workflows/service.yml"]
   pull_request:
     branches: [main]
-    paths: ["service/**", "fetch/**", "scan/**", "config/**", "compose.yml", "justfile", ".github/workflows/service.yml"]
+    paths: ["service/**", "fetch/**", "scan/**", "scripts/**", "tests/**", "config/**", "compose.yml", "justfile", ".github/workflows/service.yml"]
 
 jobs:
   test:
-    name: Unit Tests (service)
+    name: Unit Tests
     runs-on: ubuntu-latest
 
     steps:
@@ -24,13 +24,12 @@ jobs:
 
       - name: Install dependencies
         run: |
-          pip install -e fetch
-          pip install -e scan
+          pip install -r fetch/requirements.txt -e fetch
+          pip install -r scan/requirements.txt -e scan
           pip install -r service/requirements.txt -r service/requirements-dev.txt -e service
 
       - name: Run tests
-        working-directory: service
-        run: pytest
+        run: pytest --import-mode=importlib fetch/tests scan/tests service/tests scripts/tests
 
   build-and-check:
     name: Build, Health Check & Push (service)
@@ -102,3 +101,13 @@ jobs:
 
       - name: Health check — fpcalc
         run: docker run --rm --entrypoint fpcalc music-pipeline:ci-local -version
+
+      - name: Set up Python for integration tests
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+
+      - name: Integration tests
+        run: |
+          pip install -r tests/requirements.txt
+          SERVICE_IMAGE=music-pipeline:ci-local pytest tests/ -m "not auth" -v
