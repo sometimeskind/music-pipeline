@@ -68,15 +68,8 @@ mb-fingerprint:
 # One-time migration (issue #117): copy source= → sources= for all beets items.
 # IMPORTANT: deploy new code first, then run this. Safe to re-run.
 migrate-sources:
-    docker compose run --rm service python3 -c "
-from beets.library import Library
-lib = Library('/root/.config/beets/library.db', '/root/Music/library')
-for item in lib.items('source:'):
-    item['sources'] = item.get('source') or ''
-    item['source'] = ''
-    item.store()
-lib._close()
-print('Migration complete.')
+    kubectl exec -n music $(kubectl get pods -n music -l app=music-pipeline -o jsonpath='{.items[0].metadata.name}') -- python3 -c "
+from beets.library import Library; lib = Library('/root/.config/beets/library.db', '/root/Music/library'); items = list(lib.items('source:')); print(f'Migrating {len(items)} items'); [item.__setitem__('sources', item.get('source') or '') or item.__setitem__('source', '') or item.store() for item in items]; lib._close(); print('Migration complete.')
 "
 
 # Dump beets DB and export JSON from the container
