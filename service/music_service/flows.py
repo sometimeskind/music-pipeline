@@ -94,10 +94,26 @@ def spotdl_sync_task(remove_sources: list[str]):
 # ---------------------------------------------------------------------------
 
 
+@task(name="save-removals", log_prints=True)
+def save_removals_task(pending) -> None:
+    """Persist pending removals to disk for the scan flow to consume."""
+    logger = get_run_logger()
+    if pending.tracks or pending.remove_sources:
+        ingest.save_pending_removals(pending)
+        logger.info(
+            "Saved %d track removal(s), %d source removal(s)",
+            len(pending.tracks),
+            len(pending.remove_sources),
+        )
+    else:
+        logger.info("No pending removals")
+
+
 @task(name="apply-removals", log_prints=True)
-def apply_removals_task(pending=None) -> None:
+def apply_removals_task() -> None:
     """Clear beets source tags for tracks removed from Spotify playlists."""
     logger = get_run_logger()
+    pending = ingest.load_and_clear_pending_removals()
     if pending is None:
         logger.info("No pending removals")
         return
@@ -195,23 +211,17 @@ def reconcile_task() -> None:
 
 @flow(name="fetch-and-scan", log_prints=True)
 def fetch_and_scan_flow() -> None:
-    """Full pipeline: spotdl fetch then beets scan."""
+    """Fetch only: spotdl sync. Scan is triggered separately by the file watcher."""
     preflight_task()
     remove_sources = reconcile_playlists_task()
     pending = spotdl_sync_task(remove_sources)
-    apply_removals_task(pending)
-    beet_import_task()
-    quarantine_task()
-    asis_import_task()
-    beet_update_task()
-    regen_playlists_task()
-    navidrome_task()
-    reconcile_task()
+    save_removals_task(pending)
 
 
 @flow(name="scan", log_prints=True)
 def scan_flow() -> None:
-    """Scan only: import inbox and regenerate playlists."""
+    """Scan: apply any pending removals, import inbox, regenerate playlists."""
+    apply_removals_task()
     beet_import_task()
     quarantine_task()
     asis_import_task()

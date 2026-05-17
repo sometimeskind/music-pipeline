@@ -96,6 +96,12 @@ def run_inbox_import(skip_limit: int | None = None) -> list[tuple[str, str]]:
     with MusicLibrary(LIBRARY_DB) as lib:
         imported = lib.items_added_since(import_start)
     logger.info("Newly imported : %d track(s)", len(imported))
+    if inbox_snapshot and not imported:
+        logger.warning(
+            "==> 0 of %d inbox file(s) were imported — beets skipped all tracks. "
+            "Check ~/.config/beets/import.log for skip details.",
+            len(inbox_snapshot),
+        )
     _check_import_names(inbox_snapshot, imported)
     return imported
 

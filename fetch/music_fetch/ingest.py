@@ -32,6 +32,7 @@ logger = logging.getLogger(__name__)
 
 SPOTDL_DIR = Path("/root/Music/inbox/spotdl")
 FAILURES_FILE = SPOTDL_DIR.parent / ".spotdl-failures.json"
+PENDING_REMOVALS_PATH = SPOTDL_DIR.parent / ".pending-removals.json"
 COOKIE_FILE = Path("/root/.config/spotdl/cookies.txt")
 CONF_PATH = Path("/root/.config/music-pipeline/playlists.conf")
 
@@ -304,6 +305,38 @@ def sync_playlists(
 
     logger.info("==> music-ingest complete. Run music-scan for local import and playlist generation.")
     return PendingRemovals(tracks=pending_removals, remove_sources=remove_sources)
+
+
+def save_pending_removals(pending: PendingRemovals) -> None:
+    """Write pending removals to the shared handoff file for music-scan to read."""
+    if not pending.tracks and not pending.remove_sources:
+        return
+    data = {
+        "tracks": [dataclasses.asdict(t) for t in pending.tracks],
+        "remove_sources": pending.remove_sources,
+    }
+    PENDING_REMOVALS_PATH.write_text(json.dumps(data), encoding="utf-8")
+    logger.info(
+        "Saved %d track removal(s) and %d source removal(s) to %s",
+        len(pending.tracks),
+        len(pending.remove_sources),
+        PENDING_REMOVALS_PATH,
+    )
+
+
+def load_and_clear_pending_removals() -> PendingRemovals | None:
+    """Read and delete the pending-removals handoff file. Returns None if absent."""
+    if not PENDING_REMOVALS_PATH.exists():
+        return None
+    try:
+        data = json.loads(PENDING_REMOVALS_PATH.read_text(encoding="utf-8"))
+        tracks = [RemovedTrack(**t) for t in data.get("tracks", [])]
+        return PendingRemovals(tracks=tracks, remove_sources=data.get("remove_sources", []))
+    except Exception:
+        logger.warning("Failed to load %s — skipping pending removals", PENDING_REMOVALS_PATH, exc_info=True)
+        return None
+    finally:
+        PENDING_REMOVALS_PATH.unlink(missing_ok=True)
 
 
 def run() -> PendingRemovals:
