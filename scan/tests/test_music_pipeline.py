@@ -28,7 +28,7 @@ def _make_plugin() -> MusicPipelinePlugin:
     return plugin
 
 
-def _item(path: str, sources: str = "", via: str = "", title: str = "") -> MagicMock:
+def _item(path: str | bytes, sources: str = "", via: str = "", title: str = "") -> MagicMock:
     """Mock beets Item with a path and readable/writable flexible attributes."""
     m = MagicMock()
     m.path = path
