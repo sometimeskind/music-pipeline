@@ -28,12 +28,12 @@ def _make_plugin() -> MusicPipelinePlugin:
     return plugin
 
 
-def _item(path: str, source: str = "", via: str = "", title: str = "") -> MagicMock:
+def _item(path: str | bytes, sources: str = "", via: str = "", title: str = "") -> MagicMock:
     """Mock beets Item with a path and readable/writable flexible attributes."""
     m = MagicMock()
     m.path = path
     m.title = title
-    data = {"source": source, "via": via}
+    data = {"sources": sources, "via": via}
     m.get = lambda k, default="": data.get(k, default)
     # __setitem__ tracked by MagicMock; also update data so .get() sees writes.
     def _setitem(k, v):
@@ -42,11 +42,15 @@ def _item(path: str, source: str = "", via: str = "", title: str = "") -> MagicM
     return m
 
 
-def _dup(via: str = "spotdl") -> MagicMock:
+def _dup(via: str = "spotdl", sources: str = "") -> MagicMock:
     """Mock a library Item used as a duplicate (not a beets_library.Album)."""
-    d = MagicMock(spec=[])  # spec=[] prevents hasattr from matching Album
-    data = {"via": via}
+    d = MagicMock(spec=["get", "__setitem__", "store"])  # spec=[] prevents hasattr from matching Album
+    data = {"via": via, "sources": sources}
     d.get = lambda k, default="": data.get(k, default)
+    def _setitem(k, v):
+        data[k] = v
+    d.__setitem__ = MagicMock(side_effect=_setitem)
+    d._data = data  # expose for assertions
     return d
 
 
@@ -126,7 +130,7 @@ def test_tag_source_on_created_singleton_in_inbox() -> None:
 
     plugin.tag_source_on_created(session=MagicMock(), task=task)
 
-    item.__setitem__.assert_any_call("source", "jazz")
+    item.__setitem__.assert_any_call("sources", "jazz")
     item.__setitem__.assert_any_call("via", "spotdl")
 
 
@@ -149,7 +153,7 @@ def test_tag_source_on_created_album_task_tags_all_items() -> None:
     plugin.tag_source_on_created(session=MagicMock(), task=task)
 
     for item in (item1, item2):
-        item.__setitem__.assert_any_call("source", "pop")
+        item.__setitem__.assert_any_call("sources", "pop")
         item.__setitem__.assert_any_call("via", "spotdl")
 
 
@@ -216,7 +220,7 @@ def test_tag_source_on_stored_applies_via_filename_key() -> None:
 
     plugin.tag_source_on_stored(lib=MagicMock(), item=item)
 
-    item.__setitem__.assert_any_call("source", "jazz")
+    item.__setitem__.assert_any_call("sources", "jazz")
     item.__setitem__.assert_any_call("via", "spotdl")
     item.store.assert_called_once()
 
@@ -237,7 +241,7 @@ def test_tag_source_on_stored_applies_via_title_key_after_rename() -> None:
 
     plugin.tag_source_on_stored(lib=MagicMock(), item=item)
 
-    item.__setitem__.assert_any_call("source", "jazz")
+    item.__setitem__.assert_any_call("sources", "jazz")
     item.__setitem__.assert_any_call("via", "spotdl")
     item.store.assert_called_once()
 
@@ -291,7 +295,7 @@ def test_tag_source_on_stored_bytes_path() -> None:
 
     plugin.tag_source_on_stored(lib=MagicMock(), item=item)
 
-    item.__setitem__.assert_any_call("source", "rock")
+    item.__setitem__.assert_any_call("sources", "rock")
     item.store.assert_called_once()
 
 
@@ -321,16 +325,19 @@ def test_handle_duplicates_no_duplicates_does_not_skip() -> None:
     task.set_choice.assert_not_called()
 
 
-def test_handle_duplicates_spotdl_only_defers_to_config() -> None:
-    """All-spotdl duplicates: plugin steps aside; beets config handles removal."""
+def test_handle_duplicates_spotdl_only_appends_and_skips() -> None:
+    """All-spotdl duplicates: append incoming playlist to sources, set SKIP."""
     plugin = _make_plugin()
     item = _item("/root/Music/inbox/spotdl/jazz/track.m4a")
     task = _task(item=item)
-    task.find_duplicates.return_value = [_dup(via="spotdl")]
+    dup = _dup(via="spotdl", sources="rock")
+    task.find_duplicates.return_value = [dup]
 
+    # Path.unlink(missing_ok=True) is a no-op for non-existent files; no patch needed.
     plugin.handle_duplicates(session=MagicMock(), task=task)
 
-    task.set_choice.assert_not_called()
+    task.set_choice.assert_called_once_with(beets_importer.Action.SKIP)
+    assert dup._data["sources"] == "rock,jazz"
 
 
 def test_handle_duplicates_manual_duplicate_sets_skip() -> None:
@@ -439,3 +446,87 @@ def test_tag_source_on_stored_no_spotify_url_does_not_set() -> None:
     written_keys = [c[0][0] for c in item.__setitem__.call_args_list]
     assert "spotify_url" not in written_keys
     item.store.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
+# MusicPipelinePlugin.handle_duplicates — multi-playlist membership append
+# ---------------------------------------------------------------------------
+
+
+def test_handle_duplicates_appends_to_sources_via_pending() -> None:
+    """Existing spotdl item gets incoming playlist appended via _pending_sources."""
+    plugin = _make_plugin()
+    item = _item("/root/Music/inbox/spotdl/playlist-b/Song.m4a", title="Song")
+    plugin._pending_sources["song"] = "playlist-b"
+    task = _task(item=item)
+    dup = _dup(via="spotdl", sources="playlist-a")
+    task.find_duplicates.return_value = [dup]
+
+    plugin.handle_duplicates(session=MagicMock(), task=task)
+
+    assert dup._data["sources"] == "playlist-a,playlist-b"
+    task.set_choice.assert_called_once_with(beets_importer.Action.SKIP)
+    dup.store.assert_called_once()
+
+
+def test_handle_duplicates_appends_idempotent() -> None:
+    """Appending a playlist that already exists in sources is a no-op."""
+    plugin = _make_plugin()
+    item = _item("/root/Music/inbox/spotdl/playlist-b/Song.m4a", title="Song")
+    plugin._pending_sources["song"] = "playlist-b"
+    task = _task(item=item)
+    dup = _dup(via="spotdl", sources="playlist-a,playlist-b")
+    task.find_duplicates.return_value = [dup]
+
+    plugin.handle_duplicates(session=MagicMock(), task=task)
+
+    assert dup._data["sources"] == "playlist-a,playlist-b"
+    task.set_choice.assert_called_once_with(beets_importer.Action.SKIP)
+    dup.store.assert_not_called()
+
+
+def test_handle_duplicates_fallback_to_path() -> None:
+    """When _pending_sources misses, playlist is resolved from the inbox path."""
+    plugin = _make_plugin()
+    # _pending_sources intentionally empty — force path-based lookup
+    item = _item("/root/Music/inbox/spotdl/playlist-b/Song.m4a", title="Song")
+    task = _task(item=item)
+    dup = _dup(via="spotdl", sources="playlist-a")
+    task.find_duplicates.return_value = [dup]
+
+    plugin.handle_duplicates(session=MagicMock(), task=task)
+
+    assert dup._data["sources"] == "playlist-a,playlist-b"
+    task.set_choice.assert_called_once_with(beets_importer.Action.SKIP)
+
+
+def test_handle_duplicates_both_lookups_miss_falls_through() -> None:
+    """When playlist cannot be resolved, falls through to duplicate_action with a warning."""
+    plugin = _make_plugin()
+    # Path is outside the spotdl inbox — _playlist_from_path returns None.
+    item = _item("/root/Music/library/Artist/Album/track.m4a", title="Song")
+    task = _task(item=item)
+    dup = _dup(via="spotdl", sources="playlist-a")
+    task.find_duplicates.return_value = [dup]
+
+    plugin.handle_duplicates(session=MagicMock(), task=task)
+
+    task.set_choice.assert_not_called()
+    plugin._log.warning.assert_called()
+
+
+def test_handle_duplicates_file_deletion_failure_still_skips() -> None:
+    """An OSError from Path.unlink does not prevent SKIP from being set."""
+    plugin = _make_plugin()
+    item = _item("/root/Music/inbox/spotdl/playlist-b/Song.m4a", title="Song")
+    plugin._pending_sources["song"] = "playlist-b"
+    task = _task(item=item)
+    dup = _dup(via="spotdl", sources="playlist-a")
+    task.find_duplicates.return_value = [dup]
+
+    with patch("music_scan.music_pipeline.Path") as mock_path:
+        mock_path.return_value.name = "Song.m4a"
+        mock_path.return_value.unlink.side_effect = OSError("permission denied")
+        plugin.handle_duplicates(session=MagicMock(), task=task)
+
+    task.set_choice.assert_called_once_with(beets_importer.Action.SKIP)

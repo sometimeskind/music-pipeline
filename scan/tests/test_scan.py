@@ -129,6 +129,7 @@ def testapply_pending_removals_remove_sources(tmp_path: Path) -> None:
 
     pending = PendingRemovals(tracks=[], remove_sources=["old-playlist"])
     mock_item = mock.MagicMock()
+    mock_item.get = mock.MagicMock(return_value="old-playlist")
     mock_lib = _make_mock_lib()
     mock_lib.items_by_source = mock.MagicMock(return_value=[mock_item])
 
@@ -137,9 +138,28 @@ def testapply_pending_removals_remove_sources(tmp_path: Path) -> None:
 
     assert count == 1
     mock_lib.items_by_source.assert_called_once_with("old-playlist")
-    mock_item.__setitem__.assert_called_once_with("source", "")
+    mock_item.__setitem__.assert_called_once_with("sources", "")
     mock_item.store.assert_called_once()
     assert not m3u.exists()
+
+
+def testapply_pending_removals_strips_one_source_from_multi(tmp_path: Path) -> None:
+    """Removing a playlist strips only that name from a comma-separated sources field."""
+    from music_scan.scan import apply_pending_removals
+
+    playlists = tmp_path / "playlists"
+    playlists.mkdir()
+
+    pending = PendingRemovals(tracks=[], remove_sources=["old-playlist"])
+    mock_item = mock.MagicMock()
+    mock_item.get = mock.MagicMock(return_value="old-playlist,other-playlist")
+    mock_lib = _make_mock_lib()
+    mock_lib.items_by_source = mock.MagicMock(return_value=[mock_item])
+
+    with mock.patch("music_scan.scan.PLAYLISTS", playlists):
+        apply_pending_removals(pending, mock_lib)
+
+    mock_item.__setitem__.assert_called_once_with("sources", "other-playlist")
 
 
 def testapply_pending_removals_returns_total_count() -> None:

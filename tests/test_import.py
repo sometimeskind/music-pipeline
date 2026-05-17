@@ -80,7 +80,7 @@ def test_file_drop_noise_goes_to_quarantine(docker_client, volumes):
 def test_playlist_import_source_tag_applied(
     docker_client, volumes, fixture_audio, beets_asis_config
 ):
-    """Track imported from a spotdl playlist dir is tagged source=<playlist-name>."""
+    """Track imported from a spotdl playlist dir is tagged sources=<playlist-name>."""
     _setup_playlist(docker_client, volumes, "test-playlist", fixture_audio)
 
     exit_code, logs = run_scan(
@@ -89,9 +89,9 @@ def test_playlist_import_source_tag_applied(
     )
     assert exit_code == 0, f"music-scan exited {exit_code}. Logs:\n{logs}"
 
-    output = beet_ls(docker_client, volumes, "source:test-playlist")
+    output = beet_ls(docker_client, volumes, "sources:test-playlist")
     assert output.strip(), (
-        "No tracks found with source=test-playlist in the beets library.\n"
+        "No tracks found with sources=test-playlist in the beets library.\n"
         f"Scan logs:\n{logs}"
     )
 
@@ -140,7 +140,7 @@ def test_duplicate_import_skipped(
     )
     assert exit_code == 0, f"Second scan exited {exit_code}. Logs:\n{logs}"
 
-    output = beet_ls(docker_client, volumes, "source:test-playlist")
+    output = beet_ls(docker_client, volumes, "sources:test-playlist")
     entries = [line for line in output.strip().splitlines() if line]
     assert len(entries) == 1, (
         f"Expected exactly 1 beets entry for test-playlist, found {len(entries)}.\n"

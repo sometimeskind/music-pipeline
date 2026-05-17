@@ -37,7 +37,7 @@ class MusicLibrary:
 
     def items_by_source(self, source: str) -> list["Item"]:
         """All items whose source flexible-attribute matches *source*."""
-        return list(self._lib.items(f"source:{source}"))
+        return list(self._lib.items(f"sources:{source}"))
 
     def item_count(self) -> int:
         """Return the total number of items in the library."""
@@ -75,14 +75,17 @@ class MusicLibrary:
         """Clear the source tag on items matching title + artist + source.
 
         Returns True if at least one item was modified.
-        Matching is done with beets' query syntax (substring by default).
+        Matching is done with beets' substring query — beets has no contains-word
+        query; clash validation in load_playlists() prevents false positives.
         """
-        query = f"title:{title} artist:{artist} source:{source}"
+        # Substring match on sources field; load_playlists() ensures no name clashes.
+        query = f"title:{title} artist:{artist} sources:{source}"
         items = list(self._lib.items(query))
         if not items:
             return False
         for item in items:
-            item["source"] = ""
+            parts = [p.strip() for p in (item.get("sources") or "").split(",")]
+            item["sources"] = ",".join(p for p in parts if p and p != source)
             item.store()
         logger.debug("Cleared source tag on %d item(s) matching %r", len(items), query)
         return True

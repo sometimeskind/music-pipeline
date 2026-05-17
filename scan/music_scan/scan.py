@@ -268,7 +268,8 @@ def apply_pending_removals(pending: PendingRemovals, lib: MusicLibrary) -> int:
         logger.info("==> Removing all tracks from playlist: %s", source_name)
         items = lib.items_by_source(source_name)
         for item in items:
-            item["source"] = ""
+            parts = [p for p in (item.get("sources") or "").split(",") if p.strip() and p.strip() != source_name]
+            item["sources"] = ",".join(parts)
             item.store()
         m3u = PLAYLISTS / f"{source_name}.m3u"
         m3u.unlink(missing_ok=True)
