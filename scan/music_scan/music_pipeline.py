@@ -1,14 +1,14 @@
-"""Beets plugin: tag-on-import and conditional duplicate replacement.
+"""Beets plugin: tag-on-import and multi-playlist membership via duplicate append.
 
 Responsibilities
 ----------------
 1. **tag_source_on_created** (``import_task_created``): every track imported
    from the spotdl inbox gets two flexible attributes:
 
-   * ``source=<playlist>``  — playlist membership; drives .m3u generation,
-     ``clear_source_tag``, and ``music-remove``.  All existing pipeline code
-     reads this unchanged.
-   * ``via=spotdl``          — import origin; used *only* to decide whether a
+   * ``sources=<playlist>``  — playlist membership; drives .m3u generation,
+     ``clear_source_tag``, and ``music-remove``.  Comma-separated when a track
+     belongs to multiple playlists (appended by handle_duplicates).
+   * ``via=spotdl``           — import origin; used *only* to decide whether a
      duplicate can be replaced safely.  Never inherited.
 
    Fires from ``handle_created()`` during ``read_tasks`` — always, regardless
@@ -19,7 +19,7 @@ Responsibilities
    Caches both ``filename → playlist`` and ``title → playlist`` in
    ``_pending_sources`` for step 1a.
 
-1a. **tag_source_on_stored** (``item_imported``): re-applies ``source=`` and
+1a. **tag_source_on_stored** (``item_imported``): re-applies ``sources=`` and
     ``via=`` after the item is fully persisted, then calls ``item.store()``.
     Two things can discard the flex attributes between steps 1 and 1a:
     (a) beets' dirty-field tracking is reset during candidate lookup, so
@@ -31,14 +31,17 @@ Responsibilities
     survives both.  This hook guarantees the tags land in the database on
     clean first-time imports.
 
-2. **Duplicate protection** (``import_task_choice``): when duplicates exist in
-   the library for the incoming track:
+2. **Multi-playlist membership** (``import_task_choice``): when duplicates exist
+   in the library for the incoming track:
 
    * Any duplicate has no ``via=spotdl`` (manually imported) → skip the
      incoming file AND delete it from the inbox so it does not get
      re-attempted on every subsequent beet-import run.
-   * All duplicates have ``via=spotdl`` → do nothing; ``duplicate_action:
-     remove`` in config.yaml handles removal automatically.
+   * All duplicates have ``via=spotdl`` → append the incoming playlist name to
+     the ``sources`` field of every existing duplicate (idempotent), delete the
+     incoming inbox file, and set SKIP so beets does not re-import the track.
+     If the incoming playlist cannot be resolved (cache miss and unrecognisable
+     path), fall through to ``duplicate_action: remove`` with a warning.
 
    Only fires when ``autotag=True`` (production). In ASIS mode
    (``autotag=False``), ``import_asis`` calls ``_resolve_duplicates``
@@ -179,7 +182,7 @@ class MusicPipelinePlugin(BeetsPlugin):
             playlist = _playlist_from_path(item.path)
             if playlist is None:
                 continue
-            item["source"] = playlist
+            item["sources"] = playlist
             item["via"] = "spotdl"
             path = item.path.decode() if isinstance(item.path, bytes) else item.path
             filename = Path(path).name
@@ -222,7 +225,7 @@ class MusicPipelinePlugin(BeetsPlugin):
             # is session-scoped and is GC'd when the import session ends.
         if playlist is None:
             return
-        item["source"] = playlist
+        item["sources"] = playlist
         item["via"] = "spotdl"
         filename = Path(path).name
         spotify_url = self._pending_spotify_urls.pop(filename, None)
@@ -239,10 +242,19 @@ class MusicPipelinePlugin(BeetsPlugin):
         )
 
     def handle_duplicates(self, session, task):
-        """Protect manually-imported tracks from spotdl overwrites.
+        """Handle duplicate tracks to support multi-playlist membership.
 
         Fires from user_query (autotag=True only). In ASIS mode
         (autotag=False) beets applies duplicate_action from config directly.
+
+        When all existing duplicates are spotdl-sourced, appends the incoming
+        playlist name to their ``sources`` field (idempotent), deletes the
+        incoming inbox file, and sets SKIP.  If the incoming playlist cannot be
+        resolved (cache miss and unrecognisable path), falls through to
+        ``duplicate_action: remove`` with a warning.
+
+        When any existing duplicate is manually imported, protects it by
+        deleting the incoming inbox file and setting SKIP.
         """
         items = _items_from_task(task)
 
@@ -269,10 +281,53 @@ class MusicPipelinePlugin(BeetsPlugin):
                 dup_items.append(dup)
 
         if _all_via_spotdl(dup_items):
-            # All spotdl-sourced — let duplicate_action: remove in config
-            # handle removal automatically.
+            # Resolve the incoming playlist name.
+            # Try _pending_sources first (populated by tag_source_on_created).
+            # Fall back to reading the path directly if the cache missed.
+            incoming_playlist = None
+            for item in items:
+                path = item.path if isinstance(item.path, str) else item.path.decode()
+                title = (item.title or "").lower()
+                incoming_playlist = (
+                    self._pending_sources.get(Path(path).name)
+                    or (self._pending_sources.get(title) if title else None)
+                    or _playlist_from_path(item.path)
+                )
+                if incoming_playlist:
+                    break
+
+            if not incoming_playlist:
+                self._log.warning(
+                    "handle_duplicates: could not resolve incoming playlist — "
+                    "falling through to duplicate_action"
+                )
+                return  # falls through to duplicate_action: remove
+
+            # Append new playlist to each existing duplicate item.
+            for dup in dup_items:
+                existing = [p for p in (dup.get("sources") or "").split(",") if p.strip()]
+                if incoming_playlist not in existing:
+                    existing.append(incoming_playlist)
+                    dup["sources"] = ",".join(existing)
+                    dup.store()
+                    self._log.debug(
+                        "appended {} to sources on existing item: {}", incoming_playlist, dup
+                    )
+
+            # Remove the incoming inbox file and skip the import.
+            for item in items:
+                path = item.path if isinstance(item.path, str) else item.path.decode()
+                try:
+                    Path(path).unlink(missing_ok=True)
+                except OSError as exc:
+                    self._log.warning("could not remove duplicate inbox file {}: {}", path, exc)
+                    # Still set SKIP below — self-heals on next scan (append is idempotent).
+
+            task.set_choice(beets_importer.Action.SKIP)
             self._log.debug(
-                "spotdl-only duplicate(s) found; deferring to config duplicate_action"
+                "skipping duplicate import; appended {} to sources on {} existing item(s)",
+                incoming_playlist,
+                len(dup_items),
             )
             return
 
