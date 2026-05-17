@@ -24,8 +24,8 @@ jobs:
 
       - name: Install dependencies
         run: |
-          pip install -e fetch
-          pip install -e scan
+          pip install -r fetch/requirements.txt -e fetch
+          pip install -r scan/requirements.txt -e scan
           pip install -r service/requirements.txt -r service/requirements-dev.txt -e service
 
       - name: Run tests
