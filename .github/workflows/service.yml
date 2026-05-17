@@ -29,7 +29,7 @@ jobs:
           pip install -r service/requirements.txt -r service/requirements-dev.txt -e service
 
       - name: Run tests
-        run: pytest fetch/tests scan/tests service/tests scripts/tests
+        run: pytest --import-mode=importlib fetch/tests scan/tests service/tests scripts/tests
 
   build-and-check:
     name: Build, Health Check & Push (service)
