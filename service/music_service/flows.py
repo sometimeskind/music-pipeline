@@ -209,7 +209,7 @@ def reconcile_task() -> None:
 # ---------------------------------------------------------------------------
 
 
-@flow(name="fetch-and-scan", log_prints=True)
+@flow(name="fetch", log_prints=True)
 def fetch_and_scan_flow() -> None:
     """Fetch only: spotdl sync. Scan is triggered separately by the file watcher."""
     preflight_task()

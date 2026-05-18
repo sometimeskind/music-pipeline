@@ -10,7 +10,7 @@ A single long-running service container orchestrates everything via Prefect. Two
 
 | Flow | Default schedule | Does |
 |---|---|---|
-| `fetch-and-scan` | Daily 03:00 UTC (`FETCH_CRON`) | Spotify/YouTube sync — downloads new tracks, queues removals |
+| `fetch` | Daily 03:00 UTC (`FETCH_CRON`) | Spotify/YouTube sync — downloads new tracks, queues removals |
 | `scan` | On demand (file watcher or HTTP API) | Import inbox → beets, refresh metadata, regenerate .m3u |
 
 ---
@@ -144,7 +144,7 @@ This provisions `.spotdl` files for all entries in `playlists.conf` and begins d
 op run --env-file=.env.tpl -- docker compose up
 ```
 
-This starts the Prefect server and the `music-pipeline` service. The fetch-and-scan flow runs daily at 03:00 UTC by default — override with the `FETCH_CRON` env var. The scan flow runs automatically whenever new audio files arrive in the inbox.
+This starts the Prefect server and the `music-pipeline` service. The fetch flow runs daily at 03:00 UTC by default — override with the `FETCH_CRON` env var. The scan flow runs automatically whenever new audio files arrive in the inbox.
 
 To avoid rate limiting on large playlists, set `SYNC_TRACK_LIMIT` to cap total new downloads per session across all playlists. The pipeline resumes where it left off on the next run.
 
@@ -232,7 +232,7 @@ Mount `cookies.txt` at `/root/.config/spotdl/cookies.txt` read-only. Update by p
 | `SPOTIFY_CLIENT_SECRET` | Secret | — | Required |
 | `API_BEARER_TOKEN` | Secret | — | Required |
 | `PREFECT_API_URL` | Plain value | unset | Set to reach the Prefect server (e.g. `http://prefect-server:4200/api`). Unset = direct mode. |
-| `FETCH_CRON` | Plain value | `0 3 * * *` | Cron expression for the fetch-and-scan flow |
+| `FETCH_CRON` | Plain value | `0 3 * * *` | Cron expression for the fetch flow |
 | `PUSHGATEWAY_URL` | Plain value | `""` | e.g. `http://prometheus-pushgateway.monitoring:9091` |
 | `SYNC_JITTER_SECONDS` | Plain value | `""` | Random pre-sync sleep (seconds) to stagger retries |
 | `SYNC_TRACK_LIMIT` | Plain value | `""` | Cap new tracks downloaded per run. Pipeline resumes next run. |
@@ -240,7 +240,7 @@ Mount `cookies.txt` at `/root/.config/spotdl/cookies.txt` read-only. Update by p
 
 ### Typical k8s playlist workflow
 
-Playlist management is fully declarative: edit `config/playlists.conf` and update the `music-pipeline-playlists` ConfigMap. The next fetch-and-scan flow run reconciles disk state automatically.
+Playlist management is fully declarative: edit `config/playlists.conf` and update the `music-pipeline-playlists` ConfigMap. The next fetch flow run reconciles disk state automatically.
 
 **Add a new playlist:**
 1. Add the entry to `config/playlists.conf`, commit and push.

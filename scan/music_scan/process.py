@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import logging
-import os
 import signal
 import subprocess
 import threading
@@ -15,24 +14,6 @@ from typing import Generator
 logger = logging.getLogger(__name__)
 
 IMPORT_LOG = Path("/root/.config/beets/import.log")
-_ACOUSTID_CONFIG = Path("/tmp/beets-acoustid.yaml")
-_acoustid_config_written = False
-
-
-def _extra_beet_args() -> list[str]:
-    """Return [-c, path] args for beet if ACOUSTID_APIKEY is set, else [].
-
-    Writes a supplementary beets config with the AcoustID key on first call so
-    the key never has to be embedded in the ConfigMap.
-    """
-    global _acoustid_config_written
-    key = os.environ.get("ACOUSTID_APIKEY")
-    if not key:
-        return []
-    if not _acoustid_config_written:
-        _ACOUSTID_CONFIG.write_text(f"acoustid:\n  apikey: {key}\n", encoding="utf-8")
-        _acoustid_config_written = True
-    return ["-c", str(_ACOUSTID_CONFIG)]
 
 
 @contextmanager
@@ -91,7 +72,7 @@ def run_beet_import(inbox_dir: Path, skip_limit: int | None = None, asis: bool =
         asis: If True, pass ``--asis`` to import using existing embedded tags without
               MusicBrainz lookups.
     """
-    cmd = ["beet"] + _extra_beet_args() + ["import", "--quiet"]
+    cmd = ["beet", "import", "--quiet"]
     if asis:
         cmd.append("-A")
     cmd.append(str(inbox_dir))
@@ -131,6 +112,6 @@ def run_beet_import(inbox_dir: Path, skip_limit: int | None = None, asis: bool =
 
 def run_beet_update() -> None:
     """Run ``beet update`` (non-fatal on failure)."""
-    result = subprocess.run(["beet"] + _extra_beet_args() + ["update"], check=False)
+    result = subprocess.run(["beet", "update"], check=False)
     if result.returncode != 0:
         logger.warning("beet update exited with code %d (non-fatal)", result.returncode)

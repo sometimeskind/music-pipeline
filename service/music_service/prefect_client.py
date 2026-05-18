@@ -98,9 +98,9 @@ def _direct(target) -> bool:
 
 
 def trigger_fetch() -> bool:
-    """Submit a fetch-and-scan run. Returns True if submitted/accepted."""
+    """Submit a fetch run. Returns True if submitted/accepted."""
     if _has_server():
-        return _via_api("fetch-and-scan/fetch-and-scan")
+        return _via_api("fetch/fetch")
     return _direct(_run_fetch_and_scan)
 
 

@@ -163,7 +163,7 @@ def test_reconcile_task_calls_reconcile_all():
 # ---------------------------------------------------------------------------
 
 
-def test_fetch_and_scan_flow_runs_fetch_steps_only():
+def test_fetch_flow_runs_fetch_steps_only():
     from music_service.flows import fetch_and_scan_flow
     call_order: list[str] = []
     mock_pending = MagicMock()

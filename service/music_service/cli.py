@@ -68,7 +68,7 @@ def main() -> None:
     observer = _start_file_watcher(debouncer.trigger)
 
     fetch_deployment = fetch_and_scan_flow.to_deployment(
-        name="fetch-and-scan",
+        name="fetch",
         cron=fetch_cron,
     )
     scan_deployment = scan_flow.to_deployment(name="scan")

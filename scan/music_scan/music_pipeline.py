@@ -64,6 +64,7 @@ duplicate check fires. After the rebuild completes all tracks will carry
 ``via=spotdl`` for future runs. No manual intervention needed.
 """
 
+import os
 from pathlib import Path
 
 from beets import importer as beets_importer
@@ -154,6 +155,18 @@ def _items_from_task(task) -> list:
 class MusicPipelinePlugin(BeetsPlugin):
     def __init__(self):
         super().__init__("music_pipeline")
+        # Patch the chroma plugin's hardcoded API key with ours.
+        # beetsplug.chroma uses a module-level API_KEY constant for AcoustID
+        # lookups — it ignores config["acoustid"]["apikey"] during import.
+        # Overriding it here makes every beet invocation use our dedicated key
+        # instead of the shared beets application key (which gets rate-limited).
+        key = os.environ.get("ACOUSTID_APIKEY")
+        if key:
+            try:
+                import beetsplug.chroma as _chroma  # noqa: PLC0415
+                _chroma.API_KEY = key
+            except Exception:
+                pass
         # Keys: inbox filename OR normalised title → playlist name.
         # Populated at import_task_created, consumed at item_imported.
         # Two keys per track because beets renames the file on import
