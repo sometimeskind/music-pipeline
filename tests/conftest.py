@@ -25,7 +25,7 @@ SERVICE_IMAGE = os.environ.get(
 )
 
 REPO_ROOT = Path(__file__).parent.parent
-BEETS_CONFIG = str(REPO_ROOT / "config" / "beets" / "config.yaml")
+BEETS_CONFIG = str(REPO_ROOT / "config" / "beets" / "integration-test-config.yaml")
 SPOTDL_CONFIG = str(REPO_ROOT / "config" / "spotdl" / "config.json")
 PLAYLISTS_CONF = str(REPO_ROOT / "config" / "playlists.conf")
 COOKIES_PATH = REPO_ROOT / "cookies.txt"

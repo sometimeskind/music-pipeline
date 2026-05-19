@@ -29,7 +29,7 @@ musicbrainz:
   # spotdl files have data_source=None; without this, every MusicBrainz/
   # AcoustID candidate gets +0.5 added to its distance, pushing all matches
   # above the strong_rec_thresh and causing quiet-mode to skip everything.
-  source_weight: 0.0
+  data_source_mismatch_penalty: 0.0
 
 paths:
   default: $albumartist/$album/$track - $title
