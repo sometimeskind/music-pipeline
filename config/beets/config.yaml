@@ -24,6 +24,13 @@ match:
   max_rec:
     missing_tracks: strong
 
+musicbrainz:
+  # Disable the data-source mismatch penalty introduced in beets 2.11.0.
+  # spotdl files have data_source=None; without this, every MusicBrainz/
+  # AcoustID candidate gets +0.5 added to its distance, pushing all matches
+  # above the strong_rec_thresh and causing quiet-mode to skip everything.
+  source_weight: 0.0
+
 paths:
   default: $albumartist/$album/$track - $title
   singleton: $albumartist/$album/$track - $title
