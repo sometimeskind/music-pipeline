@@ -304,6 +304,7 @@ def test_run_reconcile_failure_sets_reconcile_error_reason(tmp_path: Path) -> No
         def __init__(self):
             self.success = True
             self.failure_reason = ""
+            self.tracks_attempted = 0
             self.tracks_downloaded = 0
             self.playlists_total = 0
             self.playlists_skipped = 0

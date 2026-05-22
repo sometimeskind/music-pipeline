@@ -69,8 +69,9 @@ def spotdl_sync_task(remove_sources: list[str]):
     try:
         result = ingest.sync_playlists(remove_sources, metrics)
         logger.info(
-            "Sync complete: %d track(s) downloaded, %d playlist(s) processed, %d pending removal(s)",
+            "Sync complete: %d of %d track(s) downloaded, %d playlist(s) processed, %d pending removal(s)",
             metrics.tracks_downloaded,
+            metrics.tracks_attempted,
             metrics.playlists_total,
             len(result.tracks),
         )

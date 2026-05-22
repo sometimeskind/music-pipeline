@@ -88,6 +88,19 @@ def test_ingest_metrics_tracks_downloaded(monkeypatch: pytest.MonkeyPatch) -> No
     assert "music_ingest_tracks_downloaded_total 42" in pushed[0]
 
 
+def test_ingest_metrics_tracks_attempted_distinct_from_downloaded(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Attempted and downloaded are pushed as separate gauges so a 0-download night
+    is visibly distinct from an idle one (regression for issue #124)."""
+    pushed: list[str] = []
+    monkeypatch.setattr("music_fetch.metrics._push", lambda body, job: pushed.append(body))
+
+    m = IngestMetrics(tracks_attempted=4, tracks_downloaded=0)
+    m.push()
+
+    assert "music_ingest_tracks_attempted_total 4" in pushed[0]
+    assert "music_ingest_tracks_downloaded_total 0" in pushed[0]
+
+
 def test_ingest_metrics_cookies_expired_true(monkeypatch: pytest.MonkeyPatch) -> None:
     pushed: list[str] = []
     monkeypatch.setattr("music_fetch.metrics._push", lambda body, job: pushed.append(body))
