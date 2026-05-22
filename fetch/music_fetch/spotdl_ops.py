@@ -123,7 +123,7 @@ def sync_playlist(
     cookie_file: Path,
     track_limit: int | None = None,
     failures_file: Path | None = None,
-) -> tuple[set[str], int]:
+) -> tuple[set[str], int, int]:
     """Sync a playlist from its .spotdl file.
 
     Downloads tracks new to the Spotify playlist, up to *track_limit* new
@@ -136,8 +136,9 @@ def sync_playlist(
 
     Returns a tuple of:
       - the set of Spotify track URLs removed from the playlist since the last sync
-      - the number of tracks sent to spotdl this session (tracks *sent*, not confirmed
-        completions — spotdl may download fewer if some are unavailable on YouTube)
+      - the number of tracks sent to spotdl this session (tracks *attempted*; budget
+        is consumed per attempt so a stuck [MISS] doesn't loop forever)
+      - the number of tracks spotdl actually wrote to disk (path is not None)
 
     Note on ordering: when *track_limit* is set, the batch is taken from the front of
     the list returned by spotdl.search(), which for Spotify playlists is typically
@@ -251,7 +252,7 @@ def sync_playlist(
             ensure_ascii=False,
         )
 
-    return removed_urls, len(truly_new)
+    return removed_urls, len(truly_new), len(downloaded_urls)
 
 
 def find_track_in_snapshot(snapshot: list[dict], url: str) -> dict | None:

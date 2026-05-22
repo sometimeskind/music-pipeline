@@ -75,17 +75,18 @@ def test_sync_playlist_after_stub_downloads_all_songs(tmp_path: Path) -> None:
     mock_spotdl.download_songs.return_value = [(s, Path(f"/tmp/{i}.m4a")) for i, s in enumerate(songs)]
 
     with mock.patch("music_fetch.spotdl_ops._make_spotdl", return_value=mock_spotdl):
-        removed_urls, tracks_sent = sync_playlist(
+        removed_urls, attempted, downloaded = sync_playlist(
             spotdl_file=spotdl_file,
             output_dir=output_dir,
             cookie_file=cookie_file,
         )
 
     # All 5 songs should be sent to download — none were in the empty snapshot
-    assert tracks_sent == 5
+    assert attempted == 5
+    assert downloaded == 5
     mock_spotdl.download_songs.assert_called_once()
-    downloaded = mock_spotdl.download_songs.call_args[0][0]
-    assert len(downloaded) == 5
+    sent_to_spotdl = mock_spotdl.download_songs.call_args[0][0]
+    assert len(sent_to_spotdl) == 5
     assert removed_urls == set()
 
     # All 5 downloaded songs should be persisted to the snapshot
@@ -120,17 +121,18 @@ def test_sync_playlist_second_run_skips_known_songs(tmp_path: Path) -> None:
     mock_spotdl.download_songs.return_value = [(s, Path(f"/tmp/{i}.m4a")) for i, s in enumerate(new_only)]
 
     with mock.patch("music_fetch.spotdl_ops._make_spotdl", return_value=mock_spotdl):
-        removed_urls, tracks_sent = sync_playlist(
+        removed_urls, attempted, downloaded = sync_playlist(
             spotdl_file=spotdl_file,
             output_dir=output_dir,
             cookie_file=cookie_file,
         )
 
     # Only the 2 new songs should be downloaded
-    assert tracks_sent == 2
-    downloaded = mock_spotdl.download_songs.call_args[0][0]
-    downloaded_urls = {s.url for s in downloaded}
-    assert downloaded_urls == {
+    assert attempted == 2
+    assert downloaded == 2
+    sent_to_spotdl = mock_spotdl.download_songs.call_args[0][0]
+    sent_urls = {s.url for s in sent_to_spotdl}
+    assert sent_urls == {
         "https://open.spotify.com/track/3",
         "https://open.spotify.com/track/4",
     }
@@ -166,14 +168,15 @@ def test_sync_playlist_detects_removed_tracks(tmp_path: Path) -> None:
     mock_spotdl.download_songs.return_value = []  # nothing new to download
 
     with mock.patch("music_fetch.spotdl_ops._make_spotdl", return_value=mock_spotdl):
-        removed_urls, tracks_sent = sync_playlist(
+        removed_urls, attempted, downloaded = sync_playlist(
             spotdl_file=spotdl_file,
             output_dir=output_dir,
             cookie_file=cookie_file,
         )
 
     assert removed_urls == {"https://open.spotify.com/track/B"}
-    assert tracks_sent == 0  # A was already known; nothing new to download
+    assert attempted == 0  # A was already known; nothing new to download
+    assert downloaded == 0
 
 def test_sync_playlist_failed_downloads_not_persisted(tmp_path: Path) -> None:
     """Songs spotdl failed to download (path=None) are excluded from the snapshot.
@@ -201,13 +204,14 @@ def test_sync_playlist_failed_downloads_not_persisted(tmp_path: Path) -> None:
     ]
 
     with mock.patch("music_fetch.spotdl_ops._make_spotdl", return_value=mock_spotdl):
-        removed_urls, tracks_sent = sync_playlist(
+        removed_urls, attempted, downloaded = sync_playlist(
             spotdl_file=spotdl_file,
             output_dir=output_dir,
             cookie_file=cookie_file,
         )
 
-    assert tracks_sent == 4  # all 4 were sent to spotdl
+    assert attempted == 4  # all 4 were sent to spotdl
+    assert downloaded == 2  # only 2 actually landed on disk (regression for issue #124)
     assert removed_urls == set()
 
     # Only the 2 successful downloads should be in the snapshot
@@ -387,15 +391,16 @@ def test_miss_track_in_backoff_is_skipped(tmp_path: Path) -> None:
     mock_spotdl.download_songs.return_value = [(fresh, Path("/tmp/fresh.m4a"))]
 
     with mock.patch("music_fetch.spotdl_ops._make_spotdl", return_value=mock_spotdl):
-        _, tracks_sent = sync_playlist(
+        _, attempted, downloaded = sync_playlist(
             spotdl_file=spotdl_file, output_dir=output_dir, cookie_file=cookie_file,
             failures_file=failures_file, track_limit=10,
         )
 
     # Only the fresh track should have been sent
-    assert tracks_sent == 1
-    downloaded = mock_spotdl.download_songs.call_args[0][0]
-    assert all(s.url != backed_off_url for s in downloaded)
+    assert attempted == 1
+    assert downloaded == 1
+    sent_to_spotdl = mock_spotdl.download_songs.call_args[0][0]
+    assert all(s.url != backed_off_url for s in sent_to_spotdl)
 
 
 def test_miss_track_past_backoff_is_retried(tmp_path: Path) -> None:
@@ -419,11 +424,12 @@ def test_miss_track_past_backoff_is_retried(tmp_path: Path) -> None:
     mock_spotdl.download_songs.return_value = [(song, None)]
 
     with mock.patch("music_fetch.spotdl_ops._make_spotdl", return_value=mock_spotdl):
-        _, tracks_sent = sync_playlist(
+        _, attempted, downloaded = sync_playlist(
             spotdl_file=spotdl_file, output_dir=output_dir, cookie_file=cookie_file, failures_file=failures_file,
         )
 
-    assert tracks_sent == 1
+    assert attempted == 1
+    assert downloaded == 0  # spotdl returned path=None — must NOT be counted as downloaded
     data = json.loads(failures_file.read_text(encoding="utf-8"))
     assert data[retry_url]["attempts"] == 2  # incremented
 
@@ -509,11 +515,12 @@ def test_corrupt_failures_file_treated_as_empty(tmp_path: Path) -> None:
     mock_spotdl.download_songs.return_value = [(song, Path("/tmp/1.m4a"))]
 
     with mock.patch("music_fetch.spotdl_ops._make_spotdl", return_value=mock_spotdl):
-        _, tracks_sent = sync_playlist(
+        _, attempted, downloaded = sync_playlist(
             spotdl_file=spotdl_file, output_dir=output_dir, cookie_file=cookie_file, failures_file=failures_file,
         )
 
-    assert tracks_sent == 1  # proceeded normally despite corrupt file
+    assert attempted == 1  # proceeded normally despite corrupt file
+    assert downloaded == 1
 
 
 def test_outcome_defer_logged_for_budget_limited_tracks(tmp_path: Path, caplog) -> None:

@@ -276,7 +276,7 @@ def sync_playlists(
         output_dir.mkdir(parents=True, exist_ok=True)
 
         try:
-            removed_urls, tracks_sent = sync_playlist(
+            removed_urls, attempted, downloaded = sync_playlist(
                 spotdl_file=spotdl_file,
                 output_dir=output_dir,
                 cookie_file=COOKIE_FILE,
@@ -294,9 +294,11 @@ def sync_playlists(
                 metrics.cookies_expired = True
             raise
 
-        metrics.tracks_downloaded += tracks_sent
+        metrics.tracks_attempted += attempted
+        metrics.tracks_downloaded += downloaded
         if remaining is not None:
-            remaining -= tracks_sent
+            # Budget is consumed per attempt: a stuck [MISS] cluster would otherwise loop forever.
+            remaining -= attempted
 
         _collect_removals(pending_removals, removed_urls, old_songs, name)
 
