@@ -89,6 +89,7 @@ def _make_spotdl(settings: dict):
     _spotdl_instance = Spotdl(
         client_id=client_id,
         client_secret=client_secret,
+        use_official_api=True,
         downloader_settings=settings,
     )
     return _spotdl_instance
