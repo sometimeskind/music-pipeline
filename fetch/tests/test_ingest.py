@@ -329,6 +329,7 @@ def test_run_returns_pending_removals_with_remove_sources(tmp_path: Path) -> Non
 
     with mock.patch.object(ingest, "SPOTDL_DIR", spotdl_dir), \
          mock.patch.object(ingest, "COOKIE_FILE", cookie_file), \
+         mock.patch.object(ingest, "CONF_PATH", tmp_path / "missing.conf"), \
          mock.patch.dict("os.environ", {"SPOTIFY_CLIENT_ID": "id", "SPOTIFY_CLIENT_SECRET": "secret"}), \
          mock.patch("shutil.disk_usage", return_value=mock.Mock(free=10 * 1024**3)), \
          mock.patch("music_fetch.ingest.reconcile_playlists", return_value=["gone-playlist"]), \
