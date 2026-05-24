@@ -173,7 +173,10 @@ def test_fetch_flow_runs_fetch_steps_only():
 
     with patch("music_service.flows.ingest") as mock_ingest, \
          patch("music_service.flows.scan") as mock_scan, \
-         patch("music_service.flows.IngestMetrics", return_value=mock_metrics):
+         patch("music_service.flows.IngestMetrics", return_value=mock_metrics), \
+         patch("music_service.flows.concurrency") as mock_concurrency:
+        mock_concurrency.return_value.__enter__.return_value = None
+        mock_concurrency.return_value.__exit__.return_value = False
         mock_ingest.preflight.side_effect = lambda: call_order.append("preflight")
         mock_ingest.reconcile_playlists.side_effect = lambda: (call_order.append("reconcile-playlists"), [])[1]
         mock_ingest.sync_playlists.side_effect = lambda *_: (call_order.append("spotdl-sync"), mock_pending)[1]
@@ -218,3 +221,14 @@ def test_scan_flow_runs_all_scan_steps_in_order():
     ]
     mock_ingest.preflight.assert_not_called()
     mock_ingest.sync_playlists.assert_not_called()
+
+
+def test_scan_flow_skips_when_pipeline_busy():
+    """Scan exits immediately if the pipeline concurrency slot is taken."""
+    from music_service.flows import scan_flow
+    with patch("music_service.flows.concurrency") as mock_concurrency, \
+         patch("music_service.flows.ingest") as mock_ingest:
+        mock_concurrency.return_value.__enter__.side_effect = TimeoutError
+        mock_concurrency.return_value.__exit__.return_value = False
+        scan_flow()
+        mock_ingest.load_and_clear_pending_removals.assert_not_called()

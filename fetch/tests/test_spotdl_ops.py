@@ -75,7 +75,7 @@ def test_sync_playlist_after_stub_downloads_all_songs(tmp_path: Path) -> None:
     mock_spotdl.download_songs.return_value = [(s, Path(f"/tmp/{i}.m4a")) for i, s in enumerate(songs)]
 
     with mock.patch("music_fetch.spotdl_ops._make_spotdl", return_value=mock_spotdl):
-        removed_urls, attempted, downloaded = sync_playlist(
+        removed_urls, attempted, downloaded, _missed, _failed = sync_playlist(
             spotdl_file=spotdl_file,
             output_dir=output_dir,
             cookie_file=cookie_file,
@@ -121,7 +121,7 @@ def test_sync_playlist_second_run_skips_known_songs(tmp_path: Path) -> None:
     mock_spotdl.download_songs.return_value = [(s, Path(f"/tmp/{i}.m4a")) for i, s in enumerate(new_only)]
 
     with mock.patch("music_fetch.spotdl_ops._make_spotdl", return_value=mock_spotdl):
-        removed_urls, attempted, downloaded = sync_playlist(
+        removed_urls, attempted, downloaded, _missed, _failed = sync_playlist(
             spotdl_file=spotdl_file,
             output_dir=output_dir,
             cookie_file=cookie_file,
@@ -168,7 +168,7 @@ def test_sync_playlist_detects_removed_tracks(tmp_path: Path) -> None:
     mock_spotdl.download_songs.return_value = []  # nothing new to download
 
     with mock.patch("music_fetch.spotdl_ops._make_spotdl", return_value=mock_spotdl):
-        removed_urls, attempted, downloaded = sync_playlist(
+        removed_urls, attempted, downloaded, _missed, _failed = sync_playlist(
             spotdl_file=spotdl_file,
             output_dir=output_dir,
             cookie_file=cookie_file,
@@ -204,7 +204,7 @@ def test_sync_playlist_failed_downloads_not_persisted(tmp_path: Path) -> None:
     ]
 
     with mock.patch("music_fetch.spotdl_ops._make_spotdl", return_value=mock_spotdl):
-        removed_urls, attempted, downloaded = sync_playlist(
+        removed_urls, attempted, downloaded, n_missed, n_failed = sync_playlist(
             spotdl_file=spotdl_file,
             output_dir=output_dir,
             cookie_file=cookie_file,
@@ -212,6 +212,8 @@ def test_sync_playlist_failed_downloads_not_persisted(tmp_path: Path) -> None:
 
     assert attempted == 4  # all 4 were sent to spotdl
     assert downloaded == 2  # only 2 actually landed on disk (regression for issue #124)
+    assert n_missed == 2
+    assert n_failed == 0
     assert removed_urls == set()
 
     # Only the 2 successful downloads should be in the snapshot
@@ -391,7 +393,7 @@ def test_miss_track_in_backoff_is_skipped(tmp_path: Path) -> None:
     mock_spotdl.download_songs.return_value = [(fresh, Path("/tmp/fresh.m4a"))]
 
     with mock.patch("music_fetch.spotdl_ops._make_spotdl", return_value=mock_spotdl):
-        _, attempted, downloaded = sync_playlist(
+        _, attempted, downloaded, _missed, _failed = sync_playlist(
             spotdl_file=spotdl_file, output_dir=output_dir, cookie_file=cookie_file,
             failures_file=failures_file, track_limit=10,
         )
@@ -424,7 +426,7 @@ def test_miss_track_past_backoff_is_retried(tmp_path: Path) -> None:
     mock_spotdl.download_songs.return_value = [(song, None)]
 
     with mock.patch("music_fetch.spotdl_ops._make_spotdl", return_value=mock_spotdl):
-        _, attempted, downloaded = sync_playlist(
+        _, attempted, downloaded, _missed, _failed = sync_playlist(
             spotdl_file=spotdl_file, output_dir=output_dir, cookie_file=cookie_file, failures_file=failures_file,
         )
 
@@ -515,7 +517,7 @@ def test_corrupt_failures_file_treated_as_empty(tmp_path: Path) -> None:
     mock_spotdl.download_songs.return_value = [(song, Path("/tmp/1.m4a"))]
 
     with mock.patch("music_fetch.spotdl_ops._make_spotdl", return_value=mock_spotdl):
-        _, attempted, downloaded = sync_playlist(
+        _, attempted, downloaded, _missed, _failed = sync_playlist(
             spotdl_file=spotdl_file, output_dir=output_dir, cookie_file=cookie_file, failures_file=failures_file,
         )
 

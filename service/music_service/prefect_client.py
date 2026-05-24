@@ -122,6 +122,10 @@ async def _upsert_limits() -> None:
             name="beet-import",
             limit=1,
         )
+        await client.upsert_global_concurrency_limit_by_name(
+            name="pipeline",
+            limit=1,
+        )
 
 
 def ensure_concurrency_limits() -> None:
@@ -134,6 +138,6 @@ def ensure_concurrency_limits() -> None:
         return
     try:
         asyncio.run(_upsert_limits())
-        logger.info("Prefect concurrency limit 'beet-import' ensured (limit=1)")
+        logger.info("Prefect concurrency limits ensured: beet-import=1, pipeline=1")
     except Exception as exc:
         logger.warning("Could not upsert Prefect concurrency limit: %s", exc)

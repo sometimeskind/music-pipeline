@@ -68,10 +68,21 @@ def spotdl_sync_task(remove_sources: list[str]):
     start = time.monotonic()
     try:
         result = ingest.sync_playlists(remove_sources, metrics)
+        not_downloaded = metrics.tracks_attempted - metrics.tracks_downloaded
+        suffix = ""
+        if not_downloaded:
+            parts = []
+            if metrics.tracks_missed:
+                parts.append(f"{metrics.tracks_missed} no source")
+            if metrics.tracks_failed:
+                parts.append(f"{metrics.tracks_failed} download error")
+            if parts:
+                suffix = f" ({', '.join(parts)})"
         logger.info(
-            "Sync complete: %d of %d track(s) downloaded, %d playlist(s) processed, %d pending removal(s)",
+            "Sync complete: %d of %d track(s) downloaded%s, %d playlist(s) processed, %d pending removal(s)",
             metrics.tracks_downloaded,
             metrics.tracks_attempted,
+            suffix,
             metrics.playlists_total,
             len(result.tracks),
         )
@@ -213,20 +224,26 @@ def reconcile_task() -> None:
 @flow(name="fetch", log_prints=True)
 def fetch_and_scan_flow() -> None:
     """Fetch only: spotdl sync. Scan is triggered separately by the file watcher."""
-    preflight_task()
-    remove_sources = reconcile_playlists_task()
-    pending = spotdl_sync_task(remove_sources)
-    save_removals_task(pending)
+    with concurrency("pipeline", occupy=1):
+        preflight_task()
+        remove_sources = reconcile_playlists_task()
+        pending = spotdl_sync_task(remove_sources)
+        save_removals_task(pending)
 
 
 @flow(name="scan", log_prints=True)
 def scan_flow() -> None:
     """Scan: apply any pending removals, import inbox, regenerate playlists."""
-    apply_removals_task()
-    beet_import_task()
-    quarantine_task()
-    asis_import_task()
-    beet_update_task()
-    regen_playlists_task()
-    navidrome_task()
-    reconcile_task()
+    logger = get_run_logger()
+    try:
+        with concurrency("pipeline", occupy=1, timeout_seconds=0):
+            apply_removals_task()
+            beet_import_task()
+            quarantine_task()
+            asis_import_task()
+            beet_update_task()
+            regen_playlists_task()
+            navidrome_task()
+            reconcile_task()
+    except TimeoutError:
+        logger.info("Scan skipped — pipeline busy (fetch or scan already running)")
