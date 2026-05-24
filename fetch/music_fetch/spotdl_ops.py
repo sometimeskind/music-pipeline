@@ -124,7 +124,7 @@ def sync_playlist(
     cookie_file: Path,
     track_limit: int | None = None,
     failures_file: Path | None = None,
-) -> tuple[set[str], int, int]:
+) -> tuple[set[str], int, int, int, int]:
     """Sync a playlist from its .spotdl file.
 
     Downloads tracks new to the Spotify playlist, up to *track_limit* new
@@ -140,6 +140,8 @@ def sync_playlist(
       - the number of tracks sent to spotdl this session (tracks *attempted*; budget
         is consumed per attempt so a stuck [MISS] doesn't loop forever)
       - the number of tracks spotdl actually wrote to disk (path is not None)
+      - the number of tracks with no YouTube source found ([MISS])
+      - the number of tracks where a source was found but the download failed ([FAIL])
 
     Note on ordering: when *track_limit* is set, the batch is taken from the front of
     the list returned by spotdl.search(), which for Spotify playlists is typically
@@ -218,13 +220,16 @@ def sync_playlist(
     # Log per-track outcomes.
     # MISS vs FAIL: if song.download_url is None, spotdl found no YouTube source (LookupError);
     # if it's set, a source was found but the download itself failed (AudioProviderError).
+    n_missed = n_failed = 0
     for song, path in results:
         if path is not None:
             logger.info("[OK]   %s", _song_label(song))
             failures.pop(song.url, None)
         elif getattr(song, "download_url", None):
+            n_failed += 1
             logger.info("[FAIL] %s → download failed", _song_label(song))
         else:
+            n_missed += 1
             entry = failures.get(song.url, {"attempts": 0})
             attempts = entry["attempts"] + 1
             days = _backoff_days(attempts)
@@ -253,7 +258,7 @@ def sync_playlist(
             ensure_ascii=False,
         )
 
-    return removed_urls, len(truly_new), len(downloaded_urls)
+    return removed_urls, len(truly_new), len(downloaded_urls), n_missed, n_failed
 
 
 def find_track_in_snapshot(snapshot: list[dict], url: str) -> dict | None:

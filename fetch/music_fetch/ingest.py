@@ -225,6 +225,13 @@ def sync_playlists(
         logger.info("Soft timeout: %ds — will stop before Kubernetes deadline fires", soft_timeout)
 
     spotdl_files = sorted(SPOTDL_DIR.glob("*.spotdl"))
+    if CONF_PATH.exists():
+        try:
+            config_order = {pl.name: i for i, pl in enumerate(load_playlists(CONF_PATH))}
+            spotdl_files.sort(key=lambda f: (config_order.get(f.stem, len(config_order)), f.stem))
+        except Exception:
+            pass  # keep alphabetical order on parse failure
+
     if not spotdl_files:
         logger.info("No .spotdl files found in %s", SPOTDL_DIR)
 
@@ -276,7 +283,7 @@ def sync_playlists(
         output_dir.mkdir(parents=True, exist_ok=True)
 
         try:
-            removed_urls, attempted, downloaded = sync_playlist(
+            removed_urls, attempted, downloaded, missed, failed = sync_playlist(
                 spotdl_file=spotdl_file,
                 output_dir=output_dir,
                 cookie_file=COOKIE_FILE,
@@ -296,6 +303,8 @@ def sync_playlists(
 
         metrics.tracks_attempted += attempted
         metrics.tracks_downloaded += downloaded
+        metrics.tracks_missed += missed
+        metrics.tracks_failed += failed
         if remaining is not None:
             # Budget is consumed per attempt: a stuck [MISS] cluster would otherwise loop forever.
             remaining -= attempted

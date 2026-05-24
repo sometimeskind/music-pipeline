@@ -40,6 +40,8 @@ class IngestMetrics:
     playlists_deferred: int = 0
     tracks_attempted: int = 0
     tracks_downloaded: int = 0
+    tracks_missed: int = 0
+    tracks_failed: int = 0
     cookies_expired: bool = False
     failure_reason: str = ""
 
@@ -52,6 +54,8 @@ class IngestMetrics:
             _gauge("music_ingest_playlists_deferred_total", self.playlists_deferred),
             _gauge("music_ingest_tracks_attempted_total", self.tracks_attempted),
             _gauge("music_ingest_tracks_downloaded_total", self.tracks_downloaded),
+            _gauge("music_ingest_tracks_missed_total", self.tracks_missed),
+            _gauge("music_ingest_tracks_failed_total", self.tracks_failed),
             _gauge("music_ingest_cookies_expired", int(self.cookies_expired)),
         ]
         if not self.success and self.failure_reason:

@@ -202,6 +202,57 @@ def test_budget_spans_playlists() -> None:
 
 
 # ---------------------------------------------------------------------------
+# sync_playlists — config ordering
+# ---------------------------------------------------------------------------
+
+
+def test_sync_playlists_processes_in_config_order(tmp_path: Path) -> None:
+    """Playlists are synced in playlists.conf order, not alphabetically.
+
+    Regression: previously sorted(glob("*.spotdl")) produced alphabetical
+    order, so 'later' was processed before 'wedding' even though 'wedding'
+    was listed first in the config.
+    """
+    import unittest.mock as mock
+    from music_fetch import ingest
+    from music_fetch.metrics import IngestMetrics
+
+    spotdl_dir = tmp_path / "spotdl"
+    spotdl_dir.mkdir()
+
+    # Config order: aaaaaaah, wedding, later
+    conf = tmp_path / "playlists.conf"
+    conf.write_text(
+        "aaaaaaah  https://open.spotify.com/playlist/A\n"
+        "wedding   https://open.spotify.com/playlist/W\n"
+        "later     https://open.spotify.com/playlist/L\n",
+        encoding="utf-8",
+    )
+
+    # Alphabetical order would be: aaaaaaah, later, wedding
+    for name in ("aaaaaaah", "later", "wedding"):
+        (spotdl_dir / f"{name}.spotdl").write_text(
+            '{"type":"sync","query":["https://open.spotify.com/playlist/X"],"songs":[]}',
+            encoding="utf-8",
+        )
+
+    processed: list[str] = []
+
+    def fake_sync(spotdl_file, **_kwargs):
+        processed.append(spotdl_file.stem)
+        return set(), 0, 0, 0, 0
+
+    with mock.patch.object(ingest, "SPOTDL_DIR", spotdl_dir), \
+         mock.patch.object(ingest, "CONF_PATH", conf), \
+         mock.patch.object(ingest, "COOKIE_FILE", tmp_path / "cookies.txt"), \
+         mock.patch.object(ingest, "FAILURES_FILE", tmp_path / ".failures.json"), \
+         mock.patch("music_fetch.ingest.sync_playlist", side_effect=fake_sync):
+        ingest.sync_playlists([], IngestMetrics())
+
+    assert processed == ["aaaaaaah", "wedding", "later"]
+
+
+# ---------------------------------------------------------------------------
 # _collect_removals
 # ---------------------------------------------------------------------------
 
@@ -278,6 +329,7 @@ def test_run_returns_pending_removals_with_remove_sources(tmp_path: Path) -> Non
 
     with mock.patch.object(ingest, "SPOTDL_DIR", spotdl_dir), \
          mock.patch.object(ingest, "COOKIE_FILE", cookie_file), \
+         mock.patch.object(ingest, "CONF_PATH", tmp_path / "missing.conf"), \
          mock.patch.dict("os.environ", {"SPOTIFY_CLIENT_ID": "id", "SPOTIFY_CLIENT_SECRET": "secret"}), \
          mock.patch("shutil.disk_usage", return_value=mock.Mock(free=10 * 1024**3)), \
          mock.patch("music_fetch.ingest.reconcile_playlists", return_value=["gone-playlist"]), \
@@ -306,6 +358,8 @@ def test_run_reconcile_failure_sets_reconcile_error_reason(tmp_path: Path) -> No
             self.failure_reason = ""
             self.tracks_attempted = 0
             self.tracks_downloaded = 0
+            self.tracks_missed = 0
+            self.tracks_failed = 0
             self.playlists_total = 0
             self.playlists_skipped = 0
             self.playlists_deferred = 0
