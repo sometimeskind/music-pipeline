@@ -163,7 +163,7 @@ def test_reconcile_task_calls_reconcile_all():
 # ---------------------------------------------------------------------------
 
 
-def test_fetch_flow_runs_fetch_steps_only():
+def test_fetch_flow_runs_fetch_then_scan():
     from music_service.flows import fetch_and_scan_flow
     call_order: list[str] = []
     mock_pending = MagicMock()
@@ -173,18 +173,25 @@ def test_fetch_flow_runs_fetch_steps_only():
 
     with patch("music_service.flows.ingest") as mock_ingest, \
          patch("music_service.flows.scan") as mock_scan, \
+         patch("music_service.flows.reconcile") as mock_reconcile, \
          patch("music_service.flows.IngestMetrics", return_value=mock_metrics), \
-         patch("music_service.flows.concurrency") as mock_concurrency:
+         patch("music_service.flows.concurrency") as mock_concurrency, \
+         patch("music_scan.process.run_beet_update"), \
+         patch("music_scan.navidrome.trigger_scan"):
         mock_concurrency.return_value.__enter__.return_value = None
         mock_concurrency.return_value.__exit__.return_value = False
         mock_ingest.preflight.side_effect = lambda: call_order.append("preflight")
         mock_ingest.reconcile_playlists.side_effect = lambda: (call_order.append("reconcile-playlists"), [])[1]
         mock_ingest.sync_playlists.side_effect = lambda *_: (call_order.append("spotdl-sync"), mock_pending)[1]
+        mock_ingest.load_and_clear_pending_removals.return_value = None
+        mock_scan.run_inbox_import.side_effect = lambda: (call_order.append("beet-import"), [])[1]
+        mock_reconcile.reconcile_all.return_value = 0
 
         fetch_and_scan_flow()
 
-    assert call_order == ["preflight", "reconcile-playlists", "spotdl-sync"]
-    mock_scan.run_inbox_import.assert_not_called()
+    assert call_order[:3] == ["preflight", "reconcile-playlists", "spotdl-sync"]
+    assert "beet-import" in call_order
+    mock_scan.run_inbox_import.assert_called_once()
 
 
 def test_scan_flow_runs_all_scan_steps_in_order():

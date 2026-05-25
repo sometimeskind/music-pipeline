@@ -223,12 +223,13 @@ def reconcile_task() -> None:
 
 @flow(name="fetch", log_prints=True)
 def fetch_and_scan_flow() -> None:
-    """Fetch only: spotdl sync. Scan is triggered separately by the file watcher."""
+    """Fetch: spotdl sync, then scan inbox."""
     with concurrency("pipeline", occupy=1):
         preflight_task()
         remove_sources = reconcile_playlists_task()
         pending = spotdl_sync_task(remove_sources)
         save_removals_task(pending)
+    scan_flow()
 
 
 @flow(name="scan", log_prints=True)
