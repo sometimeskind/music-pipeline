@@ -3,6 +3,10 @@
 cookies.txt
 *.spotdl
 
+# Claude Code runtime files
+.claude/scheduled_tasks.lock
+.claude/worktrees/
+
 # Docker build artifacts
 .dockerenv
 
