@@ -221,6 +221,17 @@ def reconcile_task() -> None:
 # ---------------------------------------------------------------------------
 
 
+def _run_scan_tasks() -> None:
+    apply_removals_task()
+    beet_import_task()
+    quarantine_task()
+    asis_import_task()
+    beet_update_task()
+    regen_playlists_task()
+    navidrome_task()
+    reconcile_task()
+
+
 @flow(name="fetch", log_prints=True)
 def fetch_and_scan_flow() -> None:
     """Fetch: spotdl sync, then scan inbox."""
@@ -229,7 +240,7 @@ def fetch_and_scan_flow() -> None:
         remove_sources = reconcile_playlists_task()
         pending = spotdl_sync_task(remove_sources)
         save_removals_task(pending)
-    scan_flow()
+        _run_scan_tasks()
 
 
 @flow(name="scan", log_prints=True)
@@ -238,13 +249,6 @@ def scan_flow() -> None:
     logger = get_run_logger()
     try:
         with concurrency("pipeline", occupy=1, timeout_seconds=0):
-            apply_removals_task()
-            beet_import_task()
-            quarantine_task()
-            asis_import_task()
-            beet_update_task()
-            regen_playlists_task()
-            navidrome_task()
-            reconcile_task()
+            _run_scan_tasks()
     except TimeoutError:
         logger.info("Scan skipped — pipeline busy (fetch or scan already running)")
