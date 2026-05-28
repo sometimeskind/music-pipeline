@@ -367,7 +367,16 @@ def run() -> PendingRemovals:
 
     try:
         logger.info("==> music-ingest starting")
-        logger.info("MISS backoff state: %s", FAILURES_FILE)
+        if FAILURES_FILE.exists():
+            try:
+                failures = json.loads(FAILURES_FILE.read_text(encoding="utf-8"))
+                logger.info("MISS backoff state (%d track(s)):", len(failures))
+                for url, entry in failures.items():
+                    logger.info("  [BACK] attempts=%d retry_after=%s url=%s", entry.get("attempts", "?"), entry.get("retry_after", "?")[:10], url)
+            except Exception:
+                logger.warning("Could not read MISS backoff state from %s", FAILURES_FILE)
+        else:
+            logger.info("MISS backoff state: empty")
 
         logger.info("==> Reconciling playlists...")
         try:
