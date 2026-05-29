@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import time
 
 from prefect import flow, get_run_logger, task
@@ -67,6 +68,21 @@ def spotdl_sync_task(remove_sources: list[str]):
     metrics = IngestMetrics()
     start = time.monotonic()
     try:
+        if ingest.FAILURES_FILE.exists():
+            try:
+                failures = json.loads(ingest.FAILURES_FILE.read_text(encoding="utf-8"))
+                logger.info("MISS backoff state: %d track(s) backed off", len(failures))
+                for url, entry in failures.items():
+                    logger.info(
+                        "  [BACK] attempts=%d retry_after=%s url=%s",
+                        entry.get("attempts", "?"),
+                        entry.get("retry_after", "?")[:10],
+                        url,
+                    )
+            except Exception:
+                logger.warning("Could not read MISS backoff state from %s", ingest.FAILURES_FILE)
+        else:
+            logger.info("MISS backoff state: empty")
         result = ingest.sync_playlists(remove_sources, metrics)
         not_downloaded = metrics.tracks_attempted - metrics.tracks_downloaded
         suffix = ""
