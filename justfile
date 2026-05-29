@@ -49,6 +49,12 @@ sync:
 list-failures:
     docker compose run --rm service sh -c "cat /root/Music/inbox/.spotdl-failures.json 2>/dev/null | python3 -m json.tool || echo '(no backoff state)'"
 
+# Export YouTube Premium cookies from Firefox and save to cookies.txt
+# Requires yt-dlp on the host: pipx install yt-dlp
+cookies:
+    yt-dlp --cookies-from-browser firefox --cookies cookies.txt --skip-download "https://music.youtube.com"
+    @echo "Cookies saved to cookies.txt"
+
 # Clear all MISS backoff state — all tracks will be retried on the next run
 clear-failures:
     docker compose run --rm service sh -c "rm -f /root/Music/inbox/.spotdl-failures.json && echo Cleared"

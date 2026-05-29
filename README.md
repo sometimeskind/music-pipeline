@@ -95,12 +95,21 @@ cd music-pipeline
 
 spotdl requires YouTube Premium cookies for M4A 256 kbps quality.
 
-1. Install the browser extension **"Get cookies.txt LOCALLY"**
-2. Sign in to [music.youtube.com](https://music.youtube.com) with your YouTube Premium account
-3. Export cookies in Netscape format
-4. Save as `cookies.txt` in the repo root (already in `.gitignore`)
+**One-time setup:** install `yt-dlp` on the host:
 
-Cookies expire periodically. Re-export when downloads start failing at quality.
+```bash
+pipx install yt-dlp
+```
+
+**Each time cookies expire**, sign in to [music.youtube.com](https://music.youtube.com) in Firefox, then run:
+
+```bash
+just cookies
+```
+
+This extracts cookies directly from Firefox and saves them to `cookies.txt` (already in `.gitignore`).
+
+Cookies expire every few weeks. Re-export when downloads start failing or when `just fetch` logs show all tracks as `no source`.
 
 ### 3. Set up Spotify credentials
 
