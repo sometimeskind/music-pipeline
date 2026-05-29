@@ -95,12 +95,6 @@ cd music-pipeline
 
 spotdl requires YouTube Premium cookies for M4A 256 kbps quality.
 
-**One-time setup:** install `yt-dlp` on the host:
-
-```bash
-pipx install yt-dlp
-```
-
 **Each time cookies expire**, sign in to [music.youtube.com](https://music.youtube.com) in Firefox, then run:
 
 ```bash
