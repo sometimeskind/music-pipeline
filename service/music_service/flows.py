@@ -259,7 +259,11 @@ def fetch_and_scan_flow() -> None:
         _run_scan_tasks()
 
 
-@flow(name="scan", log_prints=True)
+# Prefixed: the document-pipeline service serves its own scan flow against
+# the same Prefect server, and a bare "scan" collided with it — Prefect keys
+# deployments on flow name + deployment name, so both runners polled one
+# shared record and crashed on each other's entrypoint.
+@flow(name="music-scan", log_prints=True)
 def scan_flow() -> None:
     """Scan: apply any pending removals, import inbox, regenerate playlists."""
     logger = get_run_logger()

@@ -108,7 +108,7 @@ def trigger_scan() -> None:
     """Submit a scan run. Fire-and-forget."""
     if _has_server():
         try:
-            asyncio.run(_submit_deployment("scan/scan"))
+            asyncio.run(_submit_deployment("music-scan/music-scan"))
         except Exception as exc:
             logger.error("Failed to submit scan: %s", exc)
     else:

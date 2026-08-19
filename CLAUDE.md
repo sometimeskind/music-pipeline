@@ -120,7 +120,7 @@ Defined in `service/music_service/flows.py`:
 | Flow | Trigger | Steps |
 |---|---|---|
 | `fetch` | Cron (`FETCH_CRON`), or `POST /fetch/trigger` | preflight → reconcile playlists → spotdl sync → save removals |
-| `scan` | File watcher (new audio in inbox), or `POST /scan/trigger` | apply removals → beet import → quarantine → asis import → beet update → regen playlists → Navidrome → snapshot reconcile |
+| `music-scan` | File watcher (new audio in inbox), or `POST /scan/trigger` | apply removals → beet import → quarantine → asis import → beet update → regen playlists → Navidrome → snapshot reconcile |
 
 ### HTTP API
 

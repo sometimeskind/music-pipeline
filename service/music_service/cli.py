@@ -71,7 +71,7 @@ def main() -> None:
         name="fetch",
         cron=fetch_cron,
     )
-    scan_deployment = scan_flow.to_deployment(name="scan")
+    scan_deployment = scan_flow.to_deployment(name="music-scan")
 
     ensure_concurrency_limits()
 
