@@ -10,8 +10,8 @@ A single long-running service container orchestrates everything via Prefect. Two
 
 | Flow | Default schedule | Does |
 |---|---|---|
-| `fetch` | Daily 03:00 UTC (`FETCH_CRON`) | Spotify/YouTube sync — downloads new tracks, queues removals |
-| `scan` | On demand (file watcher or HTTP API) | Import inbox → beets, refresh metadata, regenerate .m3u |
+| `music-fetch` | Daily 03:00 UTC (`FETCH_CRON`) | Spotify/YouTube sync — downloads new tracks, queues removals |
+| `music-scan` | On demand (file watcher or HTTP API) | Import inbox → beets, refresh metadata, regenerate .m3u |
 
 ---
 

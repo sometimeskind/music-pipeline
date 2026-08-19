@@ -119,8 +119,8 @@ Defined in `service/music_service/flows.py`:
 
 | Flow | Trigger | Steps |
 |---|---|---|
-| `fetch` | Cron (`FETCH_CRON`), or `POST /fetch/trigger` | preflight → reconcile playlists → spotdl sync → save removals |
-| `scan` | File watcher (new audio in inbox), or `POST /scan/trigger` | apply removals → beet import → quarantine → asis import → beet update → regen playlists → Navidrome → snapshot reconcile |
+| `music-fetch` | Cron (`FETCH_CRON`), or `POST /fetch/trigger` | preflight → reconcile playlists → spotdl sync → save removals |
+| `music-scan` | File watcher (new audio in inbox), or `POST /scan/trigger` | apply removals → beet import → quarantine → asis import → beet update → regen playlists → Navidrome → snapshot reconcile |
 
 ### HTTP API
 
@@ -171,7 +171,7 @@ The service exposes a Flask API on port 8080. All routes except `/health` requir
 | `SPOTIFY_CLIENT_SECRET` | — | Required. Spotify Developer app client secret. |
 | `API_BEARER_TOKEN` | — | Required. Bearer token for the HTTP API. |
 | `PREFECT_API_URL` | unset | Prefect server URL. If unset, runs in direct (in-process) mode. |
-| `FETCH_CRON` | `0 3 * * *` | Cron expression for the fetch Prefect deployment. |
+| `FETCH_CRON` | `0 3 * * *` | Cron expression for the music-fetch Prefect deployment. |
 | `SYNC_TRACK_LIMIT` | unset | Cap total new tracks downloaded across all playlists per run. |
 | `SYNC_JITTER_SECONDS` | unset | Sleep random 0–N seconds before syncing to spread load. |
 | `BEET_SKIP_LIMIT` | unset | Terminate beet import after this many skipped tracks. |

@@ -100,7 +100,7 @@ def _direct(target) -> bool:
 def trigger_fetch() -> bool:
     """Submit a fetch run. Returns True if submitted/accepted."""
     if _has_server():
-        return _via_api("fetch/fetch")
+        return _via_api("music-fetch/music-fetch")
     return _direct(_run_fetch_and_scan)
 
 
@@ -108,7 +108,7 @@ def trigger_scan() -> None:
     """Submit a scan run. Fire-and-forget."""
     if _has_server():
         try:
-            asyncio.run(_submit_deployment("scan/scan"))
+            asyncio.run(_submit_deployment("music-scan/music-scan"))
         except Exception as exc:
             logger.error("Failed to submit scan: %s", exc)
     else:

@@ -248,7 +248,12 @@ def _run_scan_tasks() -> None:
     reconcile_task()
 
 
-@flow(name="fetch", log_prints=True)
+# Flow names are prefixed because the document-pipeline service serves its
+# own flows against the same Prefect server. Prefect keys a deployment on
+# flow name + deployment name, so a bare "scan" resolved to one shared
+# record that both runners polled and each crashed on the other's
+# entrypoint. "fetch" is prefixed too so it cannot repeat that.
+@flow(name="music-fetch", log_prints=True)
 def fetch_and_scan_flow() -> None:
     """Fetch: spotdl sync, then scan inbox."""
     with concurrency("pipeline", occupy=1):
@@ -259,7 +264,7 @@ def fetch_and_scan_flow() -> None:
         _run_scan_tasks()
 
 
-@flow(name="scan", log_prints=True)
+@flow(name="music-scan", log_prints=True)
 def scan_flow() -> None:
     """Scan: apply any pending removals, import inbox, regenerate playlists."""
     logger = get_run_logger()

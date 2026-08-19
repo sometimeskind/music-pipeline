@@ -68,10 +68,10 @@ def main() -> None:
     observer = _start_file_watcher(debouncer.trigger)
 
     fetch_deployment = fetch_and_scan_flow.to_deployment(
-        name="fetch",
+        name="music-fetch",
         cron=fetch_cron,
     )
-    scan_deployment = scan_flow.to_deployment(name="scan")
+    scan_deployment = scan_flow.to_deployment(name="music-scan")
 
     ensure_concurrency_limits()
 
