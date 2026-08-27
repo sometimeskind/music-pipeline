@@ -99,6 +99,12 @@ jobs:
       - name: Health check — spotdl
         run: docker run --rm --entrypoint spotdl music-pipeline:ci-local --version
 
+      - name: Health check — deno
+        run: docker run --rm --entrypoint deno music-pipeline:ci-local --version
+
+      - name: Health check — yt-dlp
+        run: docker run --rm --entrypoint yt-dlp music-pipeline:ci-local --version
+
       - name: Health check — fpcalc
         run: docker run --rm --entrypoint fpcalc music-pipeline:ci-local -version
 

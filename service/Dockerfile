@@ -2,11 +2,15 @@
 # Build context: repo root
 FROM python:3.13-slim AS prod
 
-# System deps: all of fetch (ffmpeg, nodejs) + scan (ffmpeg, chromaprint) + rclone
+# System deps: all of fetch (ffmpeg) + scan (ffmpeg, chromaprint) + rclone
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
-       ffmpeg nodejs libchromaprint-tools rclone \
+       ffmpeg libchromaprint-tools rclone \
     && rm -rf /var/lib/apt/lists/*
+
+# Deno >= 2.3 is required by yt-dlp's EJS JS-challenge solver (Deno is yt-dlp's default runtime).
+# Debian's nodejs (20.x) is below yt-dlp's Node >= 22 floor, so Node is not an option here.
+COPY --from=docker.io/denoland/deno:bin-2.9.5 /deno /usr/local/bin/deno
 
 # Install all three packages
 COPY fetch/music_fetch/ /build/fetch/music_fetch/
@@ -34,10 +38,7 @@ RUN mkdir -p \
     /root/Music/playlists \
     /root/.config/beets \
     /root/.config/spotdl \
-    /root/.config/music-pipeline \
-    /root/.config/yt-dlp
-
-RUN echo --js-runtimes node > /root/.config/yt-dlp/config
+    /root/.config/music-pipeline
 
 CMD ["music-pipeline"]
 

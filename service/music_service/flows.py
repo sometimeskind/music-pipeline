@@ -71,18 +71,19 @@ def spotdl_sync_task(remove_sources: list[str]):
         if ingest.FAILURES_FILE.exists():
             try:
                 failures = json.loads(ingest.FAILURES_FILE.read_text(encoding="utf-8"))
-                logger.info("MISS backoff state: %d track(s) backed off", len(failures))
+                logger.info("Backoff state: %d track(s) backed off", len(failures))
                 for url, entry in failures.items():
                     logger.info(
-                        "  [BACK] attempts=%d retry_after=%s url=%s",
+                        "  [BACK] kind=%s attempts=%d retry_after=%s url=%s",
+                        entry.get("kind", "miss"),
                         entry.get("attempts", "?"),
                         entry.get("retry_after", "?")[:10],
                         url,
                     )
             except Exception:
-                logger.warning("Could not read MISS backoff state from %s", ingest.FAILURES_FILE)
+                logger.warning("Could not read backoff state from %s", ingest.FAILURES_FILE)
         else:
-            logger.info("MISS backoff state: empty")
+            logger.info("Backoff state: empty")
         result = ingest.sync_playlists(remove_sources, metrics)
         not_downloaded = metrics.tracks_attempted - metrics.tracks_downloaded
         suffix = ""

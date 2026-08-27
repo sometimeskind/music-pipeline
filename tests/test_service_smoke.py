@@ -77,10 +77,11 @@ def test_ffmpeg_installed(docker_client):
     assert "ffmpeg" in output.lower()
 
 
-def test_node_installed(docker_client):
-    """node is present (required by spotdl/yt-dlp JS runtime)."""
-    exit_code, output = _run_once(docker_client, ["node", "--version"])
-    assert exit_code == 0, f"node --version failed. Output:\n{output}"
+def test_deno_installed(docker_client):
+    """deno is present and runs (required by yt-dlp for YouTube JS challenges)."""
+    exit_code, output = _run_once(docker_client, ["deno", "eval", "console.log('ok')"])
+    assert exit_code == 0, f"deno eval failed. Output:\n{output}"
+    assert "ok" in output
 
 
 # ---------------------------------------------------------------------------

@@ -47,7 +47,7 @@ container via Docker SDK.
   `music-pipeline --help` inside the container. Validates all three entry points
   are installed.
 - `test_system_deps` — Run `rclone version`, `fpcalc -version`, `ffmpeg -version`,
-  `node --version` inside the container. Validates all system dependencies.
+  `deno --version` inside the container. Validates all system dependencies.
 - `test_beet_chroma_plugin` — Run `beet version` and check `chroma` is listed
   (same as existing test but against the unified image).
 

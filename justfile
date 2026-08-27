@@ -57,6 +57,9 @@ cookies:
 # Clear all MISS backoff state — all tracks will be retried on the next run
 clear-failures:
     docker compose run --rm service sh -c "rm -f /root/Music/inbox/.spotdl-failures.json && echo Cleared"
+# Clear all backoff state in the k8s deployment (see #151) — all tracks will be retried on the next run
+clear-failures-k8s:
+    kubectl exec -n music $(kubectl get pods -n music -l app=music-pipeline -o jsonpath='{.items[0].metadata.name}') -- sh -c "rm -f /root/Music/inbox/.spotdl-failures.json && echo Cleared"
 
 # One-time migration: populate spotify_url flex attr for items imported before #100 fix.
 # Pass --dry-run to preview, --playlist <name> to limit to one playlist.
