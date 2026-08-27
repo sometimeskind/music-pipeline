@@ -18,11 +18,48 @@ logger = logging.getLogger(__name__)
 
 _spotdl_instance = None  # process-wide singleton (SpotifyClient + ProgressHandler can't be reinitialised)
 
-_BACKOFF_SCHEDULE = [7, 14, 28]  # days; last value repeats indefinitely
+# Backoff schedules in days; the last value repeats indefinitely.
+# "miss": no YouTube source found — unlikely to change quickly.
+# "fail": a source was found but the download failed — usually transient (yt-dlp/YouTube
+#         breakage), so retry soon, but still back off so permanently broken tracks don't
+#         consume the per-run track budget forever.
+_BACKOFF_SCHEDULES = {"miss": [7, 14, 28], "fail": [1, 2, 4]}
 
 
-def _backoff_days(attempts: int) -> int:
-    return _BACKOFF_SCHEDULE[min(attempts, len(_BACKOFF_SCHEDULE)) - 1]
+def _backoff_days(attempts: int, kind: str = "miss") -> int:
+    schedule = _BACKOFF_SCHEDULES[kind]
+    return schedule[min(attempts, len(schedule)) - 1]
+
+
+def _download_error_reasons(errors) -> dict[str, str]:
+    """Map Spotify track URL → "ExceptionName: message" from spotdl's Downloader.errors.
+
+    spotdl appends ``f"{song.url} - {exc.__class__.__name__}: {exc}"`` for every failed
+    download.  Entries without a URL prefix (e.g. "Song is missing required fields: …")
+    are ignored.  Anything that isn't a list (e.g. a test double) yields no reasons.
+    """
+    reasons: dict[str, str] = {}
+    if not isinstance(errors, list):
+        return reasons
+    for err in errors:
+        url, sep, reason = str(err).partition(" - ")
+        if sep and url.startswith("http"):
+            reasons[url] = reason
+    return reasons
+
+
+def _record_failure(failures: dict, url: str, kind: str) -> tuple[int, int]:
+    """Bump the backoff entry for *url*; returns (attempts, backoff_days).
+
+    Attempts restart at 1 when the failure kind changes (miss ↔ fail).  Entries written
+    before the "kind" field existed are treated as "miss".
+    """
+    entry = failures.get(url, {})
+    attempts = entry.get("attempts", 0) + 1 if entry.get("kind", "miss") == kind else 1
+    days = _backoff_days(attempts, kind)
+    retry_after = (datetime.now(timezone.utc) + timedelta(days=days)).replace(microsecond=0).isoformat()
+    failures[url] = {"kind": kind, "attempts": attempts, "retry_after": retry_after}
+    return attempts, days
 
 
 def _load_failures(failures_file: Path) -> dict:
@@ -61,7 +98,6 @@ def _make_downloader_settings(
         "sync_without_deleting": sync_without_deleting,
         "load_config": False,
         "threads": 4,
-        "yt_dlp_args": "--js-runtimes node",
     }
     if output_dir is not None:
         settings["output"] = str(output_dir)
@@ -182,7 +218,7 @@ def sync_playlist(
     # Identify tracks not yet downloaded (absent from the previous snapshot).
     truly_new = [s for s in new_songs if s.url not in old_urls]
 
-    # Apply MISS backoff: filter out tracks whose retry window hasn't expired yet.
+    # Apply MISS/FAIL backoff: filter out tracks whose retry window hasn't expired yet.
     failures: dict = {}
     if failures_file is not None:
         failures = _load_failures(failures_file)
@@ -197,7 +233,13 @@ def sync_playlist(
             else:
                 due.append(song)
         for song in backed_off:
-            logger.info("[BACK] %s → backed off until %s", _song_label(song), failures[song.url]["retry_after"][:10])
+            entry = failures[song.url]
+            logger.info(
+                "[BACK] %s → %s backed off until %s",
+                _song_label(song),
+                entry.get("kind", "miss"),
+                entry["retry_after"][:10],
+            )
         truly_new = due
 
     total_new = len(truly_new)
@@ -215,27 +257,41 @@ def sync_playlist(
             logger.info("[DEFER] %s", _song_label(song))
 
     # Download only the new batch; existing tracks are already on disk (overwrite=skip).
+    # spotdl records why each download failed in Downloader.errors and never clears the
+    # list — and our Spotdl instance is a process-wide singleton — so reset it before the
+    # batch and read it back afterwards.
+    downloader_errors = getattr(getattr(spotdl_obj, "downloader", None), "errors", None)
+    if isinstance(downloader_errors, list):
+        downloader_errors.clear()
     results = spotdl_obj.download_songs(truly_new)
+    reasons = _download_error_reasons(downloader_errors)
 
     # Log per-track outcomes.
-    # MISS vs FAIL: if song.download_url is None, spotdl found no YouTube source (LookupError);
-    # if it's set, a source was found but the download itself failed (AudioProviderError).
+    # MISS vs FAIL: a recorded LookupError means spotdl found no YouTube source.  Anything
+    # else (AudioProviderError, DownloaderError, …) — or no recorded error at all — means a
+    # source was found but the download itself failed.  song.download_url can't be used as
+    # the discriminator: spotdl only sets it on success (issue #151).
     n_missed = n_failed = 0
     for song, path in results:
         if path is not None:
             logger.info("[OK]   %s", _song_label(song))
             failures.pop(song.url, None)
-        elif getattr(song, "download_url", None):
-            n_failed += 1
-            logger.info("[FAIL] %s → download failed", _song_label(song))
-        else:
+            continue
+        reason = reasons.get(song.url, "")
+        if reason.startswith("LookupError"):
             n_missed += 1
-            entry = failures.get(song.url, {"attempts": 0})
-            attempts = entry["attempts"] + 1
-            days = _backoff_days(attempts)
-            retry_after = (datetime.now(timezone.utc) + timedelta(days=days)).replace(microsecond=0).isoformat()
-            failures[song.url] = {"attempts": attempts, "retry_after": retry_after}
+            attempts, days = _record_failure(failures, song.url, "miss")
             logger.info("[MISS] %s → no source found; backing off %d days (attempt %d)", _song_label(song), days, attempts)
+        else:
+            n_failed += 1
+            attempts, days = _record_failure(failures, song.url, "fail")
+            logger.info(
+                "[FAIL] %s → %s; backing off %d days (attempt %d)",
+                _song_label(song),
+                reason or "download failed (no error reported)",
+                days,
+                attempts,
+            )
 
     if failures_file is not None:
         _save_failures(failures_file, failures)

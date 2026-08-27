@@ -1,10 +1,14 @@
 # fetch: spotdl sync, Spotify/YouTube network calls.
 FROM python:3.13-slim AS prod
 
-# ffmpeg required by spotdl; nodejs required by yt-dlp for JS challenge solving
+# ffmpeg required by spotdl
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends ffmpeg nodejs \
+    && apt-get install -y --no-install-recommends ffmpeg \
     && rm -rf /var/lib/apt/lists/*
+
+# Deno >= 2.3 is required by yt-dlp's EJS JS-challenge solver (Deno is yt-dlp's default runtime).
+# Debian's nodejs (20.x) is below yt-dlp's Node >= 22 floor, so Node is not an option here.
+COPY --from=docker.io/denoland/deno:bin-2.9.5 /deno /usr/local/bin/deno
 
 # Python dependencies
 COPY requirements.txt /requirements.txt
@@ -19,11 +23,7 @@ RUN pip install --no-cache-dir -e /app
 RUN mkdir -p \
     /root/Music/inbox/spotdl \
     /root/.config/spotdl \
-    /root/.config/music-pipeline \
-    /root/.config/yt-dlp
-
-# Use Node.js for EJS JS challenge solving (Deno is the default but not installed)
-RUN echo --js-runtimes node > /root/.config/yt-dlp/config
+    /root/.config/music-pipeline
 
 CMD ["music-ingest"]
 
