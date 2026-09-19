@@ -40,6 +40,12 @@ RUN mkdir -p \
     /root/.config/spotdl \
     /root/.config/music-pipeline
 
+# Attach Prefect's API log handler to our own packages' loggers so their records
+# (per-track [OK]/[MISS]/[FAIL] lines) also show up in the flow run logs in the
+# Prefect UI. Console/pod-log visibility is handled by the level pin in
+# music_service/flows.py. Inherited by the dev stage below.
+ENV PREFECT_LOGGING_EXTRA_LOGGERS=music_fetch,music_scan
+
 CMD ["music-pipeline"]
 
 FROM prod AS dev
