@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import time
 
 from prefect import flow, get_run_logger, task
@@ -13,6 +14,15 @@ import music_scan.reconcile as reconcile
 import music_scan.scan as scan
 from music_fetch.config import load_playlists
 from music_fetch.metrics import IngestMetrics
+
+# Prefect runs each flow run in a `python -m prefect.engine` subprocess where its own
+# logging dictConfig owns the root logger (level WARNING). music_fetch / music_scan
+# loggers inherit that, so their INFO records (per-track [OK]/[MISS]/[FAIL] lines)
+# would be dropped before reaching the console handler or the API handler attached
+# via PREFECT_LOGGING_EXTRA_LOGGERS. This module is the deployment entrypoint and is
+# imported in every flow-run process, so pin those loggers to INFO here.
+for _name in ("music_fetch", "music_scan"):
+    logging.getLogger(_name).setLevel(logging.INFO)
 
 
 # ---------------------------------------------------------------------------
