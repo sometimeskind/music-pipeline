@@ -102,19 +102,19 @@ def test_sync_playlist_after_stub_downloads_all_songs(tmp_path: Path) -> None:
     mock_spotdl.download_songs.return_value = [(s, Path(f"/tmp/{i}.m4a")) for i, s in enumerate(songs)]
 
     with mock.patch("music_fetch.spotdl_ops._make_spotdl", return_value=mock_spotdl):
-        removed_urls, attempted, downloaded, _missed, _failed = sync_playlist(
+        result = sync_playlist(
             spotdl_file=spotdl_file,
             output_dir=output_dir,
             cookie_file=cookie_file,
         )
 
     # All 5 songs should be sent to download — none were in the empty snapshot
-    assert attempted == 5
-    assert downloaded == 5
+    assert result.attempted == 5
+    assert result.downloaded == 5
     mock_spotdl.download_songs.assert_called_once()
     sent_to_spotdl = mock_spotdl.download_songs.call_args[0][0]
     assert len(sent_to_spotdl) == 5
-    assert removed_urls == set()
+    assert result.removed_urls == set()
 
     # All 5 downloaded songs should be persisted to the snapshot
     data = json.loads(spotdl_file.read_text(encoding="utf-8"))
@@ -148,22 +148,22 @@ def test_sync_playlist_second_run_skips_known_songs(tmp_path: Path) -> None:
     mock_spotdl.download_songs.return_value = [(s, Path(f"/tmp/{i}.m4a")) for i, s in enumerate(new_only)]
 
     with mock.patch("music_fetch.spotdl_ops._make_spotdl", return_value=mock_spotdl):
-        removed_urls, attempted, downloaded, _missed, _failed = sync_playlist(
+        result = sync_playlist(
             spotdl_file=spotdl_file,
             output_dir=output_dir,
             cookie_file=cookie_file,
         )
 
     # Only the 2 new songs should be downloaded
-    assert attempted == 2
-    assert downloaded == 2
+    assert result.attempted == 2
+    assert result.downloaded == 2
     sent_to_spotdl = mock_spotdl.download_songs.call_args[0][0]
     sent_urls = {s.url for s in sent_to_spotdl}
     assert sent_urls == {
         "https://open.spotify.com/track/3",
         "https://open.spotify.com/track/4",
     }
-    assert removed_urls == set()
+    assert result.removed_urls == set()
 
     # Snapshot should contain all 3 old + 2 newly downloaded = 5 songs
     data = json.loads(spotdl_file.read_text(encoding="utf-8"))
@@ -195,15 +195,15 @@ def test_sync_playlist_detects_removed_tracks(tmp_path: Path) -> None:
     mock_spotdl.download_songs.return_value = []  # nothing new to download
 
     with mock.patch("music_fetch.spotdl_ops._make_spotdl", return_value=mock_spotdl):
-        removed_urls, attempted, downloaded, _missed, _failed = sync_playlist(
+        result = sync_playlist(
             spotdl_file=spotdl_file,
             output_dir=output_dir,
             cookie_file=cookie_file,
         )
 
-    assert removed_urls == {"https://open.spotify.com/track/B"}
-    assert attempted == 0  # A was already known; nothing new to download
-    assert downloaded == 0
+    assert result.removed_urls == {"https://open.spotify.com/track/B"}
+    assert result.attempted == 0  # A was already known; nothing new to download
+    assert result.downloaded == 0
 
 def test_sync_playlist_failed_downloads_not_persisted(tmp_path: Path) -> None:
     """Songs spotdl failed to download (path=None) are excluded from the snapshot.
@@ -233,17 +233,17 @@ def test_sync_playlist_failed_downloads_not_persisted(tmp_path: Path) -> None:
     )
 
     with mock.patch("music_fetch.spotdl_ops._make_spotdl", return_value=mock_spotdl):
-        removed_urls, attempted, downloaded, n_missed, n_failed = sync_playlist(
+        result = sync_playlist(
             spotdl_file=spotdl_file,
             output_dir=output_dir,
             cookie_file=cookie_file,
         )
 
-    assert attempted == 4  # all 4 were sent to spotdl
-    assert downloaded == 2  # only 2 actually landed on disk (regression for issue #124)
-    assert n_missed == 1
-    assert n_failed == 1
-    assert removed_urls == set()
+    assert result.attempted == 4  # all 4 were sent to spotdl
+    assert result.downloaded == 2  # only 2 actually landed on disk (regression for issue #124)
+    assert result.missed == 1
+    assert result.failed == 1
+    assert result.removed_urls == set()
 
     # Only the 2 successful downloads should be in the snapshot
     data = json.loads(spotdl_file.read_text(encoding="utf-8"))
@@ -341,12 +341,12 @@ def test_outcome_fail_logged_when_download_error(tmp_path: Path, caplog) -> None
 
     with mock.patch("music_fetch.spotdl_ops._make_spotdl", return_value=mock_spotdl), \
          caplog.at_level(logging.INFO, logger="music_fetch.spotdl_ops"):
-        _, _, _, n_missed, n_failed = sync_playlist(
+        result = sync_playlist(
             spotdl_file=spotdl_file, output_dir=output_dir, cookie_file=cookie_file,
         )
 
-    assert n_failed == 1
-    assert n_missed == 0
+    assert result.failed == 1
+    assert result.missed == 0
     assert "[FAIL]" in caplog.text
     assert "Errored Track" in caplog.text
     assert "AudioProviderError: YT-DLP download error" in caplog.text
@@ -364,11 +364,11 @@ def test_path_none_without_error_is_fail(tmp_path: Path, caplog) -> None:
 
     with mock.patch("music_fetch.spotdl_ops._make_spotdl", return_value=mock_spotdl), \
          caplog.at_level(logging.INFO, logger="music_fetch.spotdl_ops"):
-        _, _, _, n_missed, n_failed = sync_playlist(
+        result = sync_playlist(
             spotdl_file=spotdl_file, output_dir=output_dir, cookie_file=cookie_file,
         )
 
-    assert (n_missed, n_failed) == (0, 1)
+    assert (result.missed, result.failed) == (0, 1)
     assert "[FAIL]" in caplog.text
     assert "[MISS]" not in caplog.text
 
@@ -384,11 +384,11 @@ def test_downloader_errors_missing_treated_as_fail(tmp_path: Path) -> None:
     mock_spotdl.download_songs.return_value = [(song, None)]
 
     with mock.patch("music_fetch.spotdl_ops._make_spotdl", return_value=mock_spotdl):
-        _, _, _, n_missed, n_failed = sync_playlist(
+        result = sync_playlist(
             spotdl_file=spotdl_file, output_dir=output_dir, cookie_file=cookie_file,
         )
 
-    assert (n_missed, n_failed) == (0, 1)
+    assert (result.missed, result.failed) == (0, 1)
 
 
 def test_stale_errors_cleared_before_download(tmp_path: Path) -> None:
@@ -401,11 +401,11 @@ def test_stale_errors_cleared_before_download(tmp_path: Path) -> None:
     mock_spotdl.downloader.errors.append(_lookup_error(song.url))  # stale, from an earlier call
 
     with mock.patch("music_fetch.spotdl_ops._make_spotdl", return_value=mock_spotdl):
-        _, _, _, n_missed, n_failed = sync_playlist(
+        result = sync_playlist(
             spotdl_file=spotdl_file, output_dir=output_dir, cookie_file=cookie_file,
         )
 
-    assert (n_missed, n_failed) == (0, 1)
+    assert (result.missed, result.failed) == (0, 1)
     assert mock_spotdl.downloader.errors == []
 
 
@@ -482,11 +482,11 @@ def test_fail_track_in_backoff_is_skipped(tmp_path: Path) -> None:
     mock_spotdl = _mock_spotdl([song], [], errors=[])
 
     with mock.patch("music_fetch.spotdl_ops._make_spotdl", return_value=mock_spotdl):
-        _, attempted, _, _, _ = sync_playlist(
+        result = sync_playlist(
             spotdl_file=spotdl_file, output_dir=output_dir, cookie_file=cookie_file, failures_file=failures_file,
         )
 
-    assert attempted == 0
+    assert result.attempted == 0
     assert mock_spotdl.download_songs.call_args[0][0] == []
 
 
@@ -561,14 +561,14 @@ def test_miss_track_in_backoff_is_skipped(tmp_path: Path) -> None:
     mock_spotdl.download_songs.return_value = [(fresh, Path("/tmp/fresh.m4a"))]
 
     with mock.patch("music_fetch.spotdl_ops._make_spotdl", return_value=mock_spotdl):
-        _, attempted, downloaded, _missed, _failed = sync_playlist(
+        result = sync_playlist(
             spotdl_file=spotdl_file, output_dir=output_dir, cookie_file=cookie_file,
             failures_file=failures_file, track_limit=10,
         )
 
     # Only the fresh track should have been sent
-    assert attempted == 1
-    assert downloaded == 1
+    assert result.attempted == 1
+    assert result.downloaded == 1
     sent_to_spotdl = mock_spotdl.download_songs.call_args[0][0]
     assert all(s.url != backed_off_url for s in sent_to_spotdl)
 
@@ -592,12 +592,12 @@ def test_miss_track_past_backoff_is_retried(tmp_path: Path) -> None:
     mock_spotdl = _mock_spotdl([song], [(song, None)], errors=[_lookup_error(retry_url)])
 
     with mock.patch("music_fetch.spotdl_ops._make_spotdl", return_value=mock_spotdl):
-        _, attempted, downloaded, _missed, _failed = sync_playlist(
+        result = sync_playlist(
             spotdl_file=spotdl_file, output_dir=output_dir, cookie_file=cookie_file, failures_file=failures_file,
         )
 
-    assert attempted == 1
-    assert downloaded == 0  # spotdl returned path=None — must NOT be counted as downloaded
+    assert result.attempted == 1
+    assert result.downloaded == 0  # spotdl returned path=None — must NOT be counted as downloaded
     data = json.loads(failures_file.read_text(encoding="utf-8"))
     assert data[retry_url]["attempts"] == 2  # incremented
 
@@ -681,12 +681,12 @@ def test_corrupt_failures_file_treated_as_empty(tmp_path: Path) -> None:
     mock_spotdl.download_songs.return_value = [(song, Path("/tmp/1.m4a"))]
 
     with mock.patch("music_fetch.spotdl_ops._make_spotdl", return_value=mock_spotdl):
-        _, attempted, downloaded, _missed, _failed = sync_playlist(
+        result = sync_playlist(
             spotdl_file=spotdl_file, output_dir=output_dir, cookie_file=cookie_file, failures_file=failures_file,
         )
 
-    assert attempted == 1  # proceeded normally despite corrupt file
-    assert downloaded == 1
+    assert result.attempted == 1  # proceeded normally despite corrupt file
+    assert result.downloaded == 1
 
 
 def test_outcome_defer_logged_for_budget_limited_tracks(tmp_path: Path, caplog) -> None:
@@ -707,3 +707,194 @@ def test_outcome_defer_logged_for_budget_limited_tracks(tmp_path: Path, caplog) 
     assert "[DEFER]" in caplog.text
     assert "Track 1" in caplog.text
     assert "Track 2" in caplog.text
+
+
+# ---------------------------------------------------------------------------
+# Per-track failure reasons: chained cause, SyncResult, failures-file round-trip (issue #159)
+# ---------------------------------------------------------------------------
+
+
+class _AudioProviderError(Exception):
+    """Stand-in for spotdl.providers.audio.base.AudioProviderError."""
+
+
+class _DownloadError(Exception):
+    """Stand-in for yt_dlp.utils.DownloadError."""
+
+
+class _HTTPError(Exception):
+    """Stand-in for urllib.error.HTTPError."""
+
+
+def _chained_403(video_url: str = "https://music.youtube.com/watch?v=abc") -> Exception:
+    """Build the exception chain spotdl produces when yt-dlp gets a 403 on the media URL."""
+    try:
+        try:
+            raise _HTTPError("HTTP Error 403: Forbidden")
+        except _HTTPError:
+            # yt-dlp re-raises from inside the except block: implicit chaining (__context__ only)
+            raise _DownloadError("ERROR: unable to download video data:\nHTTP Error 403: Forbidden")
+    except _DownloadError as exc:
+        try:
+            raise _AudioProviderError(f"YT-DLP download error - {video_url}") from exc
+        except _AudioProviderError as outer:
+            return outer
+    raise AssertionError("unreachable")
+
+
+def _mock_spotdl_with_causes(songs: list, results: list, causes: dict[str, BaseException]) -> mock.Mock:
+    """Spotdl double that reports failures the way spotdl 4.5.2 does.
+
+    For every song in *causes* download_songs() hands the exception object to the song's
+    progress tracker via notify_error() and appends the formatted string to
+    Downloader.errors.  Only the string survives in Downloader.errors; the chained cause
+    is reachable only through notify_error().
+    """
+    m = mock.Mock()
+    m.search.return_value = songs
+    m.downloader.errors = []
+    m.downloader.progress_handler.get_new_tracker.side_effect = lambda song: mock.Mock()
+
+    def _download(batch):
+        for song in batch:
+            exc = causes.get(song.url)
+            if exc is None:
+                continue
+            tracker = m.downloader.progress_handler.get_new_tracker(song)
+            tracker.notify_error("Traceback (most recent call last): ...", exc, True)
+            m.downloader.errors.append(f"{song.url} - {exc.__class__.__name__}: {exc}")
+        return results
+
+    m.download_songs.side_effect = _download
+    return m
+
+
+def test_download_error_reasons_append_chained_cause() -> None:
+    """The reason string carries every link of the exception chain, on one line."""
+    from music_fetch.spotdl_ops import _download_error_reasons
+
+    url = "https://open.spotify.com/track/1"
+    exc = _chained_403()
+    reasons = _download_error_reasons([f"{url} - {exc.__class__.__name__}: {exc}"], {url: exc})
+
+    assert reasons[url] == (
+        "_AudioProviderError: YT-DLP download error - https://music.youtube.com/watch?v=abc "
+        "(caused by _DownloadError: ERROR: unable to download video data: HTTP Error 403: Forbidden; "
+        "_HTTPError: HTTP Error 403: Forbidden)"
+    )
+    assert "\n" not in reasons[url]
+
+
+def test_download_error_reasons_without_cause_unchanged() -> None:
+    """No captured exception (or an unchained one) leaves the spotdl string as-is."""
+    from music_fetch.spotdl_ops import _download_error_reasons
+
+    url = "https://open.spotify.com/track/1"
+    expected = "AudioProviderError: YT-DLP download error - https://music.youtube.com/watch?v=abc"
+    plain = _AudioProviderError("YT-DLP download error - https://music.youtube.com/watch?v=abc")
+    assert _download_error_reasons([_download_error(url)], {url: plain})[url] == expected
+    assert _download_error_reasons([_download_error(url)], {})[url] == expected
+    assert _download_error_reasons([_download_error(url)], None)[url] == expected
+
+
+def test_sync_playlist_returns_fail_reasons_with_cause(tmp_path: Path, caplog) -> None:
+    """sync_playlist exposes the per-track [FAIL] reason (with chained cause) to the caller."""
+    import logging
+    spotdl_file, output_dir, cookie_file = _setup_sync(tmp_path)
+    save_playlist(url="https://open.spotify.com/playlist/abc", spotdl_file=spotdl_file)
+
+    ok = _make_mock_song("https://open.spotify.com/track/ok")
+    missing = _make_mock_song("https://open.spotify.com/track/miss")
+    failed = _make_mock_song("https://open.spotify.com/track/fail", title="Forbidden")
+    mock_spotdl = _mock_spotdl_with_causes(
+        [ok, missing, failed],
+        [(ok, Path("/tmp/ok.m4a")), (missing, None), (failed, None)],
+        causes={missing.url: LookupError("No results found for song: Artist - Song"), failed.url: _chained_403()},
+    )
+
+    with mock.patch("music_fetch.spotdl_ops._make_spotdl", return_value=mock_spotdl), \
+         caplog.at_level(logging.INFO, logger="music_fetch.spotdl_ops"):
+        result = sync_playlist(spotdl_file=spotdl_file, output_dir=output_dir, cookie_file=cookie_file)
+
+    assert (result.attempted, result.downloaded, result.missed, result.failed) == (3, 1, 1, 1)
+    assert set(result.fail_reasons) == {failed.url}  # [MISS] tracks are not download failures
+    assert "HTTP Error 403: Forbidden" in result.fail_reasons[failed.url]
+    assert "[FAIL] Artist - Forbidden → _AudioProviderError: YT-DLP download error" in caplog.text
+    assert "(caused by _DownloadError: ERROR: unable to download video data: HTTP Error 403: Forbidden" in caplog.text
+
+
+def test_cause_capture_installed_once_on_singleton(tmp_path: Path) -> None:
+    """The progress-handler hook is installed once per Spotdl instance and reset per batch."""
+    spotdl_file, output_dir, cookie_file = _setup_sync(tmp_path)
+    save_playlist(url="https://open.spotify.com/playlist/abc", spotdl_file=spotdl_file)
+
+    song = _make_mock_song("https://open.spotify.com/track/1")
+    mock_spotdl = _mock_spotdl_with_causes([song], [(song, None)], causes={song.url: _chained_403()})
+    original_get_new_tracker = mock_spotdl.downloader.progress_handler.get_new_tracker
+
+    with mock.patch("music_fetch.spotdl_ops._make_spotdl", return_value=mock_spotdl):
+        first = sync_playlist(spotdl_file=spotdl_file, output_dir=output_dir, cookie_file=cookie_file)
+        wrapped = mock_spotdl.downloader.progress_handler.get_new_tracker
+        # Second run: the song is still new (never downloaded) and fails again.
+        second = sync_playlist(spotdl_file=spotdl_file, output_dir=output_dir, cookie_file=cookie_file)
+
+    assert wrapped is not original_get_new_tracker
+    assert mock_spotdl.downloader.progress_handler.get_new_tracker is wrapped  # not re-wrapped
+    assert "HTTP Error 403" in first.fail_reasons[song.url]
+    assert "HTTP Error 403" in second.fail_reasons[song.url]
+
+
+def test_failures_file_round_trips_reason(tmp_path: Path) -> None:
+    """[FAIL] and [MISS] entries persist their reason so investigations don't need a pod exec."""
+    spotdl_file, output_dir, cookie_file = _setup_sync(tmp_path)
+    failures_file = tmp_path / ".spotdl-failures.json"
+    save_playlist(url="https://open.spotify.com/playlist/abc", spotdl_file=spotdl_file)
+
+    missing = _make_mock_song("https://open.spotify.com/track/miss")
+    failed = _make_mock_song("https://open.spotify.com/track/fail")
+    mock_spotdl = _mock_spotdl_with_causes(
+        [missing, failed],
+        [(missing, None), (failed, None)],
+        causes={missing.url: LookupError("No results found for song: Artist - Song"), failed.url: _chained_403()},
+    )
+
+    with mock.patch("music_fetch.spotdl_ops._make_spotdl", return_value=mock_spotdl):
+        sync_playlist(spotdl_file=spotdl_file, output_dir=output_dir, cookie_file=cookie_file, failures_file=failures_file)
+
+    data = json.loads(failures_file.read_text(encoding="utf-8"))
+    assert data[missing.url]["kind"] == "miss"
+    assert data[missing.url]["reason"] == "LookupError: No results found for song: Artist - Song"
+    assert data[failed.url]["kind"] == "fail"
+    assert data[failed.url]["reason"].startswith("_AudioProviderError: YT-DLP download error")
+    assert "(caused by _DownloadError: ERROR: unable to download video data: HTTP Error 403: Forbidden" in data[failed.url]["reason"]
+
+
+def test_failures_file_legacy_entry_without_reason(tmp_path: Path) -> None:
+    """Entries written before 'reason' existed still load, back off, and gain a reason on the next failure."""
+    from datetime import datetime, timedelta, timezone
+
+    spotdl_file, output_dir, cookie_file = _setup_sync(tmp_path)
+    failures_file = tmp_path / ".spotdl-failures.json"
+    save_playlist(url="https://open.spotify.com/playlist/abc", spotdl_file=spotdl_file)
+
+    backed_off = _make_mock_song("https://open.spotify.com/track/backed")
+    due = _make_mock_song("https://open.spotify.com/track/due")
+    future = (datetime.now(timezone.utc) + timedelta(days=1)).replace(microsecond=0).isoformat()
+    past = (datetime.now(timezone.utc) - timedelta(days=1)).replace(microsecond=0).isoformat()
+    failures_file.write_text(
+        json.dumps({
+            backed_off.url: {"kind": "fail", "attempts": 1, "retry_after": future},
+            due.url: {"kind": "fail", "attempts": 1, "retry_after": past},
+        }),
+        encoding="utf-8",
+    )
+    mock_spotdl = _mock_spotdl([backed_off, due], [(due, None)], errors=[_download_error(due.url)])
+
+    with mock.patch("music_fetch.spotdl_ops._make_spotdl", return_value=mock_spotdl):
+        result = sync_playlist(spotdl_file=spotdl_file, output_dir=output_dir, cookie_file=cookie_file, failures_file=failures_file)
+
+    assert result.attempted == 1  # the legacy entry without a reason still backs off
+    data = json.loads(failures_file.read_text(encoding="utf-8"))
+    assert "reason" not in data[backed_off.url]  # untouched
+    assert data[due.url]["attempts"] == 2
+    assert data[due.url]["reason"] == "AudioProviderError: YT-DLP download error - https://music.youtube.com/watch?v=abc"

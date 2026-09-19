@@ -283,7 +283,7 @@ def sync_playlists(
         output_dir.mkdir(parents=True, exist_ok=True)
 
         try:
-            removed_urls, attempted, downloaded, missed, failed = sync_playlist(
+            result = sync_playlist(
                 spotdl_file=spotdl_file,
                 output_dir=output_dir,
                 cookie_file=COOKIE_FILE,
@@ -301,21 +301,67 @@ def sync_playlists(
                 metrics.cookies_expired = True
             raise
 
-        metrics.tracks_attempted += attempted
-        metrics.tracks_downloaded += downloaded
-        metrics.tracks_missed += missed
-        metrics.tracks_failed += failed
+        metrics.tracks_attempted += result.attempted
+        metrics.tracks_downloaded += result.downloaded
+        metrics.tracks_missed += result.missed
+        metrics.tracks_failed += result.failed
         if remaining is not None:
             # Budget is consumed per attempt: a stuck [MISS] cluster would otherwise loop forever.
-            remaining -= attempted
+            remaining -= result.attempted
 
-        _collect_removals(pending_removals, removed_urls, old_songs, name)
+        _flag_expired_cookies_from_failures(result.fail_reasons, name, metrics)
+        _collect_removals(pending_removals, result.removed_urls, old_songs, name)
 
         # Brief pause between playlists — avoid hammering Spotify/YouTube APIs.
         time.sleep(5)
 
+    _flag_expired_cookies_from_totals(metrics)
+
     logger.info("==> music-ingest complete. Run music-scan for local import and playlist generation.")
     return PendingRemovals(tracks=pending_removals, remove_sources=remove_sources)
+
+
+def _flag_expired_cookies_from_failures(fail_reasons: dict[str, str], playlist: str, metrics: IngestMetrics) -> None:
+    """Set ``cookies_expired`` when a per-track [FAIL] reason classifies as auth_youtube (issue #159).
+
+    Per-track download failures never raise — spotdl wraps them and the sync completes —
+    so the ``except`` path above never sees a 403 on the media URL.  A 403 is only
+    evidence of expired cookies when a cookie file is actually in use.  Logs one WARNING
+    per run naming the first offending track.
+    """
+    if not COOKIE_FILE.exists():
+        return
+    for url, reason in fail_reasons.items():
+        if classify_failure(reason) != "auth_youtube":
+            continue
+        if not metrics.cookies_expired:
+            logger.warning(
+                "YouTube cookies at %s look expired: %s failed in playlist %s with %s",
+                COOKIE_FILE,
+                url,
+                playlist,
+                reason,
+            )
+        metrics.cookies_expired = True
+        return
+
+
+def _flag_expired_cookies_from_totals(metrics: IngestMetrics) -> None:
+    """Safety net: every attempted track [FAIL]ed and nothing landed on disk (issue #159).
+
+    Catches cookie expiry even when the per-track reason doesn't carry the yt-dlp cause.
+    [MISS] tracks (no YouTube source) don't count: they say nothing about cookies.  A total
+    YouTube outage trips this too; the response (look at the pod) is the same.
+    """
+    if metrics.cookies_expired:
+        return
+    if metrics.tracks_attempted > 0 and metrics.tracks_downloaded == 0 and metrics.tracks_failed == metrics.tracks_attempted:
+        logger.warning(
+            "All %d attempted track(s) failed to download and none succeeded — "
+            "flagging cookies as expired (heuristic: attempted > 0, downloaded == 0, [FAIL] == attempted)",
+            metrics.tracks_attempted,
+        )
+        metrics.cookies_expired = True
 
 
 def save_pending_removals(pending: PendingRemovals) -> None:
@@ -372,7 +418,7 @@ def run() -> PendingRemovals:
                 failures = json.loads(FAILURES_FILE.read_text(encoding="utf-8"))
                 logger.info("Backoff state (%d track(s)):", len(failures))
                 for url, entry in failures.items():
-                    logger.info("  [BACK] kind=%s attempts=%d retry_after=%s url=%s", entry.get("kind", "miss"), entry.get("attempts", "?"), entry.get("retry_after", "?")[:10], url)
+                    logger.info("  [BACK] kind=%s attempts=%d retry_after=%s url=%s reason=%s", entry.get("kind", "miss"), entry.get("attempts", "?"), entry.get("retry_after", "?")[:10], url, entry.get("reason", ""))
             except Exception:
                 logger.warning("Could not read backoff state from %s", FAILURES_FILE)
         else:
