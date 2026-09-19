@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 
 from music_fetch.ingest import classify_failure, _collect_removals, _deadline_reached, reconcile_playlists, PendingRemovals, RemovedTrack
-from music_fetch.spotdl_ops import find_track_in_snapshot
+from music_fetch.spotdl_ops import SyncResult, find_track_in_snapshot
 
 
 # ---------------------------------------------------------------------------
@@ -240,7 +240,7 @@ def test_sync_playlists_processes_in_config_order(tmp_path: Path) -> None:
 
     def fake_sync(spotdl_file, **_kwargs):
         processed.append(spotdl_file.stem)
-        return set(), 0, 0, 0, 0
+        return SyncResult(set(), 0, 0, 0, 0, {})
 
     with mock.patch.object(ingest, "SPOTDL_DIR", spotdl_dir), \
          mock.patch.object(ingest, "CONF_PATH", conf), \
@@ -593,3 +593,158 @@ def test_reconcile_deletes_nosync_for_removed_playlist(tmp_path: Path) -> None:
 
     assert result == ["gone"]
     assert not (spotdl_dir / "gone.nosync").exists()
+
+
+# ---------------------------------------------------------------------------
+# sync_playlists — cookie-expiry detection from per-track failures (issue #159)
+# ---------------------------------------------------------------------------
+
+_403_REASON = (
+    "AudioProviderError: YT-DLP download error - https://music.youtube.com/watch?v=abc "
+    "(caused by DownloadError: ERROR: unable to download video data: HTTP Error 403: Forbidden; "
+    "HTTPError: HTTP Error 403: Forbidden)"
+)
+_OTHER_REASON = "AudioProviderError: YT-DLP download error - https://music.youtube.com/watch?v=abc"
+
+
+def _run_sync_playlists(tmp_path: Path, results: list, cookie_file_exists: bool = True):
+    """Run ingest.sync_playlists over len(results) playlists with sync_playlist stubbed out.
+
+    Returns (metrics, caplog-free) — callers that need log output wrap in caplog themselves.
+    """
+    import unittest.mock as mock
+    from music_fetch import ingest
+    from music_fetch.metrics import IngestMetrics
+
+    spotdl_dir = tmp_path / "spotdl"
+    spotdl_dir.mkdir(exist_ok=True)
+    for i in range(len(results)):
+        (spotdl_dir / f"pl{i}.spotdl").write_text(
+            '{"type":"sync","query":["https://open.spotify.com/playlist/X"],"songs":[]}',
+            encoding="utf-8",
+        )
+    cookie_file = tmp_path / "cookies.txt"
+    if cookie_file_exists:
+        cookie_file.touch()
+
+    queued = iter(results)
+    metrics = IngestMetrics()
+    with mock.patch.object(ingest, "SPOTDL_DIR", spotdl_dir), \
+         mock.patch.object(ingest, "CONF_PATH", tmp_path / "missing.conf"), \
+         mock.patch.object(ingest, "COOKIE_FILE", cookie_file), \
+         mock.patch.object(ingest, "FAILURES_FILE", tmp_path / ".failures.json"), \
+         mock.patch("music_fetch.ingest.sync_playlist", side_effect=lambda **_kwargs: next(queued)), \
+         mock.patch("music_fetch.ingest.time.sleep"):
+        ingest.sync_playlists([], metrics)
+    return metrics
+
+
+def test_cookies_expired_set_from_403_track_failure(tmp_path: Path, caplog) -> None:
+    """A single [FAIL] whose reason classifies as auth_youtube flags cookies as expired (issue #159).
+
+    The sync itself succeeds (other tracks downloaded), so last_run_success stays 1.
+    """
+    import logging
+    from music_fetch.spotdl_ops import SyncResult
+
+    with caplog.at_level(logging.WARNING, logger="music_fetch.ingest"):
+        metrics = _run_sync_playlists(tmp_path, [
+            SyncResult(set(), 3, 2, 0, 1, {"https://open.spotify.com/track/1": _403_REASON}),
+        ])
+
+    assert metrics.cookies_expired is True
+    assert metrics.success is True
+    assert metrics.failure_reason == ""
+    warnings = [r for r in caplog.records if r.levelno == logging.WARNING and "cookies" in r.getMessage().lower()]
+    assert len(warnings) == 1
+    assert "HTTP Error 403: Forbidden" in warnings[0].getMessage()
+    assert "https://open.spotify.com/track/1" in warnings[0].getMessage()
+
+
+def test_cookies_expired_warning_logged_once_across_playlists(tmp_path: Path, caplog) -> None:
+    """Many 403s across playlists produce one WARNING, not one per track."""
+    import logging
+    from music_fetch.spotdl_ops import SyncResult
+
+    with caplog.at_level(logging.WARNING, logger="music_fetch.ingest"):
+        metrics = _run_sync_playlists(tmp_path, [
+            SyncResult(set(), 2, 1, 0, 1, {"https://open.spotify.com/track/1": _403_REASON}),
+            SyncResult(set(), 2, 1, 0, 1, {"https://open.spotify.com/track/2": _403_REASON}),
+        ])
+
+    assert metrics.cookies_expired is True
+    warnings = [r for r in caplog.records if r.levelno == logging.WARNING and "cookies" in r.getMessage().lower()]
+    assert len(warnings) == 1
+
+
+def test_cookies_expired_not_set_without_cookie_file(tmp_path: Path) -> None:
+    """A 403 without a cookie file configured is not evidence of expired cookies."""
+    from music_fetch.spotdl_ops import SyncResult
+
+    metrics = _run_sync_playlists(
+        tmp_path,
+        [SyncResult(set(), 3, 2, 0, 1, {"https://open.spotify.com/track/1": _403_REASON})],
+        cookie_file_exists=False,
+    )
+
+    assert metrics.cookies_expired is False
+    assert metrics.success is True
+
+
+def test_cookies_expired_not_set_for_non_auth_failure(tmp_path: Path) -> None:
+    """A [FAIL] that doesn't classify as auth_youtube (and isn't a total wipeout) leaves the gauge alone."""
+    from music_fetch.spotdl_ops import SyncResult
+
+    metrics = _run_sync_playlists(tmp_path, [
+        SyncResult(set(), 3, 2, 0, 1, {"https://open.spotify.com/track/1": _OTHER_REASON}),
+    ])
+
+    assert metrics.cookies_expired is False
+
+
+def test_cookies_expired_heuristic_all_attempted_failed(tmp_path: Path, caplog) -> None:
+    """Safety net: attempted > 0, downloaded == 0, failed == attempted flags cookies even without a 403."""
+    import logging
+    from music_fetch.spotdl_ops import SyncResult
+
+    with caplog.at_level(logging.WARNING, logger="music_fetch.ingest"):
+        metrics = _run_sync_playlists(tmp_path, [
+            SyncResult(set(), 20, 0, 0, 20, {f"https://open.spotify.com/track/{i}": _OTHER_REASON for i in range(20)}),
+            SyncResult(set(), 5, 0, 0, 5, {f"https://open.spotify.com/track/b{i}": _OTHER_REASON for i in range(5)}),
+        ])
+
+    assert (metrics.tracks_attempted, metrics.tracks_downloaded, metrics.tracks_failed) == (25, 0, 25)
+    assert metrics.cookies_expired is True
+    assert metrics.success is True
+    warnings = [r.getMessage() for r in caplog.records if r.levelno == logging.WARNING]
+    assert any("25" in w and "cookies" in w.lower() for w in warnings), warnings
+
+
+def test_cookies_expired_heuristic_ignores_miss_only_runs(tmp_path: Path) -> None:
+    """[MISS] tracks (no YouTube source) are not download failures; the heuristic must not fire."""
+    from music_fetch.spotdl_ops import SyncResult
+
+    metrics = _run_sync_playlists(tmp_path, [SyncResult(set(), 4, 0, 4, 0, {})])
+
+    assert (metrics.tracks_attempted, metrics.tracks_downloaded, metrics.tracks_missed, metrics.tracks_failed) == (4, 0, 4, 0)
+    assert metrics.cookies_expired is False
+
+
+def test_cookies_expired_heuristic_ignores_mixed_miss_and_fail(tmp_path: Path) -> None:
+    """downloaded == 0 but failed < attempted (some [MISS]) is not a wipeout."""
+    from music_fetch.spotdl_ops import SyncResult
+
+    metrics = _run_sync_playlists(tmp_path, [
+        SyncResult(set(), 4, 0, 1, 3, {f"https://open.spotify.com/track/{i}": _OTHER_REASON for i in range(3)}),
+    ])
+
+    assert metrics.cookies_expired is False
+
+
+def test_cookies_expired_heuristic_ignores_empty_run(tmp_path: Path) -> None:
+    """Nothing attempted (everything already synced) is not a wipeout."""
+    from music_fetch.spotdl_ops import SyncResult
+
+    metrics = _run_sync_playlists(tmp_path, [SyncResult(set(), 0, 0, 0, 0, {})])
+
+    assert metrics.cookies_expired is False

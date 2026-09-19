@@ -103,7 +103,7 @@ just cookies
 
 This extracts cookies directly from Firefox and saves them to `cookies.txt` (already in `.gitignore`).
 
-Cookies expire every few weeks. Re-export when downloads start failing or when `just fetch` logs show all tracks as `no source`.
+Cookies expire every few weeks. Re-export when downloads start failing: the ingest run logs a `YouTube cookies ... look expired` warning, sets the `music_ingest_cookies_expired` gauge to 1, and records the per-track reason (e.g. `HTTP Error 403: Forbidden`) in `/root/Music/inbox/.spotdl-failures.json`.
 
 ### 3. Set up Spotify credentials
 
