@@ -241,6 +241,7 @@ Mount `cookies.txt` at `/root/.config/spotdl/cookies.txt` read-only. Update by p
 | `SYNC_TRACK_LIMIT` | Plain value | `""` | Cap new tracks downloaded per run. Pipeline resumes next run. |
 | `BEET_SKIP_LIMIT` | Plain value | `""` | Terminate beet import after this many skipped tracks |
 | `PREFECT_LOGGING_EXTRA_LOGGERS` | Image `ENV` | `music_fetch,music_scan` | Attaches Prefect's log handlers to the pipeline's own loggers so per-track `[OK]`/`[MISS]`/`[FAIL]` lines reach the flow run logs. Baked into the image; the deployment does not need to set it. |
+| `PREFECT_LOGGING_TO_API_WHEN_MISSING_FLOW` | Image `ENV` | `ignore` | Silences Prefect's warning when those loggers emit from a thread without a flow-run context (the `beet` stderr relay). Such lines still reach the pod logs, just not the Prefect UI. |
 
 ### Typical k8s playlist workflow
 
