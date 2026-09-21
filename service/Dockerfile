@@ -45,6 +45,10 @@ RUN mkdir -p \
 # Prefect UI. Console/pod-log visibility is handled by the level pin in
 # music_service/flows.py. Inherited by the dev stage below.
 ENV PREFECT_LOGGING_EXTRA_LOGGERS=music_fetch,music_scan
+# Those loggers also emit from plain threads without a flow-run context (the beet
+# stderr relay in music_scan/process.py). The API handler cannot ship such records
+# and would warn once per call site; they still reach the console, so stay quiet.
+ENV PREFECT_LOGGING_TO_API_WHEN_MISSING_FLOW=ignore
 
 CMD ["music-pipeline"]
 
