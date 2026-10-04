@@ -898,3 +898,48 @@ def test_failures_file_legacy_entry_without_reason(tmp_path: Path) -> None:
     assert "reason" not in data[backed_off.url]  # untouched
     assert data[due.url]["attempts"] == 2
     assert data[due.url]["reason"] == "AudioProviderError: YT-DLP download error - https://music.youtube.com/watch?v=abc"
+
+
+# ---------------------------------------------------------------------------
+# SpotifyPlaylists.songs (#178)
+# ---------------------------------------------------------------------------
+
+
+def _track(n: int) -> dict:
+    return {
+        "track": {
+            "id": f"t{n}", "type": "track", "is_local": False, "name": f"Song {n}",
+            "artists": [{"name": "Artist"}], "disc_number": 1, "track_number": n,
+            "duration_ms": 200_000, "explicit": False,
+            "external_urls": {"spotify": f"https://open.spotify.com/track/t{n}"},
+            "external_ids": {"isrc": f"ISRC{n}"},
+            "album": {"id": "a1", "name": "Album", "artists": [{"name": "Artist"}],
+                      "album_type": "album", "release_date": "2001-01-01",
+                      "total_tracks": 3, "images": []},
+        }
+    }
+
+
+def test_playlist_songs_read_pages_only_never_per_track() -> None:
+    """A per-track re-fetch (track/artist/album calls) got the app rate-limited for 17h."""
+    from music_fetch.spotdl_ops import SpotifyPlaylists
+
+    client = mock.MagicMock()
+    client.playlist.return_value = {
+        "name": "keep", "owner": {"display_name": "me"}, "description": "",
+        "images": [], "external_urls": {"spotify": "https://open.spotify.com/playlist/p"},
+        "tracks": {"total": 3},
+    }
+    client.playlist_items.return_value = {"items": [_track(n) for n in (1, 2, 3)], "next": None}
+    client.track.side_effect = AssertionError("per-track fetch")
+    client.artist.side_effect = AssertionError("per-track fetch")
+    client.album.side_effect = AssertionError("per-track fetch")
+
+    reader = SpotifyPlaylists.__new__(SpotifyPlaylists)
+    with mock.patch("spotdl.types.playlist.SpotifyClient", return_value=client):
+        songs = reader.songs("https://open.spotify.com/playlist/p")
+
+    assert [s["name"] for s in songs] == ["Song 1", "Song 2", "Song 3"]
+    assert {s["album_id"] for s in songs} == {"a1"}
+    assert songs[0]["isrc"] == "ISRC1"
+    assert songs[0]["tracks_count"] == 3
