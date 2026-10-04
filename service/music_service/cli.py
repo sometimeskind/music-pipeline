@@ -47,7 +47,7 @@ def main() -> None:
 
     from music_service.api import create_app
     from music_service.debounce import Debouncer
-    from music_service.flows import albums_flow, fetch_and_scan_flow, scan_flow
+    from music_service.flows import album_import_flow, albums_flow, fetch_and_scan_flow, scan_flow
     from music_service.prefect_client import ensure_concurrency_limits, trigger_scan
     import waitress
 
@@ -77,12 +77,14 @@ def main() -> None:
         name="music-albums",
         interval=int(os.environ.get("ALBUM_POLL_SECONDS", "") or 1800),
     )
+    # Run by /trigger-album-import when SABnzbd finishes an album job.
+    album_import_deployment = album_import_flow.to_deployment(name="music-album-import")
 
     ensure_concurrency_limits()
 
     logger.info("Starting Prefect runner (FETCH_CRON=%s)", fetch_cron)
     try:
-        prefect_serve(fetch_deployment, scan_deployment, albums_deployment)
+        prefect_serve(fetch_deployment, scan_deployment, albums_deployment, album_import_deployment)
     finally:
         debouncer.cancel()
         observer.stop()

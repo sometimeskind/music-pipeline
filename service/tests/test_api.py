@@ -197,3 +197,50 @@ def test_scan_trigger_returns_202(client):
     with patch("music_service.prefect_client.trigger_scan"):
         resp = client.post("/scan/trigger", headers=AUTH)
     assert resp.status_code == 202
+
+
+# ---------------------------------------------------------------------------
+# POST /trigger-album-import
+# ---------------------------------------------------------------------------
+
+
+ALBUM_AUTH = {"Authorization": "Bearer album-secret"}
+
+
+@pytest.fixture
+def album_client(monkeypatch, client):
+    monkeypatch.setenv("ALBUM_IMPORT_TOKEN", "album-secret")
+    return client
+
+
+def test_album_import_submits_run(album_client):
+    body = {"nzo_id": "SABnzbd_nzo_1", "name": "X", "category": "album", "status": 0,
+            "fail_message": "", "path": "album/X"}
+    with patch("music_service.prefect_client.trigger_album_import", return_value=True) as trig:
+        resp = album_client.post("/trigger-album-import", json=body, headers=ALBUM_AUTH)
+    assert resp.status_code == 202
+    trig.assert_called_once_with({"nzo_id": "SABnzbd_nzo_1", "ok": True, "path": "album/X", "fail_message": ""})
+
+
+def test_album_import_failed_job(album_client):
+    body = {"nzo_id": "n", "category": "album", "status": -1, "fail_message": "Repair failed"}
+    with patch("music_service.prefect_client.trigger_album_import", return_value=True) as trig:
+        album_client.post("/trigger-album-import", json=body, headers=ALBUM_AUTH)
+    assert trig.call_args.args[0]["ok"] is False
+    assert trig.call_args.args[0]["fail_message"] == "Repair failed"
+
+
+def test_album_import_requires_nzo_id(album_client):
+    assert album_client.post("/trigger-album-import", json={}, headers=ALBUM_AUTH).status_code == 400
+
+
+def test_album_import_ignores_other_categories(album_client):
+    with patch("music_service.prefect_client.trigger_album_import") as trig:
+        resp = album_client.post("/trigger-album-import", json={"nzo_id": "n", "category": "tv"}, headers=ALBUM_AUTH)
+    assert resp.status_code == 200
+    trig.assert_not_called()
+
+
+def test_album_import_503_when_prefect_down(album_client):
+    with patch("music_service.prefect_client.trigger_album_import", return_value=False):
+        assert album_client.post("/trigger-album-import", json={"nzo_id": "n"}, headers=ALBUM_AUTH).status_code == 503

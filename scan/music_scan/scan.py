@@ -146,6 +146,11 @@ def _move_asis_eligible(quarantine: Path, staging: Path) -> int:
     for f in sorted(quarantine.rglob("*")):
         if not f.is_file() or f.suffix.lower() not in AUDIO_EXTS:
             continue
+        # Album-mode releases are verified by the strict match alone: a release
+        # beets can't match is blocklisted and the next one tried, so it must
+        # not slip in on its own tags here.
+        if f.relative_to(quarantine).parts[0] == "usenet":
+            continue
         try:
             tags = MutagenFile(f, easy=True)
             if tags is None or not all(tags.get(k) for k in _ASIS_REQUIRED_TAGS):
@@ -251,6 +256,21 @@ def source_track_keys(lib: MusicLibrary, source: str) -> set[frozenset]:
         _name_words(f"{item.title or ''} {item.artist or item.albumartist or ''}")
         for item in lib.items_by_source(source)
     }
+
+
+def add_source(lib: MusicLibrary, have_source: str, new_source: str, tracks: list[list[str]]) -> int:
+    """Append *new_source* to the *have_source* items matching *tracks*. Returns the count tagged."""
+    wanted = {_name_words(f"{title} {artist}") for title, artist in tracks}
+    count = 0
+    for item in lib.items_by_source(have_source):
+        if _name_words(f"{item.title or ''} {item.artist or item.albumartist or ''}") not in wanted:
+            continue
+        sources = [p for p in (item.get("sources") or "").split(",") if p.strip()]
+        if new_source not in sources:
+            item["sources"] = ",".join(sources + [new_source])
+            item.store()
+            count += 1
+    return count
 
 
 def has_tracks(keys: set[frozenset], tracks: list[list[str]]) -> bool:

@@ -27,9 +27,9 @@ def _has_server() -> bool:
 # ---------------------------------------------------------------------------
 
 
-async def _submit_deployment(name: str) -> None:
+async def _submit_deployment(name: str, parameters: dict | None = None) -> None:
     from prefect.deployments import run_deployment
-    await run_deployment(name, timeout=0)
+    await run_deployment(name, parameters=parameters, timeout=0)
 
 
 def _via_api(deployment_name: str) -> bool:
@@ -113,6 +113,24 @@ def trigger_scan() -> None:
             logger.error("Failed to submit scan: %s", exc)
     else:
         _direct(_run_scan)
+
+
+def trigger_album_import(params: dict) -> bool:
+    """Submit an album-import run for one finished SABnzbd job. Returns True if submitted.
+
+    Runs are queued, never dropped: each one is a different job, and the flow
+    waits for the albums lock itself.
+    """
+    if _has_server():
+        try:
+            asyncio.run(_submit_deployment("music-album-import/music-album-import", params))
+            return True
+        except Exception as exc:
+            logger.error("Failed to submit album import for %s: %s", params.get("nzo_id"), exc)
+            return False
+    from music_service.flows import album_import_flow
+    threading.Thread(target=album_import_flow, kwargs=params, daemon=True).start()
+    return True
 
 
 async def _upsert_limits() -> None:

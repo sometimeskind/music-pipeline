@@ -133,6 +133,13 @@ The optional `nosync` flag freezes a playlist: `music-ingest` creates a `.nosync
 
 The optional `album` flag is for playlists that hold only whole albums. spotdl never syncs them (a `.album` sentinel). Instead, the `music-albums` flow downloads each album whole from Usenet through Prowlarr and SABnzbd. Every `ALBUM_POLL_SECONDS` it checks the playlist's Spotify `snapshot_id` and re-reads the tracks only when it has changed, so a playlist edit is picked up within one poll. Then it tops the SABnzbd queue up to `ALBUM_MAX_IN_FLIGHT` within a rolling-24h indexer budget. Its state (album status, release blocklist, indexer use) is `.albums.json` next to the `.spotdl` files. Set `ALBUM_MODE=dry-run` first: it searches and logs `[PICK]` lines but never grabs.
 
+When SABnzbd finishes an album job, its post-processing script POSTs to `/trigger-album-import` (bearer `ALBUM_IMPORT_TOKEN`, which opens only that route). The `music-album-import` flow then:
+1. moves the job into `inbox/usenet/<playlist>/`, so beets tags it `sources=<playlist>` and `via=usenet`;
+2. runs the scan under the `pipeline` lock;
+3. counts the album imported only if every playlist track is now in the library.
+
+Otherwise (a failed download, or tracks beets quarantined) it blocklists the release, deletes its quarantined tracks, and tries the next release; tracks already in the library are skipped as duplicates, so it only fills the gaps. After 3 failed releases the album is `failed`, and the last release's quarantined tracks are kept for review. Usenet tracks never go through the asis pass. A trigger that never arrives is recovered from SABnzbd history by the next tick, an hour after the grab.
+
 This file is the single source of truth for playlists. `music-ingest` reconciles disk state to match it on every run — provisioning new entries, reconciling `.nosync` sentinels, and queuing removed playlists for cleanup.
 
 ### 5. Run the first ingest
