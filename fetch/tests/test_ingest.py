@@ -288,6 +288,39 @@ def test_collect_removals_no_removed_urls() -> None:
     assert pending == []
 
 
+def test_sync_playlists_reads_removals_from_dict_snapshot(tmp_path: Path) -> None:
+    """A .spotdl file is a dict; the removed entry comes from its songs list (#169)."""
+    import unittest.mock as mock
+    from music_fetch import ingest
+    from music_fetch.metrics import IngestMetrics
+
+    spotdl_dir = tmp_path / "spotdl"
+    spotdl_dir.mkdir()
+    removed = {"url": "https://open.spotify.com/track/B", "name": "Song B", "artists": ["Artist"], "isrc": "GBX2"}
+    (spotdl_dir / "pl.spotdl").write_text(json.dumps({
+        "type": "sync",
+        "query": ["https://open.spotify.com/playlist/X"],
+        "songs": [{"url": "https://open.spotify.com/track/A", "name": "Song A", "artists": ["Artist"]}, removed],
+    }), encoding="utf-8")
+
+    with mock.patch.object(ingest, "SPOTDL_DIR", spotdl_dir), \
+         mock.patch.object(ingest, "CONF_PATH", tmp_path / "missing.conf"), \
+         mock.patch.object(ingest, "COOKIE_FILE", tmp_path / "cookies.txt"), \
+         mock.patch.object(ingest, "FAILURES_FILE", tmp_path / ".failures.json"), \
+         mock.patch("music_fetch.ingest.sync_playlist", return_value=SyncResult({removed["url"]}, 0, 0, 0, 0, {})), \
+         mock.patch("music_fetch.ingest.time.sleep"):
+        result = ingest.sync_playlists([], IngestMetrics())
+
+    assert result.tracks == [RemovedTrack("Song B", "Artist", "pl", spotify_id="B", isrc="GBX2")]
+
+
+@pytest.mark.parametrize("sync_data", [{"type": "sync", "query": []}, [], None])
+def test_snapshot_songs_without_songs_list(sync_data) -> None:
+    from music_fetch.ingest import _snapshot_songs
+
+    assert _snapshot_songs(sync_data) == []
+
+
 # ---------------------------------------------------------------------------
 # run() — PendingRemovals return type
 # ---------------------------------------------------------------------------
