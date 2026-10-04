@@ -207,6 +207,7 @@ def test_fetch_flow_runs_fetch_then_scan():
          patch("music_service.flows.scan") as mock_scan, \
          patch("music_service.flows.reconcile") as mock_reconcile, \
          patch("music_service.flows.IngestMetrics", return_value=mock_metrics), \
+         patch("music_scan.library.MusicLibrary"), \
          patch("music_service.flows.concurrency") as mock_concurrency, \
          patch("music_scan.process.run_beet_update"), \
          patch("music_scan.navidrome.trigger_scan"):
@@ -214,7 +215,7 @@ def test_fetch_flow_runs_fetch_then_scan():
         mock_concurrency.return_value.__exit__.return_value = False
         mock_ingest.preflight.side_effect = lambda: call_order.append("preflight")
         mock_ingest.reconcile_playlists.side_effect = lambda: (call_order.append("reconcile-playlists"), [])[1]
-        mock_ingest.sync_playlists.side_effect = lambda *_: (call_order.append("spotdl-sync"), mock_pending)[1]
+        mock_ingest.sync_playlists.side_effect = lambda *_, **__: (call_order.append("spotdl-sync"), mock_pending)[1]
         mock_ingest.load_and_clear_pending_removals.return_value = None
         mock_scan.run_inbox_import.side_effect = lambda: (call_order.append("beet-import"), [])[1]
         mock_reconcile.reconcile_all.return_value = 0
