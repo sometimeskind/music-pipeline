@@ -8,7 +8,8 @@ Responsibilities
    * ``sources=<playlist>``  — playlist membership; drives .m3u generation,
      ``clear_source_tag``, and ``music-remove``.  Comma-separated when a track
      belongs to multiple playlists (appended by handle_duplicates).
-   * ``via=spotdl``           — import origin; used *only* to decide whether a
+   * ``via=spotdl|usenet``    — import origin (``usenet`` for album mode's
+     ``inbox/usenet/<playlist>/``); used *only* to decide whether a
      duplicate can be replaced safely.  Never inherited.
 
    Fires from ``handle_created()`` during ``read_tasks`` — always, regardless
@@ -34,10 +35,10 @@ Responsibilities
 2. **Multi-playlist membership** (``import_task_choice``): when duplicates exist
    in the library for the incoming track:
 
-   * Any duplicate has no ``via=spotdl`` (manually imported) → skip the
+   * Any duplicate has a ``via`` other than spotdl/usenet (manually imported) → skip the
      incoming file AND delete it from the inbox so it does not get
      re-attempted on every subsequent beet-import run.
-   * All duplicates have ``via=spotdl`` → append the incoming playlist name to
+   * All duplicates have ``via=spotdl`` or ``usenet`` → append the incoming playlist name to
      the ``sources`` field of every existing duplicate (idempotent), delete the
      incoming inbox file, and set SKIP so beets does not re-import the track.
      If the incoming playlist cannot be resolved (cache miss and unrecognisable
@@ -74,6 +75,13 @@ from beets.plugins import BeetsPlugin
 # The two locations where spotdl downloads land at beet-import time.
 # 1. Main inbox: downloaded files sit here until beet import runs.
 SPOTDL_INBOX = Path("/root/Music/inbox/spotdl")
+# Album mode (#168): whole albums from Usenet, moved here as
+# usenet/<playlist>/<job>/ before the import.  Tagged via=usenet.  Never staged
+# for the asis pass, so they need no staging path below.
+USENET_INBOX = Path("/root/Music/inbox/usenet")
+# Imports the pipeline made itself.  A duplicate carrying one of these can take
+# another playlist's source tag; any other via is a manual import and protected.
+MANAGED_VIA = frozenset({"spotdl", "usenet"})
 # 2. ASIS staging: files that failed autotag are quarantined, then
 #    _move_asis_eligible() copies them into a per-run temp dir under /tmp/
 #    preserving the spotdl/<playlist>/ subdirectory structure.
@@ -122,11 +130,12 @@ def _playlist_from_path(path: str | bytes) -> str | None:
         path = path.decode()
     p = Path(path)
 
-    # 1. Main inbox — spotdl/<playlist>/ is the root itself.
-    try:
-        return p.relative_to(SPOTDL_INBOX).parts[0]
-    except (ValueError, IndexError):
-        pass
+    # 1. Main inbox — spotdl/<playlist>/ (or usenet/<playlist>/) is the root itself.
+    for inbox in (SPOTDL_INBOX, USENET_INBOX):
+        try:
+            return p.relative_to(inbox).parts[0]
+        except (ValueError, IndexError):
+            pass
 
     # 2. ASIS staging — /tmp/<staging-dir>/spotdl/<playlist>/<file>
     try:
@@ -140,9 +149,16 @@ def _playlist_from_path(path: str | bytes) -> str | None:
     return None
 
 
+def _via_from_path(path: str | bytes) -> str:
+    """``usenet`` for album-mode imports, ``spotdl`` for everything else we tag."""
+    if isinstance(path, bytes):
+        path = path.decode()
+    return "usenet" if Path(path).is_relative_to(USENET_INBOX) else "spotdl"
+
+
 def _all_via_spotdl(duplicates: list) -> bool:
-    """Return True if every duplicate in *duplicates* carries via=spotdl."""
-    return all((item.get("via") or "") == "spotdl" for item in duplicates)
+    """Return True if every duplicate in *duplicates* is a pipeline import (spotdl or usenet)."""
+    return all((item.get("via") or "") in MANAGED_VIA for item in duplicates)
 
 
 def _items_from_task(task) -> list:
@@ -175,6 +191,8 @@ class MusicPipelinePlugin(BeetsPlugin):
         # The title key survives both the rename and MB autotag metadata replacement.
         self._pending_sources: dict[str, str] = {}
         self._pending_spotify_urls: dict[str, str] = {}
+        # Same keys → via (spotdl or usenet).
+        self._pending_via: dict[str, str] = {}
         self.register_listener("import_task_created", self.tag_source_on_created)
         self.register_listener("item_imported", self.tag_source_on_stored)
         self.register_listener("import_task_choice", self.handle_duplicates)
@@ -195,14 +213,17 @@ class MusicPipelinePlugin(BeetsPlugin):
             playlist = _playlist_from_path(item.path)
             if playlist is None:
                 continue
+            via = _via_from_path(item.path)
             item["sources"] = playlist
-            item["via"] = "spotdl"
+            item["via"] = via
             path = item.path.decode() if isinstance(item.path, bytes) else item.path
             filename = Path(path).name
             self._pending_sources[filename] = playlist
+            self._pending_via[filename] = via
             title = (item.title or "").lower()
             if title:
                 self._pending_sources[title] = playlist
+                self._pending_via[title] = via
             spotify_url = _read_spotify_url(item.path)
             if spotify_url:
                 item["spotify_url"] = spotify_url
@@ -210,7 +231,7 @@ class MusicPipelinePlugin(BeetsPlugin):
                 if title:
                     self._pending_spotify_urls[title] = spotify_url
             self._log.debug(
-                "tagged incoming track source={} via=spotdl: {}", playlist, item.path
+                "tagged incoming track source={} via={}: {}", playlist, via, item.path
             )
 
     def tag_source_on_stored(self, lib, item):
@@ -238,8 +259,11 @@ class MusicPipelinePlugin(BeetsPlugin):
             # is session-scoped and is GC'd when the import session ends.
         if playlist is None:
             return
+        via = self._pending_via.pop(Path(path).name, None)
+        if title:
+            via = self._pending_via.pop(title, None) or via
         item["sources"] = playlist
-        item["via"] = "spotdl"
+        item["via"] = via or "spotdl"
         filename = Path(path).name
         spotify_url = self._pending_spotify_urls.pop(filename, None)
         if spotify_url is not None:
@@ -251,7 +275,7 @@ class MusicPipelinePlugin(BeetsPlugin):
             item["spotify_url"] = spotify_url
         item.store()
         self._log.debug(
-            "persisted source={} via=spotdl on stored item: {}", playlist, item.path
+            "persisted source={} via={} on stored item: {}", playlist, item["via"], item.path
         )
 
     def handle_duplicates(self, session, task):
@@ -260,7 +284,7 @@ class MusicPipelinePlugin(BeetsPlugin):
         Fires from user_query (autotag=True only). In ASIS mode
         (autotag=False) beets applies duplicate_action from config directly.
 
-        When all existing duplicates are spotdl-sourced, appends the incoming
+        When all existing duplicates are pipeline imports (spotdl or usenet), appends the incoming
         playlist name to their ``sources`` field (idempotent), deletes the
         incoming inbox file, and sets SKIP.  If the incoming playlist cannot be
         resolved (cache miss and unrecognisable path), falls through to

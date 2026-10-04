@@ -121,3 +121,33 @@ def test_sabnzbd_add_url_raises_on_refusal() -> None:
     with patch("music_fetch.usenet.requests.get", return_value=resp):
         with pytest.raises(RuntimeError):
             Sabnzbd(url="http://s", api_key="k").add_url("u", "n")
+
+
+def test_rank_prefers_the_spotify_year_within_a_tier() -> None:
+    releases = [
+        rel("Artist-Album-REMASTERED-FLAC-2015", guid="remaster", grabs=20),
+        rel("Artist-Album-FLAC-1997", guid="original", grabs=2),
+    ]
+    assert [r.guid for r in rank(releases, "Artist", "Album", 10, set(), year=1997)] == ["original", "remaster"]
+
+
+def test_sabnzbd_finished_keeps_completed_and_failed() -> None:
+    resp = MagicMock()
+    resp.json.return_value = {"history": {"slots": [
+        {"nzo_id": "a", "status": "Completed", "storage": "/downloads/complete/album/A", "fail_message": ""},
+        {"nzo_id": "b", "status": "Failed", "storage": "", "fail_message": "Repair failed"},
+        {"nzo_id": "c", "status": "Extracting"},
+    ]}}
+    with patch("music_fetch.usenet.requests.get", return_value=resp) as get:
+        done = Sabnzbd(url="http://s", api_key="k").finished(["a", "b", "c"])
+    assert done == {
+        "a": {"ok": True, "storage": "/downloads/complete/album/A", "fail_message": ""},
+        "b": {"ok": False, "storage": "", "fail_message": "Repair failed"},
+    }
+    assert get.call_args.kwargs["params"]["nzo_ids"] == "a,b,c"
+
+
+def test_sabnzbd_finished_empty_makes_no_call() -> None:
+    with patch("music_fetch.usenet.requests.get") as get:
+        assert Sabnzbd(url="http://s", api_key="k").finished([]) == {}
+    get.assert_not_called()

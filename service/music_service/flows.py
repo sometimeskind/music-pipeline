@@ -291,9 +291,43 @@ def scan_flow() -> None:
 # ---------------------------------------------------------------------------
 
 
+def _album_library_hooks(lib):
+    """have / complete callbacks over one open beets library.
+
+    ``have`` caches each playlist's track keys for a tick; ``complete`` imports
+    a finished download and drops the cache, since the import changed the library.
+    """
+    import music_fetch.albums as albums  # noqa: PLC0415
+
+    keys: dict[str, set] = {}
+
+    def have(playlist: str, tracks: list[list[str]]) -> bool:
+        if playlist not in keys:
+            keys[playlist] = scan.source_track_keys(lib, playlist)
+        return scan.has_tracks(keys[playlist], tracks)
+
+    def fresh_have(playlist: str, tracks: list[list[str]]) -> bool:
+        return scan.has_tracks(scan.source_track_keys(lib, playlist), tracks)
+
+    def import_inbox() -> None:
+        # Waits for a running fetch or scan: beets' SQLite has one writer.
+        with concurrency("pipeline", occupy=1):
+            _run_scan_tasks()
+
+    def add_source(have_source: str, new_source: str, tracks: list[list[str]]) -> None:
+        scan.add_source(lib, have_source, new_source, tracks)
+
+    def complete(state, completion) -> str | None:
+        status = albums.complete(state, completion, import_inbox, fresh_have, add_source)
+        keys.clear()
+        return status
+
+    return have, complete
+
+
 @task(name="album-tick", log_prints=True)
 def album_tick_task(settings) -> None:
-    """Refresh album playlists and top the Usenet queue up."""
+    """Refresh album playlists, recover lost import triggers and top the Usenet queue up."""
     import music_fetch.albums as albums  # noqa: PLC0415
     from music_fetch.spotdl_ops import SpotifyPlaylists  # noqa: PLC0415
     from music_fetch.usenet import Prowlarr, Sabnzbd  # noqa: PLC0415
@@ -306,13 +340,7 @@ def album_tick_task(settings) -> None:
         return
 
     with MusicLibrary(scan.LIBRARY_DB) as lib:
-        keys: dict[str, set] = {}
-
-        def have(playlist: str, tracks: list[list[str]]) -> bool:
-            if playlist not in keys:
-                keys[playlist] = scan.source_track_keys(lib, playlist)
-            return scan.has_tracks(keys[playlist], tracks)
-
+        have, complete = _album_library_hooks(lib)
         result = albums.tick(
             playlists,
             SpotifyPlaylists(ingest.COOKIE_FILE),
@@ -321,6 +349,7 @@ def album_tick_task(settings) -> None:
             have,
             ingest.SPOTDL_DIR,
             settings,
+            on_completion=complete,
         )
 
     removed = [
@@ -348,3 +377,30 @@ def albums_flow() -> None:
             album_tick_task(settings)
     except TimeoutError:
         logger.info("Album tick skipped — another album run holds the lock")
+
+
+@flow(name="music-album-import", log_prints=True)
+def album_import_flow(nzo_id: str, ok: bool, path: str = "", fail_message: str = "") -> None:
+    """A SABnzbd album job finished (/trigger-album-import): import it or
+    blocklist the release, then grab the next album."""
+    import music_fetch.albums as albums  # noqa: PLC0415
+    from music_fetch.usenet import Prowlarr, Sabnzbd  # noqa: PLC0415
+    from music_scan.library import MusicLibrary  # noqa: PLC0415
+
+    logger = get_run_logger()
+    settings = albums.Settings.from_env()
+    # Waits for a tick: both read and write .albums.json.
+    with concurrency("albums", occupy=1):
+        state = albums.State.load()
+        success = False
+        try:
+            with MusicLibrary(scan.LIBRARY_DB) as lib:
+                have, complete = _album_library_hooks(lib)
+                status = complete(state, albums.Completion(nzo_id=nzo_id, ok=ok, path=path, fail_message=fail_message))
+                if status is not None and settings.mode == "on":
+                    albums.top_up(state, settings, Prowlarr(), Sabnzbd(), have, albums.TickResult())
+            success = True
+        finally:
+            state.save()
+            albums.push_metrics(state, success)
+    logger.info("Album import for %s: %s", nzo_id, status or "not an album-mode job")

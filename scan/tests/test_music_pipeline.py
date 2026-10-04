@@ -25,6 +25,7 @@ def _make_plugin() -> MusicPipelinePlugin:
     plugin._log = MagicMock()
     plugin._pending_sources = {}
     plugin._pending_spotify_urls = {}
+    plugin._pending_via = {}
     return plugin
 
 
@@ -530,3 +531,44 @@ def test_handle_duplicates_file_deletion_failure_still_skips() -> None:
         plugin.handle_duplicates(session=MagicMock(), task=task)
 
     task.set_choice.assert_called_once_with(beets_importer.Action.SKIP)
+
+
+# ---------------------------------------------------------------------------
+# Album mode (#168): the usenet inbox
+# ---------------------------------------------------------------------------
+
+
+def test_playlist_from_path_usenet_inbox() -> None:
+    path = "/root/Music/inbox/usenet/later/Artist-Album-FLAC/01-track.flac"
+    assert _playlist_from_path(path) == "later"
+
+
+def test_via_from_path() -> None:
+    from music_scan.music_pipeline import _via_from_path
+
+    assert _via_from_path("/root/Music/inbox/usenet/later/job/01.flac") == "usenet"
+    assert _via_from_path(b"/root/Music/inbox/spotdl/later/a.m4a") == "spotdl"
+
+
+def test_usenet_duplicates_count_as_managed() -> None:
+    def dup(via):
+        item = MagicMock()
+        item.get.side_effect = lambda k, d=None: via if k == "via" else d
+        return item
+
+    assert _all_via_spotdl([dup("spotdl"), dup("usenet")])
+    assert not _all_via_spotdl([dup("usenet"), dup("")])
+
+
+def test_usenet_import_keeps_via_usenet_through_the_rename() -> None:
+    """created caches via=usenet; stored re-applies it after beets renames the file."""
+    plugin = _make_plugin()
+    incoming = _item("/root/Music/inbox/usenet/later/Artist-Album-FLAC/01-artist-my_track.flac", title="My Track")
+    with patch("music_scan.music_pipeline._read_spotify_url", return_value=None):
+        plugin.tag_source_on_created(session=MagicMock(), task=_task(item=incoming))
+    incoming.__setitem__.assert_any_call("via", "usenet")
+
+    stored = _item("/root/Music/library/Artist/Album/01 - My Track.flac", title="My Track")
+    plugin.tag_source_on_stored(lib=MagicMock(), item=stored)
+    stored.__setitem__.assert_any_call("sources", "later")
+    stored.__setitem__.assert_any_call("via", "usenet")

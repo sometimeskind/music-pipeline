@@ -41,3 +41,14 @@ def test_protected_correct_token_returns_202(client):
     with patch("music_service.prefect_client.trigger_fetch", return_value=True):
         resp = client.post("/fetch/trigger", headers={"Authorization": "Bearer test-secret"})
     assert resp.status_code == 202
+
+
+def test_album_import_route_takes_only_the_album_token(monkeypatch, client):
+    monkeypatch.setenv("ALBUM_IMPORT_TOKEN", "album-secret")
+    with patch("music_service.prefect_client.trigger_album_import", return_value=True):
+        assert client.post("/trigger-album-import", json={"nzo_id": "n"},
+                           headers={"Authorization": "Bearer album-secret"}).status_code == 202
+        assert client.post("/trigger-album-import", json={"nzo_id": "n"},
+                           headers={"Authorization": "Bearer test-secret"}).status_code == 401
+    # The album token opens nothing else.
+    assert client.get("/inbox", headers={"Authorization": "Bearer album-secret"}).status_code == 401

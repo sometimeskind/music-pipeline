@@ -15,7 +15,12 @@ def setup_auth(app: Flask) -> None:
         if request.path == "/health":
             return None
 
-        token = os.environ.get("API_BEARER_TOKEN", "")
+        # SABnzbd's post-processing script holds only ALBUM_IMPORT_TOKEN, and
+        # that token opens only this route.
+        if request.path == "/trigger-album-import":
+            token = os.environ.get("ALBUM_IMPORT_TOKEN", "")
+        else:
+            token = os.environ.get("API_BEARER_TOKEN", "")
         auth_header = request.headers.get("Authorization", "")
         if not token or not auth_header.startswith("Bearer ") or auth_header[7:] != token:
             return jsonify({"error": "unauthorized"}), 401

@@ -103,13 +103,27 @@ def matches(release: Release, artist: str, album: str, tracks: int) -> bool:
     return True
 
 
-def rank(releases: list[Release], artist: str, album: str, tracks: int, blocklist: set[str]) -> list[Release]:
-    """Matching releases, best first: tier, then grabs (a proxy for completion)."""
+def rank(
+    releases: list[Release],
+    artist: str,
+    album: str,
+    tracks: int,
+    blocklist: set[str],
+    year: int | str | None = None,
+) -> list[Release]:
+    """Matching releases, best first: tier, then the Spotify year in the title
+    (a remaster or reissue usually carries a different one), then grabs (a
+    proxy for completion)."""
     candidates = [
         r for r in releases
         if r.guid not in blocklist and r.download_url and matches(r, artist, album, tracks)
     ]
-    return sorted(candidates, key=lambda r: (tier(r), -r.grabs, r.size))
+    year_word = str(year) if year else None
+
+    def other_year(r: Release) -> int:
+        return 0 if year_word is None or year_word in words(r.title) else 1
+
+    return sorted(candidates, key=lambda r: (tier(r), other_year(r), -r.grabs, r.size))
 
 
 class Prowlarr:
@@ -160,3 +174,23 @@ class Sabnzbd:
         if not data.get("status") or not ids:
             raise RuntimeError(f"SABnzbd refused {name}: {data.get('error', data)}")
         return ids[0]
+
+    def finished(self, nzo_ids: list[str]) -> dict[str, dict]:
+        """History entries for *nzo_ids* that SABnzbd has finished, by nzo_id.
+
+        Each value has ``ok`` (bool), ``storage`` (the job's dir in SABnzbd's
+        pod) and ``fail_message``.  Jobs still queued or post-processing are
+        absent.
+        """
+        if not nzo_ids:
+            return {}
+        slots = self._api(mode="history", nzo_ids=",".join(nzo_ids)).get("history", {}).get("slots", [])
+        return {
+            slot["nzo_id"]: {
+                "ok": slot.get("status") == "Completed",
+                "storage": slot.get("storage") or "",
+                "fail_message": slot.get("fail_message") or "",
+            }
+            for slot in slots
+            if slot.get("status") in ("Completed", "Failed")
+        }

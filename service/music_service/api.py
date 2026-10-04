@@ -128,4 +128,25 @@ def create_app(schedule_scan: Callable[[], None] | None = None) -> Flask:
         trigger_scan()
         return jsonify({}), 202
 
+    # SABnzbd's album post-processing script (homelab files/album-import.py).
+    # Body: {nzo_id, name, category, status, fail_message, path}; status 0 = OK.
+    @app.post("/trigger-album-import")
+    def album_import_trigger():
+        from music_service.prefect_client import trigger_album_import
+        body = request.get_json(silent=True) or {}
+        nzo_id = body.get("nzo_id")
+        if not nzo_id or not isinstance(nzo_id, str):
+            return jsonify({"error": "nzo_id required"}), 400
+        if body.get("category", "album") != "album":
+            return jsonify({"ignored": "not the album category"}), 200
+        params = {
+            "nzo_id": nzo_id,
+            "ok": body.get("status") == 0,
+            "path": str(body.get("path") or ""),
+            "fail_message": str(body.get("fail_message") or ""),
+        }
+        if not trigger_album_import(params):
+            return jsonify({"error": "failed to submit run — is the Prefect server reachable?"}), 503
+        return jsonify({}), 202
+
     return app

@@ -681,3 +681,37 @@ def test_has_tracks_matches_like_regen_playlists() -> None:
     keys = {_name_words("Song One Artist"), _name_words("Song Two Artist")}
     assert has_tracks(keys, [["Song One", "Artist"], ["Song Two", "Artist"]])
     assert not has_tracks(keys, [["Song One", "Artist"], ["Song Three", "Artist"]])
+
+
+def test_asis_skips_usenet_quarantine(tmp_path: Path) -> None:
+    from music_scan.scan import _move_asis_eligible
+
+    quarantine, staging = tmp_path / "q", tmp_path / "s"
+    for rel in ("spotdl/later/a.m4a", "usenet/later/job/b.flac"):
+        (quarantine / rel).parent.mkdir(parents=True)
+        (quarantine / rel).write_bytes(b"x")
+    tags = {"title": ["t"], "artist": ["a"], "album": ["al"], "tracknumber": ["1"]}
+    with mock.patch("mutagen.File", return_value=tags):
+        assert _move_asis_eligible(quarantine, staging) == 1
+    assert (staging / "spotdl/later/a.m4a").exists()
+    assert (quarantine / "usenet/later/job/b.flac").exists()
+
+
+def test_add_source_tags_matching_items_once() -> None:
+    from music_scan.scan import add_source
+
+    def item(title, sources):
+        it = mock.MagicMock(title=title, artist="Artist", albumartist="Artist")
+        data = {"sources": sources}
+        it.get.side_effect = lambda k, d=None: data.get(k, d)
+        it.__setitem__.side_effect = lambda k, v: data.__setitem__(k, v)
+        it.data = data
+        return it
+
+    one, two, other = item("One", "later"), item("Two", "later,keep"), item("Else", "later")
+    lib = mock.MagicMock()
+    lib.items_by_source.return_value = [one, two, other]
+    assert add_source(lib, "later", "keep", [["One", "Artist"], ["Two", "Artist"]]) == 1
+    assert one.data["sources"] == "later,keep"
+    assert two.data["sources"] == "later,keep"
+    assert other.data["sources"] == "later"

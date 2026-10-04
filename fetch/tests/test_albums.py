@@ -280,3 +280,128 @@ def test_dry_run_stops_at_total_sample_limit() -> None:
         top_up(state, settings, prowlarr, sab, never_have, albums.TickResult(), now=lambda: NOW)
     assert prowlarr.search.call_count == 4
     assert sum(1 for a in state.albums.values() if a.get("dry_run")) == 4
+
+
+# ---------------------------------------------------------------------------
+# complete / lost_completions
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def roots(tmp_path: Path):
+    complete_root, inbox, quarantine = tmp_path / "complete", tmp_path / "inbox", tmp_path / "quarantine"
+    job = complete_root / "album" / "Artist-Album-FLAC"
+    job.mkdir(parents=True)
+    (job / "01.flac").write_bytes(b"x")
+    return complete_root, inbox, quarantine
+
+
+def grabbed_state(playlists=None) -> State:
+    state = wanted_state()
+    record = state.albums["a0"]
+    record.update({
+        "status": albums.GRABBED, "nzo_id": "nzo1", "grabbed_at": albums._iso(NOW),
+        "candidate": {"guid": "r1"},
+    })
+    if playlists:
+        record["playlists"] = playlists
+    return state
+
+
+def run_complete(state, completion, roots, have_result=True, imported=None):
+    complete_root, inbox, quarantine = roots
+    seen = imported if imported is not None else []
+    added = []
+
+    def import_inbox():
+        seen.extend(p.relative_to(inbox).as_posix() for p in inbox.rglob("*.flac"))
+
+    status = albums.complete(
+        state, completion, import_inbox,
+        have=lambda pl, tracks: have_result,
+        add_source=lambda have_src, new_src, tracks: added.append((have_src, new_src)),
+        complete_root=complete_root, inbox_root=inbox, quarantine_root=quarantine,
+    )
+    return status, seen, added
+
+
+def test_complete_imports_from_the_playlist_inbox(roots) -> None:
+    state = grabbed_state()
+    status, seen, _ = run_complete(state, albums.Completion("nzo1", True, "album/Artist-Album-FLAC"), roots)
+    assert status == albums.IMPORTED
+    assert seen == ["later/Artist-Album-FLAC/01.flac"]
+    complete_root, inbox, _ = roots
+    # Moved out of SABnzbd's dir, and leftovers cleaned from the inbox.
+    assert not (complete_root / "album" / "Artist-Album-FLAC").exists()
+    assert not (inbox / "later" / "Artist-Album-FLAC").exists()
+
+
+def test_complete_tags_the_other_playlists(roots) -> None:
+    tracks = [["One", "Artist"]]
+    state = grabbed_state(playlists={"later": tracks, "keep": tracks})
+    _, _, added = run_complete(state, albums.Completion("nzo1", True, "album/Artist-Album-FLAC"), roots)
+    assert added == [("later", "keep")]
+
+
+def test_complete_blocklists_when_beets_did_not_import_everything(roots) -> None:
+    state = grabbed_state()
+    _, _, quarantine = roots
+    (quarantine / "later" / "Artist-Album-FLAC").mkdir(parents=True)
+    status, _, _ = run_complete(state, albums.Completion("nzo1", True, "album/Artist-Album-FLAC"), roots, have_result=False)
+    record = state.albums["a0"]
+    assert status == albums.WANTED
+    assert record["blocklist"] == ["r1"] and record["attempts"] == 1
+    assert not (quarantine / "later" / "Artist-Album-FLAC").exists()
+
+
+def test_complete_blocklists_a_failed_download_without_importing(roots) -> None:
+    state = grabbed_state()
+    status, seen, _ = run_complete(state, albums.Completion("nzo1", False, "album/Artist-Album-FLAC", "Repair failed"), roots)
+    assert status == albums.WANTED and seen == []
+    assert state.albums["a0"]["blocklist"] == ["r1"]
+    complete_root, _, _ = roots
+    assert not (complete_root / "album" / "Artist-Album-FLAC").exists()
+
+
+def test_complete_gives_up_after_max_attempts(roots) -> None:
+    state = grabbed_state()
+    state.albums["a0"]["attempts"] = albums.MAX_ATTEMPTS - 1
+    status, _, _ = run_complete(state, albums.Completion("nzo1", False, "album/Artist-Album-FLAC"), roots)
+    assert status == albums.FAILED
+
+
+def test_complete_ignores_jobs_it_did_not_grab(roots) -> None:
+    state = grabbed_state()
+    status, seen, _ = run_complete(state, albums.Completion("someone-else", True, "album/Artist-Album-FLAC"), roots)
+    assert status is None and seen == []
+    assert state.albums["a0"]["status"] == albums.GRABBED
+
+
+def test_complete_rejects_a_path_outside_the_complete_dir(roots) -> None:
+    state = grabbed_state()
+    status, seen, _ = run_complete(state, albums.Completion("nzo1", True, "../../etc"), roots)
+    assert status == albums.WANTED and seen == []
+
+
+def test_lost_completions_only_for_stale_grabs() -> None:
+    state = grabbed_state()
+    state.albums["a1"] = dict(state.albums["a0"], nzo_id="fresh", grabbed_at=albums._iso(NOW))
+    state.albums["a0"]["grabbed_at"] = albums._iso(NOW - timedelta(hours=2))
+    sab = MagicMock()
+    sab.finished.return_value = {"nzo1": {"ok": True, "storage": "/downloads/complete/album/X", "fail_message": ""}}
+    lost = albums.lost_completions(state, sab, now=NOW)
+    sab.finished.assert_called_once_with(["nzo1"])
+    assert lost == [albums.Completion("nzo1", True, "album/X", "")]
+
+
+def test_tick_recovers_lost_triggers_only_when_on(tmp_path: Path) -> None:
+    state = grabbed_state()
+    state.albums["a0"]["grabbed_at"] = albums._iso(datetime.now(timezone.utc) - timedelta(hours=2))
+    state.save(tmp_path / "state.json")
+    prowlarr, sab = fakes()
+    sab.finished.return_value = {"nzo1": {"ok": False, "storage": "", "fail_message": "x"}}
+    calls = []
+    for mode in ("dry-run", "on"):
+        tick([], FakeSpotify("s", []), prowlarr, sab, never_have, tmp_path, Settings(mode=mode),
+             tmp_path / "state.json", on_completion=lambda st, c: calls.append((mode, c.nzo_id)))
+    assert calls == [("on", "nzo1")]

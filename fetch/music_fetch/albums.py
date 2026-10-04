@@ -25,6 +25,7 @@ import dataclasses
 import json
 import logging
 import os
+import shutil
 import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -42,8 +43,22 @@ DRY_RUN = "dry-run"    # searched in dry-run; the pick is in `candidate`
 GRABBED = "grabbed"    # sent to SABnzbd; waits for /trigger-album-import
 MISSING = "missing"    # no matching release; searched again after MISSING_RETRY
 HAVE = "have"          # every playlist track is already in the library
+IMPORTED = "imported"  # downloaded and imported by album mode
+FAILED = "failed"      # MAX_ATTEMPTS releases failed; left for manual review
 
 MISSING_RETRY = timedelta(days=7)
+# Releases tried per album before giving up, so an album beets can't match
+# doesn't burn the grab budget.
+MAX_ATTEMPTS = 3
+# A trigger lost for longer than this is recovered from SABnzbd history.
+LOST_TRIGGER_AFTER = timedelta(hours=1)
+
+# SABnzbd's complete dir (/downloads/complete in its pod) and the inbox root
+# album imports are moved to; both on the music-data volume, so the move is a
+# rename.  beets' music_pipeline plugin reads the playlist from the inbox path.
+USENET_COMPLETE = Path("/root/Music/usenet/complete")
+USENET_INBOX = Path("/root/Music/inbox/usenet")
+USENET_QUARANTINE = Path("/root/Music/quarantine/usenet")
 WINDOW = timedelta(hours=24)
 
 
@@ -212,7 +227,7 @@ def refresh_playlists(
         for key, record in list(state.albums.items()):
             if key not in wanted and name in record.get("playlists", {}):
                 del record["playlists"][name]
-                if not record["playlists"] and record.get("status") in (WANTED, DRY_RUN, MISSING, HAVE):
+                if not record["playlists"] and record.get("status") in (WANTED, DRY_RUN, MISSING, HAVE, IMPORTED, FAILED):
                     del state.albums[key]
         entry["snapshot_id"] = snapshot
         result.refreshed.append(name)
@@ -272,7 +287,7 @@ def top_up(
             logger.warning("[ERR]  %s: search failed: %s", label, exc)
             break  # Prowlarr or the indexer is down; the next tick retries.
         tracks = record.get("tracks_count") or max(len(t) for t in record["playlists"].values())
-        ranked = rank(releases, record["artist"], record["name"], tracks, set(record["blocklist"]))
+        ranked = rank(releases, record["artist"], record["name"], tracks, set(record["blocklist"]), record.get("year"))
         record["searched_at"] = _iso(now())
         if settings.mode != "on":
             record["dry_run"] = True
@@ -314,7 +329,7 @@ def top_up(
 
 
 def status_counts(state: State) -> dict[str, int]:
-    counts = {s: 0 for s in (WANTED, DRY_RUN, GRABBED, MISSING, HAVE)}
+    counts = {s: 0 for s in (WANTED, DRY_RUN, GRABBED, MISSING, HAVE, IMPORTED, FAILED)}
     for record in state.albums.values():
         status = record.get("status", WANTED)
         counts[status] = counts.get(status, 0) + 1
@@ -346,8 +361,10 @@ def tick(
     spotdl_dir: Path,
     settings: Settings | None = None,
     state_file: Path = STATE_FILE,
+    on_completion: Callable[[State, "Completion"], object] | None = None,
 ) -> TickResult:
-    """One album-mode pass: refresh changed playlists, then top the queue up."""
+    """One album-mode pass: refresh changed playlists, recover lost import
+    triggers (*on_completion*, ``on`` only), then top the queue up."""
     settings = settings or Settings.from_env()
     result = TickResult()
     if settings.mode == "off":
@@ -357,6 +374,10 @@ def tick(
     success = False
     try:
         refresh_playlists(state, playlists, spotify, spotdl_dir, result)
+        if settings.mode == "on" and on_completion is not None:
+            for completion in lost_completions(state, sabnzbd):
+                logger.info("Recovering lost import trigger for %s", completion.nzo_id)
+                on_completion(state, completion)
         top_up(state, settings, prowlarr, sabnzbd, have, result)
         success = True
     finally:
@@ -370,3 +391,133 @@ def tick(
         state.used("hit", _now()), state.used("grab", _now()),
     )
     return result
+
+
+# ---------------------------------------------------------------------------
+# Completion: import a finished download, or blocklist the release
+# ---------------------------------------------------------------------------
+
+
+@dataclasses.dataclass
+class Completion:
+    nzo_id: str
+    ok: bool
+    # The job's dir relative to USENET_COMPLETE (album-import.py sends it so).
+    path: str = ""
+    fail_message: str = ""
+
+
+def find_by_nzo(state: State, nzo_id: str) -> tuple[str, dict] | None:
+    for key, record in state.albums.items():
+        if record.get("status") == GRABBED and record.get("nzo_id") == nzo_id:
+            return key, record
+    return None
+
+
+def _inside(root: Path, rel: str) -> Path | None:
+    """*root*/*rel*, or None when *rel* is empty or escapes *root*."""
+    if not rel or rel == ".":
+        return None
+    target = (root / rel).resolve()
+    if root.resolve() not in target.parents:
+        return None
+    return target
+
+
+def complete(
+    state: State,
+    completion: Completion,
+    import_inbox: Callable[[], None],
+    have: Callable[[str, list[list[str]]], bool],
+    add_source: Callable[[str, str, list[list[str]]], None],
+    complete_root: Path = USENET_COMPLETE,
+    inbox_root: Path = USENET_INBOX,
+    quarantine_root: Path = USENET_QUARANTINE,
+) -> str | None:
+    """Handle one finished SABnzbd job.  Returns the album's new status, or None
+    when the job isn't one of ours (a manual SABnzbd add).
+
+    On success the job dir moves to ``inbox/usenet/<playlist>/`` and
+    *import_inbox* runs the beets import.  The album counts as imported only if
+    every playlist track is then in the library (*have*): beets quarantining a
+    track, or the download failing, blocklists the release.  The next tick, or
+    the caller's top-up, tries the next one.  Tracks the library already had are
+    skipped as duplicates by beets, so a second release only fills the gaps.
+    """
+    found = find_by_nzo(state, completion.nzo_id)
+    if found is None:
+        logger.info("Album import: %s is not an album-mode job — ignoring", completion.nzo_id)
+        return None
+    _, record = found
+    label = f"{record['artist']} — {record['name']}"
+    playlists = list(record.get("playlists", {}))
+    source = _inside(complete_root, completion.path)
+    job_name = source.name if source else ""
+
+    reason = completion.fail_message or "download failed"
+    imported = False
+    if completion.ok and source is not None and source.is_dir() and playlists:
+        first = playlists[0]
+        dest = inbox_root / first / job_name
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        shutil.rmtree(dest, ignore_errors=True)
+        shutil.move(str(source), dest)
+        logger.info("[IMPT] %s: importing %s", label, job_name)
+        try:
+            import_inbox()
+        finally:
+            # Leftovers beets doesn't import (nfo, sfv, cue, cover scans).
+            shutil.rmtree(dest, ignore_errors=True)
+        tracks = record["playlists"][first]
+        imported = have(first, tracks)
+        if imported:
+            # The inbox path names one playlist; tag the album's tracks for the others.
+            for other in playlists[1:]:
+                add_source(first, other, record["playlists"][other])
+        else:
+            reason = "beets did not import every track (quarantined or unmatched)"
+    elif completion.ok:
+        reason = f"completed job dir not found: {completion.path!r}"
+
+    if imported:
+        record["status"] = IMPORTED
+        record["imported_at"] = _iso(_now())
+        logger.info("[DONE] %s", label)
+        return IMPORTED
+
+    guid = (record.get("candidate") or {}).get("guid")
+    if guid and guid not in record["blocklist"]:
+        record["blocklist"].append(guid)
+    record["attempts"] = record.get("attempts", 0) + 1
+    if source is not None:
+        shutil.rmtree(source, ignore_errors=True)
+    record["status"] = FAILED if record["attempts"] >= MAX_ATTEMPTS else WANTED
+    if record["status"] == FAILED:
+        # Keep the last release's quarantined tracks for manual review.
+        logger.warning("[FAIL] %s: %s — gave up after %d release(s)", label, reason, record["attempts"])
+    else:
+        if job_name:
+            for playlist in playlists:
+                shutil.rmtree(quarantine_root / playlist / job_name, ignore_errors=True)
+        logger.warning("[FAIL] %s: %s — blocklisted, will try the next release", label, reason)
+    return record["status"]
+
+
+def lost_completions(state: State, sabnzbd, now: datetime | None = None) -> list[Completion]:
+    """Finished jobs whose trigger never arrived, from SABnzbd history."""
+    now = now or _now()
+    stale = [
+        r["nzo_id"] for r in state.albums.values()
+        if r.get("status") == GRABBED and r.get("nzo_id")
+        and now - datetime.fromisoformat(r["grabbed_at"]) >= LOST_TRIGGER_AFTER
+    ]
+    found = sabnzbd.finished(stale)
+    return [
+        Completion(
+            nzo_id=nzo_id,
+            ok=job["ok"],
+            path=str(Path(job["storage"]).relative_to("/downloads/complete")) if job["storage"].startswith("/downloads/complete/") else "",
+            fail_message=job["fail_message"],
+        )
+        for nzo_id, job in found.items()
+    ]
