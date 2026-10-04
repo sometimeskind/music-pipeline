@@ -395,6 +395,7 @@ def test_run_reconcile_failure_sets_reconcile_error_reason(tmp_path: Path) -> No
             self.tracks_downloaded = 0
             self.tracks_missed = 0
             self.tracks_failed = 0
+            self.tracks_linked = 0
             self.playlists_total = 0
             self.playlists_skipped = 0
             self.playlists_deferred = 0
@@ -835,3 +836,35 @@ def test_pending_removals_queued_before_176_still_load(tmp_path) -> None:
     with patch.object(ingest, "PENDING_REMOVALS_PATH", path):
         pending = ingest.load_and_clear_pending_removals()
     assert pending.tracks == [ingest.RemovedTrack("T", "A", "pl")]
+
+
+def test_sync_playlists_asks_the_library_per_playlist(tmp_path: Path) -> None:
+    """in_library gets the playlist name, and linked tracks are counted (#187)."""
+    import unittest.mock as mock
+
+    from music_fetch import ingest
+    from music_fetch.metrics import IngestMetrics
+
+    spotdl_dir = tmp_path / "spotdl"
+    spotdl_dir.mkdir()
+    (spotdl_dir / "later.spotdl").write_text(
+        '{"type":"sync","query":["https://open.spotify.com/playlist/L"],"songs":[]}', encoding="utf-8"
+    )
+    asked: list[tuple[str, dict]] = []
+
+    def fake_sync(spotdl_file, in_library=None, **_kwargs):
+        assert in_library is not None
+        assert in_library({"url": "u"}) is True
+        return SyncResult(set(), 0, 0, 0, 0, {}, linked=2)
+
+    metrics = IngestMetrics()
+    with mock.patch.object(ingest, "SPOTDL_DIR", spotdl_dir), \
+         mock.patch.object(ingest, "CONF_PATH", tmp_path / "missing.conf"), \
+         mock.patch.object(ingest, "COOKIE_FILE", tmp_path / "cookies.txt"), \
+         mock.patch.object(ingest, "FAILURES_FILE", tmp_path / ".failures.json"), \
+         mock.patch("music_fetch.ingest.sync_playlist", side_effect=fake_sync), \
+         mock.patch("music_fetch.ingest.time.sleep"):
+        ingest.sync_playlists([], metrics, in_library=lambda pl, song: asked.append((pl, song)) or True)
+
+    assert asked == [("later", {"url": "u"})]
+    assert metrics.tracks_linked == 2

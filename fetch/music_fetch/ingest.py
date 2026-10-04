@@ -16,6 +16,7 @@ On each run:
 from __future__ import annotations
 
 import dataclasses
+import functools
 import json
 import logging
 import os
@@ -23,6 +24,7 @@ import re
 import shutil
 import time
 from pathlib import Path
+from typing import Callable
 
 from music_fetch.config import load_playlists
 from music_fetch.metrics import IngestMetrics
@@ -217,11 +219,15 @@ def sync_playlists(
     remove_sources: list[str],
     metrics: IngestMetrics,
     start: float | None = None,
+    in_library: Callable[[str, dict], bool] | None = None,
 ) -> PendingRemovals:
     """Run the spotdl download loop for all active playlists. Returns pending removals.
 
     *start* is the monotonic time the overall run began, used for soft-timeout
     accounting.  Defaults to now if not provided (standalone use).
+
+    *in_library(playlist, song)* reports whether the library already holds a new
+    track, tagging it with the playlist if so; those tracks are not downloaded (#187).
     """
     if start is None:
         start = time.monotonic()
@@ -327,6 +333,7 @@ def sync_playlists(
                 cookie_file=COOKIE_FILE,
                 track_limit=remaining,
                 failures_file=FAILURES_FILE,
+                in_library=None if in_library is None else functools.partial(in_library, name),
             )
         except Exception as exc:
             reason = classify_failure(str(exc))
@@ -343,6 +350,7 @@ def sync_playlists(
         metrics.tracks_downloaded += result.downloaded
         metrics.tracks_missed += result.missed
         metrics.tracks_failed += result.failed
+        metrics.tracks_linked += result.linked
         if remaining is not None:
             # Budget is consumed per attempt: a stuck [MISS] cluster would otherwise loop forever.
             remaining -= result.attempted

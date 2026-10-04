@@ -50,6 +50,7 @@ def test_spotdl_sync_task_returns_pending_and_pushes_metrics():
     mock_pending = MagicMock()
     mock_metrics = MagicMock()
     with patch("music_service.flows.ingest") as mock_ingest, \
+         patch("music_scan.library.MusicLibrary"), \
          patch("music_service.flows.IngestMetrics", return_value=mock_metrics):
         mock_ingest.sync_playlists.return_value = mock_pending
         result = spotdl_sync_task([])
@@ -61,12 +62,43 @@ def test_spotdl_sync_task_pushes_metrics_on_failure():
     from music_service.flows import spotdl_sync_task
     mock_metrics = MagicMock()
     with patch("music_service.flows.ingest") as mock_ingest, \
+         patch("music_scan.library.MusicLibrary"), \
          patch("music_service.flows.IngestMetrics", return_value=mock_metrics):
         mock_ingest.sync_playlists.side_effect = RuntimeError("boom")
         with pytest.raises(RuntimeError):
             spotdl_sync_task([])
         mock_metrics.push.assert_called_once()
         assert mock_metrics.success is False
+
+
+def test_spotdl_sync_task_links_tracks_the_library_has(tmp_path):
+    """The sync's in_library callback tags library items by Spotify ID (#187)."""
+    from beets.library import Item
+
+    from music_scan.library import MusicLibrary
+    from music_service.flows import spotdl_sync_task
+
+    db = tmp_path / "library.db"
+    with MusicLibrary(db, tmp_path) as lib:
+        item = Item(title="Song", artist="Artist", sources="liked", spotify_ids="A1")
+        lib._lib.add(item)
+
+    answers = []
+
+    def fake_sync(_remove, _metrics, in_library=None):
+        answers.append(in_library("later", {"url": "https://open.spotify.com/track/A1"}))
+        answers.append(in_library("later", {"url": "https://open.spotify.com/track/ZZ"}))
+        return MagicMock()
+
+    with patch("music_service.flows.ingest") as mock_ingest, \
+         patch("music_service.flows.scan.LIBRARY_DB", db), \
+         patch("music_service.flows.IngestMetrics", return_value=MagicMock(tracks_linked=1)):
+        mock_ingest.sync_playlists.side_effect = fake_sync
+        spotdl_sync_task([])
+
+    assert answers == [True, False]
+    with MusicLibrary(db, tmp_path) as lib:
+        assert lib._lib.get_item(item.id).get("sources") == "liked,later"
 
 
 # ---------------------------------------------------------------------------

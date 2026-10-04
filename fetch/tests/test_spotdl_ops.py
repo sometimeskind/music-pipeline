@@ -1028,3 +1028,66 @@ def test_download_song_downloads_from_the_entry_without_a_spotify_lookup(tmp_pat
     from_dict.assert_called_once_with(song)
     spotdl_obj.download_songs.assert_called_once_with(["SONG"])
     assert make.call_args.args[0]["output"] == str(tmp_path)
+
+
+# ---------------------------------------------------------------------------
+# Library check before download (#187)
+# ---------------------------------------------------------------------------
+
+
+def test_track_already_in_library_is_linked_not_downloaded(tmp_path: Path, caplog, simple_songs) -> None:
+    """A new track the library holds goes into the snapshot without a download."""
+    import logging
+    spotdl_file, output_dir, cookie_file = _setup_sync(tmp_path)
+    known = _make_mock_song("https://open.spotify.com/track/known", title="Known")
+    spotdl_file.write_text(
+        json.dumps({"type": "sync", "query": ["https://open.spotify.com/playlist/abc"], "songs": [known.json]}),
+        encoding="utf-8",
+    )
+    have = _make_mock_song("https://open.spotify.com/track/have", title="Elsewhere")
+    new = _make_mock_song("https://open.spotify.com/track/new", title="New")
+    simple_songs.return_value = [have, known, new]
+    failures_file = tmp_path / ".failures.json"
+    failures_file.write_text(json.dumps({have.url: {
+        "kind": "miss", "attempts": 1, "retry_after": "2000-01-01T00:00:00+00:00",
+    }}), encoding="utf-8")
+    mock_spotdl = _mock_spotdl([(new, Path("/tmp/new.m4a"))])
+    asked: list[str] = []
+
+    def in_library(song: dict) -> bool:
+        asked.append(song["url"])
+        return song["url"] == have.url
+
+    with mock.patch("music_fetch.spotdl_ops._make_spotdl", return_value=mock_spotdl), \
+         caplog.at_level(logging.INFO, logger="music_fetch.spotdl_ops"):
+        result = sync_playlist(
+            spotdl_file=spotdl_file, output_dir=output_dir, cookie_file=cookie_file,
+            failures_file=failures_file, in_library=in_library,
+        )
+
+    assert asked == [have.url, new.url]  # known tracks aren't asked about
+    mock_spotdl.download_songs.assert_called_once_with([new])
+    assert (result.attempted, result.downloaded, result.linked) == (1, 1, 1)
+    assert "[HAVE] Artist - Elsewhere" in caplog.text
+    data = json.loads(spotdl_file.read_text(encoding="utf-8"))
+    assert data["songs"] == [have.json, known.json, new.json]
+    assert have.url not in json.loads(failures_file.read_text(encoding="utf-8"))
+
+
+def test_linked_tracks_do_not_use_the_budget(tmp_path: Path, simple_songs) -> None:
+    """The library check runs before the track budget, so a linked track frees its slot."""
+    spotdl_file, output_dir, cookie_file = _setup_sync(tmp_path)
+    save_playlist(url="https://open.spotify.com/playlist/abc", spotdl_file=spotdl_file)
+    have = _make_mock_song("https://open.spotify.com/track/have")
+    new = _make_mock_song("https://open.spotify.com/track/new")
+    simple_songs.return_value = [have, new]
+    mock_spotdl = _mock_spotdl([(new, Path("/tmp/new.m4a"))])
+
+    with mock.patch("music_fetch.spotdl_ops._make_spotdl", return_value=mock_spotdl):
+        result = sync_playlist(
+            spotdl_file=spotdl_file, output_dir=output_dir, cookie_file=cookie_file,
+            track_limit=1, in_library=lambda song: song["url"] == have.url,
+        )
+
+    mock_spotdl.download_songs.assert_called_once_with([new])
+    assert (result.attempted, result.linked) == (1, 1)

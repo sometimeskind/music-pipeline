@@ -42,6 +42,7 @@ class IngestMetrics:
     tracks_downloaded: int = 0
     tracks_missed: int = 0
     tracks_failed: int = 0
+    tracks_linked: int = 0
     cookies_expired: bool = False
     failure_reason: str = ""
 
@@ -56,6 +57,7 @@ class IngestMetrics:
             _gauge("music_ingest_tracks_downloaded_total", self.tracks_downloaded),
             _gauge("music_ingest_tracks_missed_total", self.tracks_missed),
             _gauge("music_ingest_tracks_failed_total", self.tracks_failed),
+            _gauge("music_ingest_tracks_linked_total", self.tracks_linked),
             _gauge("music_ingest_cookies_expired", int(self.cookies_expired)),
         ]
         if not self.success and self.failure_reason:
