@@ -74,7 +74,15 @@ def reconcile_playlists_task() -> list[str]:
 
 @task(name="spotdl-sync", log_prints=True, persist_result=False)
 def spotdl_sync_task(remove_sources: list[str]):
-    """Run spotdl sync for all active playlists. Returns PendingRemovals."""
+    """Run spotdl sync for all active playlists. Returns PendingRemovals.
+
+    Tracks the library already holds (by Spotify ID or ISRC) are tagged with the
+    playlist instead of downloaded (#187).  The index is built once: a track
+    downloaded earlier in this run isn't in the library until the scan.
+    """
+    from music_scan.identity import ItemIndex  # noqa: PLC0415
+    from music_scan.library import MusicLibrary  # noqa: PLC0415
+
     logger = get_run_logger()
     metrics = IngestMetrics()
     start = time.monotonic()
@@ -95,7 +103,11 @@ def spotdl_sync_task(remove_sources: list[str]):
                 logger.warning("Could not read backoff state from %s", ingest.FAILURES_FILE)
         else:
             logger.info("Backoff state: empty")
-        result = ingest.sync_playlists(remove_sources, metrics)
+        with MusicLibrary(scan.LIBRARY_DB) as lib:
+            index = ItemIndex(lib.all_items())
+            result = ingest.sync_playlists(
+                remove_sources, metrics, in_library=lambda pl, song: scan.link_song(index, pl, song)
+            )
         not_downloaded = metrics.tracks_attempted - metrics.tracks_downloaded
         suffix = ""
         if not_downloaded:
@@ -114,6 +126,8 @@ def spotdl_sync_task(remove_sources: list[str]):
             metrics.playlists_total,
             len(result.tracks),
         )
+        if metrics.tracks_linked:
+            logger.info("  %d track(s) already in the library, tagged instead of downloaded", metrics.tracks_linked)
         if metrics.playlists_skipped:
             logger.info("  %d nosync playlist(s) skipped", metrics.playlists_skipped)
         if metrics.playlists_deferred:
@@ -321,18 +335,22 @@ def scan_flow() -> None:
 def _album_library_hooks(lib):
     """have / complete callbacks over one open beets library.
 
-    ``have`` caches each playlist's track keys for a tick; ``complete`` imports
-    a finished download and drops the cache, since the import changed the library.
+    ``have`` caches each playlist's track keys and the whole library for a tick;
+    ``complete`` imports a finished download and drops the caches, since the
+    import changed the library.  ``have`` also counts tracks the library holds
+    under another playlist, and tags them with this one (#187).
     """
     import music_fetch.albums as albums  # noqa: PLC0415
     from music_scan.identity import ItemIndex  # noqa: PLC0415
 
-    keys: dict[str, ItemIndex] = {}
+    keys: dict[str | None, ItemIndex] = {}  # None: the whole library
 
     def have(playlist: str, tracks: list[list]) -> bool:
         if playlist not in keys:
             keys[playlist] = ItemIndex(lib.items_by_source(playlist))
-        return scan.has_tracks(keys[playlist], tracks)
+        if None not in keys:
+            keys[None] = ItemIndex(lib.all_items())
+        return scan.have_or_link(keys[playlist], keys[None], playlist, tracks)
 
     def fresh_have(playlist: str, tracks: list[list]) -> bool:
         return scan.has_tracks(ItemIndex(lib.items_by_source(playlist)), tracks)

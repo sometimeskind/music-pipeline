@@ -16,7 +16,7 @@ import time
 from pathlib import Path
 
 from music_fetch.ingest import PendingRemovals
-from music_scan.identity import BY_WORDS, ItemIndex, PlaylistTrack, add_to_list
+from music_scan.identity import BY_WORDS, ItemIndex, PlaylistTrack, add_to_list, spotify_id
 from music_scan.identity import name_words as _name_words
 from music_scan.library import MusicLibrary
 from music_scan.metrics import ScanMetrics
@@ -266,19 +266,57 @@ def add_source(lib: MusicLibrary, have_source: str, new_source: str, tracks: lis
     count = 0
     for track in map(PlaylistTrack.from_entry, tracks):
         item, _ = index.match_track(track)
-        if item is None:
-            continue
-        changed = add_to_list(item, "sources", new_source)
-        changed = add_to_list(item, "spotify_ids", track.song_id) or changed
-        if changed:
-            item.store()
+        if item is not None and _link(item, new_source, track.song_id):
             count += 1
     return count
+
+
+def _link(item, source: str, song_id: str | None) -> bool:
+    """Append *source* and *song_id* to *item* and store it. True when it changed."""
+    changed = add_to_list(item, "sources", source)
+    changed = add_to_list(item, "spotify_ids", song_id) or changed
+    if changed:
+        item.store()
+    return changed
+
+
+def link_song(index: ItemIndex, source: str, song: dict) -> bool:
+    """Tag the library item holding a .spotdl *song* with *source* instead of downloading it (#187).
+
+    Matches by Spotify ID, then ISRC, never title+artist: a wrong skip loses the
+    track silently, while a redundant download is merged by the duplicate hook.
+    True when the library has the song.
+    """
+    item, _ = index.match_song(song, words=False)
+    if item is None:
+        return False
+    _link(item, source, song.get("song_id") or spotify_id(song.get("url")))
+    return True
 
 
 def has_tracks(index: ItemIndex, tracks: list[list]) -> bool:
     """True when every track in *tracks* matches an item in *index*."""
     return all(index.match_track(t)[0] is not None for t in map(PlaylistTrack.from_entry, tracks))
+
+
+def have_or_link(source_index: ItemIndex, library: ItemIndex, source: str, tracks: list[list]) -> bool:
+    """True when the library holds every track, so the album needs no download (#187).
+
+    A track counts when it matches *source*'s items by the full ladder, or any
+    item by Spotify ID or ISRC.  Only when every track is present are the items
+    found outside *source* tagged with it, so its .m3u lists them.
+    """
+    elsewhere = []
+    for track in map(PlaylistTrack.from_entry, tracks):
+        if source_index.match_track(track)[0] is not None:
+            continue
+        item, _ = library.match_track(track, words=False)
+        if item is None:
+            return False
+        elsewhere.append((item, track.song_id))
+    for item, song_id in elsewhere:
+        _link(item, source, song_id)
+    return True
 
 
 def tag_album_ids(lib: MusicLibrary, source: str, tracks: list[list], since: float, tracks_count: int) -> int:

@@ -14,6 +14,7 @@ import logging
 import os
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from typing import Callable
 
 logger = logging.getLogger(__name__)
 
@@ -44,6 +45,7 @@ class SyncResult:
     - failed: tracks where a source was found but the download failed ([FAIL])
     - fail_reasons: Spotify track URL → reason string for every [FAIL] track, including
       the chained yt-dlp cause when spotdl exposed it (e.g. "HTTP Error 403: Forbidden")
+    - linked: new tracks the library already had, tagged instead of downloaded (#187)
     """
 
     removed_urls: set[str]
@@ -52,6 +54,7 @@ class SyncResult:
     missed: int
     failed: int
     fail_reasons: dict[str, str]
+    linked: int = 0
 
 
 _MAX_CAUSE_DEPTH = 5
@@ -271,6 +274,7 @@ def sync_playlist(
     cookie_file: Path,
     track_limit: int | None = None,
     failures_file: Path | None = None,
+    in_library: Callable[[dict], bool] | None = None,
 ) -> SyncResult:
     """Sync a playlist from its .spotdl file.
 
@@ -281,6 +285,10 @@ def sync_playlist(
 
     Does NOT delete downloaded files for removed tracks — we handle that
     separately via beets source-tag removal (soft delete).
+
+    *in_library* is asked about each new track before the backoff and the budget.
+    True means the library already holds it (and the callback tagged it with this
+    playlist): the track is not downloaded and goes into the snapshot as known (#187).
 
     Returns a :class:`SyncResult` (see its docstring for the per-field meaning).
 
@@ -332,11 +340,20 @@ def sync_playlist(
     # Identify tracks not yet downloaded (absent from the previous snapshot).
     truly_new = [s for s in new_songs if s.url not in old_urls]
 
+    # Tracks the library already has under another playlist or from Usenet (#187).
+    linked: dict[str, dict] = {}
+    if in_library is not None:
+        for song in truly_new:
+            if in_library(song.json):
+                linked[song.url] = song.json
+                logger.info("[HAVE] %s → already in the library", _song_label(song))
+        truly_new = [s for s in truly_new if s.url not in linked]
+
     # Apply MISS/FAIL backoff: filter out tracks whose retry window hasn't expired yet.
     failures: dict = {}
     if failures_file is not None:
         failures = _load_failures(failures_file)
-        for url in removed_urls:
+        for url in removed_urls | linked.keys():
             failures.pop(url, None)
         now = datetime.now(timezone.utc)
         due, backed_off = [], []
@@ -422,14 +439,12 @@ def sync_playlist(
     # Songs where spotdl returned None failed silently — exclude them from the snapshot
     # so they are retried as 'truly_new' on the next run.
     # Downloaded songs carry the full metadata spotdl fetched for them; known tracks keep
-    # the entry they were downloaded with.  Written in playlist order.
+    # the entry they were downloaded with; linked tracks keep the page data.  Written in
+    # playlist order.
     downloaded = {song.url: song.json for song, path in results if path is not None}
     downloaded_urls = set(downloaded)
-    songs_to_write = [
-        old_entries[s.url] if s.url in old_entries else downloaded[s.url]
-        for s in new_songs
-        if s.url in old_entries or s.url in downloaded
-    ]
+    entries = {**linked, **downloaded, **old_entries}
+    songs_to_write = [entries[s.url] for s in new_songs if s.url in entries]
 
     with open(spotdl_file, "w", encoding="utf-8") as fh:
         json.dump(
@@ -450,6 +465,7 @@ def sync_playlist(
         missed=n_missed,
         failed=n_failed,
         fail_reasons=fail_reasons,
+        linked=len(linked),
     )
 
 

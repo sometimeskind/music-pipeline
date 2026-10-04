@@ -905,3 +905,103 @@ def test_regen_playlists_matches_by_id_before_words(tmp_path: Path, caplog) -> N
     rel = lambda p: os.path.relpath(p, playlists_dir)  # noqa: E731
     assert lines == [rel(live), rel(remaster), rel(lib_root / "Other.m4a"), rel(studio)]
     assert "pl: 1 of 3 track(s) matched by title+artist only" in caplog.text
+
+
+# ---------------------------------------------------------------------------
+# Library check before download (#187)
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def real_lib(tmp_path: Path):
+    from music_scan.library import MusicLibrary
+
+    with MusicLibrary(tmp_path / "library.db", tmp_path) as lib:
+        yield lib
+
+
+def _add(lib, **fields):
+    from beets.library import Item
+
+    item = Item(**{"title": "Song", "artist": "Artist", **fields})
+    lib._lib.add(item)
+    return item
+
+
+def _reload(lib, item):
+    return lib._lib.get_item(item.id)
+
+
+def test_link_song_tags_the_item_matched_by_spotify_id(real_lib) -> None:
+    from music_scan.identity import ItemIndex
+    from music_scan.scan import link_song
+
+    item = _add(real_lib, sources="liked", spotify_ids="A1")
+    index = ItemIndex(real_lib.all_items())
+
+    assert link_song(index, "later", {"url": "https://open.spotify.com/track/A1", "name": "Song", "artists": ["Artist"]})
+    assert _reload(real_lib, item).get("sources") == "liked,later"
+    assert _reload(real_lib, item).get("spotify_ids") == "A1"
+
+
+def test_link_song_tags_the_item_matched_by_isrc(real_lib) -> None:
+    from music_scan.identity import ItemIndex
+    from music_scan.scan import link_song
+
+    item = _add(real_lib, sources="", via="usenet", isrc="GBX1;GBX2")
+    index = ItemIndex(real_lib.all_items())
+
+    song = {"url": "https://open.spotify.com/track/B2", "song_id": "B2", "isrc": "GBX2", "name": "Other title"}
+    assert link_song(index, "later", song)
+    assert _reload(real_lib, item).get("sources") == "later"
+    assert _reload(real_lib, item).get("spotify_ids") == "B2"
+
+
+def test_link_song_never_skips_on_title_and_artist_alone(real_lib) -> None:
+    """A wrong skip loses the track silently; a redundant download is merged by the hook."""
+    from music_scan.identity import ItemIndex
+    from music_scan.scan import link_song
+
+    item = _add(real_lib, sources="liked", spotify_ids="LIVE")
+    index = ItemIndex(real_lib.all_items())
+
+    song = {"url": "https://open.spotify.com/track/STUDIO", "name": "Song", "artists": ["Artist"]}
+    assert not link_song(index, "later", song)
+    assert _reload(real_lib, item).get("sources") == "liked"
+
+
+def test_have_or_link_counts_an_album_held_under_another_playlist(real_lib) -> None:
+    from music_scan.identity import ItemIndex
+    from music_scan.scan import have_or_link
+
+    one = _add(real_lib, sources="liked", spotify_ids="T1")
+    two = _add(real_lib, title="Two", sources="", isrc="ISRC2")
+    tracks = [["Song", "Artist", "T1", None, 1, 1], ["Two", "Artist", "T2", "ISRC2", 1, 2]]
+
+    assert have_or_link(ItemIndex(real_lib.items_by_source("later")), ItemIndex(real_lib.all_items()), "later", tracks)
+    assert _reload(real_lib, one).get("sources") == "liked,later"
+    assert _reload(real_lib, two).get("sources") == "later"
+    assert _reload(real_lib, two).get("spotify_ids") == "T2"
+
+
+def test_have_or_link_tags_nothing_when_a_track_is_missing(real_lib) -> None:
+    from music_scan.identity import ItemIndex
+    from music_scan.scan import have_or_link
+
+    one = _add(real_lib, sources="liked", spotify_ids="T1")
+    _add(real_lib, title="Two", sources="liked")  # title+artist only: not enough outside the playlist
+    tracks = [["Song", "Artist", "T1", None, 1, 1], ["Two", "Artist", "T2", "ISRC2", 1, 2]]
+
+    assert not have_or_link(ItemIndex(real_lib.items_by_source("later")), ItemIndex(real_lib.all_items()), "later", tracks)
+    assert _reload(real_lib, one).get("sources") == "liked"
+
+
+def test_have_or_link_keeps_the_full_ladder_inside_the_playlist(real_lib) -> None:
+    """Within the playlist, title+artist still counts, as has_tracks did."""
+    from music_scan.identity import ItemIndex
+    from music_scan.scan import have_or_link
+
+    _add(real_lib, sources="later")
+    tracks = [["Song", "Artist", "T1", None, 1, 1]]
+
+    assert have_or_link(ItemIndex(real_lib.items_by_source("later")), ItemIndex(real_lib.all_items()), "later", tracks)
