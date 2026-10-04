@@ -455,5 +455,12 @@ class SpotifyPlaylists:
         return SpotifyClient().playlist(url, fields="snapshot_id")["snapshot_id"]
 
     def songs(self, url: str) -> list[dict]:
-        """Every track on the playlist, in the .spotdl song format."""
-        return [s.json for s in self._spotdl.search([url])]
+        """Every track on the playlist, in the .spotdl song format.
+
+        Built from the playlist item pages only, one call per 100 tracks.
+        Spotdl.search() would also re-fetch every track (track, artist and album
+        calls), which got the app a 17h rate limit on a playlist of thousands (#178).
+        """
+        from spotdl.utils.search import get_simple_songs  # noqa: PLC0415
+
+        return [s.json for s in get_simple_songs([url])]
