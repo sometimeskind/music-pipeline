@@ -6,6 +6,8 @@ import logging
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from music_scan.identity import SPOTIFY_TRACK_URL, split_list
+
 if TYPE_CHECKING:
     from beets.library import Item
 
@@ -69,12 +71,17 @@ class MusicLibrary:
         ]
 
     def spotify_urls_by_source(self, source: str) -> frozenset[str]:
-        """Spotify URLs stored as flex attr for all items with the given source tag."""
-        return frozenset(
-            item.get("spotify_url")
-            for item in self.items_by_source(source)
-            if item.get("spotify_url")
-        )
+        """Spotify track URLs of all items with the given source tag.
+
+        Built from ``spotify_ids`` too: an item that took a second playlist as
+        a duplicate keeps the first playlist's ``spotify_url``.
+        """
+        urls: set[str] = set()
+        for item in self.items_by_source(source):
+            if item.get("spotify_url"):
+                urls.add(item.get("spotify_url"))
+            urls.update(SPOTIFY_TRACK_URL + sid for sid in split_list(item.get("spotify_ids")))
+        return frozenset(urls)
 
     # ------------------------------------------------------------------
     # Modification helpers

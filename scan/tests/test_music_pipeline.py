@@ -6,9 +6,13 @@ from beets import importer as beets_importer
 
 from music_scan.music_pipeline import (
     MusicPipelinePlugin,
+    SpotdlTags,
     _all_via_spotdl,
     _playlist_from_path,
+    _read_spotdl_tags,
 )
+
+URL_X = "https://open.spotify.com/track/X"
 
 
 # ---------------------------------------------------------------------------
@@ -24,7 +28,7 @@ def _make_plugin() -> MusicPipelinePlugin:
     plugin = MusicPipelinePlugin.__new__(MusicPipelinePlugin)
     plugin._log = MagicMock()
     plugin._pending_sources = {}
-    plugin._pending_spotify_urls = {}
+    plugin._pending_spotdl = {}
     plugin._pending_via = {}
     return plugin
 
@@ -43,10 +47,10 @@ def _item(path: str | bytes, sources: str = "", via: str = "", title: str = "") 
     return m
 
 
-def _dup(via: str = "spotdl", sources: str = "") -> MagicMock:
+def _dup(via: str = "spotdl", sources: str = "", spotify_ids: str = "") -> MagicMock:
     """Mock a library Item used as a duplicate (not a beets_library.Album)."""
     d = MagicMock(spec=["get", "__setitem__", "store"])  # spec=[] prevents hasattr from matching Album
-    data = {"via": via, "sources": sources}
+    data = {"via": via, "sources": sources, "spotify_ids": spotify_ids}
     d.get = lambda k, default="": data.get(k, default)
     def _setitem(k, v):
         data[k] = v
@@ -376,12 +380,15 @@ def test_tag_source_on_created_sets_spotify_url_and_caches() -> None:
     item = _item("/root/Music/inbox/spotdl/jazz/Artist - My Track.m4a", title="My Track")
     task = _task(item=item)
 
-    with patch("music_scan.music_pipeline._read_spotify_url", return_value="https://open.spotify.com/track/X"):
+    tags = SpotdlTags(URL_X, "GBUM71029604")
+    with patch("music_scan.music_pipeline._read_spotdl_tags", return_value=tags):
         plugin.tag_source_on_created(session=MagicMock(), task=task)
 
-    item.__setitem__.assert_any_call("spotify_url", "https://open.spotify.com/track/X")
-    assert plugin._pending_spotify_urls["Artist - My Track.m4a"] == "https://open.spotify.com/track/X"
-    assert plugin._pending_spotify_urls["my track"] == "https://open.spotify.com/track/X"
+    item.__setitem__.assert_any_call("spotify_url", URL_X)
+    item.__setitem__.assert_any_call("spotify_ids", "X")
+    item.__setitem__.assert_any_call("isrc", "GBUM71029604")
+    assert plugin._pending_spotdl["Artist - My Track.m4a"] == tags
+    assert plugin._pending_spotdl["my track"] == tags
 
 
 def test_tag_source_on_created_no_spotify_url_does_not_set_or_cache() -> None:
@@ -390,12 +397,13 @@ def test_tag_source_on_created_no_spotify_url_does_not_set_or_cache() -> None:
     item = _item("/root/Music/inbox/spotdl/jazz/track.m4a", title="Track")
     task = _task(item=item)
 
-    with patch("music_scan.music_pipeline._read_spotify_url", return_value=None):
+    with patch("music_scan.music_pipeline._read_spotdl_tags", return_value=SpotdlTags()):
         plugin.tag_source_on_created(session=MagicMock(), task=task)
 
     written_keys = [c[0][0] for c in item.__setitem__.call_args_list]
     assert "spotify_url" not in written_keys
-    assert plugin._pending_spotify_urls == {}
+    assert "spotify_ids" not in written_keys
+    assert plugin._pending_spotdl == {}
 
 
 # ---------------------------------------------------------------------------
@@ -410,15 +418,16 @@ def test_tag_source_on_stored_persists_spotify_url_via_title_key() -> None:
         "Artist - My Track.m4a": "jazz",
         "my track": "jazz",
     }
-    plugin._pending_spotify_urls = {
-        "Artist - My Track.m4a": "https://open.spotify.com/track/X",
-        "my track": "https://open.spotify.com/track/X",
+    plugin._pending_spotdl = {
+        "Artist - My Track.m4a": SpotdlTags(URL_X),
+        "my track": SpotdlTags(URL_X),
     }
     item = _item("/root/Music/library/Artist/Album/03 - My Track.m4a", title="My Track")
 
     plugin.tag_source_on_stored(lib=MagicMock(), item=item)
 
-    item.__setitem__.assert_any_call("spotify_url", "https://open.spotify.com/track/X")
+    item.__setitem__.assert_any_call("spotify_url", URL_X)
+    item.__setitem__.assert_any_call("spotify_ids", "X")
     item.store.assert_called_once()
 
 
@@ -426,7 +435,7 @@ def test_tag_source_on_stored_persists_spotify_url_via_filename_key() -> None:
     """spotify_url is persisted via the filename key when the file was not renamed."""
     plugin = _make_plugin()
     plugin._pending_sources = {"track.m4a": "jazz"}
-    plugin._pending_spotify_urls = {"track.m4a": "https://open.spotify.com/track/Y"}
+    plugin._pending_spotdl = {"track.m4a": SpotdlTags("https://open.spotify.com/track/Y")}
     item = _item("/root/Music/library/Artist/Album/track.m4a", title="Track")
 
     plugin.tag_source_on_stored(lib=MagicMock(), item=item)
@@ -439,7 +448,7 @@ def test_tag_source_on_stored_no_spotify_url_does_not_set() -> None:
     """When no spotify_url was cached (e.g. file had no WOAS tag), it is not written."""
     plugin = _make_plugin()
     plugin._pending_sources = {"track.m4a": "jazz"}
-    # _pending_spotify_urls intentionally empty
+    # _pending_spotdl intentionally empty
     item = _item("/root/Music/library/Artist/Album/track.m4a", title="Track")
 
     plugin.tag_source_on_stored(lib=MagicMock(), item=item)
@@ -564,7 +573,7 @@ def test_usenet_import_keeps_via_usenet_through_the_rename() -> None:
     """created caches via=usenet; stored re-applies it after beets renames the file."""
     plugin = _make_plugin()
     incoming = _item("/root/Music/inbox/usenet/later/Artist-Album-FLAC/01-artist-my_track.flac", title="My Track")
-    with patch("music_scan.music_pipeline._read_spotify_url", return_value=None):
+    with patch("music_scan.music_pipeline._read_spotdl_tags", return_value=SpotdlTags()):
         plugin.tag_source_on_created(session=MagicMock(), task=_task(item=incoming))
     incoming.__setitem__.assert_any_call("via", "usenet")
 
@@ -572,3 +581,92 @@ def test_usenet_import_keeps_via_usenet_through_the_rename() -> None:
     plugin.tag_source_on_stored(lib=MagicMock(), item=stored)
     stored.__setitem__.assert_any_call("sources", "later")
     stored.__setitem__.assert_any_call("via", "usenet")
+
+
+# ---------------------------------------------------------------------------
+# Spotify track identity (#176): spotify_ids and isrc
+# ---------------------------------------------------------------------------
+
+
+def test_read_spotdl_tags_reads_url_and_isrc_atoms() -> None:
+    mp4 = MagicMock(tags={"----:spotdl:WOAS": [URL_X.encode()], "----:spotdl:ISRC": [b"GBUM71029604"]})
+    with patch("mutagen.mp4.MP4", return_value=mp4):
+        assert _read_spotdl_tags(b"/root/Music/inbox/spotdl/jazz/t.m4a") == SpotdlTags(URL_X, "GBUM71029604")
+
+
+def test_read_spotdl_tags_unreadable_file_is_empty() -> None:
+    with patch("mutagen.mp4.MP4", side_effect=Exception("not an mp4")):
+        assert _read_spotdl_tags("/root/Music/inbox/usenet/jazz/t.flac") == SpotdlTags()
+
+
+def test_tag_source_on_stored_sets_isrc_when_musicbrainz_did_not() -> None:
+    plugin = _make_plugin()
+    plugin._pending_sources = {"my track": "jazz"}
+    plugin._pending_spotdl = {"my track": SpotdlTags(URL_X, "GBUM71029604")}
+    item = _item("/root/Music/library/Artist/Album/03 - My Track.m4a", title="My Track")
+
+    plugin.tag_source_on_stored(lib=MagicMock(), item=item)
+
+    item.__setitem__.assert_any_call("isrc", "GBUM71029604")
+
+
+def test_tag_source_on_stored_keeps_musicbrainz_isrc() -> None:
+    """MusicBrainz's ISRCs (all of the recording's, ;-joined) win over spotdl's."""
+    plugin = _make_plugin()
+    plugin._pending_sources = {"my track": "jazz"}
+    plugin._pending_spotdl = {"my track": SpotdlTags(URL_X, "GBUM71029604")}
+    item = _item("/root/Music/library/Artist/Album/03 - My Track.m4a", title="My Track")
+    item["isrc"] = "USUM70000001;GBUM71029604"
+    item.__setitem__.reset_mock()
+
+    plugin.tag_source_on_stored(lib=MagicMock(), item=item)
+
+    assert item.get("isrc") == "USUM70000001;GBUM71029604"
+    assert "isrc" not in [c[0][0] for c in item.__setitem__.call_args_list]
+
+
+def test_handle_duplicates_appends_incoming_spotify_id() -> None:
+    """The single's track ID joins the album track's on the one library item."""
+    plugin = _make_plugin()
+    item = _item("/root/Music/inbox/spotdl/playlist-b/Song.m4a", title="Song")
+    plugin._pending_sources["song"] = "playlist-b"
+    plugin._pending_spotdl["song"] = SpotdlTags("https://open.spotify.com/track/SINGLE")
+    task = _task(item=item)
+    dup = _dup(via="spotdl", sources="playlist-a", spotify_ids="ALBUM")
+    task.find_duplicates.return_value = [dup]
+
+    plugin.handle_duplicates(session=MagicMock(), task=task)
+
+    assert dup._data["sources"] == "playlist-a,playlist-b"
+    assert dup._data["spotify_ids"] == "ALBUM,SINGLE"
+    dup.store.assert_called_once()
+
+
+def test_handle_duplicates_stores_new_id_when_source_already_present() -> None:
+    """A second entry on the same playlist still records its ID."""
+    plugin = _make_plugin()
+    item = _item("/root/Music/inbox/spotdl/playlist-a/Song.m4a", title="Song")
+    plugin._pending_sources["song"] = "playlist-a"
+    plugin._pending_spotdl["song"] = SpotdlTags("https://open.spotify.com/track/SINGLE")
+    task = _task(item=item)
+    dup = _dup(via="spotdl", sources="playlist-a", spotify_ids="ALBUM")
+    task.find_duplicates.return_value = [dup]
+
+    plugin.handle_duplicates(session=MagicMock(), task=task)
+
+    assert dup._data["spotify_ids"] == "ALBUM,SINGLE"
+    dup.store.assert_called_once()
+
+
+def test_handle_duplicates_reads_spotify_id_from_file_on_cache_miss() -> None:
+    plugin = _make_plugin()
+    item = _item("/root/Music/inbox/spotdl/playlist-b/Song.m4a", title="Song")
+    task = _task(item=item)
+    dup = _dup(via="spotdl", sources="playlist-a", spotify_ids="X")
+    task.find_duplicates.return_value = [dup]
+
+    with patch("music_scan.music_pipeline._read_spotdl_tags", return_value=SpotdlTags(URL_X)):
+        plugin.handle_duplicates(session=MagicMock(), task=task)
+
+    assert dup._data["spotify_ids"] == "X"
+    assert dup._data["sources"] == "playlist-a,playlist-b"

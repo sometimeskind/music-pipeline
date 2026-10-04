@@ -8,6 +8,11 @@ Responsibilities
    * ``sources=<playlist>``  — playlist membership; drives .m3u generation,
      ``clear_source_tag``, and ``music-remove``.  Comma-separated when a track
      belongs to multiple playlists (appended by handle_duplicates).
+   * ``spotify_ids=<id>``     — Spotify track IDs of the playlist entries the
+     item satisfies (#176), a comma list appended by handle_duplicates.  Read
+     with ``isrc`` from spotdl's ``----:spotdl:*`` atoms, which ``scrub``
+     strips, so the DB is the only copy.  ``isrc`` is only set when
+     MusicBrainz left it empty.  ``spotify_url`` keeps the first URL.
    * ``via=spotdl|usenet``    — import origin (``usenet`` for album mode's
      ``inbox/usenet/<playlist>/``); used *only* to decide whether a
      duplicate can be replaced safely.  Never inherited.
@@ -67,10 +72,13 @@ duplicate check fires. After the rebuild completes all tracks will carry
 
 import os
 from pathlib import Path
+from typing import NamedTuple
 
 from beets import importer as beets_importer
 from beets import library as beets_library
 from beets.plugins import BeetsPlugin
+
+from music_scan.identity import add_to_list, spotify_id
 
 # The two locations where spotdl downloads land at beet-import time.
 # 1. Main inbox: downloaded files sit here until beet import runs.
@@ -88,24 +96,34 @@ MANAGED_VIA = frozenset({"spotdl", "usenet"})
 ASIS_STAGING_ROOT = Path("/tmp")
 
 
-def _read_spotify_url(path: str | bytes) -> str | None:
-    """Return the Spotify URL embedded in an M4A file by spotdl, or None.
+class SpotdlTags(NamedTuple):
+    url: str | None = None
+    isrc: str | None = None
 
-    Called during import_task_created while item.path still points to the
-    inbox file — before the scrub plugin strips the freeform MP4 atom.
+
+def _read_spotdl_tags(path: str | bytes) -> SpotdlTags:
+    """Return the Spotify URL and ISRC spotdl embedded in an M4A file.
+
+    spotdl writes both to its own freeform atoms, which beets doesn't read.
+    Called while item.path still points to the inbox file — before the scrub
+    plugin strips them.
     """
     try:
         from mutagen.mp4 import MP4  # noqa: PLC0415 — beets dep, always available
 
         if isinstance(path, bytes):
             path = path.decode()
-        audio = MP4(path)
-        raw = (audio.tags or {}).get("----:spotdl:WOAS")
-        if raw:
-            return raw[0].decode("utf-8")
+        tags = MP4(path).tags or {}
+
+        def first(key: str) -> str | None:
+            raw = tags.get(key)
+            if not raw:
+                return None
+            return raw[0].decode("utf-8").strip() or None
+
+        return SpotdlTags(first("----:spotdl:WOAS"), first("----:spotdl:ISRC"))
     except Exception:
-        pass
-    return None
+        return SpotdlTags()
 
 
 # Actions that indicate the task will actually be applied to the library.
@@ -190,7 +208,7 @@ class MusicPipelinePlugin(BeetsPlugin):
         # so the filename key no longer matches at item_imported time.
         # The title key survives both the rename and MB autotag metadata replacement.
         self._pending_sources: dict[str, str] = {}
-        self._pending_spotify_urls: dict[str, str] = {}
+        self._pending_spotdl: dict[str, SpotdlTags] = {}
         # Same keys → via (spotdl or usenet).
         self._pending_via: dict[str, str] = {}
         self.register_listener("import_task_created", self.tag_source_on_created)
@@ -224,12 +242,12 @@ class MusicPipelinePlugin(BeetsPlugin):
             if title:
                 self._pending_sources[title] = playlist
                 self._pending_via[title] = via
-            spotify_url = _read_spotify_url(item.path)
-            if spotify_url:
-                item["spotify_url"] = spotify_url
-                self._pending_spotify_urls[filename] = spotify_url
+            tags = _read_spotdl_tags(item.path)
+            if tags.url or tags.isrc:
+                self._apply_spotdl_tags(item, tags)
+                self._pending_spotdl[filename] = tags
                 if title:
-                    self._pending_spotify_urls[title] = spotify_url
+                    self._pending_spotdl[title] = tags
             self._log.debug(
                 "tagged incoming track source={} via={}: {}", playlist, via, item.path
             )
@@ -265,17 +283,36 @@ class MusicPipelinePlugin(BeetsPlugin):
         item["sources"] = playlist
         item["via"] = via or "spotdl"
         filename = Path(path).name
-        spotify_url = self._pending_spotify_urls.pop(filename, None)
-        if spotify_url is not None:
+        tags = self._pending_spotdl.pop(filename, None)
+        if tags is not None:
             if title:
-                self._pending_spotify_urls.pop(title, None)
+                self._pending_spotdl.pop(title, None)
         elif title:
-            spotify_url = self._pending_spotify_urls.pop(title, None)
-        if spotify_url:
-            item["spotify_url"] = spotify_url
+            tags = self._pending_spotdl.pop(title, None)
+        if tags is not None:
+            self._apply_spotdl_tags(item, tags)
         item.store()
         self._log.debug(
             "persisted source={} via={} on stored item: {}", playlist, item["via"], item.path
+        )
+
+    @staticmethod
+    def _apply_spotdl_tags(item, tags: SpotdlTags) -> None:
+        """Set spotify_url, spotify_ids and (when MusicBrainz didn't) isrc."""
+        if tags.url:
+            item["spotify_url"] = tags.url
+            add_to_list(item, "spotify_ids", spotify_id(tags.url))
+        if tags.isrc and not item.get("isrc"):
+            item["isrc"] = tags.isrc
+
+    def _incoming_spotdl_tags(self, item) -> SpotdlTags:
+        """spotdl tags of an inbox item: cached at task creation, else read again."""
+        path = item.path if isinstance(item.path, str) else item.path.decode()
+        title = (item.title or "").lower()
+        return (
+            self._pending_spotdl.get(Path(path).name)
+            or (self._pending_spotdl.get(title) if title else None)
+            or _read_spotdl_tags(path)
         )
 
     def handle_duplicates(self, session, task):
@@ -340,12 +377,17 @@ class MusicPipelinePlugin(BeetsPlugin):
                 )
                 return  # falls through to duplicate_action: remove
 
-            # Append new playlist to each existing duplicate item.
+            # Append the new playlist, and the Spotify ID of the entry the
+            # duplicate now also satisfies, to each existing duplicate item.
+            # Album tasks (not used: singletons: yes) can't pair items to dups.
+            incoming_ids = (
+                [spotify_id(self._incoming_spotdl_tags(items[0]).url)] if len(items) == 1 else []
+            )
             for dup in dup_items:
-                existing = [p for p in (dup.get("sources") or "").split(",") if p.strip()]
-                if incoming_playlist not in existing:
-                    existing.append(incoming_playlist)
-                    dup["sources"] = ",".join(existing)
+                changed = add_to_list(dup, "sources", incoming_playlist)
+                for sid in incoming_ids:
+                    changed = add_to_list(dup, "spotify_ids", sid) or changed
+                if changed:
                     dup.store()
                     self._log.debug(
                         "appended {} to sources on existing item: {}", incoming_playlist, dup
