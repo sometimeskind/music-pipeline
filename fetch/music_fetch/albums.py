@@ -61,8 +61,10 @@ class Settings:
     max_in_flight: int = 3
     grabs_per_day: int = 18
     hits_per_day: int = 90
-    # dry-run searches cost API hits too; keep them well under the daily budget.
+    # dry-run searches cost API hits too, and `on` searches every album again,
+    # so dry-run only samples: a few per tick, dry_run_limit in total.
     dry_run_per_tick: int = 3
+    dry_run_limit: int = 25
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -75,6 +77,7 @@ class Settings:
             max_in_flight=_env_int("ALBUM_MAX_IN_FLIGHT", 3),
             grabs_per_day=_env_int("ALBUM_GRABS_PER_DAY", 18),
             hits_per_day=_env_int("ALBUM_HITS_PER_DAY", 90),
+            dry_run_limit=_env_int("ALBUM_DRY_RUN_LIMIT", 25),
         )
 
 
@@ -240,7 +243,10 @@ def top_up(
     if settings.mode == "on":
         slots = settings.max_in_flight - state.in_flight()
     else:
-        slots = settings.dry_run_per_tick
+        sampled = sum(1 for a in state.albums.values() if a.get("dry_run"))
+        slots = min(settings.dry_run_per_tick, settings.dry_run_limit - sampled)
+        if slots <= 0:
+            logger.info("Dry-run sample complete (%d album(s), ALBUM_DRY_RUN_LIMIT) — not searching", sampled)
     for key, record in list(state.albums.items()):
         if slots <= 0:
             break
@@ -268,6 +274,8 @@ def top_up(
         tracks = record.get("tracks_count") or max(len(t) for t in record["playlists"].values())
         ranked = rank(releases, record["artist"], record["name"], tracks, set(record["blocklist"]))
         record["searched_at"] = _iso(now())
+        if settings.mode != "on":
+            record["dry_run"] = True
         if not ranked:
             record["status"] = MISSING
             logger.info("[MISS] %s: %d result(s), none match", label, len(releases))
