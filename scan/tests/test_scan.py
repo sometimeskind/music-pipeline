@@ -673,3 +673,11 @@ def test_run_beet_import_no_asis_flag_by_default() -> None:
     assert "--quiet" in cmd
 
 
+
+
+def test_has_tracks_matches_like_regen_playlists() -> None:
+    from music_scan.scan import _name_words, has_tracks
+
+    keys = {_name_words("Song One Artist"), _name_words("Song Two Artist")}
+    assert has_tracks(keys, [["Song One", "Artist"], ["Song Two", "Artist"]])
+    assert not has_tracks(keys, [["Song One", "Artist"], ["Song Three", "Artist"]])

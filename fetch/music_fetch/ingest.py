@@ -137,6 +137,14 @@ def reconcile_playlists() -> list[str]:
                 logger.info("    Removing .nosync sentinel for %s (nosync flag removed from config)", pl.name)
                 nosync_file.unlink()
 
+        album_file = SPOTDL_DIR / f"{pl.name}.album"
+        if pl.album and not album_file.exists():
+            logger.info("    Creating .album sentinel for %s (downloaded by album mode)", pl.name)
+            album_file.touch()
+        elif not pl.album and album_file.exists():
+            logger.info("    Removing .album sentinel for %s (album flag removed from config)", pl.name)
+            album_file.unlink()
+
     # Detect playlists on disk that are no longer in config.
     existing_names = {f.stem for f in SPOTDL_DIR.glob("*.spotdl")}
     removed_names = existing_names - conf_names
@@ -147,6 +155,7 @@ def reconcile_playlists() -> list[str]:
         remove_sources.append(name)
         (SPOTDL_DIR / f"{name}.spotdl").unlink(missing_ok=True)
         (SPOTDL_DIR / f"{name}.nosync").unlink(missing_ok=True)
+        (SPOTDL_DIR / f"{name}.album").unlink(missing_ok=True)
         download_dir = SPOTDL_DIR / name
         if download_dir.exists():
             shutil.rmtree(download_dir)
@@ -243,6 +252,13 @@ def sync_playlists(
         # .nosync: skip spotdl sync for frozen playlists
         if (SPOTDL_DIR / f"{name}.nosync").exists():
             logger.info("==> Skipping sync for static playlist: %s (.nosync present)", name)
+            metrics.playlists_skipped += 1
+            metrics.playlists_total += 1
+            continue
+
+        # .album: downloaded whole from Usenet by the album tick, never by spotdl
+        if (SPOTDL_DIR / f"{name}.album").exists():
+            logger.info("==> Skipping sync for album playlist: %s (album mode)", name)
             metrics.playlists_skipped += 1
             metrics.playlists_total += 1
             continue
@@ -365,13 +381,20 @@ def _flag_expired_cookies_from_totals(metrics: IngestMetrics) -> None:
 
 
 def save_pending_removals(pending: PendingRemovals) -> None:
-    """Write pending removals to the shared handoff file for music-scan to read."""
+    """Add pending removals to the shared handoff file for music-scan to read.
+
+    Merges with a file not yet consumed: the album tick and music-fetch both write it.
+    """
     if not pending.tracks and not pending.remove_sources:
         return
-    data = {
-        "tracks": [dataclasses.asdict(t) for t in pending.tracks],
-        "remove_sources": pending.remove_sources,
-    }
+    data: dict = {"tracks": [], "remove_sources": []}
+    if PENDING_REMOVALS_PATH.exists():
+        try:
+            data = json.loads(PENDING_REMOVALS_PATH.read_text(encoding="utf-8"))
+        except Exception:
+            logger.warning("Could not read %s — overwriting", PENDING_REMOVALS_PATH)
+    data["tracks"] = data.get("tracks", []) + [dataclasses.asdict(t) for t in pending.tracks]
+    data["remove_sources"] = sorted(set(data.get("remove_sources", [])) | set(pending.remove_sources))
     PENDING_REMOVALS_PATH.write_text(json.dumps(data), encoding="utf-8")
     logger.info(
         "Saved %d track removal(s) and %d source removal(s) to %s",

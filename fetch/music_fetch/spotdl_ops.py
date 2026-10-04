@@ -440,3 +440,20 @@ def sync_playlist(
 def find_track_in_snapshot(snapshot: list[dict], url: str) -> dict | None:
     """Return the first song entry in a .spotdl snapshot that matches *url*."""
     return next((t for t in snapshot if t.get("url") == url), None)
+
+
+class SpotifyPlaylists:
+    """Playlist reads for album mode, through the same spotdl client as sync."""
+
+    def __init__(self, cookie_file: Path) -> None:
+        self._spotdl = _make_spotdl(_make_downloader_settings(cookie_file=cookie_file))
+
+    def snapshot_id(self, url: str) -> str:
+        """The playlist's version; Spotify changes it on every edit.  One small call."""
+        from spotdl.utils.spotify import SpotifyClient  # noqa: PLC0415
+
+        return SpotifyClient().playlist(url, fields="snapshot_id")["snapshot_id"]
+
+    def songs(self, url: str) -> list[dict]:
+        """Every track on the playlist, in the .spotdl song format."""
+        return [s.json for s in self._spotdl.search([url])]

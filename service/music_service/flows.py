@@ -284,3 +284,67 @@ def scan_flow() -> None:
             _run_scan_tasks()
     except TimeoutError:
         logger.info("Scan skipped — pipeline busy (fetch or scan already running)")
+
+
+# ---------------------------------------------------------------------------
+# Album mode (#168)
+# ---------------------------------------------------------------------------
+
+
+@task(name="album-tick", log_prints=True)
+def album_tick_task(settings) -> None:
+    """Refresh album playlists and top the Usenet queue up."""
+    import music_fetch.albums as albums  # noqa: PLC0415
+    from music_fetch.spotdl_ops import SpotifyPlaylists  # noqa: PLC0415
+    from music_fetch.usenet import Prowlarr, Sabnzbd  # noqa: PLC0415
+    from music_scan.library import MusicLibrary  # noqa: PLC0415
+
+    logger = get_run_logger()
+    playlists = [(p.name, p.url) for p in load_playlists(ingest.CONF_PATH) if p.album]
+    if not playlists:
+        logger.info("No playlists flagged album in playlists.conf")
+        return
+
+    with MusicLibrary(scan.LIBRARY_DB) as lib:
+        keys: dict[str, set] = {}
+
+        def have(playlist: str, tracks: list[list[str]]) -> bool:
+            if playlist not in keys:
+                keys[playlist] = scan.source_track_keys(lib, playlist)
+            return scan.has_tracks(keys[playlist], tracks)
+
+        result = albums.tick(
+            playlists,
+            SpotifyPlaylists(ingest.COOKIE_FILE),
+            Prowlarr(),
+            Sabnzbd(),
+            have,
+            ingest.SPOTDL_DIR,
+            settings,
+        )
+
+    removed = [
+        ingest.RemovedTrack(title=s.get("name", ""), artist=(s.get("artists") or [""])[0], source=name)
+        for name, songs in result.removed_songs.items()
+        for s in songs
+    ]
+    if removed:
+        ingest.save_pending_removals(ingest.PendingRemovals(tracks=removed, remove_sources=[]))
+        logger.info("Queued %d track removal(s) from album playlists for the next scan", len(removed))
+
+
+@flow(name="music-albums", log_prints=True)
+def albums_flow() -> None:
+    """Album mode: download album-only playlists as whole albums from Usenet."""
+    import music_fetch.albums as albums  # noqa: PLC0415
+
+    logger = get_run_logger()
+    settings = albums.Settings.from_env()
+    if settings.mode == "off":
+        logger.info("Album mode is off (ALBUM_MODE)")
+        return
+    try:
+        with concurrency("albums", occupy=1, timeout_seconds=0):
+            album_tick_task(settings)
+    except TimeoutError:
+        logger.info("Album tick skipped — another album run holds the lock")

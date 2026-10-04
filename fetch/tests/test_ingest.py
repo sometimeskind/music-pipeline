@@ -748,3 +748,37 @@ def test_cookies_expired_heuristic_ignores_empty_run(tmp_path: Path) -> None:
     metrics = _run_sync_playlists(tmp_path, [SyncResult(set(), 0, 0, 0, 0, {})])
 
     assert metrics.cookies_expired is False
+
+
+# ---------------------------------------------------------------------------
+# save_pending_removals — merges with an unconsumed handoff file
+# ---------------------------------------------------------------------------
+
+
+def test_save_pending_removals_merges(tmp_path: Path, monkeypatch) -> None:
+    import music_fetch.ingest as ingest
+
+    monkeypatch.setattr(ingest, "PENDING_REMOVALS_PATH", tmp_path / ".pending-removals.json")
+    ingest.save_pending_removals(PendingRemovals(tracks=[RemovedTrack("A", "X", "later")], remove_sources=["old"]))
+    ingest.save_pending_removals(PendingRemovals(tracks=[RemovedTrack("B", "Y", "keep")], remove_sources=["old"]))
+    loaded = ingest.load_and_clear_pending_removals()
+    assert [t.title for t in loaded.tracks] == ["A", "B"]
+    assert loaded.remove_sources == ["old"]
+
+
+def test_reconcile_album_sentinel_follows_config(tmp_path: Path) -> None:
+    """The album flag creates a .album sentinel; dropping the flag removes it."""
+    import unittest.mock as mock
+    from music_fetch import ingest
+
+    conf = tmp_path / "playlists.conf"
+    spotdl_dir = tmp_path / "spotdl"
+    spotdl_dir.mkdir()
+    (spotdl_dir / "later.spotdl").write_text('{"type": "sync", "query": [], "songs": []}')
+    with mock.patch.object(ingest, "CONF_PATH", conf), mock.patch.object(ingest, "SPOTDL_DIR", spotdl_dir):
+        conf.write_text("later https://open.spotify.com/playlist/AAA album\n")
+        reconcile_playlists()
+        assert (spotdl_dir / "later.album").exists()
+        conf.write_text("later https://open.spotify.com/playlist/AAA\n")
+        reconcile_playlists()
+        assert not (spotdl_dir / "later.album").exists()

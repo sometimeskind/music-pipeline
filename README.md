@@ -131,6 +131,8 @@ archived-mix       https://open.spotify.com/playlist/37i9dQZF1DXd9rLJfaAKCk  nos
 
 The optional `nosync` flag freezes a playlist: `music-ingest` creates a `.nosync` sentinel on the PVC and skips `spotdl sync` for it. Remove the flag and run `music-ingest` again to unfreeze.
 
+The optional `album` flag is for playlists that hold only whole albums. spotdl never syncs them (a `.album` sentinel). Instead, the `music-albums` flow downloads each album whole from Usenet through Prowlarr and SABnzbd. Every `ALBUM_POLL_SECONDS` it checks the playlist's Spotify `snapshot_id` and re-reads the tracks only when it has changed, so a playlist edit is picked up within one poll. Then it tops the SABnzbd queue up to `ALBUM_MAX_IN_FLIGHT` within a rolling-24h indexer budget. Its state (album status, release blocklist, indexer use) is `.albums.json` next to the `.spotdl` files. Set `ALBUM_MODE=dry-run` first: it searches and logs `[PICK]` lines but never grabs.
+
 This file is the single source of truth for playlists. `music-ingest` reconciles disk state to match it on every run — provisioning new entries, reconciling `.nosync` sentinels, and queuing removed playlists for cleanup.
 
 ### 5. Run the first ingest
@@ -239,6 +241,12 @@ Mount `cookies.txt` at `/root/.config/spotdl/cookies.txt` read-only. Update by p
 | `PUSHGATEWAY_URL` | Plain value | `""` | e.g. `http://prometheus-pushgateway.monitoring:9091` |
 | `SYNC_JITTER_SECONDS` | Plain value | `""` | Random pre-sync sleep (seconds) to stagger retries |
 | `SYNC_TRACK_LIMIT` | Plain value | `""` | Cap new tracks downloaded per run. Pipeline resumes next run. |
+| `ALBUM_MODE` | Plain value | `off` | `off`, `dry-run` (search and log picks, never grab) or `on` |
+| `ALBUM_POLL_SECONDS` | Plain value | `1800` | Interval of the `music-albums` flow (Spotify snapshot poll + queue top-up) |
+| `ALBUM_MAX_IN_FLIGHT` | Plain value | `3` | Albums queued in SABnzbd at once; size it to the `music-data` disk |
+| `ALBUM_GRABS_PER_DAY` / `ALBUM_HITS_PER_DAY` | Plain value | `18` / `90` | Rolling-24h indexer budget (NZB grabs / API searches) |
+| `PROWLARR_URL` / `PROWLARR_API_KEY` | Plain value / Secret | `http://prowlarr.music.svc.cluster.local:9696` / — | Album mode only |
+| `SABNZBD_URL` / `SABNZBD_API_KEY` | Plain value / Secret | `http://sabnzbd.music.svc.cluster.local:8080` / — | Album mode only |
 | `BEET_SKIP_LIMIT` | Plain value | `""` | Terminate beet import after this many skipped tracks |
 | `PREFECT_LOGGING_EXTRA_LOGGERS` | Image `ENV` | `music_fetch,music_scan` | Attaches Prefect's log handlers to the pipeline's own loggers so per-track `[OK]`/`[MISS]`/`[FAIL]` lines reach the flow run logs. Baked into the image; the deployment does not need to set it. |
 | `PREFECT_LOGGING_TO_API_WHEN_MISSING_FLOW` | Image `ENV` | `ignore` | Silences Prefect's warning when those loggers emit from a thread without a flow-run context (the `beet` stderr relay). Such lines still reach the pod logs, just not the Prefect UI. |

@@ -143,3 +143,18 @@ def test_no_clash_for_distinct_names(tmp_path: Path) -> None:
     )
     playlists = load_playlists(conf)
     assert len(playlists) == 2
+
+
+def test_album_flag(tmp_path: Path) -> None:
+    conf = write_conf(
+        tmp_path,
+        """
+        later   https://open.spotify.com/playlist/AAA  album
+        keep    https://open.spotify.com/playlist/BBB
+        frozen  https://open.spotify.com/playlist/CCC  nosync
+        """,
+    )
+    later, keep, frozen = load_playlists(conf)
+    assert later.album and not later.nosync
+    assert not keep.album
+    assert frozen.nosync and not frozen.album
