@@ -11,8 +11,9 @@ Responsibilities
    * ``spotify_ids=<id>``     — Spotify track IDs of the playlist entries the
      item satisfies (#176), a comma list appended by handle_duplicates.  Read
      with ``isrc`` from spotdl's ``----:spotdl:*`` atoms, which ``scrub``
-     strips, so the DB is the only copy.  ``isrc`` is only set when
-     MusicBrainz left it empty.  ``spotify_url`` keeps the first URL.
+     strips, so the DB is the only copy.  spotdl's ISRC is added to
+     MusicBrainz's (``;``-joined; they can disagree).  ``spotify_url`` keeps
+     the first URL.
    * ``via=spotdl|usenet``    — import origin (``usenet`` for album mode's
      ``inbox/usenet/<playlist>/``); used *only* to decide whether a
      duplicate can be replaced safely.  Never inherited.
@@ -37,8 +38,14 @@ Responsibilities
     survives both.  This hook guarantees the tags land in the database on
     clean first-time imports.
 
-2. **Multi-playlist membership** (``import_task_choice``): when duplicates exist
-   in the library for the incoming track:
+2. **Multi-playlist membership** (``import_task_choice``): duplicates are the
+   library items that are the same recording by identity (Spotify track ID,
+   ISRC or MusicBrainz recording ID, #176), else beets' artist+title
+   duplicates.  An artist+title duplicate whose ISRCs are disjoint from the
+   incoming track's (and with no shared recording ID) is a different
+   recording — a live take, a remaster, a radio edit — and is hidden from
+   beets' own check so the track imports alongside it (``[SPLIT]``).
+   Artist+title merges log ``[WORDS]``.  When duplicates exist:
 
    * Any duplicate has a ``via`` other than spotdl/usenet (manually imported) → skip the
      incoming file AND delete it from the inbox so it does not get
@@ -78,7 +85,7 @@ from beets import importer as beets_importer
 from beets import library as beets_library
 from beets.plugins import BeetsPlugin
 
-from music_scan.identity import add_to_list, spotify_id
+from music_scan.identity import add_isrcs, add_to_list, item_isrcs, item_spotify_ids, split_list, spotify_id
 
 # The two locations where spotdl downloads land at beet-import time.
 # 1. Main inbox: downloaded files sit here until beet import runs.
@@ -177,6 +184,41 @@ def _via_from_path(path: str | bytes) -> str:
 def _all_via_spotdl(duplicates: list) -> bool:
     """Return True if every duplicate in *duplicates* is a pipeline import (spotdl or usenet)."""
     return all((item.get("via") or "") in MANAGED_VIA for item in duplicates)
+
+
+class Incoming(NamedTuple):
+    """Identity of the track being imported."""
+
+    spotify_id: str | None
+    isrcs: frozenset[str]
+    mb_trackid: str | None
+
+
+def _find_same_recording(lib, incoming: Incoming) -> list:
+    """Library items that share a Spotify track ID, ISRC or MusicBrainz recording ID."""
+    found: dict = {}
+    queries = []
+    if incoming.spotify_id:
+        sid = incoming.spotify_id
+        queries += [(f"spotify_ids:{sid}", lambda i: sid in item_spotify_ids(i)),
+                    (f"spotify_url:{sid}", lambda i: sid in item_spotify_ids(i))]
+    for code in incoming.isrcs:
+        queries.append((f"isrc:{code}", lambda i, c=code: c in item_isrcs(i)))
+    if incoming.mb_trackid:
+        queries.append((f"mb_trackid:{incoming.mb_trackid}", lambda i: i.get("mb_trackid") == incoming.mb_trackid))
+    for query, same in queries:
+        for item in lib.items(query):
+            if same(item):
+                found.setdefault(item.id, item)
+    return list(found.values())
+
+
+def _different_recording(incoming: Incoming, dup) -> bool:
+    """True when both sides have ISRCs, none shared, and no shared recording ID."""
+    if incoming.mb_trackid and dup.get("mb_trackid") == incoming.mb_trackid:
+        return False
+    dup_isrcs = item_isrcs(dup)
+    return bool(incoming.isrcs and dup_isrcs and not incoming.isrcs & dup_isrcs)
 
 
 def _items_from_task(task) -> list:
@@ -298,12 +340,23 @@ class MusicPipelinePlugin(BeetsPlugin):
 
     @staticmethod
     def _apply_spotdl_tags(item, tags: SpotdlTags) -> None:
-        """Set spotify_url, spotify_ids and (when MusicBrainz didn't) isrc."""
+        """Set spotify_url and spotify_ids, and add spotdl's ISRC to the item's."""
         if tags.url:
             item["spotify_url"] = tags.url
             add_to_list(item, "spotify_ids", spotify_id(tags.url))
-        if tags.isrc and not item.get("isrc"):
-            item["isrc"] = tags.isrc
+        add_isrcs(item, split_list(tags.isrc, ";"))
+
+    def _incoming_identity(self, task, item) -> Incoming:
+        """Spotify ID and ISRC from spotdl, plus ISRCs and recording ID from the
+        chosen MusicBrainz match (or the file's own tags for an as-is import)."""
+        tags = self._incoming_spotdl_tags(item)
+        try:
+            info = task.chosen_info()
+        except Exception:
+            info = {}
+        isrcs = {*split_list(tags.isrc, ";"), *split_list(info.get("isrc"), ";"), *item_isrcs(item)}
+        mb_trackid = info.get("track_id") or info.get("mb_trackid") or item.get("mb_trackid") or None
+        return Incoming(spotify_id(tags.url), frozenset(isrcs), mb_trackid)
 
     def _incoming_spotdl_tags(self, item) -> SpotdlTags:
         """spotdl tags of an inbox item: cached at task creation, else read again."""
@@ -337,13 +390,13 @@ class MusicPipelinePlugin(BeetsPlugin):
         if not items or task.choice_flag not in _WILL_APPLY:
             return
 
+        # Album tasks (not used: singletons: yes) keep beets' artist+title check.
+        incoming = self._incoming_identity(task, items[0]) if len(items) == 1 else None
         try:
+            same = _find_same_recording(session.lib, incoming) if incoming else []
             found = task.find_duplicates(session.lib)
         except Exception as exc:
             self._log.warning("could not check for duplicates: {}", exc)
-            return
-
-        if not found:
             return
 
         # Flatten album duplicates to individual items for via= inspection.
@@ -353,6 +406,28 @@ class MusicPipelinePlugin(BeetsPlugin):
                 dup_items.extend(dup.items())
             else:
                 dup_items.append(dup)
+
+        if same:
+            dup_items = same
+        elif dup_items and incoming is not None:
+            different = [d for d in dup_items if _different_recording(incoming, d)]
+            dup_items = [d for d in dup_items if d not in different]
+            for dup in different:
+                self._log.warning(
+                    "[SPLIT] {} — {}: a different recording from {} (ISRCs {} vs {}); importing it separately",
+                    items[0].artist, items[0].title, dup, ",".join(sorted(incoming.isrcs)), dup.get("isrc"),
+                )
+            if different and not dup_items:
+                # Hide them from beets' own check, or duplicate_action: remove deletes them.
+                task.find_duplicates = task.duplicate_items = lambda lib: []
+                return
+            for dup in dup_items:
+                self._log.warning(
+                    "[WORDS] {} — {}: merged into {} by artist+title only", items[0].artist, items[0].title, dup
+                )
+
+        if not dup_items:
+            return
 
         if _all_via_spotdl(dup_items):
             # Resolve the incoming playlist name.
@@ -379,14 +454,13 @@ class MusicPipelinePlugin(BeetsPlugin):
 
             # Append the new playlist, and the Spotify ID of the entry the
             # duplicate now also satisfies, to each existing duplicate item.
-            # Album tasks (not used: singletons: yes) can't pair items to dups.
-            incoming_ids = (
-                [spotify_id(self._incoming_spotdl_tags(items[0]).url)] if len(items) == 1 else []
-            )
             for dup in dup_items:
                 changed = add_to_list(dup, "sources", incoming_playlist)
-                for sid in incoming_ids:
-                    changed = add_to_list(dup, "spotify_ids", sid) or changed
+                if incoming is not None:
+                    changed = add_to_list(dup, "spotify_ids", incoming.spotify_id) or changed
+                if same:
+                    # Same recording by identity: keep both sides' ISRCs.
+                    changed = add_isrcs(dup, sorted(incoming.isrcs)) or changed
                 if changed:
                     dup.store()
                     self._log.debug(

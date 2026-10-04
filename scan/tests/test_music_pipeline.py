@@ -70,6 +70,7 @@ def _task(choice_flag=None, item=None, items=None):
         t.item = None
         t.items = items or []
     t.find_duplicates = MagicMock(return_value=[])
+    t.chosen_info = MagicMock(return_value={})
     return t
 
 
@@ -610,18 +611,21 @@ def test_tag_source_on_stored_sets_isrc_when_musicbrainz_did_not() -> None:
     item.__setitem__.assert_any_call("isrc", "GBUM71029604")
 
 
-def test_tag_source_on_stored_keeps_musicbrainz_isrc() -> None:
-    """MusicBrainz's ISRCs (all of the recording's, ;-joined) win over spotdl's."""
+def test_tag_source_on_stored_adds_spotdl_isrc_to_musicbrainz_ones() -> None:
+    """MusicBrainz's ISRCs (all of the recording's, ;-joined) and spotdl's are unioned."""
     plugin = _make_plugin()
     plugin._pending_sources = {"my track": "jazz"}
     plugin._pending_spotdl = {"my track": SpotdlTags(URL_X, "GBUM71029604")}
     item = _item("/root/Music/library/Artist/Album/03 - My Track.m4a", title="My Track")
-    item["isrc"] = "USUM70000001;GBUM71029604"
-    item.__setitem__.reset_mock()
-
+    item["isrc"] = "USUM70000001"
     plugin.tag_source_on_stored(lib=MagicMock(), item=item)
-
     assert item.get("isrc") == "USUM70000001;GBUM71029604"
+
+    # Already listed: nothing to add.
+    plugin._pending_sources = {"my track": "jazz"}
+    plugin._pending_spotdl = {"my track": SpotdlTags(URL_X, "GBUM71029604")}
+    item.__setitem__.reset_mock()
+    plugin.tag_source_on_stored(lib=MagicMock(), item=item)
     assert "isrc" not in [c[0][0] for c in item.__setitem__.call_args_list]
 
 
@@ -670,3 +674,108 @@ def test_handle_duplicates_reads_spotify_id_from_file_on_cache_miss() -> None:
 
     assert dup._data["spotify_ids"] == "X"
     assert dup._data["sources"] == "playlist-a,playlist-b"
+
+
+# ---------------------------------------------------------------------------
+# handle_duplicates — identity first, split different recordings (#176)
+# ---------------------------------------------------------------------------
+
+
+def _lib_dup(id_: int, via: str = "spotdl", **data) -> MagicMock:
+    d = _dup(via=via, sources=data.pop("sources", "playlist-a"), spotify_ids=data.pop("spotify_ids", ""))
+    d._data.update(data)
+    d.id = id_
+    return d
+
+
+def _session(by_query: dict) -> MagicMock:
+    """A session whose lib.items(query) returns by_query's items for that query."""
+    session = MagicMock()
+    session.lib.items.side_effect = lambda q: by_query.get(q, [])
+    return session
+
+
+def _incoming(tags: SpotdlTags = SpotdlTags(), title: str = "Song") -> tuple:
+    plugin = _make_plugin()
+    item = _item("/root/Music/inbox/spotdl/playlist-b/Song.m4a", title=title)
+    plugin._pending_sources[title.lower()] = "playlist-b"
+    plugin._pending_spotdl[title.lower()] = tags
+    return plugin, item, _task(item=item)
+
+
+def test_handle_duplicates_merges_a_retitled_release_by_isrc() -> None:
+    """Beets' artist+title check misses "Song - 2011 Remaster"; the shared ISRC catches it."""
+    plugin, item, task = _incoming(SpotdlTags("https://open.spotify.com/track/REM", "GBX1"), title="Song - 2011 Remaster")
+    existing = _lib_dup(7, isrc="USX9;GBX1", spotify_ids="ALBUM")
+    session = _session({"isrc:GBX1": [existing]})
+
+    plugin.handle_duplicates(session=session, task=task)
+
+    task.set_choice.assert_called_once_with(beets_importer.Action.SKIP)
+    assert existing._data["sources"] == "playlist-a,playlist-b"
+    assert existing._data["spotify_ids"] == "ALBUM,REM"
+    assert existing._data["isrc"] == "USX9;GBX1"
+
+
+def test_handle_duplicates_merges_by_musicbrainz_recording_id() -> None:
+    plugin, item, task = _incoming(SpotdlTags(URL_X, "GBNEW"))
+    task.chosen_info.return_value = {"track_id": "mb-rec-1", "isrc": None}
+    existing = _lib_dup(7, isrc="USOLD", mb_trackid="mb-rec-1")
+    session = _session({"mb_trackid:mb-rec-1": [existing]})
+
+    plugin.handle_duplicates(session=session, task=task)
+
+    task.set_choice.assert_called_once_with(beets_importer.Action.SKIP)
+    # Same recording: Spotify's ISRC joins MusicBrainz's.
+    assert existing._data["isrc"] == "USOLD;GBNEW"
+
+
+def test_handle_duplicates_splits_a_different_recording() -> None:
+    """Live take with the studio's artist+title: imported alongside, not merged or replaced."""
+    plugin, item, task = _incoming(SpotdlTags(URL_X, "GBLIVE"))
+    studio = _lib_dup(7, isrc="GBSTUDIO")
+    task.find_duplicates.return_value = [studio]
+
+    plugin.handle_duplicates(session=_session({}), task=task)
+
+    task.set_choice.assert_not_called()
+    assert studio._data["sources"] == "playlist-a"
+    # beets' own duplicate check (duplicate_action: remove) no longer sees it.
+    assert task.find_duplicates(MagicMock()) == []
+    assert task.duplicate_items(MagicMock()) == []
+    assert any("[SPLIT]" in c.args[0] for c in plugin._log.warning.call_args_list)
+
+
+def test_handle_duplicates_without_isrcs_merges_by_words_and_logs() -> None:
+    plugin, item, task = _incoming(SpotdlTags(URL_X))
+    old = _lib_dup(7)
+    task.find_duplicates.return_value = [old]
+
+    plugin.handle_duplicates(session=_session({}), task=task)
+
+    task.set_choice.assert_called_once_with(beets_importer.Action.SKIP)
+    assert old._data["sources"] == "playlist-a,playlist-b"
+    assert any("[WORDS]" in c.args[0] for c in plugin._log.warning.call_args_list)
+
+
+def test_handle_duplicates_same_recording_id_is_never_split() -> None:
+    plugin, item, task = _incoming(SpotdlTags(URL_X, "GBA"))
+    task.chosen_info.return_value = {"track_id": "mb-1"}
+    dup = _lib_dup(7, isrc="GBB", mb_trackid="mb-1")
+    session = _session({"mb_trackid:mb-1": [dup]})
+    task.find_duplicates.return_value = [dup]
+
+    plugin.handle_duplicates(session=session, task=task)
+
+    task.set_choice.assert_called_once_with(beets_importer.Action.SKIP)
+
+
+def test_handle_duplicates_protects_a_manual_import_matched_by_identity() -> None:
+    plugin, item, task = _incoming(SpotdlTags(URL_X, "GBA"))
+    manual = _lib_dup(7, via="", isrc="GBA")
+    session = _session({"isrc:GBA": [manual]})
+
+    plugin.handle_duplicates(session=session, task=task)
+
+    task.set_choice.assert_called_once_with(beets_importer.Action.SKIP)
+    assert manual._data["sources"] == "playlist-a"

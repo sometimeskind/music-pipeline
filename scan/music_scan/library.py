@@ -6,7 +6,7 @@ import logging
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from music_scan.identity import SPOTIFY_TRACK_URL, split_list
+from music_scan.identity import SPOTIFY_TRACK_URL, ItemIndex, split_list
 
 if TYPE_CHECKING:
     from beets.library import Item
@@ -87,21 +87,30 @@ class MusicLibrary:
     # Modification helpers
     # ------------------------------------------------------------------
 
-    def clear_source_tag(self, title: str, artist: str, source: str) -> bool:
-        """Clear the source tag on items matching title + artist + source.
+    def clear_source_tag(
+        self, title: str, artist: str, source: str, spotify_id: str | None = None, isrc: str | None = None
+    ) -> bool:
+        """Clear the source tag on the item the removed playlist entry maps to.
 
-        Returns True if at least one item was modified.
-        Matching is done with beets' substring query — beets has no contains-word
-        query; clash validation in load_playlists() prevents false positives.
+        Matches the entry's Spotify ID, then its ISRC, among the *source* items.
+        Without either hit (or entries queued before #176), falls back to
+        title + artist with beets' substring query — beets has no contains-word
+        query; clash validation in load_playlists() prevents false positives —
+        and logs it.  Returns True if at least one item was modified.
         """
-        # Substring match on sources field; load_playlists() ensures no name clashes.
-        query = f"title:{title} artist:{artist} sources:{source}"
-        items = list(self._lib.items(query))
-        if not items:
-            return False
+        item, _ = ItemIndex(self.items_by_source(source)).match(spotify_id, isrc, words=False)
+        if item is not None:
+            items = [item]
+        else:
+            # Substring match on sources field; load_playlists() ensures no name clashes.
+            query = f"title:{title} artist:{artist} sources:{source}"
+            items = list(self._lib.items(query))
+            if not items:
+                return False
+            logger.info("  [WORDS] %s: removed %s — %s matched by title+artist only", source, title, artist)
         for item in items:
             parts = [p.strip() for p in (item.get("sources") or "").split(",")]
             item["sources"] = ",".join(p for p in parts if p and p != source)
             item.store()
-        logger.debug("Cleared source tag on %d item(s) matching %r", len(items), query)
+        logger.debug("Cleared source=%s on %d item(s) for %s — %s", source, len(items), title, artist)
         return True

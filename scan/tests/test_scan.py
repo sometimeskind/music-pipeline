@@ -114,7 +114,7 @@ def testapply_pending_removals_clears_source_tags(tmp_path: Path) -> None:
 
     assert count == 1
     mock_lib.clear_source_tag.assert_called_once_with(
-        title="Song A", artist="Artist 1", source="my-playlist"
+        title="Song A", artist="Artist 1", source="my-playlist", spotify_id=None, isrc=None
     )
 
 
@@ -312,12 +312,13 @@ def test_run_beet_update_failure_continues_to_regen_playlists(tmp_path: Path) ->
 # ---------------------------------------------------------------------------
 
 
-def _make_mock_item(title: str, artist: str, path: Path) -> mock.MagicMock:
+def _make_mock_item(title: str, artist: str, path: Path, **flex: str) -> mock.MagicMock:
     item = mock.MagicMock()
     item.title = title
     item.artist = artist
     item.albumartist = ""
     item.path = str(path).encode()
+    item.get.side_effect = lambda k, d=None: flex.get(k, d)
     return item
 
 
@@ -676,11 +677,20 @@ def test_run_beet_import_no_asis_flag_by_default() -> None:
 
 
 def test_has_tracks_matches_like_regen_playlists() -> None:
-    from music_scan.scan import _name_words, has_tracks
+    from music_scan.identity import ItemIndex
+    from music_scan.scan import has_tracks
 
-    keys = {_name_words("Song One Artist"), _name_words("Song Two Artist")}
-    assert has_tracks(keys, [["Song One", "Artist"], ["Song Two", "Artist"]])
-    assert not has_tracks(keys, [["Song One", "Artist"], ["Song Three", "Artist"]])
+    index = ItemIndex([_lib_item("Song One"), _lib_item("Song Two")])
+    assert has_tracks(index, [["Song One", "Artist"], ["Song Two", "Artist"]])
+    assert not has_tracks(index, [["Song One", "Artist"], ["Song Three", "Artist"]])
+
+
+def test_has_tracks_matches_a_retitled_item_by_isrc() -> None:
+    from music_scan.identity import ItemIndex
+    from music_scan.scan import has_tracks
+
+    index = ItemIndex([_lib_item("Song One (2011 Remaster)", isrc="GBUM71029604")])
+    assert has_tracks(index, [["Song One", "Artist", "sid1", "GBUM71029604", 1, 1]])
 
 
 def test_asis_skips_usenet_quarantine(tmp_path: Path) -> None:
@@ -807,7 +817,48 @@ def test_tag_album_ids_skips_tagged_and_idless_tracks() -> None:
     b.store.assert_not_called()
 
 
-def test_has_tracks_and_add_source_accept_identity_entries() -> None:
-    from music_scan.scan import _name_words, has_tracks
+def test_add_source_matches_by_id_and_records_it() -> None:
+    from music_scan.scan import add_source
 
-    assert has_tracks({_name_words("One Artist")}, [["One", "Artist", "sid1", "ISRC", 1, 1]])
+    retitled = _lib_item("Uno", spotify_ids="sid1")
+    lib = mock.MagicMock()
+    lib.items_by_source.return_value = [retitled]
+    assert add_source(lib, "later", "keep", [["One", "Artist", "sid1", None, 1, 1]]) == 1
+    assert retitled.data["sources"] == "later,keep"
+
+
+def test_regen_playlists_matches_by_id_before_words(tmp_path: Path, caplog) -> None:
+    """Two releases of a title: each playlist entry gets the item it asked for,
+    not the first one with the same words (#176)."""
+    from music_scan.scan import regen_playlists
+
+    lib_root = tmp_path / "library"
+    studio, live, remaster = lib_root / "Studio.m4a", lib_root / "Live.m4a", lib_root / "Remaster.m4a"
+    spotdl_dir = tmp_path / "spotdl"
+    spotdl_dir.mkdir()
+    (spotdl_dir / "pl.spotdl").write_text(json.dumps({"songs": [
+        {"name": "Song", "artists": ["Art"], "url": "https://open.spotify.com/track/LIVE"},
+        {"name": "Song", "artists": ["Art"], "url": "u", "song_id": "X", "isrc": "GBREM0000001"},
+        {"name": "Other", "artists": ["Art"], "url": "u2"},
+    ]}), encoding="utf-8")
+    playlists_dir = tmp_path / "playlists"
+    playlists_dir.mkdir()
+    items = [
+        _make_mock_item("Song", "Art", studio, spotify_ids="STUDIO"),
+        _make_mock_item("Song", "Art", live, spotify_url="https://open.spotify.com/track/LIVE"),
+        _make_mock_item("Song - 2011 Remaster", "Art", remaster, isrc="USX;GBREM0000001"),
+        _make_mock_item("Other", "Art", lib_root / "Other.m4a"),
+    ]
+    mock_lib = _regen_lib(spotdl_dir, playlists_dir, items)
+
+    with mock.patch("music_scan.scan.SPOTDL_DIR", spotdl_dir), \
+         mock.patch("music_scan.scan.PLAYLISTS", playlists_dir), \
+         mock.patch("music_scan.scan.LIBRARY_DB", tmp_path / "library.db"), \
+         mock.patch("music_scan.scan.MusicLibrary", return_value=mock_lib), \
+         caplog.at_level("INFO", logger="music_scan.scan"):
+        regen_playlists()
+
+    lines = (playlists_dir / "pl.m3u").read_text(encoding="utf-8").splitlines()
+    rel = lambda p: os.path.relpath(p, playlists_dir)  # noqa: E731
+    assert lines == [rel(live), rel(remaster), rel(lib_root / "Other.m4a"), rel(studio)]
+    assert "pl: 1 of 3 track(s) matched by title+artist only" in caplog.text

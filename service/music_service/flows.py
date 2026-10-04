@@ -325,16 +325,17 @@ def _album_library_hooks(lib):
     a finished download and drops the cache, since the import changed the library.
     """
     import music_fetch.albums as albums  # noqa: PLC0415
+    from music_scan.identity import ItemIndex  # noqa: PLC0415
 
-    keys: dict[str, set] = {}
+    keys: dict[str, ItemIndex] = {}
 
-    def have(playlist: str, tracks: list[list[str]]) -> bool:
+    def have(playlist: str, tracks: list[list]) -> bool:
         if playlist not in keys:
-            keys[playlist] = scan.source_track_keys(lib, playlist)
+            keys[playlist] = ItemIndex(lib.items_by_source(playlist))
         return scan.has_tracks(keys[playlist], tracks)
 
-    def fresh_have(playlist: str, tracks: list[list[str]]) -> bool:
-        return scan.has_tracks(scan.source_track_keys(lib, playlist), tracks)
+    def fresh_have(playlist: str, tracks: list[list]) -> bool:
+        return scan.has_tracks(ItemIndex(lib.items_by_source(playlist)), tracks)
 
     def import_inbox() -> None:
         # Waits for a running fetch or scan: beets' SQLite has one writer.
@@ -383,7 +384,7 @@ def album_tick_task(settings) -> None:
         )
 
     removed = [
-        ingest.RemovedTrack(title=s.get("name", ""), artist=(s.get("artists") or [""])[0], source=name)
+        ingest.RemovedTrack.from_song(s, name)
         for name, songs in result.removed_songs.items()
         for s in songs
     ]

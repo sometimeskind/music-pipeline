@@ -10,14 +10,14 @@ from __future__ import annotations
 import json
 import logging
 import os
-import re
 import shutil
 import tempfile
 import time
 from pathlib import Path
 
 from music_fetch.ingest import PendingRemovals
-from music_scan.identity import PlaylistTrack, add_to_list, split_list
+from music_scan.identity import BY_WORDS, ItemIndex, PlaylistTrack, add_to_list
+from music_scan.identity import name_words as _name_words
 from music_scan.library import MusicLibrary
 from music_scan.metrics import ScanMetrics
 from music_scan.navidrome import trigger_scan
@@ -32,15 +32,6 @@ PLAYLISTS = Path("/root/Music/playlists")
 INBOX = Path("/root/Music/inbox")
 LIBRARY = Path("/root/Music/library")
 LIBRARY_DB = Path("/root/.config/beets/library.db")
-
-
-_STOP_WORDS = frozenset({"the", "and", "for", "feat", "ft", "vs", "with", "a", "an", "of", "in", "on"})
-
-
-def _name_words(s: str) -> frozenset[str]:
-    """Normalise a track/filename string to a set of significant lowercase words."""
-    words = re.sub(r"[^\w\s]", " ", s.lower()).split()
-    return frozenset(w for w in words if len(w) > 2 and w not in _STOP_WORDS)
 
 
 def _snapshot_inbox(inbox: Path) -> list[str]:
@@ -202,23 +193,29 @@ def import_asis_from_quarantine() -> int:
     return len(asis_imported)
 
 
-def _spotdl_order(spotdl_file: Path) -> list[tuple[str, str]]:
-    """Return ordered (name, first_artist) pairs from a .spotdl file's songs list.
+def _spotdl_songs(spotdl_file: Path) -> list[dict]:
+    """Return the song entries of a .spotdl file, in playlist order.
 
     Returns [] if the file is absent, unreadable, or has no songs.
     """
     try:
-        data = json.loads(spotdl_file.read_text(encoding="utf-8"))
-        return [
-            (song.get("name", ""), (song.get("artists") or [""])[0])
-            for song in data.get("songs", [])
-        ]
+        return json.loads(spotdl_file.read_text(encoding="utf-8")).get("songs", [])
     except Exception:
         return []
 
 
+def _item_path(item) -> Path:
+    raw = item.path.decode() if isinstance(item.path, bytes) else item.path
+    return Path(raw) if Path(raw).is_absolute() else LIBRARY / raw
+
+
 def regen_playlists() -> dict[str, int]:
-    """Regenerate .m3u files for every .spotdl playlist. Returns {name: track_count}."""
+    """Regenerate .m3u files for every .spotdl playlist. Returns {name: track_count}.
+
+    Each .spotdl entry is matched to a library item by the identity ladder
+    (Spotify ID, ISRC, title+artist words); a playlist with title+artist
+    matches logs how many, so the fallback rate is visible.
+    """
     PLAYLISTS.mkdir(parents=True, exist_ok=True)
     spotdl_files = sorted(SPOTDL_DIR.glob("*.spotdl"))
     if not spotdl_files:
@@ -231,28 +228,27 @@ def regen_playlists() -> dict[str, int]:
             name = spotdl_file.stem
             m3u = PLAYLISTS / f"{name}.m3u"
 
-            items = lib.items_by_source(name)
-            # Build key → path lookup for fuzzy title+artist matching
-            by_key: dict[frozenset, Path] = {}
-            all_paths: list[Path] = []
-            for item in items:
-                raw = item.path.decode() if isinstance(item.path, bytes) else item.path
-                p = Path(raw) if Path(raw).is_absolute() else LIBRARY / raw
-                all_paths.append(p)
-                key = _name_words(f"{item.title or ''} {item.artist or item.albumartist or ''}")
-                if key and key not in by_key:
-                    by_key[key] = p
+            index = ItemIndex(lib.items_by_source(name))
+            all_paths = [_item_path(item) for item in index.items]
 
             # Emit in Spotify (.spotdl) order
             ordered: list[Path] = []
             matched: set[Path] = set()
-            for song_name, song_artist in _spotdl_order(spotdl_file):
-                key = _name_words(f"{song_name} {song_artist}")
-                if key and key in by_key:
-                    p = by_key[key]
-                    if p not in matched:
-                        ordered.append(p)
-                        matched.add(p)
+            for song in _spotdl_songs(spotdl_file):
+                item, rung = index.match_song(song)
+                if item is None:
+                    continue
+                if rung == BY_WORDS:
+                    logger.debug("  [WORDS] %s: %s matched by title+artist only", name, song.get("name", ""))
+                p = _item_path(item)
+                if p not in matched:
+                    ordered.append(p)
+                    matched.add(p)
+            if index.rungs[BY_WORDS]:
+                logger.info(
+                    "  %s: %d of %d track(s) matched by title+artist only",
+                    name, index.rungs[BY_WORDS], sum(index.rungs.values()),
+                )
 
             # Append library tracks not matched by .spotdl, alphabetically
             unmatched = sorted(p for p in all_paths if p not in matched)
@@ -263,36 +259,26 @@ def regen_playlists() -> dict[str, int]:
     return counts
 
 
-def source_track_keys(lib: MusicLibrary, source: str) -> set[frozenset]:
-    """Title+artist keys of every library track tagged with *source*, as regen_playlists matches them."""
-    return {
-        _name_words(f"{item.title or ''} {item.artist or item.albumartist or ''}")
-        for item in lib.items_by_source(source)
-    }
-
-
-def add_source(lib: MusicLibrary, have_source: str, new_source: str, tracks: list[list[str]]) -> int:
-    """Append *new_source* to the *have_source* items matching *tracks*. Returns the count tagged."""
-    wanted = {_name_words(f"{title} {artist}") for title, artist, *_ in tracks}
+def add_source(lib: MusicLibrary, have_source: str, new_source: str, tracks: list[list]) -> int:
+    """Append *new_source*, and the track's Spotify ID, to the *have_source* items
+    matching *tracks*.  Returns the count of items changed."""
+    index = ItemIndex(lib.items_by_source(have_source))
     count = 0
-    for item in lib.items_by_source(have_source):
-        if _name_words(f"{item.title or ''} {item.artist or item.albumartist or ''}") not in wanted:
+    for track in map(PlaylistTrack.from_entry, tracks):
+        item, _ = index.match_track(track)
+        if item is None:
             continue
-        sources = [p for p in (item.get("sources") or "").split(",") if p.strip()]
-        if new_source not in sources:
-            item["sources"] = ",".join(sources + [new_source])
+        changed = add_to_list(item, "sources", new_source)
+        changed = add_to_list(item, "spotify_ids", track.song_id) or changed
+        if changed:
             item.store()
             count += 1
     return count
 
 
-def has_tracks(keys: set[frozenset], tracks: list[list[str]]) -> bool:
-    """True when every (title, artist) in *tracks* is among *keys*."""
-    return all(_name_words(f"{title} {artist}") in keys for title, artist, *_ in tracks)
-
-
-def _item_words(item) -> frozenset[str]:
-    return _name_words(f"{item.title or ''} {item.artist or item.albumartist or ''}")
+def has_tracks(index: ItemIndex, tracks: list[list]) -> bool:
+    """True when every track in *tracks* matches an item in *index*."""
+    return all(index.match_track(t)[0] is not None for t in map(PlaylistTrack.from_entry, tracks))
 
 
 def tag_album_ids(lib: MusicLibrary, source: str, tracks: list[list], since: float, tracks_count: int) -> int:
@@ -305,22 +291,21 @@ def tag_album_ids(lib: MusicLibrary, source: str, tracks: list[list], since: flo
     3. title+artist words, logged so the fallback rate is visible.
     Returns the count of items tagged.
     """
-    items = lib.items_by_source(source)
+    index = ItemIndex(lib.items_by_source(source))
     fresh = [
-        i for i in items
+        i for i in index.items
         if i.get("via") == "usenet" and (i.added or 0) >= since
         and tracks_count and i.tracktotal == tracks_count
     ]
     count = 0
     for track in map(PlaylistTrack.from_entry, tracks):
-        if not track.song_id or any(track.song_id in split_list(i.get("spotify_ids")) for i in items):
+        if not track.song_id or track.song_id in index.by_id:
             continue
-        match = next((i for i in items if track.isrc and track.isrc in split_list(i.get("isrc"), ";")), None)
+        match, _ = index.match(None, track.isrc, words=False)
         if match is None and track.disc and track.track:
             match = next((i for i in fresh if (i.disc, i.track) == (track.disc, track.track)), None)
         if match is None:
-            words = _name_words(f"{track.name} {track.artist}")
-            match = next((i for i in items if words and _item_words(i) == words), None)
+            match, _ = index.match(None, None, track.name, track.artist)
             if match is not None:
                 logger.info("  [WORDS] %s: %s — %s matched by title+artist only", source, track.name, track.artist)
         if match is None:
@@ -341,7 +326,10 @@ def apply_pending_removals(pending: PendingRemovals, lib: MusicLibrary) -> int:
     )
     total = 0
     for track in pending.tracks:
-        found = lib.clear_source_tag(title=track.title, artist=track.artist, source=track.source)
+        found = lib.clear_source_tag(
+            title=track.title, artist=track.artist, source=track.source,
+            spotify_id=track.spotify_id, isrc=track.isrc,
+        )
         if not found:
             logger.warning(
                 "  WARNING: not found in beets — may need manual cleanup: %s by %s (source=%s)",

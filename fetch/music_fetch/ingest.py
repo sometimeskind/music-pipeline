@@ -33,6 +33,7 @@ logger = logging.getLogger(__name__)
 SPOTDL_DIR = Path("/root/Music/inbox/spotdl")
 FAILURES_FILE = SPOTDL_DIR.parent / ".spotdl-failures.json"
 PENDING_REMOVALS_PATH = SPOTDL_DIR.parent / ".pending-removals.json"
+SPOTIFY_TRACK_URL = "https://open.spotify.com/track/"
 COOKIE_FILE = Path("/root/.config/spotdl/cookies.txt")
 CONF_PATH = Path("/root/.config/music-pipeline/playlists.conf")
 
@@ -42,6 +43,22 @@ class RemovedTrack:
     title: str
     artist: str
     source: str
+    # Identity for matching the library item (#176); None in files queued before.
+    spotify_id: str | None = None
+    isrc: str | None = None
+
+    @classmethod
+    def from_song(cls, song: dict, source: str) -> "RemovedTrack":
+        """From a .spotdl song entry."""
+        url = song.get("url") or ""
+        from_url = url.removeprefix(SPOTIFY_TRACK_URL).split("?")[0] if url.startswith(SPOTIFY_TRACK_URL) else None
+        return cls(
+            title=song.get("name", ""),
+            artist=(song.get("artists") or [""])[0],
+            source=source,
+            spotify_id=song.get("song_id") or from_url or None,
+            isrc=song.get("isrc"),
+        )
 
 
 @dataclasses.dataclass
@@ -184,11 +201,9 @@ def _collect_removals(
             logger.warning("  Could not find snapshot entry for removed URL: %s", url)
             continue
 
-        title = entry.get("name", "")
-        artists = entry.get("artists", [])
-        artist = artists[0] if artists else ""
-        logger.info("  Scheduling unlink: %s — %s", title, artist)
-        pending.append(RemovedTrack(title=title, artist=artist, source=playlist_name))
+        track = RemovedTrack.from_song(entry, playlist_name)
+        logger.info("  Scheduling unlink: %s — %s", track.title, track.artist)
+        pending.append(track)
 
 
 def sync_playlists(
