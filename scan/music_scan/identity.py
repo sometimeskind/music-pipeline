@@ -9,6 +9,8 @@ recording joined by ``;``.
 
 from __future__ import annotations
 
+from typing import NamedTuple
+
 SPOTIFY_TRACK_URL = "https://open.spotify.com/track/"
 
 
@@ -33,3 +35,22 @@ def add_to_list(item, field: str, value: str | None) -> bool:
         return False
     item[field] = ",".join(entries + [value])
     return True
+
+
+class PlaylistTrack(NamedTuple):
+    """One entry of an album record's per-playlist track list in .albums.json.
+
+    Stored as a list: ``[name, artist, song_id, isrc, disc, track]``.  Records
+    written before #176 hold only ``[name, artist]``.
+    """
+
+    name: str
+    artist: str
+    song_id: str | None = None
+    isrc: str | None = None
+    disc: int | None = None
+    track: int | None = None
+
+    @classmethod
+    def from_entry(cls, entry: list) -> "PlaylistTrack":
+        return cls(*entry[:6])

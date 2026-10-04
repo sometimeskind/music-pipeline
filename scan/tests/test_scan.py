@@ -742,3 +742,72 @@ def test_count_lossless_items_returns_none_when_library_unreadable() -> None:
 
     with mock.patch("music_scan.scan.MusicLibrary", side_effect=OSError("locked")):
         assert count_lossless_items() is None
+
+
+# ---------------------------------------------------------------------------
+# tag_album_ids (#176)
+# ---------------------------------------------------------------------------
+
+
+def _lib_item(title, *, isrc="", spotify_ids="", via="usenet", added=100.0, disc=1, track=1, tracktotal=2):
+    it = mock.MagicMock(title=title, artist="Artist", albumartist="Artist", added=added,
+                        disc=disc, track=track, tracktotal=tracktotal)
+    data = {"isrc": isrc, "spotify_ids": spotify_ids, "via": via, "sources": "later"}
+    it.get.side_effect = lambda k, d=None: data.get(k, d)
+    it.__setitem__.side_effect = lambda k, v: data.__setitem__(k, v)
+    it.data = data
+    return it
+
+
+def _tag(items, tracks, since=50.0, tracks_count=2):
+    from music_scan.scan import tag_album_ids
+
+    lib = mock.MagicMock()
+    lib.items_by_source.return_value = items
+    return tag_album_ids(lib, "later", tracks, since, tracks_count)
+
+
+def test_tag_album_ids_prefers_isrc_over_track_number() -> None:
+    # Retitled by MusicBrainz and at the other track number: only the ISRC links it.
+    a = _lib_item("Uno", isrc="USX1;GBUM71029604", track=2)
+    b = _lib_item("Dos", track=1)
+    assert _tag([a, b], [["One", "Artist", "sid1", "GBUM71029604", 1, 1]]) == 1
+    assert a.data["spotify_ids"] == "sid1"
+    assert b.data["spotify_ids"] == ""
+
+
+def test_tag_album_ids_falls_back_to_disc_and_track() -> None:
+    a = _lib_item("Uno", track=1)
+    b = _lib_item("Dos", track=2)
+    assert _tag([a, b], [["One", "Artist", "sid1", None, 1, 1], ["Two", "Artist", "sid2", None, 1, 2]]) == 2
+    assert (a.data["spotify_ids"], b.data["spotify_ids"]) == ("sid1", "sid2")
+
+
+def test_tag_album_ids_track_number_needs_same_edition_and_this_import() -> None:
+    deluxe = _lib_item("Uno", track=1, tracktotal=18)
+    older = _lib_item("Dos", track=1, added=10.0)
+    spotdl = _lib_item("Tres", track=1, via="spotdl")
+    assert _tag([deluxe, older, spotdl], [["One", "Artist", "sid1", None, 1, 1]]) == 0
+
+
+def test_tag_album_ids_words_fallback_is_logged(caplog) -> None:
+    a = _lib_item("One", track=9, tracktotal=0)
+    with caplog.at_level("INFO", logger="music_scan.scan"):
+        assert _tag([a], [["One", "Artist", "sid1", None, 1, 1]]) == 1
+    assert a.data["spotify_ids"] == "sid1"
+    assert "[WORDS]" in caplog.text
+
+
+def test_tag_album_ids_skips_tagged_and_idless_tracks() -> None:
+    a = _lib_item("One", spotify_ids="sid1")
+    b = _lib_item("Two", track=2)
+    # sid1 already recorded; an old [name, artist] entry has no ID to record.
+    assert _tag([a, b], [["One", "Artist", "sid1", None, 1, 1], ["Two", "Artist"]]) == 0
+    a.store.assert_not_called()
+    b.store.assert_not_called()
+
+
+def test_has_tracks_and_add_source_accept_identity_entries() -> None:
+    from music_scan.scan import _name_words, has_tracks
+
+    assert has_tracks({_name_words("One Artist")}, [["One", "Artist", "sid1", "ISRC", 1, 1]])

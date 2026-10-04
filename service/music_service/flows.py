@@ -344,8 +344,11 @@ def _album_library_hooks(lib):
     def add_source(have_source: str, new_source: str, tracks: list[list[str]]) -> None:
         scan.add_source(lib, have_source, new_source, tracks)
 
+    def tag_ids(playlist: str, tracks: list[list], since: float, tracks_count: int) -> None:
+        scan.tag_album_ids(lib, playlist, tracks, since, tracks_count)
+
     def complete(state, completion) -> str | None:
-        status = albums.complete(state, completion, import_inbox, fresh_have, add_source)
+        status = albums.complete(state, completion, import_inbox, fresh_have, add_source, tag_ids)
         keys.clear()
         return status
 

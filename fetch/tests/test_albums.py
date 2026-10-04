@@ -84,7 +84,13 @@ def never_have(playlist, tracks) -> bool:
 def test_reduce_to_albums_groups_in_playlist_order() -> None:
     result = reduce_to_albums([song("One", "B"), song("X", "A", album="Other"), song("Two", "B")])
     assert list(result) == ["B", "A"]
-    assert result["B"]["tracks"] == [["One", "Artist"], ["Two", "Artist"]]
+    assert [t[:2] for t in result["B"]["tracks"]] == [["One", "Artist"], ["Two", "Artist"]]
+
+
+def test_reduce_to_albums_keeps_track_identity() -> None:
+    """song_id, isrc and disc/track let the completion tag usenet items (#176)."""
+    s = song("One", "B") | {"song_id": "sid1", "isrc": "GBUM71029604", "disc_number": 1, "track_number": 3}
+    assert reduce_to_albums([s])["B"]["tracks"] == [["One", "Artist", "sid1", "GBUM71029604", 1, 3]]
 
 
 def test_refresh_skips_unchanged_snapshot(tmp_path: Path) -> None:
@@ -308,10 +314,11 @@ def grabbed_state(playlists=None) -> State:
     return state
 
 
-def run_complete(state, completion, roots, have_result=True, imported=None):
+def run_complete(state, completion, roots, have_result=True, imported=None, tagged=None):
     complete_root, inbox, quarantine = roots
     seen = imported if imported is not None else []
     added = []
+    tagged = tagged if tagged is not None else []
 
     def import_inbox():
         seen.extend(p.relative_to(inbox).as_posix() for p in inbox.rglob("*.flac"))
@@ -320,6 +327,7 @@ def run_complete(state, completion, roots, have_result=True, imported=None):
         state, completion, import_inbox,
         have=lambda pl, tracks: have_result,
         add_source=lambda have_src, new_src, tracks: added.append((have_src, new_src)),
+        tag_ids=lambda pl, tracks, since, count: tagged.append((pl, count)),
         complete_root=complete_root, inbox_root=inbox, quarantine_root=quarantine,
     )
     return status, seen, added
@@ -405,3 +413,26 @@ def test_tick_recovers_lost_triggers_only_when_on(tmp_path: Path) -> None:
         tick([], FakeSpotify("s", []), prowlarr, sab, never_have, tmp_path, Settings(mode=mode),
              tmp_path / "state.json", on_completion=lambda st, c: calls.append((mode, c.nzo_id)))
     assert calls == [("on", "nzo1")]
+
+
+def test_complete_tags_ids_for_every_playlist(roots) -> None:
+    tracks = [["One", "Artist", "sid1", None, 1, 1]]
+    state = grabbed_state(playlists={"later": tracks, "keep": tracks})
+    tagged = []
+    run_complete(state, albums.Completion("nzo1", True, "album/Artist-Album-FLAC"), roots, tagged=tagged)
+    assert tagged == [("later", 2), ("keep", 2)]
+
+
+def test_complete_tags_ids_even_when_the_album_is_incomplete(roots) -> None:
+    """Tracks that did import keep their IDs; the next release only fills gaps."""
+    tagged = []
+    run_complete(state := grabbed_state(), albums.Completion("nzo1", True, "album/Artist-Album-FLAC"), roots,
+                 have_result=False, tagged=tagged)
+    assert tagged == [("later", 2)]
+    assert state.albums["a0"]["status"] == albums.WANTED
+
+
+def test_complete_failed_download_tags_nothing(roots) -> None:
+    tagged = []
+    run_complete(grabbed_state(), albums.Completion("nzo1", False, "album/Artist-Album-FLAC"), roots, tagged=tagged)
+    assert tagged == []
