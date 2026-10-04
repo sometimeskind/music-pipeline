@@ -782,3 +782,23 @@ def test_reconcile_album_sentinel_follows_config(tmp_path: Path) -> None:
         conf.write_text("later https://open.spotify.com/playlist/AAA\n")
         reconcile_playlists()
         assert not (spotdl_dir / "later.album").exists()
+
+
+def test_removed_track_from_song_carries_identity() -> None:
+    from music_fetch.ingest import RemovedTrack
+
+    song = {"name": "Song", "artists": ["A", "B"], "url": "https://open.spotify.com/track/SID?si=x", "isrc": "GBX1"}
+    assert RemovedTrack.from_song(song, "pl") == RemovedTrack("Song", "A", "pl", spotify_id="SID", isrc="GBX1")
+    assert RemovedTrack.from_song({"name": "x", "song_id": "S2"}, "pl").spotify_id == "S2"
+
+
+def test_pending_removals_queued_before_176_still_load(tmp_path) -> None:
+    from unittest.mock import patch
+
+    from music_fetch import ingest
+
+    path = tmp_path / "pending.json"
+    path.write_text('{"tracks": [{"title": "T", "artist": "A", "source": "pl"}], "remove_sources": []}')
+    with patch.object(ingest, "PENDING_REMOVALS_PATH", path):
+        pending = ingest.load_and_clear_pending_removals()
+    assert pending.tracks == [ingest.RemovedTrack("T", "A", "pl")]
