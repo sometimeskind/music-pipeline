@@ -118,6 +118,49 @@ def testapply_pending_removals_clears_source_tags(tmp_path: Path) -> None:
     )
 
 
+def test_removed_spotdl_entry_clears_that_items_source(tmp_path: Path) -> None:
+    """End to end (#169): a track dropped from the .spotdl snapshot unlinks the item
+    with its Spotify ID, not the same-titled one beside it."""
+    from beets.library import Item
+
+    from music_fetch import ingest
+    from music_fetch.metrics import IngestMetrics
+    from music_fetch.spotdl_ops import SyncResult
+    from music_scan.library import MusicLibrary
+    from music_scan.scan import apply_pending_removals
+
+    spotdl_dir = tmp_path / "spotdl"
+    spotdl_dir.mkdir()
+    live_url = "https://open.spotify.com/track/LIVE"
+    (spotdl_dir / "a.spotdl").write_text(json.dumps({
+        "type": "sync",
+        "query": ["https://open.spotify.com/playlist/X"],
+        "songs": [
+            {"url": "https://open.spotify.com/track/STUDIO", "name": "Song", "artists": ["Artist"]},
+            {"url": live_url, "name": "Song", "artists": ["Artist"]},
+        ],
+    }), encoding="utf-8")
+
+    with mock.patch.object(ingest, "SPOTDL_DIR", spotdl_dir), \
+         mock.patch.object(ingest, "CONF_PATH", tmp_path / "missing.conf"), \
+         mock.patch.object(ingest, "COOKIE_FILE", tmp_path / "cookies.txt"), \
+         mock.patch.object(ingest, "FAILURES_FILE", tmp_path / ".failures.json"), \
+         mock.patch("music_fetch.ingest.sync_playlist", return_value=SyncResult({live_url}, 0, 0, 0, 0, {})), \
+         mock.patch("music_fetch.ingest.time.sleep"):
+        pending = ingest.sync_playlists([], IngestMetrics())
+
+    lib = MusicLibrary(tmp_path / "library.db", tmp_path)
+    with lib:
+        items = {}
+        for sid in ("STUDIO", "LIVE"):
+            items[sid] = Item(title="Song", artist="Artist", sources="a", spotify_ids=sid)
+            lib._lib.add(items[sid])
+
+        assert apply_pending_removals(pending, lib) == 1
+        assert lib._lib.get_item(items["LIVE"].id).get("sources") == ""
+        assert lib._lib.get_item(items["STUDIO"].id).get("sources") == "a"
+
+
 def testapply_pending_removals_remove_sources(tmp_path: Path) -> None:
     """Source removals call items_by_source, clear tags, and delete the .m3u."""
     from music_scan.scan import apply_pending_removals

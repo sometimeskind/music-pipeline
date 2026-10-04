@@ -180,6 +180,13 @@ def reconcile_playlists() -> list[str]:
     return remove_sources
 
 
+def _snapshot_songs(sync_data: object) -> list[dict]:
+    """The song entries of a parsed .spotdl file ({"type", "query", "songs"})."""
+    if not isinstance(sync_data, dict):
+        return []
+    return sync_data.get("songs") or []
+
+
 def _collect_removals(
     pending: list[RemovedTrack],
     removed_urls: set[str],
@@ -306,7 +313,7 @@ def sync_playlists(
             metrics.playlists_total += 1
             continue
 
-        old_songs: list[dict] = sync_data if isinstance(sync_data, list) else []
+        old_songs = _snapshot_songs(sync_data)
 
         logger.info("==> Syncing playlist: %s", name)
         metrics.playlists_total += 1
