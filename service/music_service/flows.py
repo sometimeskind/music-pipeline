@@ -14,6 +14,7 @@ import music_scan.reconcile as reconcile
 import music_scan.scan as scan
 from music_fetch.config import load_playlists
 from music_fetch.metrics import IngestMetrics
+from music_scan.metrics import ScanMetrics
 
 # Prefect runs each flow run in a `python -m prefect.engine` subprocess where its own
 # logging dictConfig owns the root logger (level WARNING). music_fetch / music_scan
@@ -149,13 +150,13 @@ def save_removals_task(pending) -> None:
 
 
 @task(name="apply-removals", log_prints=True)
-def apply_removals_task() -> None:
+def apply_removals_task() -> int:
     """Clear beets source tags for tracks removed from Spotify playlists."""
     logger = get_run_logger()
     pending = ingest.load_and_clear_pending_removals()
     if pending is None:
         logger.info("No pending removals")
-        return
+        return 0
     logger.info(
         "Applying removals: %d track(s), %d full-source removal(s)",
         len(pending.tracks),
@@ -165,6 +166,7 @@ def apply_removals_task() -> None:
     with MusicLibrary(scan.LIBRARY_DB) as lib:
         count = scan.apply_pending_removals(pending, lib)
     logger.info("Cleared %d beets entry/entries", count)
+    return count
 
 
 @task(name="beet-import", log_prints=True)
@@ -182,7 +184,7 @@ def beet_import_task() -> list:
 
 
 @task(name="quarantine-leftovers", log_prints=True)
-def quarantine_task() -> None:
+def quarantine_task() -> int:
     """Move unmatched inbox audio files to quarantine for manual review."""
     logger = get_run_logger()
     moved = scan.quarantine_inbox_leftovers()
@@ -190,14 +192,16 @@ def quarantine_task() -> None:
         logger.info("Quarantined %d unmatched file(s) for manual review", moved)
     else:
         logger.info("No unmatched files left in inbox")
+    return moved
 
 
 @task(name="asis-import", log_prints=True)
-def asis_import_task() -> None:
+def asis_import_task() -> int:
     """Import quarantine files that already have complete tags (--asis)."""
     logger = get_run_logger()
     count = scan.import_asis_from_quarantine()
     logger.info("Asis import: %d track(s) imported from quarantine", count)
+    return count
 
 
 @task(name="beet-update", log_prints=True)
@@ -249,14 +253,37 @@ def reconcile_task() -> None:
 
 
 def _run_scan_tasks() -> None:
-    apply_removals_task()
-    beet_import_task()
-    quarantine_task()
-    asis_import_task()
-    beet_update_task()
-    regen_playlists_task()
-    navidrome_task()
-    reconcile_task()
+    """Every scan pushes the music_scan job, failed or not, so its alerts see it."""
+    metrics = ScanMetrics()
+    start = time.monotonic()
+    try:
+        metrics.tracks_removed = apply_removals_task()
+        imported = beet_import_task()
+        metrics.quarantined_tracks = quarantine_task()
+        metrics.tracks_imported = len(imported) + asis_import_task()
+        beet_update_task()
+        regen_playlists_task()
+        try:
+            navidrome_task()
+        except Exception:
+            metrics.failure_reason = "navidrome_trigger_failed"
+            raise
+        reconcile_task()
+    except Exception:
+        metrics.success = False
+        if not metrics.failure_reason:
+            metrics.failure_reason = "unexpected_error"
+        raise
+    finally:
+        metrics.duration_seconds = int(time.monotonic() - start)
+        metrics.lossless_items = scan.count_lossless_items()
+        metrics.push()
+
+
+# How long a flow that skips when busy waits for its lock. Not 0: Prefect wraps
+# the whole acquire request in this timeout, so 0 times out before the server
+# answers, even on a free limit (#174).
+SKIP_IF_BUSY_SECONDS = 5
 
 
 # Flow names are prefixed because the document-pipeline service serves its
@@ -280,7 +307,7 @@ def scan_flow() -> None:
     """Scan: apply any pending removals, import inbox, regenerate playlists."""
     logger = get_run_logger()
     try:
-        with concurrency("pipeline", occupy=1, timeout_seconds=0):
+        with concurrency("pipeline", occupy=1, timeout_seconds=SKIP_IF_BUSY_SECONDS):
             _run_scan_tasks()
     except TimeoutError:
         logger.info("Scan skipped — pipeline busy (fetch or scan already running)")
@@ -373,7 +400,7 @@ def albums_flow() -> None:
         logger.info("Album mode is off (ALBUM_MODE)")
         return
     try:
-        with concurrency("albums", occupy=1, timeout_seconds=0):
+        with concurrency("albums", occupy=1, timeout_seconds=SKIP_IF_BUSY_SECONDS):
             album_tick_task(settings)
     except TimeoutError:
         logger.info("Album tick skipped — another album run holds the lock")

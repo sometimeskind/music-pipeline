@@ -112,6 +112,18 @@ def _count_quarantine() -> int:
     return sum(1 for _ in QUARANTINE.rglob("*") if _.is_file())
 
 
+def count_lossless_items() -> int | None:
+    """Lossless items in the library, or None if the library can't be read.
+
+    Feeds the FLAC guard: the count is pushed even when the scan fails."""
+    try:
+        with MusicLibrary(LIBRARY_DB) as lib:
+            return lib.lossless_item_count()
+    except Exception:
+        logger.warning("Could not count lossless library items", exc_info=True)
+        return None
+
+
 def quarantine_inbox_leftovers() -> int:
     """Move any audio files still anywhere in the inbox tree to quarantine.
 
@@ -379,4 +391,5 @@ def run(pending: PendingRemovals | None = None) -> None:
             raise
     finally:
         metrics.duration_seconds = int(time.monotonic() - start)
+        metrics.lossless_items = count_lossless_items()
         metrics.push()

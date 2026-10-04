@@ -84,3 +84,21 @@ def test_scan_metrics_track_counters_default_zero(monkeypatch: pytest.MonkeyPatc
     body = pushed[0]
     assert "music_scan_tracks_imported_total 0" in body
     assert "music_scan_tracks_removed_total 0" in body
+
+
+def test_scan_metrics_lossless_items(monkeypatch: pytest.MonkeyPatch) -> None:
+    pushed: list[str] = []
+    monkeypatch.setattr("music_scan.metrics._push", lambda body, job: pushed.append(body))
+
+    ScanMetrics(lossless_items=2).push()
+
+    assert "music_library_lossless_items 2" in pushed[0]
+
+
+def test_scan_metrics_omits_lossless_when_unknown(monkeypatch: pytest.MonkeyPatch) -> None:
+    pushed: list[str] = []
+    monkeypatch.setattr("music_scan.metrics._push", lambda body, job: pushed.append(body))
+
+    ScanMetrics().push()
+
+    assert "music_library_lossless_items" not in pushed[0]

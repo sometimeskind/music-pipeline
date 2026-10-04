@@ -239,3 +239,107 @@ def test_scan_flow_skips_when_pipeline_busy():
         mock_concurrency.return_value.__exit__.return_value = False
         scan_flow()
         mock_ingest.load_and_clear_pending_removals.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# Scan metrics (music-pipeline#173)
+# ---------------------------------------------------------------------------
+
+
+def _scan_mocks(mock_scan, mock_ingest):
+    mock_ingest.load_and_clear_pending_removals.return_value = None
+    mock_scan.run_inbox_import.return_value = [("A", "B"), ("C", "D")]
+    mock_scan.quarantine_inbox_leftovers.return_value = 1
+    mock_scan.import_asis_from_quarantine.return_value = 3
+    mock_scan.regen_playlists.return_value = {}
+    mock_scan.count_lossless_items.return_value = 0
+
+
+def test_scan_pushes_metrics_on_success():
+    from music_service.flows import _run_scan_tasks
+    pushed: list = []
+
+    with patch("music_service.flows.ingest") as mock_ingest, \
+         patch("music_service.flows.scan") as mock_scan, \
+         patch("music_service.flows.reconcile") as mock_reconcile, \
+         patch("music_service.flows.concurrency"), \
+         patch("music_scan.process.run_beet_update"), \
+         patch("music_scan.navidrome.trigger_scan"), \
+         patch("music_scan.metrics.ScanMetrics.push", autospec=True, side_effect=pushed.append):
+        _scan_mocks(mock_scan, mock_ingest)
+        mock_reconcile.reconcile_all.return_value = 0
+        _run_scan_tasks()
+
+    (m,) = pushed
+    assert m.success
+    assert m.tracks_imported == 5
+    assert m.quarantined_tracks == 1
+    assert m.lossless_items == 0
+
+
+def test_scan_pushes_metrics_on_failure():
+    from music_service.flows import _run_scan_tasks
+    pushed: list = []
+
+    with patch("music_service.flows.ingest") as mock_ingest, \
+         patch("music_service.flows.scan") as mock_scan, \
+         patch("music_service.flows.concurrency"), \
+         patch("music_scan.metrics.ScanMetrics.push", autospec=True, side_effect=pushed.append):
+        _scan_mocks(mock_scan, mock_ingest)
+        mock_scan.count_lossless_items.return_value = 4
+        mock_scan.run_inbox_import.side_effect = RuntimeError("beet crashed")
+        with pytest.raises(Exception):
+            _run_scan_tasks()
+
+    (m,) = pushed
+    assert not m.success
+    assert m.failure_reason == "unexpected_error"
+    assert m.lossless_items == 4
+
+
+def test_scan_reports_navidrome_failure_reason():
+    from music_service.flows import _run_scan_tasks
+    pushed: list = []
+
+    with patch("music_service.flows.ingest") as mock_ingest, \
+         patch("music_service.flows.scan") as mock_scan, \
+         patch("music_service.flows.concurrency"), \
+         patch("music_scan.process.run_beet_update"), \
+         patch("music_scan.navidrome.trigger_scan", side_effect=RuntimeError("down")), \
+         patch("music_scan.metrics.ScanMetrics.push", autospec=True, side_effect=pushed.append):
+        _scan_mocks(mock_scan, mock_ingest)
+        with pytest.raises(Exception):
+            _run_scan_tasks()
+
+    (m,) = pushed
+    assert m.failure_reason == "navidrome_trigger_failed"
+
+
+# ---------------------------------------------------------------------------
+# Skip-if-busy lock against a real Prefect server (#174)
+# ---------------------------------------------------------------------------
+
+
+def _create_limit(name: str) -> None:
+    from prefect.client.orchestration import get_client
+    from prefect.client.schemas.actions import GlobalConcurrencyLimitCreate
+    with get_client(sync_client=True) as client:
+        client.create_global_concurrency_limit(GlobalConcurrencyLimitCreate(name=name, limit=1))
+
+
+def test_skip_if_busy_acquires_a_free_limit():
+    from prefect.concurrency.sync import concurrency
+    from music_service.flows import SKIP_IF_BUSY_SECONDS
+    _create_limit("skip-if-busy-free")
+    with concurrency("skip-if-busy-free", occupy=1, timeout_seconds=SKIP_IF_BUSY_SECONDS):
+        pass
+
+
+def test_skip_if_busy_times_out_on_a_held_limit():
+    from prefect.concurrency.sync import concurrency
+    from music_service.flows import SKIP_IF_BUSY_SECONDS
+    _create_limit("skip-if-busy-held")
+    with concurrency("skip-if-busy-held", occupy=1):
+        with pytest.raises(TimeoutError):
+            with concurrency("skip-if-busy-held", occupy=1, timeout_seconds=SKIP_IF_BUSY_SECONDS):
+                pass

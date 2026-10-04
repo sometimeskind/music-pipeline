@@ -39,6 +39,7 @@ class ScanMetrics:
     tracks_imported: int = 0
     tracks_removed: int = 0
     failure_reason: str = ""
+    lossless_items: int | None = None
 
     def push(self) -> None:
         lines = [
@@ -48,6 +49,8 @@ class ScanMetrics:
             _gauge("music_scan_tracks_imported_total", self.tracks_imported),
             _gauge("music_scan_tracks_removed_total", self.tracks_removed),
         ]
+        if self.lossless_items is not None:
+            lines.append(_gauge("music_library_lossless_items", self.lossless_items))
         if not self.success and self.failure_reason:
             lines.append(
                 _gauge("music_scan_last_failure_reason", 1, {"reason": self.failure_reason})
