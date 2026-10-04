@@ -14,12 +14,13 @@ class PlaylistConfig:
     name: str
     url: str
     nosync: bool = False
+    album: bool = False
 
 
 def load_playlists(path: Path = DEFAULT_CONF) -> list[PlaylistConfig]:
     """Parse playlists.conf and return a list of PlaylistConfig entries.
 
-    Format: one entry per line — ``name  spotify-url  [nosync]``
+    Format: one entry per line — ``name  spotify-url  [nosync|album]``
     Lines starting with # and blank lines are ignored.
     """
     playlists: list[PlaylistConfig] = []
@@ -35,7 +36,8 @@ def load_playlists(path: Path = DEFAULT_CONF) -> list[PlaylistConfig]:
             PlaylistConfig(
                 name=parts[0],
                 url=parts[1],
-                nosync=len(parts) >= 3 and parts[2] == "nosync",
+                nosync="nosync" in parts[2:],
+                album="album" in parts[2:],
             )
         )
     names = [pl.name for pl in playlists]

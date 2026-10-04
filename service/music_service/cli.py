@@ -47,7 +47,7 @@ def main() -> None:
 
     from music_service.api import create_app
     from music_service.debounce import Debouncer
-    from music_service.flows import fetch_and_scan_flow, scan_flow
+    from music_service.flows import albums_flow, fetch_and_scan_flow, scan_flow
     from music_service.prefect_client import ensure_concurrency_limits, trigger_scan
     import waitress
 
@@ -72,12 +72,17 @@ def main() -> None:
         cron=fetch_cron,
     )
     scan_deployment = scan_flow.to_deployment(name="music-scan")
+    # Album mode polls Spotify snapshot ids; the flow is a no-op while ALBUM_MODE=off.
+    albums_deployment = albums_flow.to_deployment(
+        name="music-albums",
+        interval=int(os.environ.get("ALBUM_POLL_SECONDS", "") or 1800),
+    )
 
     ensure_concurrency_limits()
 
     logger.info("Starting Prefect runner (FETCH_CRON=%s)", fetch_cron)
     try:
-        prefect_serve(fetch_deployment, scan_deployment)
+        prefect_serve(fetch_deployment, scan_deployment, albums_deployment)
     finally:
         debouncer.cancel()
         observer.stop()

@@ -245,6 +245,19 @@ def regen_playlists() -> dict[str, int]:
     return counts
 
 
+def source_track_keys(lib: MusicLibrary, source: str) -> set[frozenset]:
+    """Title+artist keys of every library track tagged with *source*, as regen_playlists matches them."""
+    return {
+        _name_words(f"{item.title or ''} {item.artist or item.albumartist or ''}")
+        for item in lib.items_by_source(source)
+    }
+
+
+def has_tracks(keys: set[frozenset], tracks: list[list[str]]) -> bool:
+    """True when every (title, artist) in *tracks* is among *keys*."""
+    return all(_name_words(f"{title} {artist}") in keys for title, artist in tracks)
+
+
 def apply_pending_removals(pending: PendingRemovals, lib: MusicLibrary) -> int:
     """Clear beets source tags for tracks and playlists in *pending*. Returns entry count."""
     logger.info(
