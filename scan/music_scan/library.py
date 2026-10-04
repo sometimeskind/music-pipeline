@@ -44,6 +44,9 @@ class MusicLibrary:
         """All items whose source flexible-attribute matches *source*."""
         return list(self._lib.items(f"sources:{source}"))
 
+    def all_items(self) -> list["Item"]:
+        return list(self._lib.items())
+
     def item_count(self) -> int:
         """Return the total number of items in the library."""
         return sum(1 for _ in self._lib.items())

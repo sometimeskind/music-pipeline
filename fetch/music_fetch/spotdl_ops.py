@@ -437,6 +437,19 @@ def sync_playlist(
     )
 
 
+def download_song(song: dict, output_dir: Path, cookie_file: Path) -> Path | None:
+    """Download one track from its .spotdl song entry into *output_dir*.
+
+    The entry already holds the metadata, so this makes no Spotify calls.
+    Returns the file's path, or None when the download failed.
+    """
+    from spotdl.types.song import Song  # noqa: PLC0415
+
+    spotdl_obj = _make_spotdl(_make_downloader_settings(cookie_file=cookie_file, output_dir=output_dir))
+    [(_, path)] = spotdl_obj.download_songs([Song.from_dict(song)])
+    return path
+
+
 def find_track_in_snapshot(snapshot: list[dict], url: str) -> dict | None:
     """Return the first song entry in a .spotdl snapshot that matches *url*."""
     return next((t for t in snapshot if t.get("url") == url), None)
