@@ -284,18 +284,27 @@ def sync_playlist(
 
     Returns a :class:`SyncResult` (see its docstring for the per-field meaning).
 
+    The playlist is read from its item pages only (get_simple_songs, one call per
+    100 tracks).  Spotdl.search() would also re-fetch every track (track, artist and
+    album calls) on every run (#183).  spotdl's downloader still re-fetches each song
+    it downloads, since the page data lacks genres, so only new tracks cost per-track
+    calls.  Known tracks keep their snapshot entry from when they were downloaded.
+
     Note on ordering: when *track_limit* is set, the batch is taken from the front of
-    the list returned by spotdl.search(), which for Spotify playlists is typically
-    playlist order (oldest-added first for Liked Songs).  This means the same leading
-    batch is retried each session until fully downloaded, then the next batch follows.
+    the playlist, in playlist order (oldest-added first for Liked Songs).  This means
+    the same leading batch is retried each session until fully downloaded, then the
+    next batch follows.
     """
+    from spotdl.utils.search import get_simple_songs  # noqa: PLC0415
+
     with open(spotdl_file, encoding="utf-8") as fh:
         sync_data = json.load(fh)
 
     if sync_data.get("type") != "sync":
         raise ValueError(f"Not a valid spotdl sync file: {spotdl_file}")
 
-    old_urls: set[str] = {s["url"] for s in sync_data.get("songs", [])}
+    old_entries: dict[str, dict] = {s["url"]: s for s in sync_data.get("songs", [])}
+    old_urls: set[str] = set(old_entries)
     query: list[str] = sync_data["query"]
 
     spotdl_obj = _make_spotdl(
@@ -308,7 +317,7 @@ def sync_playlist(
 
     # Fetch current Spotify playlist state.
     logger.info("Fetching current Spotify state for %s", spotdl_file.stem)
-    new_songs = spotdl_obj.search(query)
+    new_songs = get_simple_songs(query)
     new_urls: set[str] = {s.url for s in new_songs}
 
     removed_urls = old_urls - new_urls
@@ -412,15 +421,22 @@ def sync_playlist(
     # Only persist songs that were actually downloaded (path is not None).
     # Songs where spotdl returned None failed silently — exclude them from the snapshot
     # so they are retried as 'truly_new' on the next run.
-    downloaded_urls = {song.url for song, path in results if path is not None}
-    songs_to_write = [s for s in new_songs if s.url in old_urls or s.url in downloaded_urls]
+    # Downloaded songs carry the full metadata spotdl fetched for them; known tracks keep
+    # the entry they were downloaded with.  Written in playlist order.
+    downloaded = {song.url: song.json for song, path in results if path is not None}
+    downloaded_urls = set(downloaded)
+    songs_to_write = [
+        old_entries[s.url] if s.url in old_entries else downloaded[s.url]
+        for s in new_songs
+        if s.url in old_entries or s.url in downloaded
+    ]
 
     with open(spotdl_file, "w", encoding="utf-8") as fh:
         json.dump(
             {
                 "type": "sync",
                 "query": query,
-                "songs": [s.json for s in songs_to_write],
+                "songs": songs_to_write,
             },
             fh,
             indent=4,
