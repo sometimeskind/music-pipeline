@@ -118,7 +118,12 @@ def reduce_to_albums(songs: list[dict]) -> dict[str, dict]:
             "tracks_count": song.get("tracks_count") or 0,
             "tracks": [],
         })
-        album["tracks"].append([song.get("name", ""), (song.get("artists") or [""])[0]])
+        # [name, artist, song_id, isrc, disc, track]: the IDs let the completion
+        # tag the imported items with the entries they satisfy (#176).
+        album["tracks"].append([
+            song.get("name", ""), (song.get("artists") or [""])[0],
+            song.get("song_id"), song.get("isrc"), song.get("disc_number"), song.get("track_number"),
+        ])
     return albums
 
 
@@ -430,6 +435,7 @@ def complete(
     import_inbox: Callable[[], None],
     have: Callable[[str, list[list[str]]], bool],
     add_source: Callable[[str, str, list[list[str]]], None],
+    tag_ids: Callable[[str, list[list], float, int], None],
     complete_root: Path = USENET_COMPLETE,
     inbox_root: Path = USENET_INBOX,
     quarantine_root: Path = USENET_QUARANTINE,
@@ -443,6 +449,10 @@ def complete(
     track, or the download failing, blocklists the release.  The next tick, or
     the caller's top-up, tries the next one.  Tracks the library already had are
     skipped as duplicates by beets, so a second release only fills the gaps.
+
+    Usenet files carry no Spotify IDs, so after the import *tag_ids* maps each
+    playlist's tracks onto the library items and records their Spotify IDs
+    (#176), also when the album didn't import completely.
     """
     found = find_by_nzo(state, completion.nzo_id)
     if found is None:
@@ -463,6 +473,7 @@ def complete(
         shutil.rmtree(dest, ignore_errors=True)
         shutil.move(str(source), dest)
         logger.info("[IMPT] %s: importing %s", label, job_name)
+        started = time.time()
         try:
             import_inbox()
         finally:
@@ -476,6 +487,8 @@ def complete(
                 add_source(first, other, record["playlists"][other])
         else:
             reason = "beets did not import every track (quarantined or unmatched)"
+        for playlist in playlists:
+            tag_ids(playlist, record["playlists"][playlist], started, record.get("tracks_count") or 0)
     elif completion.ok:
         reason = f"completed job dir not found: {completion.path!r}"
 

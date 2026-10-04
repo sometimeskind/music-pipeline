@@ -17,6 +17,7 @@ import time
 from pathlib import Path
 
 from music_fetch.ingest import PendingRemovals
+from music_scan.identity import PlaylistTrack, add_to_list, split_list
 from music_scan.library import MusicLibrary
 from music_scan.metrics import ScanMetrics
 from music_scan.navidrome import trigger_scan
@@ -272,7 +273,7 @@ def source_track_keys(lib: MusicLibrary, source: str) -> set[frozenset]:
 
 def add_source(lib: MusicLibrary, have_source: str, new_source: str, tracks: list[list[str]]) -> int:
     """Append *new_source* to the *have_source* items matching *tracks*. Returns the count tagged."""
-    wanted = {_name_words(f"{title} {artist}") for title, artist in tracks}
+    wanted = {_name_words(f"{title} {artist}") for title, artist, *_ in tracks}
     count = 0
     for item in lib.items_by_source(have_source):
         if _name_words(f"{item.title or ''} {item.artist or item.albumartist or ''}") not in wanted:
@@ -287,7 +288,48 @@ def add_source(lib: MusicLibrary, have_source: str, new_source: str, tracks: lis
 
 def has_tracks(keys: set[frozenset], tracks: list[list[str]]) -> bool:
     """True when every (title, artist) in *tracks* is among *keys*."""
-    return all(_name_words(f"{title} {artist}") in keys for title, artist in tracks)
+    return all(_name_words(f"{title} {artist}") in keys for title, artist, *_ in tracks)
+
+
+def _item_words(item) -> frozenset[str]:
+    return _name_words(f"{item.title or ''} {item.artist or item.albumartist or ''}")
+
+
+def tag_album_ids(lib: MusicLibrary, source: str, tracks: list[list], since: float, tracks_count: int) -> int:
+    """Record each album-mode playlist track's Spotify ID on the *source* item it maps to.
+
+    Usenet files carry no Spotify IDs (#176).  Per track, first hit wins:
+    1. ISRC among the item's ISRCs;
+    2. disc and track number, only on usenet items imported since *since*
+       whose release has Spotify's track count (editions renumber tracks);
+    3. title+artist words, logged so the fallback rate is visible.
+    Returns the count of items tagged.
+    """
+    items = lib.items_by_source(source)
+    fresh = [
+        i for i in items
+        if i.get("via") == "usenet" and (i.added or 0) >= since
+        and tracks_count and i.tracktotal == tracks_count
+    ]
+    count = 0
+    for track in map(PlaylistTrack.from_entry, tracks):
+        if not track.song_id or any(track.song_id in split_list(i.get("spotify_ids")) for i in items):
+            continue
+        match = next((i for i in items if track.isrc and track.isrc in split_list(i.get("isrc"), ";")), None)
+        if match is None and track.disc and track.track:
+            match = next((i for i in fresh if (i.disc, i.track) == (track.disc, track.track)), None)
+        if match is None:
+            words = _name_words(f"{track.name} {track.artist}")
+            match = next((i for i in items if words and _item_words(i) == words), None)
+            if match is not None:
+                logger.info("  [WORDS] %s: %s — %s matched by title+artist only", source, track.name, track.artist)
+        if match is None:
+            logger.info("  [NOID] %s: %s — %s matches no library item", source, track.name, track.artist)
+            continue
+        add_to_list(match, "spotify_ids", track.song_id)
+        match.store()
+        count += 1
+    return count
 
 
 def apply_pending_removals(pending: PendingRemovals, lib: MusicLibrary) -> int:
