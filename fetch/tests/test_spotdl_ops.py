@@ -943,3 +943,17 @@ def test_playlist_songs_read_pages_only_never_per_track() -> None:
     assert {s["album_id"] for s in songs} == {"a1"}
     assert songs[0]["isrc"] == "ISRC1"
     assert songs[0]["tracks_count"] == 3
+
+
+def test_download_song_downloads_from_the_entry_without_a_spotify_lookup(tmp_path) -> None:
+    from music_fetch.spotdl_ops import download_song
+
+    song = {"name": "Song", "url": "https://open.spotify.com/track/S"}
+    spotdl_obj = mock.MagicMock()
+    spotdl_obj.download_songs.return_value = [(mock.MagicMock(), tmp_path / "Song.m4a")]
+    with mock.patch("music_fetch.spotdl_ops._make_spotdl", return_value=spotdl_obj) as make, \
+         mock.patch("spotdl.types.song.Song.from_dict", return_value="SONG") as from_dict:
+        assert download_song(song, tmp_path, tmp_path / "cookies.txt") == tmp_path / "Song.m4a"
+    from_dict.assert_called_once_with(song)
+    spotdl_obj.download_songs.assert_called_once_with(["SONG"])
+    assert make.call_args.args[0]["output"] == str(tmp_path)

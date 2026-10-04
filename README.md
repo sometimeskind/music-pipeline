@@ -285,6 +285,14 @@ kubectl exec -n <ns> deploy/music-pipeline -- \
     -H "Authorization: Bearer <token>"
 ```
 
+**Backfill track identity (once, #176):** items imported before Spotify IDs and ISRCs were stored get them from the playlists' Spotify pages (about one call per 100 tracks). It also lists **wrong versions**: playlist entries an older artist+title duplicate check merged into a different recording (live, remaster, radio edit).
+```bash
+kubectl exec -n <ns> deploy/music-pipeline -- music-backfill-ids                            # dry run: report only
+kubectl exec -n <ns> deploy/music-pipeline -- music-backfill-ids --apply                    # write IDs and ISRCs
+kubectl exec -n <ns> deploy/music-pipeline -- music-backfill-ids --apply --redownload 10    # also fetch 10 right versions
+```
+`--redownload` downloads into the playlist's inbox (works for `nosync` and `album` playlists too) and takes the playlist off the wrong item; the next scan imports the download as its own recording.
+
 **Recover after PVC loss:**
 1. Restore `beets-data` PVC from backup (restores `library.db`).
 2. Trigger a fetch — it re-provisions all `.spotdl` files from `playlists.conf` and re-downloads.
@@ -293,6 +301,7 @@ kubectl exec -n <ns> deploy/music-pipeline -- \
 
 ## Notes and gotchas
 
+- **Track identity.** `spotify_ids` (comma-separated Spotify track IDs: one recording has different IDs on the single, the album and compilations) and `isrc` (`;`-separated, MusicBrainz's plus Spotify's) decide whether a playlist entry is a library item: Spotify ID, then ISRC, then MusicBrainz recording ID, and title+artist only as a logged last resort (`[WORDS]`). A same-title track with different ISRCs imports as its own recording (`[SPLIT]`).
 - **`sources` is comma-separated.** A track imported by multiple playlists carries all playlist names (e.g. `sources=playlist-a,playlist-b`). It will appear in all relevant `.m3u` files once each playlist has been synced at least once.
 - **`beet update` does not prune deleted files.** Use `beet remove <query>` with a specific query. Never run `beet remove` without a query.
 - **Cookies expire.** Re-export from browser when downloads fail at quality.
