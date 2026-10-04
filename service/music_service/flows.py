@@ -280,6 +280,12 @@ def _run_scan_tasks() -> None:
         metrics.push()
 
 
+# How long a flow that skips when busy waits for its lock. Not 0: Prefect wraps
+# the whole acquire request in this timeout, so 0 times out before the server
+# answers, even on a free limit (#174).
+SKIP_IF_BUSY_SECONDS = 5
+
+
 # Flow names are prefixed because the document-pipeline service serves its
 # own flows against the same Prefect server. Prefect keys a deployment on
 # flow name + deployment name, so a bare "scan" resolved to one shared
@@ -301,7 +307,7 @@ def scan_flow() -> None:
     """Scan: apply any pending removals, import inbox, regenerate playlists."""
     logger = get_run_logger()
     try:
-        with concurrency("pipeline", occupy=1, timeout_seconds=0):
+        with concurrency("pipeline", occupy=1, timeout_seconds=SKIP_IF_BUSY_SECONDS):
             _run_scan_tasks()
     except TimeoutError:
         logger.info("Scan skipped — pipeline busy (fetch or scan already running)")
@@ -394,7 +400,7 @@ def albums_flow() -> None:
         logger.info("Album mode is off (ALBUM_MODE)")
         return
     try:
-        with concurrency("albums", occupy=1, timeout_seconds=0):
+        with concurrency("albums", occupy=1, timeout_seconds=SKIP_IF_BUSY_SECONDS):
             album_tick_task(settings)
     except TimeoutError:
         logger.info("Album tick skipped — another album run holds the lock")

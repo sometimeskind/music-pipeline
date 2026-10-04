@@ -313,3 +313,33 @@ def test_scan_reports_navidrome_failure_reason():
 
     (m,) = pushed
     assert m.failure_reason == "navidrome_trigger_failed"
+
+
+# ---------------------------------------------------------------------------
+# Skip-if-busy lock against a real Prefect server (#174)
+# ---------------------------------------------------------------------------
+
+
+def _create_limit(name: str) -> None:
+    from prefect.client.orchestration import get_client
+    from prefect.client.schemas.actions import GlobalConcurrencyLimitCreate
+    with get_client(sync_client=True) as client:
+        client.create_global_concurrency_limit(GlobalConcurrencyLimitCreate(name=name, limit=1))
+
+
+def test_skip_if_busy_acquires_a_free_limit():
+    from prefect.concurrency.sync import concurrency
+    from music_service.flows import SKIP_IF_BUSY_SECONDS
+    _create_limit("skip-if-busy-free")
+    with concurrency("skip-if-busy-free", occupy=1, timeout_seconds=SKIP_IF_BUSY_SECONDS):
+        pass
+
+
+def test_skip_if_busy_times_out_on_a_held_limit():
+    from prefect.concurrency.sync import concurrency
+    from music_service.flows import SKIP_IF_BUSY_SECONDS
+    _create_limit("skip-if-busy-held")
+    with concurrency("skip-if-busy-held", occupy=1):
+        with pytest.raises(TimeoutError):
+            with concurrency("skip-if-busy-held", occupy=1, timeout_seconds=SKIP_IF_BUSY_SECONDS):
+                pass
