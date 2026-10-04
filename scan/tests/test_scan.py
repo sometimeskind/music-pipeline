@@ -715,3 +715,30 @@ def test_add_source_tags_matching_items_once() -> None:
     assert one.data["sources"] == "later,keep"
     assert two.data["sources"] == "later,keep"
     assert other.data["sources"] == "later"
+
+
+# ---------------------------------------------------------------------------
+# count_lossless_items (FLAC guard)
+# ---------------------------------------------------------------------------
+
+
+def test_lossless_item_count_matches_codec_not_extension() -> None:
+    from music_scan.library import MusicLibrary
+
+    lib = MusicLibrary.__new__(MusicLibrary)
+    lib._lib = mock.MagicMock()
+    lib._lib.items.return_value = [
+        mock.MagicMock(format="AAC"),
+        mock.MagicMock(format="FLAC"),
+        mock.MagicMock(format="ALAC"),  # lossless inside .m4a
+        mock.MagicMock(format="MP3"),
+        mock.MagicMock(format="WAVE"),
+    ]
+    assert lib.lossless_item_count() == 3
+
+
+def test_count_lossless_items_returns_none_when_library_unreadable() -> None:
+    from music_scan.scan import count_lossless_items
+
+    with mock.patch("music_scan.scan.MusicLibrary", side_effect=OSError("locked")):
+        assert count_lossless_items() is None

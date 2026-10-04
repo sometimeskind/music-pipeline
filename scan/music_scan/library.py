@@ -13,6 +13,9 @@ logger = logging.getLogger(__name__)
 
 LIBRARY_DB = Path("/root/.config/beets/library.db")
 LIBRARY_DIR = Path("/root/Music/library")
+# mediafile's type names (Item.format) for lossless codecs. Matched by codec,
+# not extension, so ALAC inside .m4a counts too.
+LOSSLESS_FORMATS = frozenset({"FLAC", "ALAC", "APE", "WavPack", "AIFF", "WAVE", "DSD Stream File"})
 
 
 class MusicLibrary:
@@ -42,6 +45,12 @@ class MusicLibrary:
     def item_count(self) -> int:
         """Return the total number of items in the library."""
         return sum(1 for _ in self._lib.items())
+
+    def lossless_item_count(self) -> int:
+        """Items with a lossless codec. The library should hold none: the convert
+        plugin transcodes them on import, but imports the original without an
+        error when ffmpeg fails."""
+        return sum(1 for item in self._lib.items() if item.format in LOSSLESS_FORMATS)
 
     def items_added_since(self, since: float) -> list[tuple[str, str]]:
         """Return (title, artist) for items added to the library after *since* (Unix timestamp)."""
