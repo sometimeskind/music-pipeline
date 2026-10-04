@@ -270,3 +270,13 @@ def test_tick_persists_state(tmp_path: Path) -> None:
     saved = State.load(tmp_path / "state.json")
     assert saved.albums["A"]["status"] == albums.DRY_RUN
     assert saved.playlists["later"]["snapshot_id"] == "s1"
+
+
+def test_dry_run_stops_at_total_sample_limit() -> None:
+    state = wanted_state(10)
+    prowlarr, sab = fakes()
+    settings = Settings(mode="dry-run", dry_run_per_tick=3, dry_run_limit=4)
+    for _ in range(3):
+        top_up(state, settings, prowlarr, sab, never_have, albums.TickResult(), now=lambda: NOW)
+    assert prowlarr.search.call_count == 4
+    assert sum(1 for a in state.albums.values() if a.get("dry_run")) == 4

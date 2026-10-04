@@ -242,6 +242,7 @@ Mount `cookies.txt` at `/root/.config/spotdl/cookies.txt` read-only. Update by p
 | `SYNC_JITTER_SECONDS` | Plain value | `""` | Random pre-sync sleep (seconds) to stagger retries |
 | `SYNC_TRACK_LIMIT` | Plain value | `""` | Cap new tracks downloaded per run. Pipeline resumes next run. |
 | `ALBUM_MODE` | Plain value | `off` | `off`, `dry-run` (search and log picks, never grab) or `on` |
+| `ALBUM_DRY_RUN_LIMIT` | Plain value | `25` | Albums searched in total while `dry-run`; then it only polls. `on` searches every album again, so dry-run is a sample |
 | `ALBUM_POLL_SECONDS` | Plain value | `1800` | Interval of the `music-albums` flow (Spotify snapshot poll + queue top-up) |
 | `ALBUM_MAX_IN_FLIGHT` | Plain value | `3` | Albums queued in SABnzbd at once; size it to the `music-data` disk |
 | `ALBUM_GRABS_PER_DAY` / `ALBUM_HITS_PER_DAY` | Plain value | `18` / `90` | Rolling-24h indexer budget (NZB grabs / API searches) |
