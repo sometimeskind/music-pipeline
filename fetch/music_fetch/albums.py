@@ -453,7 +453,7 @@ def tick(
     settings: Settings | None = None,
     state_file: Path = STATE_FILE,
     on_completion: Callable[[State, "Completion"], object] | None = None,
-    overrides_file: Path = OVERRIDES_FILE,
+    overrides_file: Path | None = None,
 ) -> TickResult:
     """One album-mode pass: refresh changed playlists, recover lost import
     triggers (*on_completion*, ``on`` only), then top the queue up."""
@@ -470,7 +470,7 @@ def tick(
             for completion in lost_completions(state, sabnzbd):
                 logger.info("Recovering lost import trigger for %s", completion.nzo_id)
                 on_completion(state, completion)
-        top_up(state, settings, prowlarr, sabnzbd, have, result, overrides=load_overrides(overrides_file))
+        top_up(state, settings, prowlarr, sabnzbd, have, result, overrides=load_overrides(overrides_file or OVERRIDES_FILE))
         success = True
     finally:
         state.save(state_file)

@@ -21,6 +21,12 @@ def _no_push():
         yield
 
 
+@pytest.fixture(autouse=True)
+def _no_overrides(tmp_path: Path):
+    with patch.object(albums, "OVERRIDES_FILE", tmp_path / "album-overrides.conf"):
+        yield
+
+
 def song(name: str, album_id: str, album: str = "Album", artist: str = "Artist", url: str | None = None) -> dict:
     return {
         "name": name,
