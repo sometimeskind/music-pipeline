@@ -65,7 +65,8 @@ A full sync cycle (`music-ingest` followed by `music-scan`) runs 9 discrete step
 │  [8] Snapshot reconciliation                                           │
 │        Diffs each .spotdl file against the beets library + quarantine. │
 │        Drops URLs absent from both so spotdl re-downloads them next    │
-│        fetch rather than silently skipping forever.                    │
+│        fetch rather than silently skipping forever. Skips album and    │
+│        nosync playlists: spotdl never re-adds their entries.           │
 │        │                                                               │
 │        ▼                                                               │
 │  [9] Playlist generation + Navidrome trigger                           │
@@ -292,7 +293,7 @@ kubectl exec -n <ns> deploy/music-pipeline -- \
     -H "Authorization: Bearer <token>"
 ```
 
-**Backfill track identity (once, #176):** items imported before Spotify IDs and ISRCs were stored get them from the playlists' Spotify pages (about one call per 100 tracks). It also lists **wrong versions**: playlist entries an older artist+title duplicate check merged into a different recording (live, remaster, radio edit).
+**Backfill track identity (once, #176):** items imported before Spotify IDs and ISRCs were stored get them from the playlists' Spotify pages (about one call per 100 tracks). It also lists **wrong versions**: playlist entries an older artist+title duplicate check merged into a different recording (live, remaster, radio edit). A candidate whose ISRC MusicBrainz lists on the item's recording (`mb_trackid`) is the same recording under another ISRC, not a wrong version (`[SAME]`); only those candidates are looked up, at one MusicBrainz call a second.
 ```bash
 kubectl exec -n <ns> deploy/music-pipeline -- music-backfill-ids                            # dry run: report only
 kubectl exec -n <ns> deploy/music-pipeline -- music-backfill-ids --apply                    # write IDs and ISRCs

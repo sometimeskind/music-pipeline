@@ -282,6 +282,14 @@ def test_collect_removals_empty_artists() -> None:
     assert pending == [RemovedTrack(title="Song B", artist="", source="my-playlist")]
 
 
+def test_collect_removals_logs_each_track(caplog) -> None:
+    """One line per removed track, naming the playlist (#190)."""
+    pending: list[RemovedTrack] = []
+    with caplog.at_level("INFO", logger="music_fetch.ingest"):
+        _collect_removals(pending, {"https://spotify.com/track/A"}, SNAPSHOT, "my-playlist")
+    assert "Scheduling unlink: Song A — Artist 1 (my-playlist)" in caplog.text
+
+
 def test_collect_removals_no_removed_urls() -> None:
     pending: list[RemovedTrack] = []
     _collect_removals(pending, set(), SNAPSHOT, "my-playlist")

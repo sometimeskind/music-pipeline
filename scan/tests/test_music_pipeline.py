@@ -728,6 +728,10 @@ def test_handle_duplicates_merges_by_musicbrainz_recording_id() -> None:
     task.set_choice.assert_called_once_with(beets_importer.Action.SKIP)
     # Same recording: Spotify's ISRC joins MusicBrainz's.
     assert existing._data["isrc"] == "USOLD;GBNEW"
+    # One warning-level line per merge (#191).
+    same = [c for c in plugin._log.warning.call_args_list if "[SAME]" in c.args[0]]
+    assert len(same) == 1
+    assert "playlist-b" in same[0].args
 
 
 def test_handle_duplicates_splits_a_different_recording() -> None:

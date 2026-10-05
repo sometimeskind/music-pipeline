@@ -12,6 +12,10 @@ track ID) and, per playlist entry:
    finds the item among the playlist's items.  A match whose ISRCs are disjoint
    from the entry's is a **wrong version**: an earlier artist+title duplicate
    check merged a live take, remaster or radio edit into another recording.
+   Unless MusicBrainz lists the entry's ISRC on the item's recording
+   (``mb_trackid``): one recording often has several ISRCs (editions,
+   clean/explicit, labels), so that is the same recording, as in the
+   duplicate hook (#191).  Only these candidates are looked up.
    Other matches get the entry's ID and ISRC.
 
 Wrong versions are only listed unless ``--redownload N``: then the first N are
@@ -27,7 +31,13 @@ from __future__ import annotations
 
 import argparse
 import dataclasses
+import json
 import logging
+import time
+import urllib.error
+import urllib.parse
+import urllib.request
+from collections.abc import Callable
 
 from music_scan.identity import (
     BY_ISRC,
@@ -41,6 +51,10 @@ from music_scan.identity import (
 )
 
 logger = logging.getLogger(__name__)
+
+MB_ISRC_URL = "https://musicbrainz.org/ws/2/isrc/{}?fmt=json"
+MB_USER_AGENT = "music-pipeline-backfill/1.0 ( https://github.com/sometimeskind/music-pipeline )"
+MB_INTERVAL = 1.0  # MusicBrainz allows one request a second per client.
 
 
 @dataclasses.dataclass
@@ -62,6 +76,8 @@ class Plan:
     disagree: int = 0
     compared: int = 0
     wrong: list[WrongVersion] = dataclasses.field(default_factory=list)
+    # Disjoint ISRCs, but MusicBrainz lists the entry's ISRC on the item's recording.
+    same_recording: int = 0
     # (playlist, item.id) pairs that some entry rightly maps to.
     claimed: set = dataclasses.field(default_factory=set)
 
@@ -90,7 +106,48 @@ def _contradicts(song: dict, item) -> bool:
     return bool(isrc and have and isrc not in have)
 
 
-def plan_backfill(items: list, songs_by_playlist: dict[str, list[dict]]) -> Plan:
+class MusicBrainzRecordings:
+    """ISRC → MusicBrainz recording IDs, cached and rate-limited; None when the lookup fails."""
+
+    def __init__(self) -> None:
+        self._cache: dict[str, set[str] | None] = {}
+        self._last = 0.0
+
+    def __call__(self, isrc: str) -> set[str] | None:
+        if isrc not in self._cache:
+            self._cache[isrc] = self._fetch(isrc)
+        return self._cache[isrc]
+
+    def _fetch(self, isrc: str) -> set[str] | None:
+        time.sleep(max(0.0, self._last + MB_INTERVAL - time.monotonic()))
+        self._last = time.monotonic()
+        url = MB_ISRC_URL.format(urllib.parse.quote(isrc))
+        req = urllib.request.Request(url, headers={"User-Agent": MB_USER_AGENT})
+        try:
+            with urllib.request.urlopen(req, timeout=30) as resp:
+                return {r["id"] for r in json.load(resp).get("recordings", [])}
+        except urllib.error.HTTPError as exc:
+            if exc.code == 404:  # MusicBrainz has no recording with this ISRC
+                return set()
+            logger.warning("MusicBrainz lookup of ISRC %s failed: %s", isrc, exc)
+        except (OSError, ValueError) as exc:
+            logger.warning("MusicBrainz lookup of ISRC %s failed: %s", isrc, exc)
+        return None
+
+
+def _same_recording(song: dict, item, recordings: Callable[[str], set[str] | None] | None) -> bool:
+    """True if MusicBrainz lists the entry's ISRC on the item's recording."""
+    mbid = item.get("mb_trackid")
+    if not (recordings and mbid):
+        return False
+    return mbid in (recordings(song["isrc"]) or set())
+
+
+def plan_backfill(
+    items: list,
+    songs_by_playlist: dict[str, list[dict]],
+    recordings: Callable[[str], set[str] | None] | None = None,
+) -> Plan:
     """Work out the backfill on in-memory *items*; changes are made on them but not stored."""
     plan = Plan()
     for item in items:
@@ -122,7 +179,15 @@ def plan_backfill(items: list, songs_by_playlist: dict[str, list[dict]]) -> Plan
             if item is None:
                 plan.missing += 1
             elif rung != BY_ISRC and _contradicts(song, item):
-                plan.wrong.append(WrongVersion(playlist, song, item))
+                if _same_recording(song, item, recordings):
+                    plan.same_recording += 1
+                    logger.info(
+                        "  [SAME] %s: %s (ISRC %s) is the recording of %s (ISRC %s) on MusicBrainz",
+                        playlist, _label(song), song.get("isrc"), item.get("mb_trackid"), item.get("isrc"),
+                    )
+                    _record(plan, playlist, song, item)
+                else:
+                    plan.wrong.append(WrongVersion(playlist, song, item))
             else:
                 if rung == BY_WORDS:
                     plan.by_words += 1
@@ -151,9 +216,10 @@ def report(plan: Plan) -> None:
         )
     logger.info(
         "Backfill: %d item(s) to change — %d spotify_ids from spotify_url, %d Spotify ID(s) and %d ISRC(s) "
-        "added, %d by title+artist only; %d wrong version(s); %d playlist entr(ies) with no library item",
+        "added, %d by title+artist only; %d wrong version(s), %d same recording by MusicBrainz; "
+        "%d playlist entr(ies) with no library item",
         len(plan.changed), plan.ids_from_url, plan.ids_added, plan.isrcs_added, plan.by_words,
-        len(plan.wrong), plan.missing,
+        len(plan.wrong), plan.same_recording, plan.missing,
     )
     logger.info(
         "ISRCs: Spotify and MusicBrainz disagree on %d of %d downloaded track(s) both tagged",
@@ -174,7 +240,7 @@ def run(apply: bool = False, redownload: int = 0) -> Plan:
         logger.info("Read %s: %d track(s)", pl.name, len(songs_by_playlist[pl.name]))
 
     with MusicLibrary(LIBRARY_DB) as lib:
-        plan = plan_backfill(lib.all_items(), songs_by_playlist)
+        plan = plan_backfill(lib.all_items(), songs_by_playlist, MusicBrainzRecordings())
         report(plan)
         if not apply:
             logger.info("Dry run — nothing written. Re-run with --apply to write.")

@@ -51,6 +51,63 @@ def test_live_entry_merged_into_studio_is_a_wrong_version() -> None:
     assert "LIVE" not in studio.data["spotify_ids"]
 
 
+def test_disjoint_isrcs_on_the_same_musicbrainz_recording_is_not_wrong() -> None:
+    """Crabs In A Bucket (#191): Spotify's ISRC differs from MusicBrainz's, but
+    MusicBrainz lists it on the item's recording, so it is the same recording."""
+    item = _item(1, "Crabs In A Bucket", "keep", isrc="USUM71705082", mb_trackid="f956a6fa")
+    lookups = []
+
+    def recordings(isrc):
+        lookups.append(isrc)
+        return {"f956a6fa", "other"}
+
+    plan = plan_backfill([item], {"keep": [_song("CRABS", "Crabs In A Bucket", isrc="USUM71705065")]}, recordings)
+    assert plan.wrong == []
+    assert plan.same_recording == 1
+    assert lookups == ["USUM71705065"]
+    assert item.data["isrc"] == "USUM71705082;USUM71705065"
+    assert item.data["spotify_ids"] == "CRABS"
+
+
+def test_disjoint_isrcs_stay_wrong_when_musicbrainz_disagrees_or_fails() -> None:
+    def other(_):
+        return {"other"}
+
+    def failed(_):
+        return None
+
+    for recordings in (other, failed, None):
+        studio = _item(1, "Song", "a", isrc="GBSTUDIO", mb_trackid="mb-studio")
+        plan = plan_backfill([studio], {"a": [_song("LIVE", isrc="GBLIVE")]}, recordings)
+        assert len(plan.wrong) == 1, recordings
+        assert plan.same_recording == 0
+
+
+def test_musicbrainz_lookup_reads_recordings_and_caches(monkeypatch) -> None:
+    import io
+    import json
+    import urllib.error
+
+    from music_scan import backfill
+
+    calls = []
+
+    def urlopen(req, timeout):
+        calls.append(req.full_url)
+        if "MISSING" in req.full_url:
+            raise urllib.error.HTTPError(req.full_url, 404, "Not Found", {}, None)
+        return io.BytesIO(json.dumps({"isrc": "X", "recordings": [{"id": "r1"}, {"id": "r2"}]}).encode())
+
+    monkeypatch.setattr(backfill.urllib.request, "urlopen", urlopen)
+    monkeypatch.setattr(backfill.time, "sleep", lambda _: None)
+    lookup = backfill.MusicBrainzRecordings()
+    assert lookup("USX1") == {"r1", "r2"}
+    assert lookup("USX1") == {"r1", "r2"}
+    assert lookup("MISSING") == set()
+    assert len(calls) == 2
+    assert calls[0].endswith("/isrc/USX1?fmt=json")
+
+
 def test_wrong_version_merged_after_177_is_caught_through_its_id() -> None:
     """Merges since #177 recorded the live entry's ID on the studio item."""
     studio = _item(1, "Song", "a,b", spotify_url=URL + "STUDIO", spotify_ids="STUDIO,LIVE")
