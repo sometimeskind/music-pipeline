@@ -118,3 +118,21 @@ def test_ingest_metrics_cookies_expired_false_by_default(monkeypatch: pytest.Mon
     IngestMetrics().push()
 
     assert "music_ingest_cookies_expired 0" in pushed[0]
+
+
+def test_ingest_metrics_cookie_expiry_pushed_when_set(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: list[tuple[str, str]] = []
+    monkeypatch.setattr("music_fetch.metrics._push", lambda body, job: calls.append((body, job)))
+
+    IngestMetrics(cookies_expiry_timestamp=1_800_000_000).push()
+
+    assert "music_ingest_cookies_expiry_timestamp_seconds 1800000000" in calls[0][0]
+
+
+def test_ingest_metrics_cookie_expiry_absent_when_unknown(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: list[tuple[str, str]] = []
+    monkeypatch.setattr("music_fetch.metrics._push", lambda body, job: calls.append((body, job)))
+
+    IngestMetrics().push()
+
+    assert "cookies_expiry" not in calls[0][0]

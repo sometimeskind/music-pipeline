@@ -877,3 +877,99 @@ def test_sync_playlists_asks_the_library_per_playlist(tmp_path: Path) -> None:
 
     assert asked == [("later", {"url": "u"})]
     assert metrics.tracks_linked == 2
+
+
+# ---------------------------------------------------------------------------
+# cookie_expiry (issue #166)
+# ---------------------------------------------------------------------------
+
+
+def _cookie_row(name: str, expiry: int, domain: str = ".youtube.com", http_only: bool = False) -> str:
+    prefix = "#HttpOnly_" if http_only else ""
+    return "\t".join([f"{prefix}{domain}", "TRUE", "/", "TRUE", str(expiry), name, "value"])
+
+
+def _write_cookies(tmp_path: Path, rows: list[str]) -> Path:
+    path = tmp_path / "cookies.txt"
+    path.write_text("# Netscape HTTP Cookie File\n\n" + "\n".join(rows) + "\n", encoding="utf-8")
+    return path
+
+
+def test_cookie_expiry_parses_httponly_rows(tmp_path: Path) -> None:
+    from music_fetch.ingest import cookie_expiry
+
+    path = _write_cookies(tmp_path, [_cookie_row("HSID", 1_800_000_000, http_only=True)])
+    assert cookie_expiry(path) == (1_800_000_000, "HSID")
+
+
+def test_cookie_expiry_ignores_session_cookies(tmp_path: Path) -> None:
+    from music_fetch.ingest import cookie_expiry
+
+    path = _write_cookies(tmp_path, [_cookie_row("SID", 0), _cookie_row("SSID", 1_800_000_000)])
+    assert cookie_expiry(path) == (1_800_000_000, "SSID")
+
+
+def test_cookie_expiry_ignores_non_auth_cookies(tmp_path: Path) -> None:
+    from music_fetch.ingest import cookie_expiry
+
+    path = _write_cookies(tmp_path, [
+        _cookie_row("__Secure-1PSIDTS", 1_700_000_000),
+        _cookie_row("SIDCC", 1_700_000_000),
+        _cookie_row("VISITOR_INFO1_LIVE", 1_700_000_000),
+        _cookie_row("SID", 1_800_000_000),
+    ])
+    assert cookie_expiry(path) == (1_800_000_000, "SID")
+
+
+def test_cookie_expiry_soonest_wins(tmp_path: Path) -> None:
+    from music_fetch.ingest import cookie_expiry
+
+    path = _write_cookies(tmp_path, [
+        _cookie_row("SID", 1_900_000_000),
+        _cookie_row("LOGIN_INFO", 1_800_000_000, http_only=True),
+        _cookie_row("__Secure-3PSID", 1_850_000_000, domain=".google.com"),
+    ])
+    assert cookie_expiry(path) == (1_800_000_000, "LOGIN_INFO")
+
+
+def test_cookie_expiry_no_auth_cookies(tmp_path: Path) -> None:
+    from music_fetch.ingest import cookie_expiry
+
+    path = _write_cookies(tmp_path, [_cookie_row("YSC", 0), _cookie_row("PREF", 1_800_000_000)])
+    assert cookie_expiry(path) is None
+
+
+def test_run_pushes_cookie_expiry_when_preflight_fails(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The expiry gauge is pushed even on a run that fails (here: preflight, no Spotify creds)."""
+    import unittest.mock as mock
+    from music_fetch import ingest
+
+    cookie_file = _write_cookies(tmp_path, [_cookie_row("SAPISID", 1_800_000_000)])
+    pushes: list[tuple[str, str]] = []
+    monkeypatch.setattr("music_fetch.metrics._push", lambda body, job: pushes.append((body, job)))
+    monkeypatch.delenv("SPOTIFY_CLIENT_ID", raising=False)
+
+    with mock.patch.object(ingest, "COOKIE_FILE", cookie_file):
+        with pytest.raises(SystemExit):
+            ingest.run()
+
+    body = next(body for body, job in pushes if job == "music_ingest")
+    assert "music_ingest_cookies_expiry_timestamp_seconds 1800000000" in body
+    assert 'reason="auth_spotify"' in body
+
+
+def test_run_logs_no_auth_cookie_warning(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog) -> None:
+    import unittest.mock as mock
+    from music_fetch import ingest
+
+    cookie_file = _write_cookies(tmp_path, [_cookie_row("PREF", 1_800_000_000)])
+    pushes: list[tuple[str, str]] = []
+    monkeypatch.setattr("music_fetch.metrics._push", lambda body, job: pushes.append((body, job)))
+    monkeypatch.delenv("SPOTIFY_CLIENT_ID", raising=False)
+
+    with mock.patch.object(ingest, "COOKIE_FILE", cookie_file), caplog.at_level("WARNING"):
+        with pytest.raises(SystemExit):
+            ingest.run()
+
+    assert "No YouTube auth cookie" in caplog.text
+    assert all("cookies_expiry" not in body for body, _ in pushes)

@@ -44,6 +44,7 @@ class IngestMetrics:
     tracks_failed: int = 0
     tracks_linked: int = 0
     cookies_expired: bool = False
+    cookies_expiry_timestamp: int | None = None
     failure_reason: str = ""
 
     def push(self) -> None:
@@ -60,6 +61,11 @@ class IngestMetrics:
             _gauge("music_ingest_tracks_linked_total", self.tracks_linked),
             _gauge("music_ingest_cookies_expired", int(self.cookies_expired)),
         ]
+        # Left out when unknown: the PUT replaces the group, so a stale expiry doesn't linger.
+        if self.cookies_expiry_timestamp is not None:
+            lines.append(
+                _gauge("music_ingest_cookies_expiry_timestamp_seconds", self.cookies_expiry_timestamp)
+            )
         if not self.success and self.failure_reason:
             lines.append(
                 _gauge("music_ingest_last_failure_reason", 1, {"reason": self.failure_reason})
