@@ -119,6 +119,16 @@ def song_url(path: Path) -> str | None:
     return _read_spotdl_tags(str(path)).url
 
 
+def read_comment(path: Path) -> str | None:
+    """The comment tag, where spotdl records the YouTube URL it downloaded from."""
+    try:
+        from mutagen.mp4 import MP4  # noqa: PLC0415
+
+        return (MP4(str(path)).tags or {}).get("\xa9cmt", [None])[0]
+    except Exception:
+        return None
+
+
 def expected_durations(spotdl_dir: Path) -> dict[str, dict[str, int]]:
     """``{playlist: {spotify_url: duration}}`` from every ``.spotdl`` snapshot."""
     out: dict[str, dict[str, int]] = {}

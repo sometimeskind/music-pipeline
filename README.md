@@ -298,6 +298,15 @@ kubectl exec -n <ns> deploy/music-pipeline -- music-backfill-ids                
 kubectl exec -n <ns> deploy/music-pipeline -- music-backfill-ids --apply                    # write IDs and ISRCs
 kubectl exec -n <ns> deploy/music-pipeline -- music-backfill-ids --apply --redownload 10    # also fetch 10 right versions
 ```
+
+**Audit and replace wrong audio (#165):** the length guard only checks new downloads. `music-audit-lengths` reads every playlist (`nosync` and `album` ones too) from its Spotify pages (about one call per 100 tracks) and lists `[SUSPECT]` items whose length is off from the Spotify entry's by more than 10% and 5s, with the YouTube video spotdl downloaded them from. `--replace` re-downloads one item, pinned to a YouTube video, and swaps the file **in place**: the item keeps its id, tags, playlists and IDs, and the old file goes to `quarantine/replaced/`. Going through the inbox doesn't work, since the duplicate hook would merge the new file into the old item by Spotify ID and drop it.
+```bash
+kubectl exec -n <ns> deploy/music-pipeline -- music-audit-lengths                         # report suspects
+kubectl exec -n <ns> deploy/music-pipeline -- music-audit-lengths --silence --quarantine  # also mid-track silence; guard over quarantine
+kubectl exec -n <ns> deploy/music-pipeline -- music-audit-lengths --replace <id> --youtube <url>          # dry run
+kubectl exec -n <ns> deploy/music-pipeline -- music-audit-lengths --replace <id> --youtube <url> --apply  # replace
+```
+Without `--youtube` spotdl searches again and usually picks the same video; the replace then stops. A download that fails the guard is refused unless `--force`.
 `--redownload` downloads into the playlist's inbox (works for `nosync` and `album` playlists too) and takes the playlist off the wrong item; the next scan imports the download as its own recording.
 
 **Recover after PVC loss:**
