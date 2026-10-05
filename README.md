@@ -17,7 +17,7 @@ A single long-running service container orchestrates everything via Prefect. Two
 
 ## Pipeline internals
 
-A full sync cycle (`music-ingest` followed by `music-scan`) runs 8 discrete steps. Steps 1–2 are the **fetch phase**; steps 3–8 are the **scan phase**.
+A full sync cycle (`music-ingest` followed by `music-scan`) runs 9 discrete steps. Steps 1–2 are the **fetch phase**; steps 3–9 are the **scan phase**.
 
 ```
 ┌─ FETCH PHASE (music-ingest) ──────────────────────────────────────────┐
@@ -41,35 +41,41 @@ A full sync cycle (`music-ingest` followed by `music-scan`) runs 8 discrete step
 │        removed from Spotify or from playlists.conf.                    │
 │        │                                                               │
 │        ▼                                                               │
-│  [4] Beets import                                                      │
+│  [4] Length guard (LENGTH_GUARD)                                       │
+│        Checks each spotdl download against the Spotify duration (±10%) │
+│        and for mid-track silence; moves wrong audio to                 │
+│        quarantine/rejected/ (asis pass skips it, no re-download).      │
+│        │                                                               │
+│        ▼                                                               │
+│  [5] Beets import                                                      │
 │        Matches inbox audio to MusicBrainz/AcoustID; moves matched      │
 │        files to library/. Low-confidence matches go to quarantine/.    │
 │        │                                                               │
 │        ▼                                                               │
-│  [5] Quarantine + asis pass                                            │
+│  [6] Quarantine + asis pass                                            │
 │        Moves unmatched inbox leftovers to quarantine/. Then attempts   │
 │        a second beet import --asis for quarantine files that already   │
 │        have sufficient embedded tags (title, artist, album, track#).   │
 │        │                                                               │
 │        ▼                                                               │
-│  [6] Library metadata refresh                                          │
+│  [7] Library metadata refresh                                          │
 │        Runs beet update to refresh metadata on existing library items. │
 │        │                                                               │
 │        ▼                                                               │
-│  [7] Snapshot reconciliation                                           │
+│  [8] Snapshot reconciliation                                           │
 │        Diffs each .spotdl file against the beets library + quarantine. │
 │        Drops URLs absent from both so spotdl re-downloads them next    │
 │        fetch rather than silently skipping forever.                    │
 │        │                                                               │
 │        ▼                                                               │
-│  [8] Playlist generation + Navidrome trigger                           │
+│  [9] Playlist generation + Navidrome trigger                           │
 │        Regenerates .m3u files (in Spotify playlist order). Calls the   │
 │        Navidrome Subsonic API to trigger a library rescan.             │
 │                                                                        │
 └────────────────────────────────────────────────────────────────────────┘
 ```
 
-Steps 3, 7, and 8 are no-ops when `music-scan` runs on its 5-minute schedule with no preceding fetch (no removals to apply, Navidrome already up to date). The scan phase is idempotent and safe to run at any time.
+Steps 3, 8, and 9 are no-ops when `music-scan` runs on its 5-minute schedule with no preceding fetch (no removals to apply, Navidrome already up to date). The scan phase is idempotent and safe to run at any time.
 
 ---
 
@@ -248,6 +254,7 @@ Mount `cookies.txt` at `/root/.config/spotdl/cookies.txt` read-only. Update by p
 | `PUSHGATEWAY_URL` | Plain value | `""` | e.g. `http://prometheus-pushgateway.monitoring:9091` |
 | `SYNC_JITTER_SECONDS` | Plain value | `""` | Random pre-sync sleep (seconds) to stagger retries |
 | `SYNC_TRACK_LIMIT` | Plain value | `""` | Cap new tracks downloaded per run. Pipeline resumes next run. |
+| `LENGTH_GUARD` | Plain value | `dry-run` | `on` rejects wrong-length or silence-padded spotdl downloads before import, `dry-run` only logs `[WOULD-REJECT]`, `off` skips the check |
 | `ALBUM_MODE` | Plain value | `off` | `off`, `dry-run` (search and log picks, never grab) or `on` |
 | `ALBUM_DRY_RUN_LIMIT` | Plain value | `25` | Albums searched in total while `dry-run`; then it only polls. `on` searches every album again, so dry-run is a sample |
 | `ALBUM_POLL_SECONDS` | Plain value | `1800` | Interval of the `music-albums` flow (Spotify snapshot poll + queue top-up) |
