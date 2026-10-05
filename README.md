@@ -286,7 +286,7 @@ kubectl exec -n <ns> deploy/music-pipeline -- \
     -H "Authorization: Bearer <token>"
 ```
 
-**Backfill track identity (once, #176):** items imported before Spotify IDs and ISRCs were stored get them from the playlists' Spotify pages (about one call per 100 tracks). It also lists **wrong versions**: playlist entries an older artist+title duplicate check merged into a different recording (live, remaster, radio edit).
+**Backfill track identity (once, #176):** items imported before Spotify IDs and ISRCs were stored get them from the playlists' Spotify pages (about one call per 100 tracks). It also lists **wrong versions**: playlist entries an older artist+title duplicate check merged into a different recording (live, remaster, radio edit). A candidate whose ISRC MusicBrainz lists on the item's recording (`mb_trackid`) is the same recording under another ISRC, not a wrong version (`[SAME]`); only those candidates are looked up, at one MusicBrainz call a second.
 ```bash
 kubectl exec -n <ns> deploy/music-pipeline -- music-backfill-ids                            # dry run: report only
 kubectl exec -n <ns> deploy/music-pipeline -- music-backfill-ids --apply                    # write IDs and ISRCs

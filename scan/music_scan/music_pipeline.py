@@ -461,6 +461,11 @@ class MusicPipelinePlugin(BeetsPlugin):
                 if same:
                     # Same recording by identity: keep both sides' ISRCs.
                     changed = add_isrcs(dup, sorted(incoming.isrcs)) or changed
+                    # Warning, like [SPLIT]/[WORDS]: beets drops plugin debug lines (#191).
+                    self._log.warning(
+                        "[SAME] {} — {}: same recording as {}; merged (playlist {})",
+                        items[0].artist, items[0].title, dup, incoming_playlist,
+                    )
                 if changed:
                     dup.store()
                     self._log.debug(
