@@ -16,6 +16,7 @@ import time
 from pathlib import Path
 
 from music_fetch.ingest import PendingRemovals
+from music_scan.guard import guard_inbox
 from music_scan.identity import BY_WORDS, ItemIndex, PlaylistTrack, add_to_list, spotify_id
 from music_scan.identity import name_words as _name_words
 from music_scan.library import MusicLibrary
@@ -28,6 +29,8 @@ logger = logging.getLogger(__name__)
 AUDIO_EXTS = {".mp3", ".flac", ".ogg", ".opus", ".m4a", ".aac", ".wav", ".wma", ".aiff", ".ape", ".mpc"}
 SPOTDL_DIR = Path("/root/Music/inbox/spotdl")
 QUARANTINE = Path("/root/Music/quarantine")
+# Files the length guard rejected (#165); never staged for the asis pass.
+REJECTED = QUARANTINE / "rejected"
 PLAYLISTS = Path("/root/Music/playlists")
 INBOX = Path("/root/Music/inbox")
 LIBRARY = Path("/root/Music/library")
@@ -101,7 +104,7 @@ def run_inbox_import(skip_limit: int | None = None) -> list[tuple[str, str]]:
 def _count_quarantine() -> int:
     if not QUARANTINE.exists():
         return 0
-    return sum(1 for _ in QUARANTINE.rglob("*") if _.is_file())
+    return sum(1 for f in QUARANTINE.rglob("*") if f.is_file() and f.suffix.lower() in AUDIO_EXTS)
 
 
 def count_lossless_items() -> int | None:
@@ -152,8 +155,9 @@ def _move_asis_eligible(quarantine: Path, staging: Path) -> int:
             continue
         # Album-mode releases are verified by the strict match alone: a release
         # beets can't match is blocklisted and the next one tried, so it must
-        # not slip in on its own tags here.
-        if f.relative_to(quarantine).parts[0] == "usenet":
+        # not slip in on its own tags here.  Files the length guard rejected
+        # (#165) carry the right tags on the wrong audio.
+        if f.relative_to(quarantine).parts[0] in ("usenet", "rejected"):
             continue
         try:
             tags = MutagenFile(f, easy=True)
@@ -410,6 +414,12 @@ def run(pending: PendingRemovals | None = None) -> None:
                 logger.error("Pending-removals step failed — continuing with import", exc_info=True)
 
         quarantined_before = _count_quarantine()
+
+        logger.info("==> Checking download lengths...")
+        try:
+            metrics.rejected = guard_inbox(SPOTDL_DIR, SPOTDL_DIR, REJECTED, AUDIO_EXTS)
+        except Exception:
+            logger.error("Length guard failed — continuing with import", exc_info=True)
 
         logger.info("==> Importing from inbox...")
         imported = run_inbox_import()

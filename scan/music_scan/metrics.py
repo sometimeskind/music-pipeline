@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import requests
 
@@ -40,6 +40,8 @@ class ScanMetrics:
     tracks_removed: int = 0
     failure_reason: str = ""
     lossless_items: int | None = None
+    # Downloads the length guard rejected, per reason (#165).
+    rejected: dict[str, int] = field(default_factory=lambda: {"duration": 0, "silence": 0})
 
     def push(self) -> None:
         lines = [
@@ -49,6 +51,8 @@ class ScanMetrics:
             _gauge("music_scan_tracks_imported_total", self.tracks_imported),
             _gauge("music_scan_tracks_removed_total", self.tracks_removed),
         ]
+        lines.append("# TYPE music_scan_rejected_tracks_total gauge")
+        lines += [f'music_scan_rejected_tracks_total{{reason="{r}"}} {n}' for r, n in sorted(self.rejected.items())]
         if self.lossless_items is not None:
             lines.append(_gauge("music_library_lossless_items", self.lossless_items))
         if not self.success and self.failure_reason:

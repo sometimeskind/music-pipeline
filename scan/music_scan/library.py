@@ -47,6 +47,9 @@ class MusicLibrary:
     def all_items(self) -> list["Item"]:
         return list(self._lib.items())
 
+    def get_item(self, item_id: int) -> "Item | None":
+        return self._lib.get_item(item_id)
+
     def item_count(self) -> int:
         """Return the total number of items in the library."""
         return sum(1 for _ in self._lib.items())

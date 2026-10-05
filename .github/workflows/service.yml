@@ -22,6 +22,10 @@ jobs:
         with:
           python-version: "3.13"
 
+      - name: Install ffmpeg
+        # The length guard's tests generate audio fixtures with ffmpeg (#165).
+        run: sudo apt-get update -q && sudo apt-get install -y -q --no-install-recommends ffmpeg
+
       - name: Install dependencies
         run: |
           pip install -r fetch/requirements.txt -e fetch
