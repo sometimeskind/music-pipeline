@@ -4,7 +4,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from music_fetch.usenet import Prowlarr, Release, Sabnzbd, clean_album, matches, rank, tier
+from music_fetch.usenet import Prowlarr, Release, Sabnzbd, clean_album, matches, normalise, rank, readable, tier
 
 MB = 1_000_000
 
@@ -238,3 +238,71 @@ def test_rank_prefers_fewer_leftover_words_within_a_tier() -> None:
         rel("Artist-Album-WEB-FLAC-2020-GRP", guid="clean", grabs=1),
     ]
     assert [r.guid for r in rank(releases, "Artist", "Album", 10, set())] == ["clean", "extra"]
+
+
+# ---------------------------------------------------------------------------
+# Stylised names (#197)
+# ---------------------------------------------------------------------------
+
+GLYPH_ARTIST = "⣎⡇ꉺლ༽இ•̛)ྀ◞ ༎ຶ ༽ৣৢ؞ৢ؞ؖ ꉺლ"
+GLYPH_TITLE = (
+    "ʅ͡͡͡͡͡͡͡͡͡͡͡(̸̢̛̼̞̭͋ͅ)̸͚̰͛̔̾̀̿͒͂:̴͓̞̑̌̂̆̊͋̀:̸͎̟̯̂̓̌ ҉ ͡ ͞ ͞ ͞ ҉● ࿀ ● ࿀ ● ҉⃝ l̡̡̡ ̡͌ "
+    "Ɵʅ͡͡͡͡͡͡͡͡͡͡͡(̸̢̛̼̞̭͋ͅ)̸͚̰͛̔̾̀̿͒͂v̴̢͚͚͎ȯ̶̞̮͖̑̈́)̸̳̥̰̜̥̺̐ͅ)̴͎̜͍̱̋̌͋̓̾̚ ̷̨ ☼⃝◞⊖◟ ∷፨◉☼⃝◞⊖◟☼⃝ꉂꆭ(☼⃝❁)ᕗ"
+)
+
+
+@pytest.mark.parametrize(
+    "text, expected",
+    [
+        ("Slayyyter WOR$T GIRL IN AMERICA", "slayyyter worst girl in america"),
+        ("Tierra Whack WHACK'S MUSEUM", "tierra whack whacks museum"),
+        ("Tierra Whack WHACK’S MUSEUM", "tierra whack whacks museum"),
+        ("Beyoncé", "beyonce"),
+        ("Sigur Rós Ágætis byrjun", "sigur ros agaetis byrjun"),
+        ("P!nk", "pink"),
+        ("Help!", "help"),
+        ("Florence + the Machine", "florence and the machine"),
+        ("Love & Devotion", "love and devotion"),
+    ],
+)
+def test_normalise(text: str, expected: str) -> None:
+    assert normalise(text) == expected
+
+
+@pytest.mark.parametrize("text", ["WOR$T GIRL IN AMERICA", "Beyoncé", "Fred again..", "On", "Danzig II: Lucifuge"])
+def test_readable(text: str) -> None:
+    assert readable(text)
+
+
+@pytest.mark.parametrize("text", [GLYPH_ARTIST, GLYPH_TITLE, "÷", "!!!", ""])
+def test_glyph_names_are_not_readable(text: str) -> None:
+    assert not readable(text)
+
+
+@pytest.mark.parametrize(
+    "artist, album, title",
+    [
+        ("Slayyyter", "WOR$T GIRL IN AMERICA", "Slayyyter-WORsT GIRL IN AMERICA-24BIT-48KHZ-WEB-FLAC-2026-OBZEN"),
+        ("Slayyyter", "WOR$T GIRL IN AMERICA", "Slayyyter-Worst Girl In America-CD-FLAC-2026-PERFECT"),
+        ("Tierra Whack", "WHACK'S MUSEUM", "Tierra Whack-WHACKS MUSEUM-24BIT-WEB-FLAC-2026-ENRiCH"),
+        ("Beyoncé", "RENAISSANCE", "Beyonce-Renaissance-24BIT-WEB-FLAC-2022-ENRiCH"),
+        ("Sigur Rós", "Ágætis byrjun", "Sigur Ros-Agaetis Byrjun-CD-FLAC-1999-GRP"),
+    ],
+)
+def test_matches_stylised_names(artist: str, album: str, title: str) -> None:
+    assert matches(rel(title, size=500 * MB), artist, album, 10)
+
+
+def test_matches_override_words() -> None:
+    """An override is matched as the album, with no artist check."""
+    assert matches(rel("webdings-four-tet", size=300 * MB), "", "webdings four tet", 10)
+    assert not matches(rel("four-tet-rounds", size=300 * MB), "", "webdings four tet", 10)
+
+
+def test_matches_any_album_by_the_artist_on_size_and_type() -> None:
+    """A title with no words matches any album-sized release by the artist."""
+    assert matches(rel("Artist-Some Album-WEB-FLAC-2026-GRP", size=300 * MB), "Artist", "÷", 10, any_album=True)
+    assert not matches(rel("Other-Some Album-WEB-FLAC-2026-GRP", size=300 * MB), "Artist", "÷", 10, any_album=True)
+    assert not matches(rel("Artist-Some Song-Single-WEB-FLAC-2026-GRP", size=300 * MB), "Artist", "÷", 10,
+                       any_album=True, album_type="album")
+    assert not matches(rel("Artist-Some Album-WEB-FLAC-2026-GRP", size=5 * MB), "Artist", "÷", 10, any_album=True)

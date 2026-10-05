@@ -149,6 +149,8 @@ When SABnzbd finishes an album job, its post-processing script POSTs to `/trigge
 
 Otherwise (a failed download, or tracks beets quarantined) it blocklists the release, deletes its quarantined tracks, and tries the next release; tracks already in the library are skipped as duplicates, so it only fills the gaps. After 3 failed releases the album is `failed`, and the last release's quarantined tracks are kept for review. Usenet tracks never go through the asis pass. A trigger that never arrives is recovered from SABnzbd history by the next tick, an hour after the grab.
 
+Searches use the names as release names spell them: diacritics folded, `$` as `s`, apostrophes deleted (`WHACK'S MUSEUM` searches and matches as `whacks museum`). A search with no results is retried once with the artist alone, which counts as a second indexer hit. A title made of glyphs is searched by the artist and matched on size alone (`[PICK] … (artist-only)`). An album whose artist and title are both glyphs is not searched; it logs `[NOWORDS] <album id>: … add a search override`. Overrides live in `album-overrides.conf`, one `<spotify album id>  <search words>` per line; the words are both the query and what a release title must contain. A missing album is searched again as soon as its query changes (a new override, or a normalisation fix). `[MISS]` lines list the queries sent, so a miss can be checked in the indexer's own search.
+
 This file is the single source of truth for playlists. `music-ingest` reconciles disk state to match it on every run — provisioning new entries, reconciling `.nosync` sentinels, and queuing removed playlists for cleanup.
 
 ### 5. Run the first ingest
@@ -202,6 +204,7 @@ A `justfile` lives in the repo root. Run these from the repo directory.
   config.yaml            ← bind-mounted from ./config/beets/config.yaml
 /root/.config/music-pipeline/
   playlists.conf         ← bind-mounted from ./config/playlists.conf (k8s: ConfigMap)
+  album-overrides.conf   ← optional album-mode search overrides (k8s: ConfigMap)
 ```
 
 ---
@@ -231,6 +234,7 @@ Without `PREFECT_API_URL` set, the service runs in direct mode: flows execute in
 | `music-pipeline-beets-config` | `config.yaml` | `/root/.config/beets/config.yaml` | `config/beets/config.yaml` |
 | `music-pipeline-spotdl-config` | `config.json` | `/root/.config/spotdl/config.json` | `config/spotdl/config.json` |
 | `music-pipeline-playlists` | `playlists.conf` | `/root/.config/music-pipeline/playlists.conf` | `config/playlists.conf` |
+| `music-pipeline-playlists` | `album-overrides.conf` (optional) | `/root/.config/music-pipeline/album-overrides.conf` | homelab repo only |
 
 All three ConfigMaps should be mounted `readOnly: true`.
 

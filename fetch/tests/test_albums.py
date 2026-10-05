@@ -21,6 +21,12 @@ def _no_push():
         yield
 
 
+@pytest.fixture(autouse=True)
+def _no_overrides(tmp_path: Path):
+    with patch.object(albums, "OVERRIDES_FILE", tmp_path / "album-overrides.conf"):
+        yield
+
+
 def song(name: str, album_id: str, album: str = "Album", artist: str = "Artist", url: str | None = None) -> dict:
     return {
         "name": name,
@@ -221,10 +227,11 @@ def test_no_match_is_missing_until_retry() -> None:
     top_up(state, Settings(mode="on"), prowlarr, sab, never_have, albums.TickResult(), now=lambda: NOW)
     assert state.albums["a0"]["status"] == albums.MISSING
 
+    # Each search is the query, then the artist alone (#197).
     top_up(state, Settings(mode="on"), prowlarr, sab, never_have, albums.TickResult(), now=lambda: NOW + timedelta(days=1))
-    assert prowlarr.search.call_count == 1
-    top_up(state, Settings(mode="on"), prowlarr, sab, never_have, albums.TickResult(), now=lambda: NOW + timedelta(days=8))
     assert prowlarr.search.call_count == 2
+    top_up(state, Settings(mode="on"), prowlarr, sab, never_have, albums.TickResult(), now=lambda: NOW + timedelta(days=8))
+    assert prowlarr.search.call_count == 4
 
 
 def test_failed_redirect_blocklists_the_release() -> None:
@@ -459,3 +466,137 @@ def test_reduce_to_albums_carries_album_type_and_whole_album_duration() -> None:
     album = reduce_to_albums([s])["B"]
     assert album["album_type"] == "single"
     assert album["duration"] == 400  # one of tracks_count=2 on the playlist
+
+
+# ---------------------------------------------------------------------------
+# Search plans: normalised queries, the artist-only retry, overrides (#197)
+# ---------------------------------------------------------------------------
+
+GLYPH_ARTIST = "⣎⡇ꉺლ༽இ•̛)ྀ◞ ༎ຶ ༽ৣৢ؞ৢ؞ؖ ꉺლ"
+GLYPH_TITLE = "ʅ͡͡͡͡͡͡͡͡͡͡͡(̸̢̛̼̞̭͋ͅ)̸͚̰͛̔̾̀̿͒͂:̴͓̞̑̌̂̆̊͋̀ ҉● ࿀ ● l̡̡̡ ̡͌ Ɵʅ͡͡͡͡͡͡͡͡͡͡͡v̴̢͚͚͎ȯ̶̞̮͖̑̈́)̸̳̥̰̜̥̺̐ͅ ☼⃝◞⊖◟ ∷፨◉☼⃝"
+
+
+def one_album(artist: str, name: str, key: str = "a0", **extra) -> State:
+    state = State()
+    state.albums[key] = {
+        "status": albums.WANTED, "blocklist": [], "name": name, "artist": artist, "tracks_count": 2,
+        "playlists": {"later": [["One", artist], ["Two", artist]]}, **extra,
+    }
+    return state
+
+
+def test_query_is_normalised() -> None:
+    state = one_album("Slayyyter", "WOR$T GIRL IN AMERICA (Deluxe)")
+    prowlarr, sab = fakes([release(title="Slayyyter-WORsT GIRL IN AMERICA-24BIT-48KHZ-WEB-FLAC-2026-OBZEN")])
+    top_up(state, Settings(mode="dry-run"), prowlarr, sab, never_have, albums.TickResult(), now=lambda: NOW)
+    prowlarr.search.assert_called_once_with("slayyyter worst girl in america")
+    assert state.albums["a0"]["status"] == albums.DRY_RUN
+
+
+def test_no_results_retries_the_artist_alone_and_counts_the_hit(caplog) -> None:
+    state = one_album("Tierra Whack", "WHACK'S MUSEUM")
+    prowlarr, sab = fakes()
+    prowlarr.search.side_effect = [[], [release(title="Tierra Whack-WHACKS MUSEUM-24BIT-WEB-FLAC-2026-ENRiCH"),
+                                        release("r2", "Tierra Whack-World Wide Whack-WEB-FLAC-2024-GRP")]]
+    result = albums.TickResult()
+    with caplog.at_level("INFO"):
+        top_up(state, Settings(mode="dry-run"), prowlarr, sab, never_have, result, now=lambda: NOW)
+    assert [c.args[0] for c in prowlarr.search.call_args_list] == ["tierra whack whacks museum", "tierra whack"]
+    assert state.used("hit", NOW) == 2 and result.searched == 2
+    assert state.albums["a0"]["candidate"]["guid"] == "r1"
+
+
+def test_results_that_do_not_match_are_not_retried() -> None:
+    state = one_album("Artist", "Album")
+    prowlarr, sab = fakes([release(title="Other-Thing-WEB-FLAC-2020")])
+    top_up(state, Settings(mode="dry-run"), prowlarr, sab, never_have, albums.TickResult(), now=lambda: NOW)
+    assert prowlarr.search.call_count == 1
+
+
+def test_retry_waits_when_the_budget_is_spent() -> None:
+    state = one_album("Tierra Whack", "WHACK'S MUSEUM")
+    for _ in range(89):
+        state.record("hit", NOW - timedelta(hours=1))
+    prowlarr, sab = fakes(releases=[])
+    top_up(state, Settings(mode="on"), prowlarr, sab, never_have, albums.TickResult(), now=lambda: NOW)
+    assert prowlarr.search.call_count == 1
+    assert state.used("hit", NOW) == 90
+    assert state.albums["a0"]["status"] == albums.WANTED
+
+
+def test_miss_logs_every_query(caplog) -> None:
+    state = one_album("Tierra Whack", "WHACK'S MUSEUM")
+    prowlarr, sab = fakes(releases=[])
+    with caplog.at_level("INFO"):
+        top_up(state, Settings(mode="dry-run"), prowlarr, sab, never_have, albums.TickResult(), now=lambda: NOW)
+    assert 'queries: "tierra whack whacks museum", "tierra whack"' in caplog.text
+    assert state.albums["a0"]["status"] == albums.MISSING
+
+
+def test_glyph_title_searches_the_artist_and_matches_any_album(caplog) -> None:
+    state = one_album("Artist", GLYPH_TITLE)
+    prowlarr, sab = fakes([release(title="Artist-Something Else-WEB-FLAC-2020")])
+    with caplog.at_level("INFO"):
+        top_up(state, Settings(mode="dry-run"), prowlarr, sab, never_have, albums.TickResult(), now=lambda: NOW)
+    prowlarr.search.assert_called_once_with("artist")
+    assert state.albums["a0"]["status"] == albums.DRY_RUN
+    assert "(artist-only) →" in caplog.text
+
+
+def test_glyph_album_without_override_is_not_searched(caplog) -> None:
+    state = one_album(GLYPH_ARTIST, GLYPH_TITLE, key="5glyphAlbumId")
+    prowlarr, sab = fakes()
+    with caplog.at_level("INFO"):
+        top_up(state, Settings(mode="on"), prowlarr, sab, never_have, albums.TickResult(), now=lambda: NOW)
+    prowlarr.search.assert_not_called()
+    assert state.used("hit", NOW) == 0
+    assert state.albums["5glyphAlbumId"]["status"] == albums.MISSING
+    assert "[NOWORDS] 5glyphAlbumId:" in caplog.text and "add a search override" in caplog.text
+
+
+def test_glyph_album_with_override(tmp_path: Path) -> None:
+    conf = tmp_path / "album-overrides.conf"
+    conf.write_text("# id  search\n5glyphAlbumId  webdings four tet  # glyph name\n\n", encoding="utf-8")
+    overrides = albums.load_overrides(conf)
+    assert overrides == {"5glyphAlbumId": "webdings four tet"}
+    state = one_album(GLYPH_ARTIST, GLYPH_TITLE, key="5glyphAlbumId")
+    prowlarr, sab = fakes([release(title="webdings-four-tet")])
+    top_up(state, Settings(mode="dry-run"), prowlarr, sab, never_have, albums.TickResult(), now=lambda: NOW,
+           overrides=overrides)
+    prowlarr.search.assert_called_once_with("webdings four tet")
+    assert state.albums["5glyphAlbumId"]["status"] == albums.DRY_RUN
+
+
+def test_missing_overrides_file_is_empty(tmp_path: Path) -> None:
+    assert albums.load_overrides(tmp_path / "absent.conf") == {}
+
+
+def test_changed_query_re_searches_a_miss_without_a_sample_slot() -> None:
+    """A sampled miss from before #197 (no stored query) is re-checked once, even
+    after the dry-run sample is complete, and then waits MISSING_RETRY again."""
+    state = one_album("Slayyyter", "WOR$T GIRL IN AMERICA", status=albums.MISSING, dry_run=True,
+                      searched_at=albums._iso(NOW - timedelta(hours=1)))
+    prowlarr, sab = fakes(releases=[])
+    settings = Settings(mode="dry-run", dry_run_limit=1)
+    top_up(state, settings, prowlarr, sab, never_have, albums.TickResult(), now=lambda: NOW)
+    assert prowlarr.search.call_count == 2  # the query, then the artist alone
+    assert state.albums["a0"]["query"] == "slayyyter worst girl in america"
+    top_up(state, settings, prowlarr, sab, never_have, albums.TickResult(), now=lambda: NOW + timedelta(hours=1))
+    assert prowlarr.search.call_count == 2
+
+
+def test_new_override_re_searches_a_noword_miss() -> None:
+    state = one_album(GLYPH_ARTIST, GLYPH_TITLE, key="g")
+    prowlarr, sab = fakes([release(title="webdings-four-tet")])
+    top_up(state, Settings(mode="on"), prowlarr, sab, never_have, albums.TickResult(), now=lambda: NOW)
+    assert state.albums["g"]["status"] == albums.MISSING
+    top_up(state, Settings(mode="on"), prowlarr, sab, never_have, albums.TickResult(),
+           now=lambda: NOW + timedelta(minutes=30), overrides={"g": "webdings four tet"})
+    assert state.albums["g"]["status"] == albums.GRABBED
+
+
+def test_various_artists_is_not_retried_alone() -> None:
+    state = one_album("Various Artists", "Some Compilation")
+    prowlarr, sab = fakes(releases=[])
+    top_up(state, Settings(mode="on"), prowlarr, sab, never_have, albums.TickResult(), now=lambda: NOW)
+    assert prowlarr.search.call_count == 1
