@@ -77,6 +77,8 @@ def _deadline_reached(elapsed: float, timeout: int | None) -> bool:
 def classify_failure(error_msg: str) -> str:
     """Map a spotdl error message to a short Prometheus label string."""
     msg = error_msg.lower()
+    if "spotify rate-limited" in msg:
+        return "spotify_rate_limited"
     if re.search(r"spotifyerror|invalid credentials", msg):
         return "auth_spotify"
     if re.search(r"http error 403|sign in to confirm|cookies", msg):

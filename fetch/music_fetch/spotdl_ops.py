@@ -16,6 +16,8 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Callable
 
+from music_fetch import spotify_limit
+
 logger = logging.getLogger(__name__)
 
 _spotdl_instance = None  # process-wide singleton (SpotifyClient + ProgressHandler can't be reinitialised)
@@ -242,6 +244,10 @@ def _make_spotdl(settings: dict):
         use_official_api=True,
         downloader_settings=settings,
     )
+    # Every Spotify reader goes through this client: fail fast on a long 429 (#195).
+    from spotdl.utils.spotify import SpotifyClient  # noqa: PLC0415
+
+    spotify_limit.install(SpotifyClient._instance)
     return _spotdl_instance
 
 
@@ -400,6 +406,9 @@ def sync_playlist(
     if causes is not None:
         causes.clear()
     results = spotdl_obj.download_songs(truly_new)
+    # spotdl turns a per-track Spotify error into a failed download; a rate limit
+    # must fail the run instead of backing those tracks off as [FAIL] (#195).
+    spotify_limit.check()
     reasons = _download_error_reasons(downloader_errors, causes)
 
     # Log per-track outcomes.

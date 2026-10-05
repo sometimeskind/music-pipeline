@@ -21,6 +21,7 @@ from music_fetch.spotdl_ops import SyncResult, find_track_in_snapshot
         ("HTTP Error 403: Forbidden", "auth_youtube"),
         ("Sign in to confirm your age", "auth_youtube"),
         ("cookies are required", "auth_youtube"),
+        ("Spotify rate-limited: Retry-After 62939s, until 2026-10-05 03:00:00 UTC", "spotify_rate_limited"),
         ("429 Too Many Requests", "rate_limited"),
         ("too many requests, back off", "rate_limited"),
         ("some unexpected download error", "spotdl_error"),

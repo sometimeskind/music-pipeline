@@ -278,6 +278,21 @@ def test_tick_persists_state(tmp_path: Path) -> None:
     assert saved.playlists["later"]["snapshot_id"] == "s1"
 
 
+def test_tick_fails_on_a_spotify_rate_limit(tmp_path: Path) -> None:
+    """A long 429 fails the tick (MusicAlbumTickFailing) instead of sleeping (#195)."""
+    from music_fetch.spotify_limit import SpotifyRateLimited
+
+    spotify = FakeSpotify("s1", [])
+    spotify.snapshot_id = MagicMock(side_effect=SpotifyRateLimited(NOW, 62939))
+    prowlarr, sab = fakes()
+    with patch.object(albums, "push_metrics") as push, pytest.raises(SpotifyRateLimited):
+        tick([("later", "url")], spotify, prowlarr, sab, never_have, tmp_path,
+             Settings(mode="dry-run"), tmp_path / "state.json")
+    push.assert_called_once()
+    assert push.call_args.args[1] is False
+    prowlarr.search.assert_not_called()
+
+
 def test_dry_run_stops_at_total_sample_limit() -> None:
     state = wanted_state(10)
     prowlarr, sab = fakes()
