@@ -9,7 +9,6 @@ from music_scan import audit
 from music_scan.audit import audit as run_audit
 from music_scan.audit import find_song, off_by
 
-from .test_guard import _clip
 
 URL = "https://open.spotify.com/track/"
 DEMO = "https://www.youtube.com/watch?v=demo0000000"
@@ -92,7 +91,7 @@ def test_run_reads_playlists_from_item_pages_only(monkeypatch) -> None:
 # ---------------------------------------------------------------------------
 
 @pytest.fixture
-def calico(tmp_path: Path):
+def calico(tmp_path: Path, clip):
     """A library item whose file is a 'demo' (60s) of a 40s Spotify track."""
     from beets.library import Item
 
@@ -101,7 +100,7 @@ def calico(tmp_path: Path):
     libdir = tmp_path / "library"
     path = libdir / "Paul McCartney" / "Flaming Pie" / "06 - Calico Skies.m4a"
     path.parent.mkdir(parents=True)
-    _clip(path, ("tone", 60))
+    clip(path, ("tone", 60))
     lib = MusicLibrary(tmp_path / "library.db", libdir)
     item = Item(path=str(path).encode(), title="Calico Skies", artist="Paul McCartney", album="Flaming Pie",
                 track=6, comments=DEMO)
@@ -116,10 +115,10 @@ def calico(tmp_path: Path):
     lib._lib._close()
 
 
-def _fake_download(seconds: float):
+def _fake_download(clip, seconds: float):
     def download(song, out, cookie):
         assert song["download_url"] == STUDIO, "the download must be pinned to --youtube"
-        f = _clip(out / "Paul McCartney - Calico Skies.m4a", ("tone", seconds))
+        f = clip(out / "Paul McCartney - Calico Skies.m4a", ("tone", seconds))
         from mutagen.mp4 import MP4
 
         audio = MP4(f)
@@ -129,13 +128,13 @@ def _fake_download(seconds: float):
     return download
 
 
-def test_replace_swaps_audio_in_place_and_keeps_identity(calico, tmp_path, monkeypatch) -> None:
+def test_replace_swaps_audio_in_place_and_keeps_identity(calico, clip, tmp_path, monkeypatch) -> None:
     monkeypatch.delenv("PREFECT_API_URL", raising=False)
     lib, item, path = calico
     song = _song("CALICO", "Calico Skies", 40, isrc="GBCAL9700006")
     replaced = tmp_path / "quarantine" / "replaced"
 
-    with patch("music_fetch.spotdl_ops.download_song", side_effect=_fake_download(40)):
+    with patch("music_fetch.spotdl_ops.download_song", side_effect=_fake_download(clip, 40)):
         assert audit.replace(item, song, STUDIO, Path("cookies.txt"), replaced_dir=replaced)
 
     fresh = lib.get_item(item.id)
@@ -151,26 +150,26 @@ def test_replace_swaps_audio_in_place_and_keeps_identity(calico, tmp_path, monke
     assert MP4(path)["\xa9nam"] == ["Calico Skies"]  # beets' tags were written to the new file
 
 
-def test_replace_refuses_a_download_that_fails_the_guard(calico, tmp_path, monkeypatch) -> None:
+def test_replace_refuses_a_download_that_fails_the_guard(calico, clip, tmp_path, monkeypatch) -> None:
     monkeypatch.delenv("PREFECT_API_URL", raising=False)
     lib, item, path = calico
     song = _song("CALICO", "Calico Skies", 40)
 
-    with patch("music_fetch.spotdl_ops.download_song", side_effect=_fake_download(60)):
+    with patch("music_fetch.spotdl_ops.download_song", side_effect=_fake_download(clip, 60)):
         assert not audit.replace(item, song, STUDIO, Path("cookies.txt"), replaced_dir=tmp_path / "r")
     assert abs(lib.get_item(item.id).length - 60) < 1
     assert path.exists()
 
-    with patch("music_fetch.spotdl_ops.download_song", side_effect=_fake_download(60)):
+    with patch("music_fetch.spotdl_ops.download_song", side_effect=_fake_download(clip, 60)):
         assert audit.replace(item, song, STUDIO, Path("cookies.txt"), force=True, replaced_dir=tmp_path / "r")
 
 
-def test_replace_without_pin_refuses_the_same_video(calico, tmp_path, monkeypatch) -> None:
+def test_replace_without_pin_refuses_the_same_video(calico, clip, tmp_path, monkeypatch) -> None:
     lib, item, path = calico
 
     def same_video(song, out, cookie):
         assert "download_url" not in song or song["download_url"] is None
-        f = _clip(out / "x.m4a", ("tone", 40))
+        f = clip(out / "x.m4a", ("tone", 40))
         from mutagen.mp4 import MP4
 
         audio = MP4(f)
