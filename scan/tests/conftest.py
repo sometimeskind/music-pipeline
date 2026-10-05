@@ -1,5 +1,6 @@
 """Shared fixtures for the scan tests."""
 
+import shutil
 import subprocess
 from pathlib import Path
 
@@ -30,5 +31,9 @@ def _clip(path: Path, *parts: tuple[str, float], url: str | None = SPOTIFY_URL) 
 
 @pytest.fixture
 def clip():
-    """Generate an AAC m4a from lavfi tone and silence parts, tagged like spotdl."""
+    """Generate an AAC m4a from lavfi tone and silence parts, tagged like spotdl.
+
+    Skips where ffmpeg is missing (the bare CI runner); the dev image has it."""
+    if not (shutil.which("ffmpeg") and shutil.which("ffprobe")):
+        pytest.skip("ffmpeg not installed")
     return _clip
