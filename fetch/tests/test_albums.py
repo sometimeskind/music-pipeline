@@ -436,3 +436,11 @@ def test_complete_failed_download_tags_nothing(roots) -> None:
     tagged = []
     run_complete(grabbed_state(), albums.Completion("nzo1", False, "album/Artist-Album-FLAC"), roots, tagged=tagged)
     assert tagged == []
+
+
+def test_reduce_to_albums_carries_album_type_and_whole_album_duration() -> None:
+    """The matcher needs both (#189); a partial playlist's duration is scaled up."""
+    s = song("One", "B") | {"album_type": "single", "duration": 200}
+    album = reduce_to_albums([s])["B"]
+    assert album["album_type"] == "single"
+    assert album["duration"] == 400  # one of tracks_count=2 on the playlist

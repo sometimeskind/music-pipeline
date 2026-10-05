@@ -116,14 +116,22 @@ def reduce_to_albums(songs: list[dict]) -> dict[str, dict]:
             "artist": song.get("album_artist") or (song.get("artists") or [""])[0],
             "year": song.get("year"),
             "tracks_count": song.get("tracks_count") or 0,
+            "album_type": song.get("album_type"),
+            "duration": 0,
             "tracks": [],
         })
+        album["duration"] += song.get("duration") or 0
         # [name, artist, song_id, isrc, disc, track]: the IDs let the completion
         # tag the imported items with the entries they satisfy (#176).
         album["tracks"].append([
             song.get("name", ""), (song.get("artists") or [""])[0],
             song.get("song_id"), song.get("isrc"), song.get("disc_number"), song.get("track_number"),
         ])
+    # The playlist may hold part of the album: scale its tracks' duration up to
+    # the whole album, which the matcher's size bound uses (#189).
+    for album in albums.values():
+        if album["tracks_count"] > len(album["tracks"]):
+            album["duration"] = album["duration"] * album["tracks_count"] // len(album["tracks"])
     return albums
 
 
@@ -292,7 +300,8 @@ def top_up(
             logger.warning("[ERR]  %s: search failed: %s", label, exc)
             break  # Prowlarr or the indexer is down; the next tick retries.
         tracks = record.get("tracks_count") or max(len(t) for t in record["playlists"].values())
-        ranked = rank(releases, record["artist"], record["name"], tracks, set(record["blocklist"]), record.get("year"))
+        ranked = rank(releases, record["artist"], record["name"], tracks, set(record["blocklist"]), record.get("year"),
+                      album_type=record.get("album_type"), seconds=record.get("duration") or 0)
         record["searched_at"] = _iso(now())
         if settings.mode != "on":
             record["dry_run"] = True

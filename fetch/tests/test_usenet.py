@@ -151,3 +151,90 @@ def test_sabnzbd_finished_empty_makes_no_call() -> None:
     with patch("music_fetch.usenet.requests.get") as get:
         assert Sabnzbd(url="http://s", api_key="k").finished([]) == {}
     get.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# Wrong releases from the first dry-run sample (#189)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "artist, album, title, size_mb",
+    [
+        # Self-titled: the album words are the artist words.
+        ("Wendy Eisenberg", "Wendy Eisenberg", "Wendy Eisenberg-Viewfinder-16BIT-WEB-FLAC-2024-ENRiCH", 541),
+        # clean_album makes it self-titled; also a CD single.
+        ("Electronic", "Electronic (Special Edition)", "Electronic-Vivid-CDRS6514-CDM-FLAC-1999-HOUND", 210),
+        # The album name inside a box set's title.
+        ("Bob Dylan", "Time Out Of Mind",
+         "Bob Dylan-Fragments Time Out of Mind Sessions (1996-1997) The Bootleg Series Vol. 17-16BIT-WEB-FLAC-2023-ENRiCH",
+         956),
+        # A single of the album's title track.
+        ("Social Distortion", "Born To Kill", "Social Distortion-Born To Kill-Single-24BIT-WEB-FLAC-2026-VEXED", 120),
+    ],
+)
+def test_matches_rejects_the_wrong_picks(artist: str, album: str, title: str, size_mb: int) -> None:
+    assert not matches(rel(title, size=size_mb * MB), artist, album, 11, album_type="album")
+
+
+@pytest.mark.parametrize(
+    "artist, album, title",
+    [
+        ("Wendy Eisenberg", "Wendy Eisenberg", "Wendy Eisenberg-Wendy Eisenberg-16BIT-WEB-FLAC-2024-ENRiCH"),
+        ("Wendy Eisenberg", "Wendy Eisenberg", "Wendy Eisenberg-Self-Titled-WEB-FLAC-2024-GRP"),
+        ("Electronic", "Electronic (Special Edition)", "Electronic-Electronic-(Special Edition)-2CD-FLAC-2013-GRP"),
+        ("Bob Dylan", "Time Out Of Mind", "Bob Dylan-Time Out Of Mind-(Remastered)-WEB-FLAC-1997-GRP"),
+        ("Social Distortion", "Born To Kill", "Social Distortion-Born To Kill-24BIT-WEB-FLAC-2026-VEXED"),
+    ],
+)
+def test_matches_accepts_the_right_releases(artist: str, album: str, title: str) -> None:
+    assert matches(rel(title), artist, album, 11, album_type="album")
+
+
+@pytest.mark.parametrize(
+    "artist, album, title",
+    [
+        # Picks from the first sample that the operator confirmed right.
+        ("Tiga", "HOTLIFE", "Tiga-Hotlife-2026-24Bit-44.1kHz-FLAC"),
+        ("Fred again..", "USB", "Fred Again.USB-SKUDERO-FLAC"),
+        ("Jackson Mico Milas", "Blu Terra", "Jackson Mico Milas-Blu Terra-WEB-2022-BABAS"),
+        ("JPEGMAFIA", "EXPERIMENTAL RAP", "JPEGMAFIA-EXPERIMENTAL RAP-24BIT-WEBFLAC-2026-NACHOS"),
+        ("Danzig", "Danzig II: Lucifuge", "Danzig-II Lucifuge-CD-FLAC-1990-SCORN"),
+        ("My New Band Believe", "My New Band Believe", "My New Band Believe-My New Band Believe-16BIT-WEB-FLAC-2026-FLACCiD"),
+        ("Neurosis", "An Undying Love for a Burning World",
+         "Neurosis-An Undying Love For A Burning World-24BIT-48KHZ-WEB-FLAC-2026-OBZEN"),
+        ("Peter Broderick", "How They Are", "Peter Broderick-How They Are-2010-404"),
+        ("Sam and Louise Sullivan", "Love & Devotion", "Sam and Louise Sullivan-Love and Devotion-16BIT-WEB-FLAC-2026-ENRiCH"),
+        ("Man/Woman/Chainsaw", "Cannonball", "Man Woman Chainsaw-Cannonball-16BIT-WEB-FLAC-2026-FLACCiD"),
+        ("Lusine", "The Waiting Room", "Lusine--The Waiting Room-GI-172-2013-OMA"),
+        ("Erykah Badu", "Before The World Blows", "Erykah Badu X The Alchemist-Before The World Blows-16BIT-WEB-FLAC-2026-ENRiCH"),
+        ("Jeffrey Lewis", "The EVEN MORE Freewheelin' Jeffrey Lewis",
+         "Jeffrey Lewis-The Even More Freewheelin Jeffrey Lewis-16BIT-WEB-FLAC-2025-NRS"),
+        ("Genesis Owusu", "REDSTAR WU & THE WORLDWIDE SCOURGE", "Genesis Owusu-Redstar Wu and The Worldwide Scourge-2026-FLAC"),
+    ],
+)
+def test_matches_keeps_the_confirmed_picks(artist: str, album: str, title: str) -> None:
+    assert matches(rel(title), artist, album, 0, album_type="album")
+
+
+def test_matches_accepts_a_single_when_spotify_says_so() -> None:
+    title = "Social Distortion-Born To Kill-Single-24BIT-WEB-FLAC-2026-VEXED"
+    assert matches(rel(title, size=120 * MB), "Social Distortion", "Born To Kill", 2, album_type="single")
+    # Without album_type, a short tracklist stands in for it.
+    assert matches(rel(title, size=120 * MB), "Social Distortion", "Born To Kill", 2)
+    assert not matches(rel(title, size=120 * MB), "Social Distortion", "Born To Kill", 11)
+
+
+def test_matches_sizes_by_duration_when_known() -> None:
+    forty_minutes = 40 * 60
+    assert matches(rel("Artist-Album-WEB-FLAC-2020-GRP", size=300 * MB), "Artist", "Album", 10, seconds=forty_minutes)
+    assert not matches(rel("Artist-Album-WEB-FLAC-2020-GRP", size=30 * MB), "Artist", "Album", 10, seconds=forty_minutes)
+    assert not matches(rel("Artist-Album-WEB-FLAC-2020-GRP", size=3000 * MB), "Artist", "Album", 10, seconds=forty_minutes)
+
+
+def test_rank_prefers_fewer_leftover_words_within_a_tier() -> None:
+    releases = [
+        rel("Artist-Album-Live Edit-WEB-FLAC-2020-GRP", guid="extra", grabs=50),
+        rel("Artist-Album-WEB-FLAC-2020-GRP", guid="clean", grabs=1),
+    ]
+    assert [r.guid for r in rank(releases, "Artist", "Album", 10, set())] == ["clean", "extra"]

@@ -23,9 +23,12 @@ LOSSLESS_CATEGORY = 3040
 SAB_CATEGORY = "album"
 
 # Size sanity per album track: below this a release is a single or a sampler;
-# above it, a discography or a video.
+# above it, a discography or a video.  The fallback when the album's duration
+# is unknown; the per-second bound runs from ~130 kbps lossy to 24/192 FLAC (#189).
 MIN_BYTES_PER_TRACK = 1_000_000
 MAX_BYTES_PER_TRACK = 150_000_000
+MIN_BYTES_PER_SECOND = 16_000   # ~1 MB/min
+MAX_BYTES_PER_SECOND = 1_000_000  # 60 MB/min
 
 # Tiers, best first.  The library is AAC 256k: lossless transcodes cleanly,
 # MP3 320 is kept as-is by beets (never_convert_lossy_files).
@@ -34,6 +37,24 @@ TIER_MP3_320 = 1
 TIER_OTHER = 2
 
 _REJECT_WORDS = {"discography", "anthology", "karaoke", "instrumental", "tribute"}
+
+# Release types shorter than an album; accepted only when Spotify calls it a single.
+_SINGLE_WORDS = {"single", "ep", "cdm", "cds", "cdep", "maxi"}
+
+# Words a release title may carry beyond artist and album: format, source,
+# edition and release-type tags.  Anything else is a leftover word, a sign the
+# release is a different album that contains this one's name (#189).
+_TAG_WORDS = {
+    "a", "an", "and", "the", "of", "va",
+    "flac", "web", "dl", "cd", "cdda", "cdr", "vinyl", "lp", "mp3", "aac", "alac", "m4a", "ogg",
+    "lossless", "hires", "hi", "res", "cbr", "vbr", "kbps", "bit", "khz", "mono", "stereo",
+    "retail", "promo", "proper", "repack", "dirfix", "nfofix", "int",
+    "remastered", "remaster", "deluxe", "edition", "expanded", "bonus", "tracks", "track",
+    "reissue", "limited", "special", "anniversary", "version", "digital", "album", "explicit", "clean",
+    "bandcamp", "qobuz", "tidal", "deezer", "itunes", "hdtracks", "mfit",
+    "us", "uk", "eu", "jp", "de",
+} | _SINGLE_WORDS
+MAX_LEFTOVER_WORDS = 2
 
 
 @dataclasses.dataclass
@@ -87,9 +108,38 @@ def tier(release: Release) -> int:
     return TIER_OTHER
 
 
-def matches(release: Release, artist: str, album: str, tracks: int) -> bool:
-    """True when the release title names this album and its size fits the track count."""
-    title = set(words(release.title))
+def _drop_group(title: str) -> str:
+    """Strip the scene group, the last segment of a dash-separated title
+    ("Artist-Album-WEB-FLAC-2024-ENRiCH").  A title with fewer than three
+    segments keeps its last one: it may be the album."""
+    segments = re.split(r"(?<! )-(?! )", title)
+    return "-".join(segments[:-1]) if len(segments) >= 3 else title
+
+
+def leftover(release: Release, artist: str, album: str) -> list[str]:
+    """Title words that are not artist, album, a year or number, or a known tag."""
+    known = set(words(artist)) | set(words(album)) | _TAG_WORDS
+    return [w for w in words(_drop_group(release.title)) if w not in known and not any(c.isdigit() for c in w)]
+
+
+def _occurrences(seq: list[str], within: list[str]) -> int:
+    n = len(seq)
+    return sum(1 for i in range(len(within) - n + 1) if within[i:i + n] == seq)
+
+
+def matches(
+    release: Release,
+    artist: str,
+    album: str,
+    tracks: int,
+    *,
+    album_type: str | None = None,
+    seconds: int = 0,
+) -> bool:
+    """True when the release title names this album, carries little else, and
+    its size fits the album's duration (or, unknown, its track count)."""
+    title_words = words(release.title)
+    title = set(title_words)
     album_words = [w for w in words(clean_album(album)) if w not in {"the", "a", "and"}]
     if not album_words or not set(album_words) <= title:
         return False
@@ -98,7 +148,24 @@ def matches(release: Release, artist: str, album: str, tracks: int) -> bool:
         return False
     if title & _REJECT_WORDS and not set(words(album)) & _REJECT_WORDS:
         return False
-    if tracks > 0 and not (tracks * MIN_BYTES_PER_TRACK <= release.size <= tracks * MAX_BYTES_PER_TRACK):
+    extra = leftover(release, artist, album)
+    if len(extra) > MAX_LEFTOVER_WORDS:
+        return False
+    # Self-titled: the artist words already satisfy the album check, so the
+    # title must name the album a second time, say so, or carry nothing else.
+    if set(album_words) <= set(artist_words) and not (
+        _occurrences(words(clean_album(album)), title_words) >= 2
+        or {"self", "titled"} <= title
+        or not extra
+    ):
+        return False
+    is_single = album_type == "single" if album_type else 0 < tracks <= 3
+    if title & _SINGLE_WORDS - set(words(album)) and not is_single:
+        return False
+    if seconds > 0:
+        if not seconds * MIN_BYTES_PER_SECOND <= release.size <= seconds * MAX_BYTES_PER_SECOND:
+            return False
+    elif tracks > 0 and not (tracks * MIN_BYTES_PER_TRACK <= release.size <= tracks * MAX_BYTES_PER_TRACK):
         return False
     return True
 
@@ -110,20 +177,24 @@ def rank(
     tracks: int,
     blocklist: set[str],
     year: int | str | None = None,
+    *,
+    album_type: str | None = None,
+    seconds: int = 0,
 ) -> list[Release]:
-    """Matching releases, best first: tier, then the Spotify year in the title
-    (a remaster or reissue usually carries a different one), then grabs (a
-    proxy for completion)."""
+    """Matching releases, best first: tier, then fewest leftover title words,
+    then the Spotify year in the title (a remaster or reissue usually carries a
+    different one), then grabs (a proxy for completion)."""
     candidates = [
         r for r in releases
-        if r.guid not in blocklist and r.download_url and matches(r, artist, album, tracks)
+        if r.guid not in blocklist and r.download_url
+        and matches(r, artist, album, tracks, album_type=album_type, seconds=seconds)
     ]
     year_word = str(year) if year else None
 
     def other_year(r: Release) -> int:
         return 0 if year_word is None or year_word in words(r.title) else 1
 
-    return sorted(candidates, key=lambda r: (tier(r), other_year(r), -r.grabs, r.size))
+    return sorted(candidates, key=lambda r: (tier(r), len(leftover(r, artist, album)), other_year(r), -r.grabs, r.size))
 
 
 class Prowlarr:
