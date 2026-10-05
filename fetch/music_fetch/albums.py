@@ -32,11 +32,14 @@ from pathlib import Path
 from typing import Callable, Protocol
 
 from music_fetch.metrics import _gauge, _push
-from music_fetch.usenet import Release, clean_album, rank
+from music_fetch.usenet import Release, clean_album, normalise, rank, readable
 
 logger = logging.getLogger(__name__)
 
 STATE_FILE = Path("/root/Music/inbox/spotdl/.albums.json")
+# Search text for albums whose names no normalisation reaches (#197); mounted
+# from the homelab repo next to playlists.conf.
+OVERRIDES_FILE = Path("/root/.config/music-pipeline/album-overrides.conf")
 
 WANTED = "wanted"      # waiting for a search slot
 DRY_RUN = "dry-run"    # searched in dry-run; the pick is in `candidate`
@@ -133,6 +136,51 @@ def reduce_to_albums(songs: list[dict]) -> dict[str, dict]:
         if album["tracks_count"] > len(album["tracks"]):
             album["duration"] = album["duration"] * album["tracks_count"] // len(album["tracks"])
     return albums
+
+
+def load_overrides(path: Path = OVERRIDES_FILE) -> dict[str, str]:
+    """Search text by Spotify album ID, for names no normalisation can reach.
+
+    Format: one ``<album id>  <search words…>`` per line; ``#`` comments and
+    blank lines are ignored.  A missing file means no overrides.
+    """
+    if not path.exists():
+        return {}
+    overrides: dict[str, str] = {}
+    for raw in path.read_text(encoding="utf-8").splitlines():
+        parts = raw.split("#")[0].split(maxsplit=1)
+        if len(parts) == 2 and normalise(parts[1]):
+            overrides[parts[0]] = normalise(parts[1])
+    return overrides
+
+
+@dataclasses.dataclass
+class Plan:
+    """How to search for an album: the queries in order (the second, the artist
+    alone, only when the first finds nothing) and what rank() matches on."""
+    queries: list[str]
+    artist: str = ""
+    album: str = ""
+    any_album: bool = False
+    note: str = ""
+
+
+def plan(key: str, record: dict, overrides: dict[str, str]) -> Plan:
+    """The searches for an album (#197).  An override wins; a title with no
+    readable words searches the artist alone and matches any of their releases
+    on size; with neither, there is nothing to search (``queries`` empty)."""
+    if key in overrides:
+        return Plan([overrides[key]], album=overrides[key], note=" (override)")
+    artist = record["artist"] if readable(record["artist"]) else ""
+    name = clean_album(record["name"])
+    if readable(name):
+        first = normalise(f"{artist} {name}")
+        # Retrying a compilation as "various artists" would only list compilations.
+        retry = artist and artist.lower() != "various artists"
+        return Plan([first, normalise(artist)] if retry else [first], artist=artist, album=record["name"])
+    if artist:
+        return Plan([normalise(artist)], artist=artist, album=record["name"], any_album=True, note=" (artist-only)")
+    return Plan([])
 
 
 # ---------------------------------------------------------------------------
@@ -247,14 +295,20 @@ def refresh_playlists(
         logger.info("    %d track(s) on %d album(s)", len(songs), len(wanted))
 
 
-def _due(record: dict, now: datetime, mode: str) -> bool:
+def _requery(record: dict, search: Plan) -> bool:
+    """A missing album whose query has changed since its search (a fix to the
+    normalisation, or a new override) is searched again at once."""
+    return record.get("status") == MISSING and record.get("query") != (search.queries[0] if search.queries else "")
+
+
+def _due(record: dict, now: datetime, mode: str, search: Plan) -> bool:
     status = record.get("status")
     if status == WANTED:
         return True
     if status == DRY_RUN:
         return mode == "on"
     if status == MISSING:
-        return now - datetime.fromisoformat(record["searched_at"]) >= MISSING_RETRY
+        return _requery(record, search) or now - datetime.fromisoformat(record["searched_at"]) >= MISSING_RETRY
     return False
 
 
@@ -266,8 +320,10 @@ def top_up(
     have: Callable[[str, list[list[str]]], bool],
     result: TickResult,
     now: Callable[[], datetime] = _now,
+    overrides: dict[str, str] | None = None,
 ) -> None:
     """Search and grab wanted albums until the queue or a budget is full."""
+    overrides = overrides or {}
     if settings.mode == "on":
         slots = settings.max_in_flight - state.in_flight()
     else:
@@ -276,9 +332,18 @@ def top_up(
         if slots <= 0:
             logger.info("Dry-run sample complete (%d album(s), ALBUM_DRY_RUN_LIMIT) — not searching", sampled)
     for key, record in list(state.albums.items()):
-        if slots <= 0:
-            break
-        if not _due(record, now(), settings.mode):
+        label = f"{record['artist']} — {record['name']}"
+        search = plan(key, record, overrides)
+        if not _due(record, now(), settings.mode, search):
+            continue
+        if not search.queries:
+            # Costs nothing, so it is logged even when no slot is free.
+            record.update(status=MISSING, searched_at=_iso(now()), query="")
+            logger.warning("[NOWORDS] %s: %s: add a search override", key, label)
+            continue
+        # In dry-run, re-checking a sampled miss after its query changed takes no sample slot.
+        recheck = settings.mode != "on" and record.get("dry_run") and _requery(record, search)
+        if slots <= 0 and not recheck:
             continue
         if all(have(pl, tracks) for pl, tracks in record.get("playlists", {}).items()):
             record["status"] = HAVE
@@ -290,33 +355,45 @@ def top_up(
             logger.info("Grab budget spent (%d/24h) — stopping", settings.grabs_per_day)
             break
 
-        label = f"{record['artist']} — {record['name']}"
-        query = f"{record['artist']} {clean_album(record['name'])}"
-        state.record("hit", now())
-        result.searched += 1
+        sent: list[str] = []
+        releases: list[Release] = []
         try:
-            releases = prowlarr.search(query)
+            for query in search.queries:
+                if sent and (releases or state.used("hit", now()) >= settings.hits_per_day):
+                    break
+                state.record("hit", now())
+                result.searched += 1
+                sent.append(query)
+                releases = prowlarr.search(query)
         except Exception as exc:
             logger.warning("[ERR]  %s: search failed: %s", label, exc)
             break  # Prowlarr or the indexer is down; the next tick retries.
+        if not releases and len(sent) < len(search.queries):
+            logger.info("Indexer API budget spent (%d/24h) before the artist-only retry for %s — stopping",
+                        settings.hits_per_day, label)
+            break  # The album keeps its status; the next window searches it again.
         tracks = record.get("tracks_count") or max(len(t) for t in record["playlists"].values())
-        ranked = rank(releases, record["artist"], record["name"], tracks, set(record["blocklist"]), record.get("year"),
-                      album_type=record.get("album_type"), seconds=record.get("duration") or 0)
+        ranked = rank(releases, search.artist, search.album, tracks, set(record["blocklist"]), record.get("year"),
+                      album_type=record.get("album_type"), seconds=record.get("duration") or 0,
+                      any_album=search.any_album)
         record["searched_at"] = _iso(now())
+        record["query"] = search.queries[0]
         if settings.mode != "on":
             record["dry_run"] = True
         if not ranked:
             record["status"] = MISSING
-            logger.info("[MISS] %s: %d result(s), none match", label, len(releases))
+            logger.info("[MISS] %s%s: %d result(s), none match; queries: %s",
+                        label, search.note, len(releases), ", ".join(f'"{q}"' for q in sent))
             continue
 
         best: Release = ranked[0]
         record["candidate"] = best.as_dict()
         if settings.mode != "on":
             record["status"] = DRY_RUN
-            logger.info("[PICK] %s → %s (%.0f MB, %d grabs, %d other match(es))",
-                        label, best.title, best.size / 1e6, best.grabs, len(ranked) - 1)
-            slots -= 1
+            logger.info("[PICK] %s%s → %s (%.0f MB, %d grabs, %d other match(es))",
+                        label, search.note, best.title, best.size / 1e6, best.grabs, len(ranked) - 1)
+            if not recheck:
+                slots -= 1
             continue
 
         state.record("grab", now())
@@ -339,7 +416,7 @@ def top_up(
         record["grabbed_at"] = _iso(now())
         result.grabbed += 1
         slots -= 1
-        logger.info("[GRAB] %s → %s (%.0f MB)", label, best.title, best.size / 1e6)
+        logger.info("[GRAB] %s%s → %s (%.0f MB)", label, search.note, best.title, best.size / 1e6)
 
 
 def status_counts(state: State) -> dict[str, int]:
@@ -376,6 +453,7 @@ def tick(
     settings: Settings | None = None,
     state_file: Path = STATE_FILE,
     on_completion: Callable[[State, "Completion"], object] | None = None,
+    overrides_file: Path = OVERRIDES_FILE,
 ) -> TickResult:
     """One album-mode pass: refresh changed playlists, recover lost import
     triggers (*on_completion*, ``on`` only), then top the queue up."""
@@ -392,7 +470,7 @@ def tick(
             for completion in lost_completions(state, sabnzbd):
                 logger.info("Recovering lost import trigger for %s", completion.nzo_id)
                 on_completion(state, completion)
-        top_up(state, settings, prowlarr, sabnzbd, have, result)
+        top_up(state, settings, prowlarr, sabnzbd, have, result, overrides=load_overrides(overrides_file))
         success = True
     finally:
         state.save(state_file)

@@ -13,6 +13,7 @@ import dataclasses
 import logging
 import os
 import re
+import unicodedata
 
 import requests
 
@@ -83,9 +84,44 @@ class Release:
         return dataclasses.asdict(self)
 
 
+# Letters NFKD leaves whole; release names spell them out.
+_FOLD = str.maketrans({"æ": "ae", "œ": "oe", "ø": "o", "ð": "d", "þ": "th", "ł": "l", "đ": "d", "ı": "i"})
+_APOSTROPHES = re.compile(r"['’ʼ‘`]")
+
+
+def _prepare(text: str) -> str:
+    """Fold *text* the way release names spell a stylised name (#197).
+
+    Diacritics go (Beyoncé → beyonce); '$' is always an s (WOR$T, Ke$ha); '@'
+    and '!' only inside a word (P!nk, but Help!); '&' and '+' read 'and';
+    apostrophes are deleted, joining the word (WHACK'S → whacks).
+    """
+    text = unicodedata.normalize("NFKD", text)
+    text = "".join(c for c in text if not unicodedata.combining(c)).casefold().translate(_FOLD)
+    text = _APOSTROPHES.sub("", text).replace("$", "s")
+    text = re.sub(r"(?<=[a-z0-9])@(?=[a-z0-9])", "a", text)
+    text = re.sub(r"(?<=[a-z0-9])!(?=[a-z0-9])", "i", text)
+    return re.sub(r"[&+]", " and ", text)
+
+
 def words(text: str) -> list[str]:
-    """Lowercase alphanumeric tokens; '&' and 'and' are treated alike."""
-    return re.findall(r"[a-z0-9]+", text.lower().replace("&", " and "))
+    """Lowercase ASCII alphanumeric tokens of *text*, folded by :func:`_prepare`.
+    The query and the matcher share it, so both read WOR$T as worst."""
+    return re.findall(r"[a-z0-9]+", _prepare(text))
+
+
+def normalise(text: str) -> str:
+    """*text* as search words: ``"Slayyyter WOR$T GIRL"`` → ``"slayyyter worst girl"``."""
+    return " ".join(words(text))
+
+
+def readable(text: str) -> bool:
+    """True when most of *text* survives as words.  A name made of glyphs or
+    Zalgo marks leaves a few stray letters (an ``l``, a ``v``), which would
+    only search as noise; it needs the artist, or an override (#197)."""
+    chars = [c for c in _prepare(text) if not c.isspace()]
+    kept = sum(1 for c in chars if c.isascii() and c.isalnum())
+    return kept > 0 and kept * 2 >= len(chars)
 
 
 def clean_album(name: str) -> str:
@@ -135,25 +171,30 @@ def matches(
     *,
     album_type: str | None = None,
     seconds: int = 0,
+    any_album: bool = False,
 ) -> bool:
     """True when the release title names this album, carries little else, and
-    its size fits the album's duration (or, unknown, its track count)."""
+    its size fits the album's duration (or, unknown, its track count).
+
+    *any_album* is for a title with no readable words (#197): any release by
+    the artist matches on size and type alone, and the pick is logged as such.
+    """
     title_words = words(release.title)
     title = set(title_words)
     album_words = [w for w in words(clean_album(album)) if w not in {"the", "a", "and"}]
-    if not album_words or not set(album_words) <= title:
+    if not any_album and (not album_words or not set(album_words) <= title):
         return False
     artist_words = [w for w in words(artist) if w not in {"the", "a", "and"}]
     if artist.lower() not in ("various artists", "") and not set(artist_words) <= title:
         return False
     if title & _REJECT_WORDS and not set(words(album)) & _REJECT_WORDS:
         return False
-    extra = leftover(release, artist, album)
+    extra = [] if any_album else leftover(release, artist, album)
     if len(extra) > MAX_LEFTOVER_WORDS:
         return False
     # Self-titled: the artist words already satisfy the album check, so the
     # title must name the album a second time, say so, or carry nothing else.
-    if set(album_words) <= set(artist_words) and not (
+    if not any_album and set(album_words) <= set(artist_words) and not (
         _occurrences(words(clean_album(album)), title_words) >= 2
         or {"self", "titled"} <= title
         or not extra
@@ -180,6 +221,7 @@ def rank(
     *,
     album_type: str | None = None,
     seconds: int = 0,
+    any_album: bool = False,
 ) -> list[Release]:
     """Matching releases, best first: tier, then fewest leftover title words,
     then the Spotify year in the title (a remaster or reissue usually carries a
@@ -187,7 +229,7 @@ def rank(
     candidates = [
         r for r in releases
         if r.guid not in blocklist and r.download_url
-        and matches(r, artist, album, tracks, album_type=album_type, seconds=seconds)
+        and matches(r, artist, album, tracks, album_type=album_type, seconds=seconds, any_album=any_album)
     ]
     year_word = str(year) if year else None
 
