@@ -4,7 +4,9 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from music_fetch.usenet import Prowlarr, Release, Sabnzbd, clean_album, matches, normalise, rank, readable, tier
+from music_fetch.usenet import (
+    Prowlarr, Release, Sabnzbd, clean_album, leftover, matches, normalise, rank, readable, tier,
+)
 
 MB = 1_000_000
 
@@ -294,7 +296,7 @@ def test_matches_stylised_names(artist: str, album: str, title: str) -> None:
 
 
 def test_matches_override_words() -> None:
-    """An override is matched as the album, with no artist check."""
+    """An override is matched as the album; its words stand in for the artist (#200)."""
     assert matches(rel("webdings-four-tet", size=300 * MB), "", "webdings four tet", 10)
     assert not matches(rel("four-tet-rounds", size=300 * MB), "", "webdings four tet", 10)
 
@@ -306,3 +308,76 @@ def test_matches_any_album_by_the_artist_on_size_and_type() -> None:
     assert not matches(rel("Artist-Some Song-Single-WEB-FLAC-2026-GRP", size=300 * MB), "Artist", "÷", 10,
                        any_album=True, album_type="album")
     assert not matches(rel("Artist-Some Album-WEB-FLAC-2026-GRP", size=5 * MB), "Artist", "÷", 10, any_album=True)
+
+
+# ---------------------------------------------------------------------------
+# The release title leads with the artist (#200)
+# ---------------------------------------------------------------------------
+
+
+def test_matches_rejects_another_artists_album_of_the_same_name() -> None:
+    """Elvis27's album *Electronic* is not the band Electronic's self-titled one:
+    the digit-bearing artist word must not vanish into the year/catalogue rule."""
+    title = "Elvis27-Electronic-ANTI087-WEB-2026-YALLA"
+    assert not matches(rel(title, size=171 * MB), "Electronic", "Electronic (Special Edition)", 11,
+                       album_type="album")
+
+
+def test_leftover_counts_digit_words_only_in_the_artist_segment() -> None:
+    title = "Artist X Elvis27-Album-ANTI087-WEB-2026-GRP"
+    assert leftover(rel(title), "Artist", "Album") == ["x", "elvis27"]
+
+
+def test_matches_needs_the_artist_first() -> None:
+    assert not matches(rel("Great Album-The Artist-WEB-FLAC-2020-GRP"), "The Artist", "Great Album", 10)
+    assert not matches(rel("Someone-Summer Hits-WEB-320-2020-GRP"), "Various Artists", "Summer Hits", 10)
+    assert matches(rel("Various Artists-Summer Hits-WEB-320-2020-GRP"), "Various Artists", "Summer Hits", 10)
+    assert matches(rel("Jay-Z-The Blueprint-CD-FLAC-2001-GRP"), "JAY-Z", "The Blueprint", 13)
+    assert matches(rel("Beatles-Abbey Road-CD-FLAC-1969-GRP"), "The Beatles", "Abbey Road", 17)
+
+
+@pytest.mark.parametrize(
+    "artist, album, title, size_mb",
+    [
+        # Every pick from the 2026-10-05 re-sample (Loki, from 12:50 UTC), Electronic aside.
+        ("Danzig", "Danzig II: Lucifuge", "Danzig-II Lucifuge-CD-FLAC-1990-SCORN", 354),
+        ("Jeffrey Lewis", "The EVEN MORE Freewheelin' Jeffrey Lewis",
+         "Jeffrey Lewis-The Even More Freewheelin Jeffrey Lewis-16BIT-WEB-FLAC-2025-NRS", 300),
+        ("Gold Panda", "TON UP", "Gold Panda-TON UP-16BIT-WEB-FLAC-2026-ENRiCH", 251),
+        ("Genesis Owusu", "REDSTAR WU & THE WORLDWIDE SCOURGE",
+         "Genesis Owusu-Redstar Wu and The Worldwide Scourge-2026-FLAC", 413),
+        ("mary in the junkyard", "Role Model Hermit",
+         "Mary In The Junkyard-Role Model Hermit-24BIT-WEB-FLAC-2026-ENViED", 578),
+        ("Swapmeet", "Mount Zero", "Swapmeet-Mount Zero-24BIT-WEB-FLAC-2026-ENRiCH", 465),
+        ("My New Band Believe", "My New Band Believe",
+         "My New Band Believe-My New Band Believe-16BIT-WEB-FLAC-2026-FLACCiD", 305),
+        ("Neurosis", "An Undying Love for a Burning World",
+         "Neurosis-An Undying Love For A Burning World-24BIT-48KHZ-WEB-FLAC-2026-OBZEN", 942),
+        ("Aldous Harding", "Train on the Island", "Aldous Harding-Train On The Island-24BIT-WEB-FLAC-2026-ENRiCH", 901),
+        ("Bob Dylan", "Time Out Of Mind", "Bob Dylan-Time Out Of Mind-24-44-WEB-FLAC-REMASTERED-1997-OBZEN", 856),
+        ("IAN SWEET", "Shiverstruck", "IAN SWEET-Shiverstruck-24BIT-WEB-FLAC-2026-ENRiCH", 928),
+        ("Sam and Louise Sullivan", "Love & Devotion",
+         "Sam and Louise Sullivan-Love and Devotion-16BIT-WEB-FLAC-2026-ENRiCH", 216),
+        ("Man/Woman/Chainsaw", "Cannonball", "Man Woman Chainsaw-Cannonball-16BIT-WEB-FLAC-2026-FLACCiD", 330),
+        ("Lusine", "The Waiting Room", "Lusine--The Waiting Room-GI-172-2013-OMA", 113),
+        ("Erykah Badu", "Before The World Blows",
+         "Erykah Badu X The Alchemist-Before The World Blows-16BIT-WEB-FLAC-2026-ENRiCH", 453),
+        ("Lambchop", "Punching the Clown", "Lambchop-Punching the Clown-WEB-2026-ENRiCH", 127),
+        ("Sports Team", "Boys These Days",
+         "Sports Team-Boys These Days-DELUXE EDITION-24BIT-44KHZ-WEB-FLAC-2025-OBZEN", 939),
+        ("Tierra Whack", "WHACK'S MUSEUM", "Tierra Whack-WHACKS MUSEUM-16BIT-WEB-FLAC-2026-ENRiCH", 185),
+        ("Slayyyter", "WOR$T GIRL IN AMERICA", "Slayyyter-Worst Girl In America-CD-FLAC-2026-PERFECT", 401),
+        ("L'Rain", "fata morgana", "LRain-fata morgana-16BIT-WEB-FLAC-2026-ENRiCH", 253),
+        # A compilation.
+        ("Various Artists", "Summer Hits", "VA-Summer Hits-WEB-FLAC-2026-GRP", 400),
+    ],
+)
+def test_matches_keeps_the_resample_picks(artist: str, album: str, title: str, size_mb: int) -> None:
+    assert matches(rel(title, size=size_mb * MB), artist, album, 0)
+
+
+def test_matches_override_needs_its_words_first() -> None:
+    """An override (no artist) still checks the title's first word against its words."""
+    title = "Wingdings-Four Tet-Untitled-TEXT059-WEB-2026-BB"
+    assert matches(rel(title, size=102 * MB), "", "wingdings four tet", 0)
+    assert not matches(rel("Elvis27-Wingdings Four Tet-WEB-2026-GRP", size=102 * MB), "", "wingdings four tet", 0)

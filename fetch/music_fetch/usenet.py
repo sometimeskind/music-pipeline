@@ -56,6 +56,8 @@ _TAG_WORDS = {
     "us", "uk", "eu", "jp", "de",
 } | _SINGLE_WORDS
 MAX_LEFTOVER_WORDS = 2
+# Words a release name may add or drop around a name ("The Beatles", "Love & Devotion").
+_ARTICLES = {"the", "a", "and"}
 
 
 @dataclasses.dataclass
@@ -153,9 +155,30 @@ def _drop_group(title: str) -> str:
 
 
 def leftover(release: Release, artist: str, album: str) -> list[str]:
-    """Title words that are not artist, album, a year or number, or a known tag."""
+    """Title words that are not artist, album, a year or number, or a known tag.
+
+    A word with a digit counts in the leading (artist) segment, where it is a
+    name, not a year or catalogue number: ``Elvis27-Electronic-…`` (#200).
+    """
     known = set(words(artist)) | set(words(album)) | _TAG_WORDS
-    return [w for w in words(_drop_group(release.title)) if w not in known and not any(c.isdigit() for c in w)]
+    title = _drop_group(release.title)
+    segments = re.split(r"(?<! )-(?! )", title)
+    lead = set(words(segments[0])) if len(segments) >= 2 else set()
+    return [w for w in words(title) if w not in known and (w in lead or not any(c.isdigit() for c in w))]
+
+
+def _leads_with_artist(title_words: list[str], artist: str, album: str) -> bool:
+    """True when the title starts with the artist, as scene names do
+    (``Artist-Album-…``); a collaboration may follow (``Artist X Other-…``).
+    A compilation starts ``VA``/``Various``.  An override (no artist) starts
+    with one of its own words (#200)."""
+    lead = [w for w in title_words if w not in _ARTICLES]
+    if not artist:
+        return bool(lead) and lead[0] in set(words(album))
+    if artist.lower() == "various artists":
+        return lead[:1] in (["va"], ["various"])
+    names = [w for w in words(artist) if w not in _ARTICLES]
+    return set(lead[:len(names)]) == set(names)
 
 
 def _occurrences(seq: list[str], within: list[str]) -> int:
@@ -181,11 +204,11 @@ def matches(
     """
     title_words = words(release.title)
     title = set(title_words)
-    album_words = [w for w in words(clean_album(album)) if w not in {"the", "a", "and"}]
+    album_words = [w for w in words(clean_album(album)) if w not in _ARTICLES]
     if not any_album and (not album_words or not set(album_words) <= title):
         return False
-    artist_words = [w for w in words(artist) if w not in {"the", "a", "and"}]
-    if artist.lower() not in ("various artists", "") and not set(artist_words) <= title:
+    artist_words = [w for w in words(artist) if w not in _ARTICLES]
+    if not _leads_with_artist(title_words, artist, album):
         return False
     if title & _REJECT_WORDS and not set(words(album)) & _REJECT_WORDS:
         return False
