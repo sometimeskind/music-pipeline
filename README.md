@@ -59,7 +59,8 @@ A full sync cycle (`music-ingest` followed by `music-scan`) runs 8 discrete step
 │  [7] Snapshot reconciliation                                           │
 │        Diffs each .spotdl file against the beets library + quarantine. │
 │        Drops URLs absent from both so spotdl re-downloads them next    │
-│        fetch rather than silently skipping forever.                    │
+│        fetch rather than silently skipping forever. Skips album and    │
+│        nosync playlists: spotdl never re-adds their entries.           │
 │        │                                                               │
 │        ▼                                                               │
 │  [8] Playlist generation + Navidrome trigger                           │

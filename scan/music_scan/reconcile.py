@@ -5,6 +5,11 @@ library and the quarantine directory are dropped. This allows spotdl to
 re-download them on the next fetch run rather than silently skipping them
 forever.
 
+Only playlists spotdl syncs are reconciled.  An ``album`` playlist's snapshot is
+its full Spotify track list, written by the album tick, and a ``nosync``
+playlist's is never refreshed: nothing would re-download a dropped entry, so
+dropping it only loses the playlist's order (#186).
+
 Called by the orchestrator after every scan, before the library push.
 """
 
@@ -14,6 +19,8 @@ import json
 import logging
 from pathlib import Path
 from typing import TYPE_CHECKING
+
+from music_fetch.config import DEFAULT_CONF, load_playlists
 
 if TYPE_CHECKING:
     from music_scan.library import MusicLibrary
@@ -100,9 +107,11 @@ def reconcile_all(
     spotdl_dir: Path = SPOTDL_DIR,
     library_db: Path = LIBRARY_DB,
     quarantine_dir: Path = QUARANTINE_DIR,
+    conf_path: Path = DEFAULT_CONF,
 ) -> int:
-    """Reconcile all .spotdl snapshots against the beets library.
+    """Reconcile the synced playlists' .spotdl snapshots against the beets library.
 
+    Skips ``album`` and ``nosync`` playlists (see the module docstring).
     Scans the quarantine directory once, then verifies each snapshot.
     Skips silently if library_db does not exist (e.g. first run).
     Returns the total number of URLs dropped across all playlists.
@@ -113,7 +122,10 @@ def reconcile_all(
         logger.info("Beets library.db not found — skipping reconciliation")
         return 0
 
-    spotdl_files = sorted(spotdl_dir.glob("*.spotdl"))
+    unsynced = set()
+    if conf_path.exists():
+        unsynced = {pl.name for pl in load_playlists(conf_path) if pl.album or pl.nosync}
+    spotdl_files = [f for f in sorted(spotdl_dir.glob("*.spotdl")) if f.stem not in unsynced]
     if not spotdl_files:
         return 0
 

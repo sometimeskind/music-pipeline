@@ -7,7 +7,7 @@ import logging
 import unittest.mock as mock
 from pathlib import Path
 
-from music_scan.reconcile import reconcile_snapshot
+from music_scan.reconcile import reconcile_all, reconcile_snapshot
 
 
 # ---------------------------------------------------------------------------
@@ -146,3 +146,37 @@ def test_reconcile_empty_snapshot_no_op(tmp_path: Path) -> None:
 
     assert dropped == 0
     lib.spotify_urls_by_source.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# reconcile_all — album and nosync playlists are skipped (#186)
+# ---------------------------------------------------------------------------
+
+
+def test_reconcile_all_skips_album_and_nosync_playlists(tmp_path: Path) -> None:
+    """Entries of album and nosync playlists that aren't in the library are kept."""
+    spotdl_dir = tmp_path / "spotdl"
+    spotdl_dir.mkdir()
+    synced = _write_snapshot(spotdl_dir, "synced", ["https://open.spotify.com/track/A"])
+    album = _write_snapshot(spotdl_dir, "later", ["https://open.spotify.com/track/B"])
+    frozen = _write_snapshot(spotdl_dir, "frozen", ["https://open.spotify.com/track/C"])
+    conf = tmp_path / "playlists.conf"
+    conf.write_text(
+        "synced https://open.spotify.com/playlist/s\n"
+        "later https://open.spotify.com/playlist/l album\n"
+        "frozen https://open.spotify.com/playlist/f nosync\n",
+        encoding="utf-8",
+    )
+    db = tmp_path / "library.db"
+    db.touch()
+    lib = _mock_library(frozenset())
+    lib.__enter__ = mock.Mock(return_value=lib)
+    lib.__exit__ = mock.Mock(return_value=False)
+
+    with mock.patch("music_scan.library.MusicLibrary", return_value=lib):
+        dropped = reconcile_all(spotdl_dir, db, tmp_path / "quarantine", conf)
+
+    assert dropped == 1
+    assert json.loads(synced.read_text(encoding="utf-8"))["songs"] == []
+    assert len(json.loads(album.read_text(encoding="utf-8"))["songs"]) == 1
+    assert len(json.loads(frozen.read_text(encoding="utf-8"))["songs"]) == 1
