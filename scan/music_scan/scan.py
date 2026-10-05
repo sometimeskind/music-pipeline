@@ -356,26 +356,34 @@ def tag_album_ids(lib: MusicLibrary, source: str, tracks: list[list], since: flo
 
 
 def apply_pending_removals(pending: PendingRemovals, lib: MusicLibrary) -> int:
-    """Clear beets source tags for tracks and playlists in *pending*. Returns entry count."""
+    """Clear beets source tags for tracks and playlists in *pending*.
+
+    Logs one ``[UNLINK]`` line per item cleared, whichever rung matched it.
+    Returns the number of items modified; entries with no library item are
+    logged and counted separately (#190).
+    """
     logger.info(
         "==> Processing pending removals: %d track(s), %d source(s)...",
         len(pending.tracks),
         len(pending.remove_sources),
     )
-    total = 0
+    total = not_found = 0
     for track in pending.tracks:
-        found = lib.clear_source_tag(
+        items = lib.clear_source_tag(
             title=track.title, artist=track.artist, source=track.source,
             spotify_id=track.spotify_id, isrc=track.isrc,
         )
-        if not found:
+        if not items:
             logger.warning(
                 "  WARNING: not found in beets — may need manual cleanup: %s by %s (source=%s)",
                 track.title,
                 track.artist,
                 track.source,
             )
-        total += 1
+            not_found += 1
+        for item in items:
+            logger.info("  [UNLINK] %s: %s — %s", track.source, item.get("title"), item.get("artist"))
+        total += len(items)
 
     for source_name in pending.remove_sources:
         logger.info("==> Removing all tracks from playlist: %s", source_name)
@@ -387,8 +395,9 @@ def apply_pending_removals(pending: PendingRemovals, lib: MusicLibrary) -> int:
         m3u = PLAYLISTS / f"{source_name}.m3u"
         m3u.unlink(missing_ok=True)
         logger.info("  Cleared %d item(s) and removed .m3u for source=%s", len(items), source_name)
-        total += 1
+        total += len(items)
 
+    logger.info("Cleared the source tag on %d item(s); %d removed entr(ies) not found", total, not_found)
     return total
 
 

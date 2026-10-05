@@ -189,6 +189,13 @@ def _snapshot_songs(sync_data: object) -> list[dict]:
     return sync_data.get("songs") or []
 
 
+def schedule_unlink(pending: list[RemovedTrack], song: dict, playlist_name: str) -> None:
+    """Queue *song*'s removal from *playlist_name* and log it, for both removal paths (#190)."""
+    track = RemovedTrack.from_song(song, playlist_name)
+    logger.info("  Scheduling unlink: %s — %s (%s)", track.title, track.artist, playlist_name)
+    pending.append(track)
+
+
 def _collect_removals(
     pending: list[RemovedTrack],
     removed_urls: set[str],
@@ -209,10 +216,7 @@ def _collect_removals(
         if entry is None:
             logger.warning("  Could not find snapshot entry for removed URL: %s", url)
             continue
-
-        track = RemovedTrack.from_song(entry, playlist_name)
-        logger.info("  Scheduling unlink: %s — %s", track.title, track.artist)
-        pending.append(track)
+        schedule_unlink(pending, entry, playlist_name)
 
 
 def sync_playlists(

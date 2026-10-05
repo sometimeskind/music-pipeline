@@ -92,7 +92,7 @@ def _make_mock_lib() -> mock.MagicMock:
     mock_lib = mock.MagicMock()
     mock_lib.__enter__ = mock.MagicMock(return_value=mock_lib)
     mock_lib.__exit__ = mock.MagicMock(return_value=False)
-    mock_lib.clear_source_tag = mock.MagicMock(return_value=True)
+    mock_lib.clear_source_tag = mock.MagicMock(side_effect=lambda **kw: [{"title": kw["title"], "artist": kw["artist"]}])
     mock_lib.items_by_source = mock.MagicMock(return_value=[])
     mock_lib.items_added_since = mock.MagicMock(return_value=[])
     mock_lib.paths_by_source = mock.MagicMock(return_value=[])
@@ -206,7 +206,7 @@ def testapply_pending_removals_strips_one_source_from_multi(tmp_path: Path) -> N
 
 
 def testapply_pending_removals_returns_total_count() -> None:
-    """Return value is tracks + sources combined."""
+    """Return value counts items modified, by tracks and sources combined."""
     from music_scan.scan import apply_pending_removals
 
     pending = PendingRemovals(
@@ -217,11 +217,35 @@ def testapply_pending_removals_returns_total_count() -> None:
         remove_sources=["gone-pl"],
     )
     mock_lib = _make_mock_lib()
+    mock_lib.items_by_source = mock.MagicMock(return_value=[mock.MagicMock(), mock.MagicMock()])
 
     with mock.patch("music_scan.scan.PLAYLISTS", mock.MagicMock()):
         count = apply_pending_removals(pending, mock_lib)
 
-    assert count == 3
+    assert count == 4
+
+
+def testapply_pending_removals_logs_unlinks_and_skips_not_found(caplog) -> None:
+    """One [UNLINK] line per cleared item; an entry with no item isn't counted (#190)."""
+    from music_scan.scan import apply_pending_removals
+
+    pending = PendingRemovals(
+        tracks=[
+            RemovedTrack(title="A", artist="X", source="later", spotify_id="ID1"),
+            RemovedTrack(title="B", artist="Y", source="later"),
+        ],
+        remove_sources=[],
+    )
+    mock_lib = _make_mock_lib()
+    mock_lib.clear_source_tag = mock.MagicMock(side_effect=[[{"title": "A (Remastered)", "artist": "X"}], []])
+
+    with caplog.at_level("INFO", logger="music_scan.scan"):
+        count = apply_pending_removals(pending, mock_lib)
+
+    assert count == 1
+    assert "[UNLINK] later: A (Remastered) — X" in caplog.text
+    assert "not found in beets" in caplog.text
+    assert "on 1 item(s); 1 removed entr(ies) not found" in caplog.text
 
 
 def test_run_trigger_scan_failure_sets_success_false(tmp_path: Path) -> None:

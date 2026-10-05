@@ -92,14 +92,14 @@ class MusicLibrary:
 
     def clear_source_tag(
         self, title: str, artist: str, source: str, spotify_id: str | None = None, isrc: str | None = None
-    ) -> bool:
+    ) -> list:
         """Clear the source tag on the item the removed playlist entry maps to.
 
         Matches the entry's Spotify ID, then its ISRC, among the *source* items.
         Without either hit (or entries queued before #176), falls back to
         title + artist with beets' substring query — beets has no contains-word
         query; clash validation in load_playlists() prevents false positives —
-        and logs it.  Returns True if at least one item was modified.
+        and logs it.  Returns the items modified (empty when nothing matched).
         """
         item, _ = ItemIndex(self.items_by_source(source)).match(spotify_id, isrc, words=False)
         if item is not None:
@@ -109,11 +109,10 @@ class MusicLibrary:
             query = f"title:{title} artist:{artist} sources:{source}"
             items = list(self._lib.items(query))
             if not items:
-                return False
+                return []
             logger.info("  [WORDS] %s: removed %s — %s matched by title+artist only", source, title, artist)
         for item in items:
             parts = [p.strip() for p in (item.get("sources") or "").split(",")]
             item["sources"] = ",".join(p for p in parts if p and p != source)
             item.store()
-        logger.debug("Cleared source=%s on %d item(s) for %s — %s", source, len(items), title, artist)
-        return True
+        return items

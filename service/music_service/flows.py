@@ -179,7 +179,7 @@ def apply_removals_task() -> int:
     from music_scan.library import MusicLibrary  # noqa: PLC0415
     with MusicLibrary(scan.LIBRARY_DB) as lib:
         count = scan.apply_pending_removals(pending, lib)
-    logger.info("Cleared %d beets entry/entries", count)
+    logger.info("Cleared the source tag on %d beets item(s)", count)
     return count
 
 
@@ -401,11 +401,10 @@ def album_tick_task(settings) -> None:
             on_completion=complete,
         )
 
-    removed = [
-        ingest.RemovedTrack.from_song(s, name)
-        for name, songs in result.removed_songs.items()
-        for s in songs
-    ]
+    removed: list = []
+    for name, songs in result.removed_songs.items():
+        for song in songs:
+            ingest.schedule_unlink(removed, song, name)
     if removed:
         ingest.save_pending_removals(ingest.PendingRemovals(tracks=removed, remove_sources=[]))
         logger.info("Queued %d track removal(s) from album playlists for the next scan", len(removed))
