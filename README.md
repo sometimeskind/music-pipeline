@@ -112,6 +112,8 @@ This extracts cookies directly from Firefox and saves them to `cookies.txt` (alr
 
 Cookies expire every few weeks. Re-export when downloads start failing: the ingest run logs a `YouTube cookies ... look expired` warning, sets the `music_ingest_cookies_expired` gauge to 1, and records the per-track reason (e.g. `HTTP Error 403: Forbidden`) in `/root/Music/inbox/.spotdl-failures.json`.
 
+Each ingest run also reads the expiry stated in `cookies.txt`: it logs `YouTube auth cookies expire <date>` and pushes the soonest expiry among the Google login cookies (`SID`, `HSID`, `SSID`, `APISID`, `SAPISID`, `__Secure-{1,3}PSID`, `__Secure-{1,3}PAPISID`, `LOGIN_INFO`) as `music_ingest_cookies_expiry_timestamp_seconds`. The homelab alert `MusicCookiesExpiringSoon` fires 7 days before that date. A file with no login cookies (exported signed out) logs a warning and pushes no expiry. The stated expiry is about a year out, and Google usually invalidates a session server-side before then, so `music_ingest_cookies_expired` stays the main signal.
+
 ### 3. Set up Spotify credentials
 
 Store your Spotify Developer app credentials in 1Password:

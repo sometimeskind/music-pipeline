@@ -23,6 +23,7 @@ import os
 import re
 import shutil
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable
 
@@ -38,6 +39,14 @@ PENDING_REMOVALS_PATH = SPOTDL_DIR.parent / ".pending-removals.json"
 SPOTIFY_TRACK_URL = "https://open.spotify.com/track/"
 COOKIE_FILE = Path("/root/.config/spotdl/cookies.txt")
 CONF_PATH = Path("/root/.config/music-pipeline/playlists.conf")
+# Google login cookies that gate YouTube access (issue #166, set from MusicGrabber's).
+# The *PSIDTS/*PSIDCC cookies are left out: Google rotates them, so the expiry stated
+# in an exported file says nothing about when they stop working.
+AUTH_COOKIES = frozenset({
+    "SID", "HSID", "SSID", "APISID", "SAPISID",
+    "__Secure-1PSID", "__Secure-3PSID", "__Secure-1PAPISID", "__Secure-3PAPISID",
+    "LOGIN_INFO",
+})
 
 
 @dataclasses.dataclass
@@ -106,6 +115,54 @@ def preflight() -> str | None:
         return "disk_full"
 
     return None
+
+
+def cookie_expiry(path: Path) -> tuple[int, str] | None:
+    """Return (soonest expiry, cookie name) among the auth cookies in a Netscape cookies.txt.
+
+    Session cookies (expiry 0) and non-auth cookies are ignored.  Returns None when no auth
+    cookie has an expiry.  Never returns or logs a cookie value.
+    """
+    soonest: tuple[int, str] | None = None
+    for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+        if line.startswith("#HttpOnly_"):
+            line = line[len("#HttpOnly_"):]
+        elif line.startswith("#"):
+            continue
+        fields = line.split("\t")
+        if len(fields) < 7 or fields[5] not in AUTH_COOKIES:
+            continue
+        try:
+            expiry = int(fields[4])
+        except ValueError:
+            continue
+        if expiry > 0 and (soonest is None or expiry < soonest[0]):
+            soonest = (expiry, fields[5])
+    return soonest
+
+
+def _record_cookie_expiry(metrics: IngestMetrics) -> None:
+    """Log the auth-cookie expiry and set it on ``metrics`` (issue #166).
+
+    A missing file is left to preflight (``missing_cookies``).
+    """
+    if not COOKIE_FILE.exists():
+        return
+    try:
+        found = cookie_expiry(COOKIE_FILE)
+    except OSError:
+        logger.warning("Could not read %s for the cookie expiry", COOKIE_FILE, exc_info=True)
+        return
+    if found is None:
+        logger.warning("No YouTube auth cookie with an expiry in %s — was it exported signed in?", COOKIE_FILE)
+        return
+    expiry, name = found
+    metrics.cookies_expiry_timestamp = expiry
+    logger.info(
+        "YouTube auth cookies expire %s (%s)",
+        datetime.fromtimestamp(expiry, tz=timezone.utc).strftime("%Y-%m-%d %H:%M UTC"),
+        name,
+    )
 
 
 def _jitter() -> None:
@@ -459,6 +516,7 @@ def run() -> PendingRemovals:
     """Execute the full ingest pipeline, push metrics on completion, return pending removals."""
     metrics = IngestMetrics()
     start = time.monotonic()
+    _record_cookie_expiry(metrics)
 
     failure_reason = preflight()
     if failure_reason:
