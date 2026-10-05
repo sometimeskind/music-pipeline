@@ -1091,3 +1091,36 @@ def test_linked_tracks_do_not_use_the_budget(tmp_path: Path, simple_songs) -> No
 
     mock_spotdl.download_songs.assert_called_once_with([new])
     assert (result.attempted, result.linked) == (1, 1)
+
+
+def test_rate_limit_inside_download_fails_the_sync_without_backoff(tmp_path: Path, simple_songs) -> None:
+    """spotdl swallows a per-track Spotify error into (song, None); a long 429 must
+    still fail the run, not back the tracks off as [FAIL] (#195)."""
+    import music_fetch.spotify_limit as spotify_limit
+
+    spotdl_file, output_dir, cookie_file = _setup_sync(tmp_path)
+    save_playlist(url="https://open.spotify.com/playlist/abc", spotdl_file=spotdl_file)
+    failures_file = tmp_path / "failures.json"
+    songs = [_make_mock_song(f"https://open.spotify.com/track/{i}") for i in range(2)]
+    simple_songs.return_value = songs
+    mock_spotdl = mock.Mock()
+    mock_spotdl.downloader.errors = []
+
+    def _download(_batch):
+        try:
+            raise spotify_limit.trip(3600)
+        except spotify_limit.SpotifyRateLimited:
+            pass  # what spotdl's downloader does with it
+        return [(s, None) for s in songs]
+
+    mock_spotdl.download_songs.side_effect = _download
+
+    with mock.patch.object(spotify_limit, "STATE_FILE", tmp_path / ".spotify-rate-limit.json"), \
+         mock.patch.object(spotify_limit, "_limit", None), \
+         mock.patch.object(spotify_limit, "_push"), \
+         mock.patch("music_fetch.spotdl_ops._make_spotdl", return_value=mock_spotdl), \
+         pytest.raises(spotify_limit.SpotifyRateLimited):
+        sync_playlist(spotdl_file, output_dir, cookie_file, failures_file=failures_file)
+
+    assert not failures_file.exists()
+    assert json.loads(spotdl_file.read_text(encoding="utf-8"))["songs"] == []
