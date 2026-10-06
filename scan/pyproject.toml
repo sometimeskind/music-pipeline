@@ -13,6 +13,7 @@ music-scan = "music_scan.cli:main"
 music-mb-fingerprint = "music_scan.mb_fingerprint:main"
 music-backfill-ids = "music_scan.backfill:main"
 music-audit-lengths = "music_scan.audit:main"
+music-embed-covers = "music_scan.cover:main"
 
 [tool.setuptools.packages.find]
 where = ["."]
