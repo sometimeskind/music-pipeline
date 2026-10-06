@@ -15,6 +15,7 @@ music-backfill-ids = "music_scan.backfill:main"
 music-audit-lengths = "music_scan.audit:main"
 music-embed-covers = "music_scan.cover:main"
 music-canon-albums = "music_scan.canon:main"
+music-audit-dupes = "music_scan.dupes:main"
 
 [tool.setuptools.packages.find]
 where = ["."]
