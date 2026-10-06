@@ -426,7 +426,7 @@ def test_album_import_flow_grab_next_uses_search_overrides(tmp_path):
          patch("music_fetch.usenet.Prowlarr", return_value=prowlarr), \
          patch("music_fetch.usenet.Sabnzbd"), \
          patch("music_scan.library.MusicLibrary"), \
-         patch.object(flows, "_album_library_hooks", return_value=(lambda playlist, tracks: False, complete)), \
+         patch.object(flows, "_album_library_hooks", return_value=(lambda playlist, tracks: False, None, complete)), \
          patch.object(flows, "concurrency"):
         flows.album_import_flow("SABnzbd_nzo_1", True, "/downloads/x")
 

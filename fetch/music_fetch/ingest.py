@@ -28,9 +28,10 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable, Iterator
 
+from music_fetch import albums
 from music_fetch.config import load_playlists
 from music_fetch.metrics import IngestMetrics
-from music_fetch.spotdl_ops import find_track_in_snapshot, save_playlist, sync_playlist
+from music_fetch.spotdl_ops import download_fallback, find_track_in_snapshot, save_playlist, sync_playlist
 
 logger = logging.getLogger(__name__)
 
@@ -337,6 +338,8 @@ def sync_playlists(
         logger.info("No .spotdl files found in %s", SPOTDL_DIR)
 
     pending_removals: list[RemovedTrack] = []
+    # Read only: the album tick owns it (#205).
+    album_state = albums.State.load(SPOTDL_DIR / albums.STATE_FILE.name)
 
     for spotdl_file in spotdl_files:
         name = spotdl_file.stem
@@ -348,12 +351,20 @@ def sync_playlists(
             metrics.playlists_total += 1
             continue
 
-        # .album: downloaded whole from Usenet by the album tick, never by spotdl
+        # .album: downloaded whole from Usenet by the album tick.  spotdl only
+        # fetches the tracks album mode handed back to it, in playlist order (#205).
+        fallback: list[dict] | None = None
         if (SPOTDL_DIR / f"{name}.album").exists():
-            logger.info("==> Skipping sync for album playlist: %s (album mode)", name)
-            metrics.playlists_skipped += 1
-            metrics.playlists_total += 1
-            continue
+            try:
+                songs = _snapshot_songs(json.loads(spotdl_file.read_text(encoding="utf-8")))
+            except json.JSONDecodeError:
+                songs = []
+            fallback = albums.fallback_songs(album_state, name, songs)
+            if not fallback:
+                logger.info("==> Skipping sync for album playlist: %s (album mode)", name)
+                metrics.playlists_skipped += 1
+                metrics.playlists_total += 1
+                continue
 
         # Budget exhausted: defer remaining playlists to the next session.
         if remaining is not None and remaining <= 0:
@@ -390,15 +401,27 @@ def sync_playlists(
         output_dir = SPOTDL_DIR / name
         output_dir.mkdir(parents=True, exist_ok=True)
 
+        playlist_in_library = None if in_library is None else functools.partial(in_library, name)
         try:
-            result = sync_playlist(
-                spotdl_file=spotdl_file,
-                output_dir=output_dir,
-                cookie_file=COOKIE_FILE,
-                track_limit=remaining,
-                failures_file=FAILURES_FILE,
-                in_library=None if in_library is None else functools.partial(in_library, name),
-            )
+            if fallback is not None:
+                logger.info("[FALLBACK] %d track(s) album mode could not get from Usenet", len(fallback))
+                result = download_fallback(
+                    fallback,
+                    output_dir=output_dir,
+                    cookie_file=COOKIE_FILE,
+                    track_limit=remaining,
+                    failures_file=FAILURES_FILE,
+                    in_library=playlist_in_library,
+                )
+            else:
+                result = sync_playlist(
+                    spotdl_file=spotdl_file,
+                    output_dir=output_dir,
+                    cookie_file=COOKIE_FILE,
+                    track_limit=remaining,
+                    failures_file=FAILURES_FILE,
+                    in_library=playlist_in_library,
+                )
         except Exception as exc:
             reason = classify_failure(str(exc))
             logger.error(

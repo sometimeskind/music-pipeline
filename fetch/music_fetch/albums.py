@@ -10,6 +10,10 @@ A playlist flagged ``album`` in playlists.conf is never synced by spotdl.  Inste
 2. Top the Usenet queue up to ``ALBUM_MAX_IN_FLIGHT``: for each wanted album not
    already complete in the library, search Prowlarr, rank the releases and send
    the best to SABnzbd.
+3. Hand what Usenet can't supply to spotdl (#205): a missing or failed album's
+   absent tracks, and the few a partial import left out, become ``fallback``
+   tracks the nightly sync downloads into the playlist's inbox.  Once the
+   library holds them all the album is ``filled``.
 
 ``ALBUM_MODE`` is ``off`` (default), ``dry-run`` (search and log the pick, never
 grab) or ``on``.  Indexer use is capped by a rolling-24h budget counted from our
@@ -47,7 +51,9 @@ GRABBED = "grabbed"    # sent to SABnzbd; waits for /trigger-album-import
 MISSING = "missing"    # no matching release; searched again after MISSING_RETRY
 HAVE = "have"          # every playlist track is already in the library
 IMPORTED = "imported"  # downloaded and imported by album mode
-FAILED = "failed"      # MAX_ATTEMPTS releases failed; left for manual review
+FAILED = "failed"      # MAX_ATTEMPTS releases failed; becomes FALLBACK in `on`
+FALLBACK = "fallback"  # the absent tracks are left to spotdl (`fallback_tracks`)
+FILLED = "filled"      # complete, with tracks from spotdl
 
 MISSING_RETRY = timedelta(days=7)
 # Releases tried per album before giving up, so an album beets can't match
@@ -83,6 +89,10 @@ class Settings:
     # so dry-run only samples: a few per tick, dry_run_limit in total.
     dry_run_per_tick: int = 3
     dry_run_limit: int = 25
+    # A release that imports all but this many tracks (or this share of the
+    # album's playlist tracks, if more) isn't re-grabbed: spotdl gets the rest.
+    partial_max_missing: int = 2
+    partial_max_percent: int = 20
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -96,7 +106,14 @@ class Settings:
             grabs_per_day=_env_int("ALBUM_GRABS_PER_DAY", 18),
             hits_per_day=_env_int("ALBUM_HITS_PER_DAY", 90),
             dry_run_limit=_env_int("ALBUM_DRY_RUN_LIMIT", 25),
+            partial_max_missing=_env_int("ALBUM_PARTIAL_MAX_MISSING", 2),
+            partial_max_percent=_env_int("ALBUM_PARTIAL_MAX_PERCENT", 20),
         )
+
+    def partial(self, missing: int, tracks: int) -> bool:
+        """True when an import missing *missing* of *tracks* is close enough to
+        leave the rest to spotdl.  At least one track must have imported."""
+        return 0 < missing < tracks and missing <= max(self.partial_max_missing, tracks * self.partial_max_percent // 100)
 
 
 # ---------------------------------------------------------------------------
@@ -289,7 +306,7 @@ def refresh_playlists(
         for key, record in list(state.albums.items()):
             if key not in wanted and name in record.get("playlists", {}):
                 del record["playlists"][name]
-                if not record["playlists"] and record.get("status") in (WANTED, DRY_RUN, MISSING, HAVE, IMPORTED, FAILED):
+                if not record["playlists"] and record.get("status") in (WANTED, DRY_RUN, MISSING, HAVE, IMPORTED, FAILED, FALLBACK, FILLED):
                     del state.albums[key]
         entry["snapshot_id"] = snapshot
         result.refreshed.append(name)
@@ -423,8 +440,73 @@ def top_up(
         logger.info("[GRAB] %s%s → %s (%.0f MB)", label, search.note, best.title, best.size / 1e6)
 
 
+# ---------------------------------------------------------------------------
+# Fallback: what Usenet can't supply goes to spotdl (#205)
+# ---------------------------------------------------------------------------
+
+# missing(playlist, tracks): the entries of *tracks* the library lacks.
+Missing = Callable[[str, list[list]], list[list]]
+
+
+def _fallback_tracks(record: dict, missing: Missing) -> dict[str, list[str]]:
+    """Per playlist, the Spotify IDs of the album's tracks the library lacks.  A
+    track on several playlists is fetched once, into the first; the fill check
+    tags it for the others.  Tracks without an ID (local files) can't be fetched."""
+    seen: set[str] = set()
+    queued: dict[str, list[str]] = {}
+    for playlist, tracks in record.get("playlists", {}).items():
+        ids = [t[2] for t in missing(playlist, tracks) if t[2] and t[2] not in seen]
+        seen.update(ids)
+        if ids:
+            queued[playlist] = ids
+    return queued
+
+
+def _queue_fallback(record: dict, missing: Missing, source: str) -> None:
+    """Leave the album's absent tracks to spotdl; *source* is why (the status it
+    leaves, or ``partial``)."""
+    record.update(status=FALLBACK, fallback_from=source, fallback_at=_iso(_now()),
+                  fallback_tracks=_fallback_tracks(record, missing))
+    n = sum(len(ids) for ids in record["fallback_tracks"].values())
+    logger.info("[FALLBACK] %s — %s: %d track(s) left to spotdl (%s)", record["artist"], record["name"], n, source)
+
+
+def fallbacks(state: State, have: Callable[[str, list[list]], bool], missing: Missing) -> None:
+    """Hand missing and failed albums to spotdl, and mark fallback albums the
+    library now completes as filled (``on`` only).  An album in fallback is no
+    longer searched."""
+    for record in state.albums.values():
+        status = record.get("status")
+        if status in (MISSING, FAILED):
+            _queue_fallback(record, missing, status)
+        elif status != FALLBACK:
+            continue
+        if all(have(pl, tracks) for pl, tracks in record.get("playlists", {}).items()):
+            record.update(status=FILLED, filled_at=_iso(_now()), fallback_tracks={})
+            logger.info("[FILLED] %s — %s", record["artist"], record["name"])
+        else:
+            record["fallback_tracks"] = _fallback_tracks(record, missing)
+
+
+def fallback_queue(state: State) -> int:
+    """Tracks waiting for spotdl, over every fallback album."""
+    return sum(
+        len(ids) for r in state.albums.values() if r.get("status") == FALLBACK
+        for ids in r.get("fallback_tracks", {}).values()
+    )
+
+
+def fallback_songs(state: State, playlist: str, songs: list[dict]) -> list[dict]:
+    """The .spotdl *songs* of *playlist* left to spotdl, in playlist order."""
+    ids = {
+        song_id for r in state.albums.values() if r.get("status") == FALLBACK
+        for song_id in r.get("fallback_tracks", {}).get(playlist, [])
+    }
+    return [s for s in songs if s.get("song_id") in ids]
+
+
 def status_counts(state: State) -> dict[str, int]:
-    counts = {s: 0 for s in (WANTED, DRY_RUN, GRABBED, MISSING, HAVE, IMPORTED, FAILED)}
+    counts = {s: 0 for s in (WANTED, DRY_RUN, GRABBED, MISSING, HAVE, IMPORTED, FAILED, FALLBACK, FILLED)}
     for record in state.albums.values():
         status = record.get("status", WANTED)
         counts[status] = counts.get(status, 0) + 1
@@ -438,6 +520,7 @@ def push_metrics(state: State, success: bool) -> None:
     lines = ["# TYPE music_albums gauge"]
     lines += [f'music_albums{{status="{s}"}} {n}' for s, n in status_counts(state).items()]
     lines += [
+        _gauge("music_albums_fallback_tracks", fallback_queue(state)),
         "# TYPE music_albums_indexer_used_24h gauge",
         f'music_albums_indexer_used_24h{{kind="hit"}} {state.used("hit", now)}',
         f'music_albums_indexer_used_24h{{kind="grab"}} {state.used("grab", now)}',
@@ -458,9 +541,11 @@ def tick(
     state_file: Path = STATE_FILE,
     on_completion: Callable[[State, "Completion"], object] | None = None,
     overrides_file: Path | None = None,
+    missing: Missing | None = None,
 ) -> TickResult:
     """One album-mode pass: refresh changed playlists, recover lost import
-    triggers (*on_completion*, ``on`` only), then top the queue up."""
+    triggers (*on_completion*, ``on`` only), top the queue up, then hand what
+    Usenet can't supply to spotdl (*missing*, ``on`` only)."""
     settings = settings or Settings.from_env()
     result = TickResult()
     if settings.mode == "off":
@@ -475,6 +560,8 @@ def tick(
                 logger.info("Recovering lost import trigger for %s", completion.nzo_id)
                 on_completion(state, completion)
         top_up(state, settings, prowlarr, sabnzbd, have, result, overrides=load_overrides(overrides_file))
+        if settings.mode == "on" and missing is not None:
+            fallbacks(state, have, missing)
         success = True
     finally:
         state.save(state_file)
@@ -524,22 +611,25 @@ def complete(
     state: State,
     completion: Completion,
     import_inbox: Callable[[], None],
-    have: Callable[[str, list[list[str]]], bool],
+    missing: Missing,
     add_source: Callable[[str, str, list[list[str]]], None],
     tag_ids: Callable[[str, list[list], float, int], None],
     complete_root: Path = USENET_COMPLETE,
     inbox_root: Path = USENET_INBOX,
     quarantine_root: Path = USENET_QUARANTINE,
+    settings: Settings | None = None,
 ) -> str | None:
     """Handle one finished SABnzbd job.  Returns the album's new status, or None
     when the job isn't one of ours (a manual SABnzbd add).
 
     On success the job dir moves to ``inbox/usenet/<playlist>/`` and
     *import_inbox* runs the beets import.  The album counts as imported only if
-    every playlist track is then in the library (*have*): beets quarantining a
-    track, or the download failing, blocklists the release.  The next tick, or
-    the caller's top-up, tries the next one.  Tracks the library already had are
-    skipped as duplicates by beets, so a second release only fills the gaps.
+    every playlist track is then in the library (*missing* finds none): beets
+    quarantining a track, or the download failing, blocklists the release.  The
+    next tick, or the caller's top-up, tries the next one.  Tracks the library
+    already had are skipped as duplicates by beets, so a second release only
+    fills the gaps.  An import only a few tracks short (``Settings.partial``)
+    isn't re-grabbed: those tracks go to spotdl, as do a failed album's (#205).
 
     Usenet files carry no Spotify IDs, so after the import *tag_ids* maps each
     playlist's tracks onto the library items and records their Spotify IDs
@@ -555,8 +645,9 @@ def complete(
     source = _inside(complete_root, completion.path)
     job_name = source.name if source else ""
 
+    settings = settings or Settings.from_env()
     reason = completion.fail_message or "download failed"
-    imported = False
+    imported = partial = False
     if completion.ok and source is not None and source.is_dir() and playlists:
         first = playlists[0]
         dest = inbox_root / first / job_name
@@ -571,13 +662,15 @@ def complete(
             # Leftovers beets doesn't import (nfo, sfv, cue, cover scans).
             shutil.rmtree(dest, ignore_errors=True)
         tracks = record["playlists"][first]
-        imported = have(first, tracks)
+        gaps = missing(first, tracks)
+        imported = not gaps
+        partial = settings.partial(len(gaps), len(tracks))
         if imported:
             # The inbox path names one playlist; tag the album's tracks for the others.
             for other in playlists[1:]:
                 add_source(first, other, record["playlists"][other])
         else:
-            reason = "beets did not import every track (quarantined or unmatched)"
+            reason = f"beets did not import {len(gaps)} of {len(tracks)} track(s) (quarantined or unmatched)"
         for playlist in playlists:
             tag_ids(playlist, record["playlists"][playlist], started, record.get("tracks_count") or 0)
     elif completion.ok:
@@ -589,6 +682,15 @@ def complete(
         logger.info("[DONE] %s", label)
         return IMPORTED
 
+    if partial:
+        logger.info("[PART] %s: %s — not re-grabbing", label, reason)
+        if job_name:
+            for playlist in playlists:
+                shutil.rmtree(quarantine_root / playlist / job_name, ignore_errors=True)
+        record["imported_at"] = _iso(_now())
+        _queue_fallback(record, missing, "partial")
+        return FALLBACK
+
     guid = (record.get("candidate") or {}).get("guid")
     if guid and guid not in record["blocklist"]:
         record["blocklist"].append(guid)
@@ -599,6 +701,7 @@ def complete(
     if record["status"] == FAILED:
         # Keep the last release's quarantined tracks for manual review.
         logger.warning("[FAIL] %s: %s — gave up after %d release(s)", label, reason, record["attempts"])
+        _queue_fallback(record, missing, FAILED)
     else:
         if job_name:
             for playlist in playlists:

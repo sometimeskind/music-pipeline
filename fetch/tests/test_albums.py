@@ -336,7 +336,9 @@ def grabbed_state(playlists=None) -> State:
     return state
 
 
-def run_complete(state, completion, roots, have_result=True, imported=None, tagged=None):
+def run_complete(state, completion, roots, have_result=True, imported=None, tagged=None, gaps=None, settings=None):
+    """*gaps* is how many of each playlist's tracks beets left out (default: all
+    of them when *have_result* is False, none otherwise)."""
     complete_root, inbox, quarantine = roots
     seen = imported if imported is not None else []
     added = []
@@ -347,10 +349,11 @@ def run_complete(state, completion, roots, have_result=True, imported=None, tagg
 
     status = albums.complete(
         state, completion, import_inbox,
-        have=lambda pl, tracks: have_result,
+        missing=lambda pl, tracks: [] if have_result else tracks[:len(tracks) if gaps is None else gaps],
         add_source=lambda have_src, new_src, tracks: added.append((have_src, new_src)),
         tag_ids=lambda pl, tracks, since, count: tagged.append((pl, count)),
         complete_root=complete_root, inbox_root=inbox, quarantine_root=quarantine,
+        settings=settings or Settings(mode="on"),
     )
     return status, seen, added
 
@@ -393,11 +396,17 @@ def test_complete_blocklists_a_failed_download_without_importing(roots) -> None:
     assert not (complete_root / "album" / "Artist-Album-FLAC").exists()
 
 
-def test_complete_gives_up_after_max_attempts(roots) -> None:
-    state = grabbed_state()
+def test_complete_gives_up_after_max_attempts_and_falls_back_to_spotdl(roots) -> None:
+    """A failed album's tracks go to spotdl (#205)."""
+    state = grabbed_state(playlists={"later": [["One", "Artist", "s1"], ["Two", "Artist", "s2"]]})
     state.albums["a0"]["attempts"] = albums.MAX_ATTEMPTS - 1
-    status, _, _ = run_complete(state, albums.Completion("nzo1", False, "album/Artist-Album-FLAC"), roots)
-    assert status == albums.FAILED
+    status, _, _ = run_complete(state, albums.Completion("nzo1", False, "album/Artist-Album-FLAC"), roots,
+                                have_result=False)
+    record = state.albums["a0"]
+    assert status == albums.FALLBACK
+    assert record["fallback_from"] == albums.FAILED
+    assert record["fallback_tracks"] == {"later": ["s1", "s2"]}
+    assert record["attempts"] == albums.MAX_ATTEMPTS
 
 
 def test_complete_ignores_jobs_it_did_not_grab(roots) -> None:
@@ -610,3 +619,136 @@ def test_various_artists_is_not_retried_alone() -> None:
     prowlarr, sab = fakes(releases=[])
     top_up(state, Settings(mode="on"), prowlarr, sab, never_have, albums.TickResult(), now=lambda: NOW)
     assert prowlarr.search.call_count == 1
+
+
+# ---------------------------------------------------------------------------
+# Fallback to spotdl (#205)
+# ---------------------------------------------------------------------------
+
+
+def ten_tracks() -> list[list]:
+    return [[f"T{i}", "Artist", f"s{i}"] for i in range(10)]
+
+
+def test_partial_threshold() -> None:
+    settings = Settings()
+    assert settings.partial(2, 10) and not settings.partial(3, 10)
+    assert settings.partial(4, 20) and not settings.partial(5, 20)  # 20% beats 2
+    assert not settings.partial(0, 10)                               # complete, not partial
+    assert not settings.partial(2, 2)                                # nothing imported
+    assert Settings(partial_max_missing=0, partial_max_percent=0).partial(1, 10) is False
+
+
+def test_complete_partial_import_spends_no_grab(roots) -> None:
+    state = grabbed_state(playlists={"later": ten_tracks()})
+    _, _, quarantine = roots
+    (quarantine / "later" / "Artist-Album-FLAC").mkdir(parents=True)
+    status, _, _ = run_complete(state, albums.Completion("nzo1", True, "album/Artist-Album-FLAC"), roots,
+                                have_result=False, gaps=2)
+    record = state.albums["a0"]
+    assert status == albums.FALLBACK
+    assert record["fallback_from"] == "partial"
+    assert record["fallback_tracks"] == {"later": ["s0", "s1"]}
+    assert record["blocklist"] == [] and record.get("attempts", 0) == 0
+    assert "imported_at" in record
+    assert not (quarantine / "later" / "Artist-Album-FLAC").exists()
+
+
+def test_complete_one_over_the_threshold_still_blocklists(roots) -> None:
+    state = grabbed_state(playlists={"later": ten_tracks()})
+    status, _, _ = run_complete(state, albums.Completion("nzo1", True, "album/Artist-Album-FLAC"), roots,
+                                have_result=False, gaps=3)
+    assert status == albums.WANTED
+    assert state.albums["a0"]["blocklist"] == ["r1"]
+
+
+def test_a_failed_download_is_never_partial(roots) -> None:
+    state = grabbed_state(playlists={"later": ten_tracks()})
+    status, _, _ = run_complete(state, albums.Completion("nzo1", False, "album/Artist-Album-FLAC"), roots,
+                                have_result=False, gaps=1)
+    assert status == albums.WANTED
+
+
+def fallback_state(status: str, playlists: dict) -> State:
+    state = State()
+    state.albums["a0"] = {"status": status, "blocklist": [], "name": "Album", "artist": "Artist",
+                          "tracks_count": 2, "playlists": playlists}
+    return state
+
+
+def test_fallbacks_queues_a_missing_album_then_fills_it() -> None:
+    tracks = [["One", "Artist", "s1"], ["Two", "Artist", "s2"], ["Local", "Artist", None]]
+    state = fallback_state(albums.MISSING, {"later": tracks})
+    library: set[str | None] = {"s2"}
+
+    def missing(pl, ts):
+        return [t for t in ts if t[2] not in library]
+
+    def have(pl, ts):
+        return not missing(pl, ts)
+
+    albums.fallbacks(state, have, missing)
+    record = state.albums["a0"]
+    assert record["status"] == albums.FALLBACK and record["fallback_from"] == albums.MISSING
+    assert record["fallback_tracks"] == {"later": ["s1"]}  # an ID-less track can't be fetched
+    assert albums.fallback_queue(state) == 1
+
+    library |= {"s1", None}  # the nightly downloaded s1 and the scan imported it
+    albums.fallbacks(state, have, missing)
+    assert record["status"] == albums.FILLED and "filled_at" in record
+    assert albums.fallback_queue(state) == 0
+    assert albums.status_counts(state)[albums.FILLED] == 1
+
+
+def test_fallbacks_fetch_a_track_on_two_playlists_once() -> None:
+    tracks = [["One", "Artist", "s1"]]
+    state = fallback_state(albums.FAILED, {"later": tracks, "keep": tracks + [["Two", "Artist", "s2"]]})
+    albums.fallbacks(state, lambda pl, ts: False, lambda pl, ts: ts)
+    assert state.albums["a0"]["fallback_tracks"] == {"later": ["s1"], "keep": ["s2"]}
+
+
+def test_fallbacks_leave_other_statuses_alone() -> None:
+    for status in (albums.WANTED, albums.GRABBED, albums.IMPORTED, albums.HAVE, albums.DRY_RUN):
+        state = fallback_state(status, {"later": [["One", "Artist", "s1"]]})
+        albums.fallbacks(state, lambda pl, ts: False, lambda pl, ts: ts)
+        assert state.albums["a0"]["status"] == status
+
+
+def test_a_fallback_album_is_not_searched_again() -> None:
+    state = fallback_state(albums.FALLBACK, {"later": [["One", "Artist", "s1"]]})
+    state.albums["a0"]["searched_at"] = albums._iso(NOW - timedelta(days=30))
+    prowlarr, sab = fakes()
+    top_up(state, Settings(mode="on"), prowlarr, sab, never_have, albums.TickResult(), now=lambda: NOW)
+    prowlarr.search.assert_not_called()
+
+
+def test_tick_falls_back_only_when_on(tmp_path: Path) -> None:
+    prowlarr, sab = fakes(releases=[])
+    for mode, expected in (("dry-run", albums.MISSING), ("on", albums.FALLBACK)):
+        state = fallback_state(albums.MISSING, {"later": [["One", "Artist", "s1"]]})
+        state.albums["a0"]["searched_at"] = albums._iso(datetime.now(timezone.utc))
+        state.albums["a0"]["query"] = "artist album"
+        state.save(tmp_path / "state.json")
+        tick([], FakeSpotify("s", []), prowlarr, sab, never_have, tmp_path, Settings(mode=mode),
+             tmp_path / "state.json", missing=lambda pl, ts: ts)
+        assert State.load(tmp_path / "state.json").albums["a0"]["status"] == expected
+
+
+def test_push_metrics_reports_the_fallback_queue() -> None:
+    state = fallback_state(albums.FALLBACK, {"later": [["One", "Artist", "s1"]]})
+    state.albums["a0"]["fallback_tracks"] = {"later": ["s1", "s2"], "keep": ["s3"]}
+    with patch.object(albums, "_push") as push:
+        albums.push_metrics(state, True)
+    body = push.call_args[0][0]
+    assert "music_albums_fallback_tracks 3" in body
+    assert 'music_albums{status="fallback"} 1' in body
+    assert 'music_albums{status="filled"} 0' in body
+
+
+def test_fallback_songs_in_playlist_order() -> None:
+    state = fallback_state(albums.FALLBACK, {})
+    state.albums["a0"]["fallback_tracks"] = {"later": ["s3", "s1"], "keep": ["s2"]}
+    state.albums["a1"] = {"status": albums.FILLED, "fallback_tracks": {"later": ["s2"]}}
+    songs = [{"song_id": f"s{i}"} for i in range(1, 4)]
+    assert albums.fallback_songs(state, "later", songs) == [{"song_id": "s1"}, {"song_id": "s3"}]
+    assert albums.fallback_songs(state, "aaaaaaah", songs) == []

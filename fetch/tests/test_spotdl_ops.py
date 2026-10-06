@@ -1124,3 +1124,32 @@ def test_rate_limit_inside_download_fails_the_sync_without_backoff(tmp_path: Pat
 
     assert not failures_file.exists()
     assert json.loads(spotdl_file.read_text(encoding="utf-8"))["songs"] == []
+
+
+def test_download_fallback_applies_have_backoff_and_budget(tmp_path: Path) -> None:
+    """Fallback tracks (#205) go through the same [HAVE], backoff and budget as a
+    sync, into the playlist's inbox, without a snapshot to write."""
+    from music_fetch.spotdl_ops import download_fallback
+
+    songs = [{"url": f"https://open.spotify.com/track/{i}", "name": f"T{i}", "artists": ["A"]} for i in range(4)]
+    failures_file = tmp_path / "failures.json"
+    failures_file.write_text(json.dumps({songs[1]["url"]: {"kind": "fail", "attempts": 1, "retry_after": "2999-01-01T00:00:00+00:00"}}))
+    sent: list = []
+
+    def fake_download(batch):
+        sent.extend(batch)
+        return [(s, tmp_path / "x.m4a") for s in batch]
+
+    spotdl = mock.Mock()
+    spotdl.downloader.errors = []
+    spotdl.download_songs.side_effect = fake_download
+    with mock.patch("music_fetch.spotdl_ops._make_spotdl", return_value=spotdl) as make, \
+         mock.patch("spotdl.types.song.Song.from_dict", side_effect=lambda d: _make_mock_song(d["url"], d["name"])):
+        result = download_fallback(
+            songs, output_dir=tmp_path / "later", cookie_file=tmp_path / "c.txt", track_limit=1,
+            failures_file=failures_file, in_library=lambda song: song["name"] == "T0",
+        )
+
+    assert [s.url for s in sent] == [songs[2]["url"]]  # T0 [HAVE], T1 [BACK], T3 [DEFER]
+    assert (result.linked, result.attempted, result.downloaded) == (1, 1, 1)
+    assert make.call_args[0][0]["output"].startswith(str(tmp_path / "later"))

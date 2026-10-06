@@ -13,7 +13,7 @@ def _complete_with_tag_ids(embed_covers):
     lib = MagicMock()
     lib.items_by_source.return_value = [fresh, old]
 
-    def fake_complete(state, completion, import_inbox, have, add_source, tag_ids):
+    def fake_complete(state, completion, import_inbox, missing, add_source, tag_ids):
         tag_ids("later", [], 100.0, 2)
         return "imported"
 
@@ -22,7 +22,7 @@ def _complete_with_tag_ids(embed_covers):
          patch("music_scan.cover.covers_by_id", return_value={"T1": "https://i.scdn.co/x"}), \
          patch("music_scan.cover.embed_covers", side_effect=embed_covers) as embed, \
          patch("music_scan.navidrome.trigger_scan") as rescan:
-        _, complete = _album_library_hooks(lib)
+        _, _, complete = _album_library_hooks(lib)
         assert complete(MagicMock(), MagicMock()) == "imported"
     tag_album_ids.assert_called_once_with(lib, "later", [], 100.0, 2)
     return embed, rescan, fresh

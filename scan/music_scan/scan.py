@@ -312,9 +312,14 @@ def link_song(index: ItemIndex, source: str, song: dict) -> bool:
     return True
 
 
-def has_tracks(index: ItemIndex, tracks: list[list]) -> bool:
-    """True when every track in *tracks* matches an item in *index*."""
-    return all(index.match_track(t)[0] is not None for t in map(PlaylistTrack.from_entry, tracks))
+def missing_tracks(source_index: ItemIndex, tracks: list[list], library: ItemIndex | None = None) -> list[list]:
+    """The entries of *tracks* no *source_index* item matches by the full ladder,
+    nor, given *library*, any item by Spotify ID or ISRC (#205).  Tags nothing."""
+    return [
+        entry for entry in tracks
+        if source_index.match_track(track := PlaylistTrack.from_entry(entry))[0] is None
+        and (library is None or library.match_track(track, words=False)[0] is None)
+    ]
 
 
 def have_or_link(source_index: ItemIndex, library: ItemIndex, source: str, tracks: list[list]) -> bool:
