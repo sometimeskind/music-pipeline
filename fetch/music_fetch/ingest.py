@@ -23,9 +23,10 @@ import os
 import re
 import shutil
 import time
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Callable
+from typing import Callable, Iterator
 
 from music_fetch.config import load_playlists
 from music_fetch.metrics import IngestMetrics
@@ -512,55 +513,64 @@ def load_and_clear_pending_removals() -> PendingRemovals | None:
         PENDING_REMOVALS_PATH.unlink(missing_ok=True)
 
 
-def run() -> PendingRemovals:
-    """Execute the full ingest pipeline, push metrics on completion, return pending removals."""
+@contextmanager
+def ingest_run() -> Iterator[IngestMetrics]:
+    """One ingest run's metrics, shared by ``run()`` and the nightly flow (#203).
+
+    Records the cookie expiry first and pushes once at the end, failed or not.  Anything
+    set here reaches both paths, so a metric can't land in only one of them again.
+    """
     metrics = IngestMetrics()
     start = time.monotonic()
     _record_cookie_expiry(metrics)
-
-    failure_reason = preflight()
-    if failure_reason:
-        metrics.success = False
-        metrics.failure_reason = failure_reason
-        metrics.duration_seconds = int(time.monotonic() - start)
-        metrics.push()
-        raise SystemExit(1)
-
-    _jitter()
-
     try:
-        logger.info("==> music-ingest starting")
-        if FAILURES_FILE.exists():
-            try:
-                failures = json.loads(FAILURES_FILE.read_text(encoding="utf-8"))
-                logger.info("Backoff state (%d track(s)):", len(failures))
-                for url, entry in failures.items():
-                    logger.info("  [BACK] kind=%s attempts=%d retry_after=%s url=%s reason=%s", entry.get("kind", "miss"), entry.get("attempts", "?"), entry.get("retry_after", "?")[:10], url, entry.get("reason", ""))
-            except Exception:
-                logger.warning("Could not read backoff state from %s", FAILURES_FILE)
-        else:
-            logger.info("Backoff state: empty")
-
-        logger.info("==> Reconciling playlists...")
-        try:
-            remove_sources = reconcile_playlists()
-        except Exception:
-            metrics.success = False
-            metrics.failure_reason = "reconcile_error"
-            logger.exception("Reconciliation step failed")
-            raise
-
-        logger.info("==> Syncing playlists...")
-        return sync_playlists(remove_sources, metrics, start=start)
-
-    except SystemExit:
-        raise
+        yield metrics
     except Exception:
+        metrics.success = False
         if not metrics.failure_reason:
             metrics.failure_reason = "unexpected_error"
-        metrics.success = False
-        logger.exception("music-ingest failed")
         raise
     finally:
         metrics.duration_seconds = int(time.monotonic() - start)
         metrics.push()
+
+
+def run() -> PendingRemovals:
+    """Execute the full ingest pipeline, push metrics on completion, return pending removals."""
+    start = time.monotonic()
+    with ingest_run() as metrics:
+        failure_reason = preflight()
+        if failure_reason:
+            metrics.success = False
+            metrics.failure_reason = failure_reason
+            raise SystemExit(1)
+
+        _jitter()
+
+        try:
+            logger.info("==> music-ingest starting")
+            if FAILURES_FILE.exists():
+                try:
+                    failures = json.loads(FAILURES_FILE.read_text(encoding="utf-8"))
+                    logger.info("Backoff state (%d track(s)):", len(failures))
+                    for url, entry in failures.items():
+                        logger.info("  [BACK] kind=%s attempts=%d retry_after=%s url=%s reason=%s", entry.get("kind", "miss"), entry.get("attempts", "?"), entry.get("retry_after", "?")[:10], url, entry.get("reason", ""))
+                except Exception:
+                    logger.warning("Could not read backoff state from %s", FAILURES_FILE)
+            else:
+                logger.info("Backoff state: empty")
+
+            logger.info("==> Reconciling playlists...")
+            try:
+                remove_sources = reconcile_playlists()
+            except Exception:
+                metrics.failure_reason = "reconcile_error"
+                logger.exception("Reconciliation step failed")
+                raise
+
+            logger.info("==> Syncing playlists...")
+            return sync_playlists(remove_sources, metrics, start=start)
+
+        except Exception:
+            logger.exception("music-ingest failed")
+            raise

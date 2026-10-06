@@ -13,7 +13,6 @@ import music_fetch.ingest as ingest
 import music_scan.reconcile as reconcile
 import music_scan.scan as scan
 from music_fetch.config import load_playlists
-from music_fetch.metrics import IngestMetrics
 from music_scan.metrics import ScanMetrics
 
 # Prefect runs each flow run in a `python -m prefect.engine` subprocess where its own
@@ -32,17 +31,18 @@ for _name in ("music_fetch", "music_scan"):
 
 
 @task(name="preflight", log_prints=True)
-def preflight_task() -> None:
+def preflight_task(metrics) -> None:
     """Check cookies, Spotify credentials, and disk space. Raises on failure."""
     logger = get_run_logger()
     reason = ingest.preflight()
     if reason:
+        metrics.failure_reason = reason
         raise RuntimeError(f"Preflight failed: {reason}")
     logger.info("Preflight passed: cookies, credentials, and disk space OK")
 
 
 @task(name="reconcile-playlists", log_prints=True)
-def reconcile_playlists_task() -> list[str]:
+def reconcile_playlists_task(metrics) -> list[str]:
     """Reconcile playlists.conf: provision new entries, queue removed ones."""
     logger = get_run_logger()
 
@@ -64,7 +64,11 @@ def reconcile_playlists_task() -> list[str]:
         except Exception as exc:
             logger.warning("Could not pre-read playlists.conf: %s", exc)
 
-    remove_sources = ingest.reconcile_playlists()
+    try:
+        remove_sources = ingest.reconcile_playlists()
+    except Exception:
+        metrics.failure_reason = "reconcile_error"
+        raise
     if remove_sources:
         logger.info("Removed from config (queued for cleanup): %s", ", ".join(remove_sources))
     else:
@@ -73,7 +77,7 @@ def reconcile_playlists_task() -> list[str]:
 
 
 @task(name="spotdl-sync", log_prints=True, persist_result=False)
-def spotdl_sync_task(remove_sources: list[str]):
+def spotdl_sync_task(remove_sources: list[str], metrics):
     """Run spotdl sync for all active playlists. Returns PendingRemovals.
 
     Tracks the library already holds (by Spotify ID or ISRC) are tagged with the
@@ -84,63 +88,52 @@ def spotdl_sync_task(remove_sources: list[str]):
     from music_scan.library import MusicLibrary  # noqa: PLC0415
 
     logger = get_run_logger()
-    metrics = IngestMetrics()
-    start = time.monotonic()
-    try:
-        if ingest.FAILURES_FILE.exists():
-            try:
-                failures = json.loads(ingest.FAILURES_FILE.read_text(encoding="utf-8"))
-                logger.info("Backoff state: %d track(s) backed off", len(failures))
-                for url, entry in failures.items():
-                    logger.info(
-                        "  [BACK] kind=%s attempts=%d retry_after=%s url=%s",
-                        entry.get("kind", "miss"),
-                        entry.get("attempts", "?"),
-                        entry.get("retry_after", "?")[:10],
-                        url,
-                    )
-            except Exception:
-                logger.warning("Could not read backoff state from %s", ingest.FAILURES_FILE)
-        else:
-            logger.info("Backoff state: empty")
-        with MusicLibrary(scan.LIBRARY_DB) as lib:
-            index = ItemIndex(lib.all_items())
-            result = ingest.sync_playlists(
-                remove_sources, metrics, in_library=lambda pl, song: scan.link_song(index, pl, song)
-            )
-        not_downloaded = metrics.tracks_attempted - metrics.tracks_downloaded
-        suffix = ""
-        if not_downloaded:
-            parts = []
-            if metrics.tracks_missed:
-                parts.append(f"{metrics.tracks_missed} no source")
-            if metrics.tracks_failed:
-                parts.append(f"{metrics.tracks_failed} download error")
-            if parts:
-                suffix = f" ({', '.join(parts)})"
-        logger.info(
-            "Sync complete: %d of %d track(s) downloaded%s, %d playlist(s) processed, %d pending removal(s)",
-            metrics.tracks_downloaded,
-            metrics.tracks_attempted,
-            suffix,
-            metrics.playlists_total,
-            len(result.tracks),
+    if ingest.FAILURES_FILE.exists():
+        try:
+            failures = json.loads(ingest.FAILURES_FILE.read_text(encoding="utf-8"))
+            logger.info("Backoff state: %d track(s) backed off", len(failures))
+            for url, entry in failures.items():
+                logger.info(
+                    "  [BACK] kind=%s attempts=%d retry_after=%s url=%s",
+                    entry.get("kind", "miss"),
+                    entry.get("attempts", "?"),
+                    entry.get("retry_after", "?")[:10],
+                    url,
+                )
+        except Exception:
+            logger.warning("Could not read backoff state from %s", ingest.FAILURES_FILE)
+    else:
+        logger.info("Backoff state: empty")
+    with MusicLibrary(scan.LIBRARY_DB) as lib:
+        index = ItemIndex(lib.all_items())
+        result = ingest.sync_playlists(
+            remove_sources, metrics, in_library=lambda pl, song: scan.link_song(index, pl, song)
         )
-        if metrics.tracks_linked:
-            logger.info("  %d track(s) already in the library, tagged instead of downloaded", metrics.tracks_linked)
-        if metrics.playlists_skipped:
-            logger.info("  %d nosync playlist(s) skipped", metrics.playlists_skipped)
-        if metrics.playlists_deferred:
-            logger.info("  %d playlist(s) deferred (budget/timeout)", metrics.playlists_deferred)
-        return result
-    except Exception:
-        metrics.success = False
-        if not metrics.failure_reason:
-            metrics.failure_reason = "unexpected_error"
-        raise
-    finally:
-        metrics.duration_seconds = int(time.monotonic() - start)
-        metrics.push()
+    not_downloaded = metrics.tracks_attempted - metrics.tracks_downloaded
+    suffix = ""
+    if not_downloaded:
+        parts = []
+        if metrics.tracks_missed:
+            parts.append(f"{metrics.tracks_missed} no source")
+        if metrics.tracks_failed:
+            parts.append(f"{metrics.tracks_failed} download error")
+        if parts:
+            suffix = f" ({', '.join(parts)})"
+    logger.info(
+        "Sync complete: %d of %d track(s) downloaded%s, %d playlist(s) processed, %d pending removal(s)",
+        metrics.tracks_downloaded,
+        metrics.tracks_attempted,
+        suffix,
+        metrics.playlists_total,
+        len(result.tracks),
+    )
+    if metrics.tracks_linked:
+        logger.info("  %d track(s) already in the library, tagged instead of downloaded", metrics.tracks_linked)
+    if metrics.playlists_skipped:
+        logger.info("  %d nosync playlist(s) skipped", metrics.playlists_skipped)
+    if metrics.playlists_deferred:
+        logger.info("  %d playlist(s) deferred (budget/timeout)", metrics.playlists_deferred)
+    return result
 
 
 # ---------------------------------------------------------------------------
@@ -307,11 +300,16 @@ SKIP_IF_BUSY_SECONDS = 5
 # entrypoint. "fetch" is prefixed too so it cannot repeat that.
 @flow(name="music-fetch", log_prints=True)
 def fetch_and_scan_flow() -> None:
-    """Fetch: spotdl sync, then scan inbox."""
+    """Fetch: spotdl sync, then scan inbox.
+
+    The fetch tasks share one ``ingest_run`` with ``ingest.run()``, so the music_ingest
+    push (cookie expiry included) is the same in both paths (#203).
+    """
     with concurrency("pipeline", occupy=1):
-        preflight_task()
-        remove_sources = reconcile_playlists_task()
-        pending = spotdl_sync_task(remove_sources)
+        with ingest.ingest_run() as metrics:
+            preflight_task(metrics)
+            remove_sources = reconcile_playlists_task(metrics)
+            pending = spotdl_sync_task(remove_sources, metrics)
         save_removals_task(pending)
         _run_scan_tasks()
 
