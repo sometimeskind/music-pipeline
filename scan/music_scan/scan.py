@@ -450,6 +450,7 @@ def run(pending: PendingRemovals | None = None) -> None:
             logger.error("Length guard failed — continuing with import", exc_info=True)
 
         logger.info("==> Importing from inbox...")
+        since = time.time()
         imported = run_inbox_import()
 
         logger.info("==> Quarantining skipped files...")
@@ -464,6 +465,15 @@ def run(pending: PendingRemovals | None = None) -> None:
         except Exception:
             logger.error("Asis-import step failed — continuing with library update", exc_info=True)
         metrics.tracks_imported = len(imported) + asis_count
+
+        logger.info("==> Canonical album tags from Spotify...")
+        try:
+            from music_scan import canon  # noqa: PLC0415
+
+            with MusicLibrary(LIBRARY_DB) as lib:
+                canon.after_scan(lib, since)
+        except Exception:
+            logger.error("Canonical-album step failed — continuing with library update", exc_info=True)
 
         logger.info("==> Refreshing library metadata...")
         try:
