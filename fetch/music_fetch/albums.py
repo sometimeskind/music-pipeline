@@ -138,12 +138,13 @@ def reduce_to_albums(songs: list[dict]) -> dict[str, dict]:
     return albums
 
 
-def load_overrides(path: Path = OVERRIDES_FILE) -> dict[str, str]:
+def load_overrides(path: Path | None = None) -> dict[str, str]:
     """Search text by Spotify album ID, for names no normalisation can reach.
 
     Format: one ``<album id>  <search words…>`` per line; ``#`` comments and
     blank lines are ignored.  A missing file means no overrides.
     """
+    path = path or OVERRIDES_FILE
     if not path.exists():
         return {}
     overrides: dict[str, str] = {}
@@ -322,8 +323,11 @@ def top_up(
     now: Callable[[], datetime] = _now,
     overrides: dict[str, str] | None = None,
 ) -> None:
-    """Search and grab wanted albums until the queue or a budget is full."""
-    overrides = overrides or {}
+    """Search and grab wanted albums until the queue or a budget is full.
+
+    *overrides* default to ``album-overrides.conf``, so every caller searches
+    the same way (#202)."""
+    overrides = load_overrides() if overrides is None else overrides
     if settings.mode == "on":
         slots = settings.max_in_flight - state.in_flight()
     else:
@@ -470,7 +474,7 @@ def tick(
             for completion in lost_completions(state, sabnzbd):
                 logger.info("Recovering lost import trigger for %s", completion.nzo_id)
                 on_completion(state, completion)
-        top_up(state, settings, prowlarr, sabnzbd, have, result, overrides=load_overrides(overrides_file or OVERRIDES_FILE))
+        top_up(state, settings, prowlarr, sabnzbd, have, result, overrides=load_overrides(overrides_file))
         success = True
     finally:
         state.save(state_file)

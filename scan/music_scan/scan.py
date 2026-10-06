@@ -139,11 +139,19 @@ def quarantine_inbox_leftovers() -> int:
 
 
 _ASIS_REQUIRED_TAGS = ("title", "artist", "album", "tracknumber")
+_ASIS_SUBTREES = ("spotdl",)
+# The music_pipeline plugin's duplicate hook doesn't run under --asis (beets
+# sends no import_task_choice there), so beets would apply the main config's
+# duplicate_action: remove and delete the existing item and its file (#202).
+# A duplicate stays in quarantine instead.
+_ASIS_CONFIG = "import:\n  duplicate_action: skip\n"
 
 
 def _move_asis_eligible(quarantine: Path, staging: Path) -> int:
     """Move audio files from *quarantine* that have all required tags to *staging*.
 
+    Only spotdl leftovers (``spotdl/<playlist>/``) and loose files at the
+    quarantine root are eligible; every other subtree is skipped (#202).
     Files missing title, artist, album, or tracknumber are left in quarantine.
     Returns the count of files moved.
     """
@@ -153,11 +161,14 @@ def _move_asis_eligible(quarantine: Path, staging: Path) -> int:
     for f in sorted(quarantine.rglob("*")):
         if not f.is_file() or f.suffix.lower() not in AUDIO_EXTS:
             continue
-        # Album-mode releases are verified by the strict match alone: a release
-        # beets can't match is blocklisted and the next one tried, so it must
-        # not slip in on its own tags here.  Files the length guard rejected
-        # (#165) carry the right tags on the wrong audio.
-        if f.relative_to(quarantine).parts[0] in ("usenet", "rejected"):
+        # An allow-list, so a new quarantine subtree is skipped until it is
+        # known to be safe.  Skipped: album-mode releases (usenet/: verified by
+        # the strict match alone, a release beets can't match is blocklisted),
+        # the length guard's rejects (rejected/, #165) and the files
+        # music-audit-lengths --replace swapped out (replaced/, #202): both
+        # carry the right tags on the wrong audio.
+        parts = f.relative_to(quarantine).parts
+        if len(parts) > 1 and parts[0] not in _ASIS_SUBTREES:
             continue
         try:
             tags = MutagenFile(f, easy=True)
@@ -185,7 +196,10 @@ def import_asis_from_quarantine() -> int:
         staged = _move_asis_eligible(QUARANTINE, staging)
         logger.info("Asis eligible : %d file(s) with sufficient tags", staged)
         if staged:
-            run_beet_import(staging, asis=True)
+            with tempfile.TemporaryDirectory(prefix="asis-config-") as config_dir:
+                config = Path(config_dir) / "config.yaml"
+                config.write_text(_ASIS_CONFIG)
+                run_beet_import(staging, asis=True, config=config)
             for remaining in staging.rglob("*"):
                 if remaining.is_file() and remaining.suffix.lower() in AUDIO_EXTS:
                     dest = QUARANTINE / remaining.relative_to(staging)

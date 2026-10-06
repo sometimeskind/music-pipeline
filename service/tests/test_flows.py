@@ -360,6 +360,37 @@ def _create_limit(name: str) -> None:
         client.create_global_concurrency_limit(GlobalConcurrencyLimitCreate(name=name, limit=1))
 
 
+def test_album_import_flow_grab_next_uses_search_overrides(tmp_path):
+    """The grab after an import searches an override album too (#202)."""
+    import music_fetch.albums as albums
+    from music_service import flows
+
+    conf = tmp_path / "album-overrides.conf"
+    conf.write_text("glyph  webdings four tet\n", encoding="utf-8")
+    state = albums.State()
+    state.albums["glyph"] = {
+        "status": albums.WANTED, "blocklist": [], "name": "☼⃝◞⊖◟", "artist": "⣎⡇", "tracks_count": 2,
+        "playlists": {"later": [["One", "⣎⡇"], ["Two", "⣎⡇"]]},
+    }
+    prowlarr = MagicMock()
+    prowlarr.search.return_value = []
+    complete = MagicMock(return_value="done")
+
+    with patch.object(albums, "OVERRIDES_FILE", conf), \
+         patch.object(albums.State, "load", return_value=state), \
+         patch.object(albums.State, "save"), \
+         patch.object(albums, "push_metrics"), \
+         patch.object(albums.Settings, "from_env", return_value=albums.Settings(mode="on")), \
+         patch("music_fetch.usenet.Prowlarr", return_value=prowlarr), \
+         patch("music_fetch.usenet.Sabnzbd"), \
+         patch("music_scan.library.MusicLibrary"), \
+         patch.object(flows, "_album_library_hooks", return_value=(lambda playlist, tracks: False, complete)), \
+         patch.object(flows, "concurrency"):
+        flows.album_import_flow("SABnzbd_nzo_1", True, "/downloads/x")
+
+    assert prowlarr.search.call_args_list[0].args == ("webdings four tet",)
+
+
 def test_skip_if_busy_acquires_a_free_limit():
     from prefect.concurrency.sync import concurrency
     from music_service.flows import SKIP_IF_BUSY_SECONDS

@@ -567,6 +567,16 @@ def test_glyph_album_with_override(tmp_path: Path) -> None:
     assert state.albums["5glyphAlbumId"]["status"] == albums.DRY_RUN
 
 
+def test_top_up_loads_overrides_when_not_given() -> None:
+    """The import flow's grab-next calls top_up without overrides (#202)."""
+    albums.OVERRIDES_FILE.write_text("5glyphAlbumId  webdings four tet\n", encoding="utf-8")
+    state = one_album(GLYPH_ARTIST, GLYPH_TITLE, key="5glyphAlbumId")
+    prowlarr, sab = fakes([release(title="webdings-four-tet")])
+    top_up(state, Settings(mode="on"), prowlarr, sab, never_have, albums.TickResult(), now=lambda: NOW)
+    prowlarr.search.assert_called_once_with("webdings four tet")
+    assert state.albums["5glyphAlbumId"]["status"] == albums.GRABBED
+
+
 def test_missing_overrides_file_is_empty(tmp_path: Path) -> None:
     assert albums.load_overrides(tmp_path / "absent.conf") == {}
 

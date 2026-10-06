@@ -709,6 +709,57 @@ def test_move_asis_eligible_leaves_partially_tagged_file(tmp_path: Path) -> None
     assert (quarantine / "partial.flac").exists()
 
 
+@pytest.mark.parametrize("subtree", ["replaced", "usenet", "rejected", "something-new"])
+def test_move_asis_eligible_skips_non_spotdl_subtrees(tmp_path: Path, subtree: str) -> None:
+    """Only spotdl/ is allow-listed: replaced/ re-imported five wrong files (#202)."""
+    from music_scan.scan import _move_asis_eligible
+
+    quarantine, staging = tmp_path / "quarantine", tmp_path / "staging"
+    f = quarantine / subtree / "1569-10 - Liberty Tree.m4a"
+    f.parent.mkdir(parents=True)
+    f.touch()
+
+    with mock.patch("mutagen.File", return_value=_fake_tags()):
+        count = _move_asis_eligible(quarantine, staging)
+
+    assert count == 0
+    assert f.exists()
+
+
+def test_move_asis_eligible_moves_spotdl_playlist_file(tmp_path: Path) -> None:
+    from music_scan.scan import _move_asis_eligible
+
+    quarantine, staging = tmp_path / "quarantine", tmp_path / "staging"
+    f = quarantine / "spotdl" / "keep" / "Artist - Song.m4a"
+    f.parent.mkdir(parents=True)
+    f.touch()
+
+    with mock.patch("mutagen.File", return_value=_fake_tags()):
+        count = _move_asis_eligible(quarantine, staging)
+
+    assert count == 1
+    assert (staging / "spotdl" / "keep" / "Artist - Song.m4a").exists()
+
+
+def test_asis_import_skips_duplicates(tmp_path: Path) -> None:
+    """The plugin's duplicate hook doesn't run under --asis, so the pass must
+    not inherit duplicate_action: remove, which deletes the existing item (#202)."""
+    import music_scan.scan as scan
+
+    seen: dict = {}
+
+    def fake_import(inbox_dir, asis=False, config=None, **_):
+        seen["asis"], seen["config"] = asis, config.read_text()
+
+    with mock.patch.object(scan, "_move_asis_eligible", return_value=1), \
+         mock.patch.object(scan, "run_beet_import", side_effect=fake_import), \
+         mock.patch.object(scan, "MusicLibrary", return_value=_make_mock_lib()):
+        scan.import_asis_from_quarantine()
+
+    assert seen["asis"] is True
+    assert "duplicate_action: skip" in seen["config"]
+
+
 def test_run_beet_import_asis_flag() -> None:
     from music_scan.process import run_beet_import
     import unittest.mock as mock
@@ -723,6 +774,19 @@ def test_run_beet_import_asis_flag() -> None:
     cmd = mock_popen.call_args[0][0]
     assert "-A" in cmd
     assert "--quiet" in cmd
+
+
+def test_run_beet_import_config_overlay() -> None:
+    from music_scan.process import run_beet_import
+
+    mock_proc = mock.MagicMock()
+    mock_proc.wait.return_value = 0
+    with mock.patch("subprocess.Popen", return_value=mock_proc) as mock_popen, \
+         mock.patch("music_scan.process.IMPORT_LOG") as mock_log:
+        mock_log.exists.return_value = False
+        run_beet_import(Path("/some/dir"), asis=True, config=Path("/tmp/c.yaml"))
+
+    assert mock_popen.call_args[0][0][:4] == ["beet", "-c", "/tmp/c.yaml", "import"]
 
 
 def test_run_beet_import_no_asis_flag_by_default() -> None:
