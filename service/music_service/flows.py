@@ -363,6 +363,20 @@ def _album_library_hooks(lib):
 
     def tag_ids(playlist: str, tracks: list[list], since: float, tracks_count: int) -> None:
         scan.tag_album_ids(lib, playlist, tracks, since, tracks_count)
+        embed_covers(playlist, since)
+
+    def embed_covers(playlist: str, since: float) -> None:
+        # Needs the Spotify IDs tag_album_ids just set (#204).  The import's
+        # Navidrome rescan ran before this, so ask for another.
+        from music_scan import cover  # noqa: PLC0415
+        from music_scan.navidrome import trigger_scan  # noqa: PLC0415
+
+        fresh = [i for i in lib.items_by_source(playlist) if (i.added or 0) >= since]
+        try:
+            if cover.embed_covers(fresh, cover.covers_by_id(ingest.SPOTDL_DIR)):
+                trigger_scan()
+        except Exception:
+            cover.logger.exception("Album covers: embedding failed; music-embed-covers retries it")
 
     def complete(state, completion) -> str | None:
         status = albums.complete(state, completion, import_inbox, fresh_have, add_source, tag_ids)

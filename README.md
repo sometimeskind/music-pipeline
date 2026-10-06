@@ -316,6 +316,12 @@ kubectl exec -n <ns> deploy/music-pipeline -- music-audit-lengths --replace <id>
 Without `--youtube` spotdl searches again and usually picks the same video; the replace then stops. A download that fails the guard is refused unless `--force`.
 `--redownload` downloads into the playlist's inbox (works for `nosync` and `album` playlists too) and takes the playlist off the wrong item; the next scan imports the download as its own recording.
 
+**Album covers (#204):** Usenet album tracks get Spotify's album cover embedded after import (the convert command drops a FLAC's picture, and singleton imports get no `fetchart`/`embedart`). The cover URL comes from the `.spotdl` files, so no Spotify calls. `music-embed-covers` backfills every `via=usenet` item with no embedded art, then triggers a Navidrome rescan:
+```bash
+kubectl exec -n <ns> deploy/music-pipeline -- music-embed-covers           # dry run: [ART] line per album
+kubectl exec -n <ns> deploy/music-pipeline -- music-embed-covers --apply   # embed, then rescan Navidrome
+```
+
 **Recover after PVC loss:**
 1. Restore `beets-data` PVC from backup (restores `library.db`).
 2. Trigger a fetch — it re-provisions all `.spotdl` files from `playlists.conf` and re-downloads.
