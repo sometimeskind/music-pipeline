@@ -783,3 +783,37 @@ def test_handle_duplicates_protects_a_manual_import_matched_by_identity() -> Non
 
     task.set_choice.assert_called_once_with(beets_importer.Action.SKIP)
     assert manual._data["sources"] == "playlist-a"
+
+
+# ---------------------------------------------------------------------------
+# MusicPipelinePlugin.fingerprint_if_missing — asis imports (#210)
+# ---------------------------------------------------------------------------
+
+def test_fingerprint_if_missing_fingerprints_an_item_without_one() -> None:
+    plugin = _make_plugin()
+    item = _item(b"/root/Music/library/A/B/01 - T.m4a")
+    with patch("music_scan.music_pipeline.fingerprint", return_value="FP") as fp:
+        plugin.fingerprint_if_missing(lib=MagicMock(), item=item)
+    fp.assert_called_once_with("/root/Music/library/A/B/01 - T.m4a")
+    assert item.get("acoustid_fingerprint") == "FP"
+    item.store.assert_called_once()
+    item.write.assert_not_called()
+
+
+def test_fingerprint_if_missing_leaves_chromas_fingerprint() -> None:
+    plugin = _make_plugin()
+    item = _item("/root/Music/library/A/B/01 - T.m4a")
+    item["acoustid_fingerprint"] = "CHROMA"
+    with patch("music_scan.music_pipeline.fingerprint") as fp:
+        plugin.fingerprint_if_missing(lib=MagicMock(), item=item)
+    fp.assert_not_called()
+    item.store.assert_not_called()
+
+
+def test_fingerprint_if_missing_never_fails_the_import() -> None:
+    plugin = _make_plugin()
+    item = _item("/root/Music/library/A/B/01 - T.m4a")
+    with patch("music_scan.music_pipeline.fingerprint", side_effect=OSError("fpcalc failed")):
+        plugin.fingerprint_if_missing(lib=MagicMock(), item=item)
+    item.store.assert_not_called()
+    plugin._log.warning.assert_called_once()

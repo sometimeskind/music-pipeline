@@ -311,3 +311,35 @@ def _patch_run(monkeypatch, items, tmp_path):
     monkeypatch.setattr(dupes, "pipeline_lock", contextlib.nullcontext)
     monkeypatch.setattr(dupes, "push_metrics", lambda c, u: PUSHED.append((c, u)))
     return events
+
+
+# --- fingerprint backfill -----------------------------------------------------
+
+def test_fingerprint_missing_dry_run_counts_only(monkeypatch) -> None:
+    monkeypatch.setattr(dupes, "fingerprint", lambda path: pytest.fail("a dry run fingerprints nothing"))
+    items = [FakeItem(1, "A", acoustid_fingerprint="fp"), FakeItem(2, "B")]
+    assert dupes.fingerprint_missing(items, apply=False) == 1
+    assert not items[1].stored
+
+
+def test_fingerprint_missing_stores_only_the_missing(monkeypatch) -> None:
+    import contextlib
+
+    monkeypatch.setattr(dupes, "pipeline_lock", contextlib.nullcontext)
+    monkeypatch.setattr(dupes, "fingerprint", lambda path: "NEW")
+    have, missing = FakeItem(1, "A", acoustid_fingerprint="fp"), FakeItem(2, "B")
+    assert dupes.fingerprint_missing([have, missing], apply=True) == 1
+    assert have.get("acoustid_fingerprint") == "fp" and not have.stored
+    assert missing.get("acoustid_fingerprint") == "NEW" and missing.stored
+
+
+def test_fingerprint_ids_replaces_a_stale_fingerprint_and_acoustid(monkeypatch) -> None:
+    import contextlib
+
+    monkeypatch.setattr(dupes, "pipeline_lock", contextlib.nullcontext)
+    monkeypatch.setattr(dupes, "fingerprint", lambda path: "NEW")
+    stale = FakeItem(873, "The Lemon of Pink I", acoustid_fingerprint="OLD", acoustid_id="old-acid")
+    other = FakeItem(1, "Other")
+    assert dupes.fingerprint_missing([stale, other], apply=True, ids=[873, 999]) == 1
+    assert stale.get("acoustid_fingerprint") == "NEW" and stale.get("acoustid_id") == ""
+    assert not other.stored

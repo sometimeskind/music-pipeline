@@ -150,6 +150,41 @@ def test_replace_swaps_audio_in_place_and_keeps_identity(calico, clip, tmp_path,
     assert MP4(path)["\xa9nam"] == ["Calico Skies"]  # beets' tags were written to the new file
 
 
+def test_replace_refingerprints_the_new_audio(calico, clip, tmp_path, monkeypatch) -> None:
+    """The old audio's fingerprint and AcoustID ID must not stay on the item, or reach the new file (#210)."""
+    monkeypatch.delenv("PREFECT_API_URL", raising=False)
+    lib, item, path = calico
+    item["acoustid_fingerprint"], item["acoustid_id"] = "OLDFP", "old-acid"
+    item.store()
+    monkeypatch.setattr(audit, "fingerprint", lambda p: "NEWFP")
+    song = _song("CALICO", "Calico Skies", 40, isrc="GBCAL9700006")
+
+    with patch("music_fetch.spotdl_ops.download_song", side_effect=_fake_download(clip, 40)):
+        assert audit.replace(item, song, STUDIO, Path("cookies.txt"), replaced_dir=tmp_path / "replaced")
+
+    fresh = lib.get_item(item.id)
+    assert fresh.get("acoustid_fingerprint") == "NEWFP" and not fresh.get("acoustid_id")
+    from mediafile import MediaFile
+
+    assert MediaFile(str(path)).acoustid_fingerprint == "NEWFP"
+
+
+def test_replace_clears_the_fingerprint_when_fingerprinting_fails(calico, clip, tmp_path, monkeypatch) -> None:
+    monkeypatch.delenv("PREFECT_API_URL", raising=False)
+    lib, item, _ = calico
+    item["acoustid_fingerprint"] = "OLDFP"
+    item.store()
+
+    def broken(p):
+        raise OSError("fpcalc failed")
+
+    monkeypatch.setattr(audit, "fingerprint", broken)
+    with patch("music_fetch.spotdl_ops.download_song", side_effect=_fake_download(clip, 40)):
+        assert audit.replace(item, _song("CALICO", "Calico Skies", 40), STUDIO, Path("cookies.txt"),
+                             replaced_dir=tmp_path / "replaced")
+    assert not lib.get_item(item.id).get("acoustid_fingerprint")
+
+
 def test_replace_refuses_a_download_that_fails_the_guard(calico, clip, tmp_path, monkeypatch) -> None:
     monkeypatch.delenv("PREFECT_API_URL", raising=False)
     lib, item, path = calico

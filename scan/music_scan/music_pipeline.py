@@ -62,6 +62,12 @@ Responsibilities
    to ``skip``, since the main config's ``remove`` would delete the existing
    item and its file (#202).
 
+3. **fingerprint_if_missing** (``item_imported``): ``chroma`` fingerprints at
+   ``import_task_start``, which ASIS mode never sends (see the note), so asis
+   imports would carry no ``acoustid_fingerprint`` for the duplicate audit
+   (#210).  An item stored without one is fingerprinted from its library file
+   (locally, no AcoustID lookup) and stored; the file is left alone.
+
 Note
 ----
 ``import_task_start`` is inside ``lookup_candidates`` and only fires when
@@ -87,7 +93,9 @@ from beets import importer as beets_importer
 from beets import library as beets_library
 from beets.plugins import BeetsPlugin
 
-from music_scan.identity import add_isrcs, add_to_list, item_isrcs, item_spotify_ids, split_list, spotify_id
+from music_scan.identity import (
+    add_isrcs, add_to_list, fingerprint, item_isrcs, item_spotify_ids, split_list, spotify_id,
+)
 
 # The two locations where spotdl downloads land at beet-import time.
 # 1. Main inbox: downloaded files sit here until beet import runs.
@@ -258,6 +266,7 @@ class MusicPipelinePlugin(BeetsPlugin):
         self.register_listener("import_task_created", self.tag_source_on_created)
         self.register_listener("item_imported", self.tag_source_on_stored)
         self.register_listener("import_task_choice", self.handle_duplicates)
+        self.register_listener("item_imported", self.fingerprint_if_missing)
 
     def tag_source_on_created(self, session, task):
         """Tag incoming tracks with source= and via= at task creation.
@@ -339,6 +348,17 @@ class MusicPipelinePlugin(BeetsPlugin):
         self._log.debug(
             "persisted source={} via={} on stored item: {}", playlist, item["via"], item.path
         )
+
+    def fingerprint_if_missing(self, lib, item):
+        """Fingerprint an item imported without one (asis imports, #210)."""
+        if item.get("acoustid_fingerprint"):
+            return
+        try:
+            item["acoustid_fingerprint"] = fingerprint(item.path.decode() if isinstance(item.path, bytes) else item.path)
+        except Exception as exc:  # noqa: BLE001 — the import must not fail over a fingerprint
+            self._log.warning("fingerprinting {} failed: {}", item.path, exc)
+            return
+        item.store()
 
     @staticmethod
     def _apply_spotdl_tags(item, tags: SpotdlTags) -> None:

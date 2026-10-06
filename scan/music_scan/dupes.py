@@ -30,7 +30,10 @@ regenerated, so every entry resolves to the keeper.  The keeper is not moved:
 
 ``--fingerprint`` fingerprints items that have no ``acoustid_fingerprint`` (dry
 run counts them; with ``--apply`` it computes and stores them in the database
-only, leaving the files alone).  Run it before the first audit.
+only, leaving the files alone).  Run it before the first audit.  New asis
+imports are fingerprinted by the plugin and ``music-audit-lengths --replace``
+refingerprints, but items replaced before that carry the old audio's
+fingerprint: ``--fingerprint ITEM_ID...`` recomputes those.
 
 Each audit pushes ``music_dupes_groups{tier=...}`` to the Pushgateway.
 """
@@ -50,7 +53,9 @@ from pathlib import Path
 
 from music_fetch.usenet import normalise, words
 from music_scan.audit import LIBRARY, REPLACED, item_path, pipeline_lock
-from music_scan.identity import add_isrcs, add_to_list, item_isrcs, item_spotify_ids, spotify_id, split_list
+from music_scan.identity import (
+    add_isrcs, add_to_list, fingerprint, item_isrcs, item_spotify_ids, spotify_id, split_list,
+)
 from music_scan.metrics import _gauge, _push
 
 logger = logging.getLogger(__name__)
@@ -91,11 +96,11 @@ class _Union:
         self.parent[self.find(a)] = self.find(b)
 
 
-def decode(fingerprint: str) -> list[int]:
+def decode(fp: str) -> list[int]:
     """A beets ``acoustid_fingerprint`` (compressed, base64) as unsigned 32-bit sub-fingerprints."""
     import chromaprint  # noqa: PLC0415 — pyacoustid's ctypes binding to libchromaprint
 
-    data = fingerprint.encode() if isinstance(fingerprint, str) else fingerprint
+    data = fp.encode() if isinstance(fp, str) else fp
     frames, _ = chromaprint.decode_fingerprint(data)
     return [f & 0xFFFFFFFF for f in frames]
 
@@ -326,23 +331,30 @@ def merge(keeper, losers: list, replaced_dir: Path = REPLACED) -> list[Path]:
     return moved
 
 
-def fingerprint_missing(items: list, apply: bool) -> int:
-    """Fingerprint items with no ``acoustid_fingerprint``; with *apply*, store them.  Returns the count."""
-    todo = [i for i in items if not i.get("acoustid_fingerprint")]
-    logger.info("%d of %d item(s) have no fingerprint", len(todo), len(items))
+def fingerprint_missing(items: list, apply: bool, ids: list[int] | None = None) -> int:
+    """Fingerprint items with no ``acoustid_fingerprint``, or the items *ids* whatever they
+    have (a stale one); with *apply*, store them.  Returns the count."""
+    if ids:
+        todo = [i for i in items if i.id in set(ids)]
+        if missing := sorted(set(ids) - {i.id for i in todo}):
+            logger.warning("No library item with id %s", ", ".join(map(str, missing)))
+        logger.info("Refingerprinting %d item(s)", len(todo))
+    else:
+        todo = [i for i in items if not i.get("acoustid_fingerprint")]
+        logger.info("%d of %d item(s) have no fingerprint", len(todo), len(items))
     if not apply:
         logger.info("Dry run — nothing fingerprinted. Re-run with --fingerprint --apply.")
         return len(todo)
-    import acoustid  # noqa: PLC0415
 
     done = []
     for n, item in enumerate(todo, 1):
         try:
-            _, fp = acoustid.fingerprint_file(str(item_path(item)))
+            item["acoustid_fingerprint"] = fingerprint(item_path(item))
         except Exception as exc:  # noqa: BLE001 — log and go on to the next file
             logger.warning("  item %s (%s): %s", item.id, _rel(item), exc)
             continue
-        item["acoustid_fingerprint"] = fp.decode() if isinstance(fp, bytes) else fp
+        if ids:
+            item["acoustid_id"] = ""  # looked up from the old audio
         done.append(item)
         if n % 100 == 0:
             logger.info("  %d/%d", n, len(todo))
@@ -362,15 +374,17 @@ def push_metrics(certain: int, uncertain: int) -> None:
     ]), "music_audit_dupes")
 
 
-def run(apply: bool = False, fingerprint: bool = False) -> tuple[list[Group], list[Group]]:
+def run(apply: bool = False, fingerprints: list[int] | None = None) -> tuple[list[Group], list[Group]]:
+    """Audit, and with *apply* merge; with *fingerprints* (a list, empty for every item
+    missing one) fingerprint instead."""
     from music_scan.library import LIBRARY_DB, MusicLibrary  # noqa: PLC0415
     from music_scan.navidrome import trigger_scan  # noqa: PLC0415
     from music_scan.scan import SPOTDL_DIR, regen_playlists  # noqa: PLC0415
 
     with MusicLibrary(LIBRARY_DB) as lib:
         items = lib.all_items()
-        if fingerprint:
-            fingerprint_missing(items, apply)
+        if fingerprints is not None:
+            fingerprint_missing(items, apply, fingerprints)
             return [], []
         certain, uncertain, distinct = find_dupes(items, decode)
         durations = spotify_durations(SPOTDL_DIR)
@@ -396,8 +410,9 @@ def run(apply: bool = False, fingerprint: bool = False) -> tuple[list[Group], li
 def main() -> None:
     parser = argparse.ArgumentParser(prog="music-audit-dupes", description=__doc__.splitlines()[0])
     parser.add_argument("--apply", action="store_true", help="merge the certain tier (default: dry run)")
-    parser.add_argument("--fingerprint", action="store_true",
-                        help="instead: fingerprint items that have none (stored only with --apply)")
+    parser.add_argument("--fingerprint", nargs="*", type=int, metavar="ITEM_ID",
+                        help="instead: fingerprint items that have none, or these items "
+                             "(stored only with --apply)")
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO, format="[%(asctime)s] %(message)s", datefmt="%Y-%m-%dT%H:%M:%S%z")
-    run(apply=args.apply, fingerprint=args.fingerprint)
+    run(apply=args.apply, fingerprints=args.fingerprint)
