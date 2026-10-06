@@ -211,6 +211,19 @@ def asis_import_task() -> int:
     return count
 
 
+@task(name="canon-albums", log_prints=True)
+def canon_task(since: float) -> None:
+    """Canonical album tags from Spotify on new and still-pending items (#209)."""
+    logger = get_run_logger()
+    from music_scan import canon  # noqa: PLC0415
+    from music_scan.library import MusicLibrary  # noqa: PLC0415
+    try:
+        with MusicLibrary(scan.LIBRARY_DB) as lib:
+            canon.after_scan(lib, since)
+    except Exception:
+        logger.exception("Canonical albums failed; the next scan or music-canon-albums retries it")
+
+
 @task(name="beet-update", log_prints=True)
 def beet_update_task() -> None:
     """Refresh beets library metadata."""
@@ -265,9 +278,11 @@ def _run_scan_tasks() -> None:
     start = time.monotonic()
     try:
         metrics.tracks_removed = apply_removals_task()
+        since = time.time()
         imported = beet_import_task()
         metrics.quarantined_tracks = quarantine_task()
         metrics.tracks_imported = len(imported) + asis_import_task()
+        canon_task(since)
         beet_update_task()
         regen_playlists_task()
         try:
@@ -371,7 +386,19 @@ def _album_library_hooks(lib):
 
     def tag_ids(playlist: str, tracks: list[list], since: float, tracks_count: int) -> None:
         scan.tag_album_ids(lib, playlist, tracks, since, tracks_count)
+        canon_albums(playlist, since)
         embed_covers(playlist, since)
+
+    def canon_albums(playlist: str, since: float) -> None:
+        # Needs the Spotify IDs tag_album_ids just set (#209); before embed_covers,
+        # which then only covers what the canonical album had no art for.
+        from music_scan import canon  # noqa: PLC0415
+
+        fresh = [i for i in lib.items_by_source(playlist) if (i.added or 0) >= since]
+        try:
+            canon.canonicalize_items(fresh)
+        except Exception:
+            canon.logger.exception("Canonical albums failed; the next scan or music-canon-albums retries it")
 
     def embed_covers(playlist: str, since: float) -> None:
         # Needs the Spotify IDs tag_album_ids just set (#204).  The import's

@@ -40,3 +40,19 @@ def test_album_import_cover_failure_does_not_fail_the_import():
 
     _, rescan, _ = _complete_with_tag_ids(boom)
     rescan.assert_not_called()
+
+
+def test_album_import_canonicalises_after_tag_ids_and_before_covers():
+    """#209: canon needs the Spotify IDs tag_album_ids set, and runs before the
+    cover backfill so that only covers what the canonical album had no art for."""
+    order = []
+    with patch("music_scan.canon.canonicalize_items",
+               side_effect=lambda items: order.append(("canon", list(items)))):
+        _, _, fresh = _complete_with_tag_ids(lambda items, covers: order.append(("covers", items)) or 0)
+    assert order == [("canon", [fresh]), ("covers", [fresh])]
+
+
+def test_album_import_canon_failure_does_not_fail_the_import():
+    with patch("music_scan.canon.canonicalize_items", side_effect=OSError("disk full")):
+        embed, _, _ = _complete_with_tag_ids(lambda items, covers: 0)
+    embed.assert_called_once()

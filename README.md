@@ -325,6 +325,13 @@ kubectl exec -n <ns> deploy/music-pipeline -- music-embed-covers           # dry
 kubectl exec -n <ns> deploy/music-pipeline -- music-embed-covers --apply   # embed, then rescan Navidrome
 ```
 
+**Canonical albums (#209):** Spotify decides album grouping. An item with a Spotify ID takes `album`, `albumartist`, the release date and its track/disc numbering from the Spotify album its playlist entry is on (an `album` release over a `single` or `compilation`, then one a playlist names today, then the earliest), and beets moves the file. Its cover follows. Navidrome groups by the MusicBrainz album ID first, so the album-level MusicBrainz tags follow too: the release MusicBrainz links to the Spotify album URL, else one holding the album's ISRCs with its track count and title, else one with its barcode (one Spotify album call), else they are cleared (`[MB-NONE]`, with a Harmony link to add the release to MusicBrainz). Track-level IDs and ISRCs stay. Lookups are cached in `.mb-releases.json`; each scan resolves up to 20 albums and leaves the rest `mb_album_via=pending` for the next, and misses are retried weekly. Runs at every scan and after each Usenet album import. `music-canon-albums` backfills the library from the playlist pages (cached for a day, so the `--apply` after a dry run reads Spotify once):
+```bash
+kubectl exec -n <ns> deploy/music-pipeline -- music-canon-albums           # dry run: [ALBUM]/[RETAG] lines and totals
+kubectl exec -n <ns> deploy/music-pipeline -- music-canon-albums --apply   # retag, move, then rescan Navidrome
+```
+The dry run still looks albums up on MusicBrainz (about 1–6 s each) and caches the results. `--mb-budget N` caps the lookups per run.
+
 **Recover after PVC loss:**
 1. Restore `beets-data` PVC from backup (restores `library.db`).
 2. Trigger a fetch — it re-provisions all `.spotdl` files from `playlists.conf` and re-downloads.

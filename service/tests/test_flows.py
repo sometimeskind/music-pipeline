@@ -287,15 +287,19 @@ def test_scan_flow_runs_all_scan_steps_in_order():
         mock_reconcile.reconcile_all.side_effect = lambda: (call_order.append("reconcile-snapshots"), 0)[1]
 
         with patch("music_scan.process.run_beet_update") as mock_update, \
-             patch("music_scan.navidrome.trigger_scan") as mock_navidrome:
+             patch("music_scan.navidrome.trigger_scan") as mock_navidrome, \
+             patch("music_scan.library.MusicLibrary"), \
+             patch("music_scan.canon.after_scan") as mock_canon:
             mock_update.side_effect = lambda: call_order.append("beet-update")
             mock_navidrome.side_effect = lambda: call_order.append("navidrome")
+            mock_canon.side_effect = lambda lib, since: call_order.append("canon-albums")
             scan_flow()
 
     assert call_order == [
         "beet-import",
         "quarantine",
         "asis-import",
+        "canon-albums",
         "beet-update",
         "regen-playlists",
         "navidrome",
