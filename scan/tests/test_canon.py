@@ -189,6 +189,34 @@ def test_spotify_rate_limit_or_mb_error_leaves_the_album_pending(tmp_path):
     assert r.fields(_album()) is None
 
 
+def test_musicbrainz_503_is_retried_once(monkeypatch):
+    import io
+    import urllib.error
+    import urllib.request
+
+    from music_scan.mb_release import MusicBrainz
+
+    answers = []
+
+    def urlopen(req, timeout):
+        code = answers.pop(0)
+        if code != 200:
+            raise urllib.error.HTTPError(req.full_url, code, "busy", {}, None)
+        return io.BytesIO(b'{"ok": true}')
+
+    monkeypatch.setattr(urllib.request, "urlopen", urlopen)
+    mb = MusicBrainz(interval=0, retry_after=0)
+    answers[:] = [503, 200]
+    assert mb.get("url") == {"ok": True} and mb.calls == 2
+    answers[:] = [503, 503, 200]
+    with pytest.raises(urllib.error.HTTPError):
+        mb.get("url")
+    assert answers == [200]  # one retry, then the album stays pending
+    answers[:] = [500, 200]
+    with pytest.raises(urllib.error.HTTPError):
+        mb.get("url")
+
+
 # ----------------------------------------------------------------------
 # Library: retag, move, cover, re-run
 # ----------------------------------------------------------------------
@@ -348,9 +376,172 @@ def test_failed_cover_download_is_retried_next_run(tmp_path, ffmpeg, lib):
 
     canonicalize(lib.all_items(), placements, None, fetch=down)
     item = lib.get_item(jp.id)
-    assert item.album == "Album" and not item.get("spotify_album_id")
+    assert item.album == "Album (Japan Edition)" and not item.get("spotify_album_id")  # nothing written
 
     art = _jpeg(tmp_path / "c.jpg")
     plan = canonicalize(lib.all_items(), placements, None, fetch=lambda u: art)
     assert {c.item.id for c in plan.changes if c.art} >= {jp.id}
     assert MediaFile(os.fsdecode(lib.get_item(jp.id).path)).images[0].data == art
+
+
+def _with_art(item, data):
+    from music_scan import cover
+
+    cover.embed(item, data)
+    return item
+
+
+def test_cover_follows_only_a_renamed_album_or_missing_art(tmp_path, ffmpeg, lib):
+    from mediafile import MediaFile
+
+    from music_scan.canon import canonicalize, placements_from
+
+    jp, std, _, songs = _editions(tmp_path, lib)
+    old = _jpeg(tmp_path / "old.jpg")
+    _with_art(jp, old)
+    _with_art(std, old)
+    new = (tmp_path / "new.jpg")
+    subprocess.run(["ffmpeg", "-v", "error", "-y", "-f", "lavfi", "-i", "color=c=blue:s=64x64",
+                    "-frames:v", "1", str(new)], check=True)
+
+    plan = canonicalize(lib.all_items(), placements_from([(songs, True)]), None, fetch=lambda u: new.read_bytes())
+    art = {c.item.id: c.art for c in plan.changes}
+    assert art == {jp.id: True, std.id: False}  # jp is renamed; std keeps its name and its art
+    assert MediaFile(os.fsdecode(lib.get_item(jp.id).path)).images[0].data == new.read_bytes()
+    assert MediaFile(os.fsdecode(lib.get_item(std.id).path)).images[0].data == old
+
+
+def test_beets_only_changes_skip_the_file_write(tmp_path, ffmpeg, lib, caplog):
+    from music_scan.canon import canonicalize, placements_from, spotify_fields
+
+    songs = [_song("T1", track=1)]
+    placements = placements_from([(songs, True)])
+    path = _m4a(tmp_path / "library" / "Artist" / "Album" / "01 - One.m4a")
+    fields = {k: v for k, v in spotify_fields(placements["T1"]).items() if k != "albumartist"}
+    item = _add(lib, path, title="One", spotify_ids="T1", **fields)
+    _with_art(item, _jpeg(tmp_path / "c.jpg"))
+    os.utime(path, (0, 0))
+
+    plan = canonicalize(lib.all_items(), placements, None, apply=False)
+    assert [c.write for c in plan.changes] == [False] and plan.writes == 0
+    assert dict(plan.kinds) == {"beets-only": 1}
+    canonicalize(lib.all_items(), placements, None, fetch=lambda u: pytest.fail("no cover is due"))
+    stored = lib.get_item(item.id)
+    assert stored.get("mb_album_via") == "pending" and stored.get("spotify_album_id") == "A1"
+    assert os.stat(path).st_mtime == 0  # the file was not rewritten
+
+
+def test_report_counts_every_name_an_album_merges(tmp_path, ffmpeg, lib, caplog):
+    import logging
+
+    from music_scan.canon import canonicalize, placements_from, report
+
+    _, _, _, songs = _editions(tmp_path, lib)
+    art = _jpeg(tmp_path / "c.jpg")
+    plan = canonicalize(lib.all_items(), placements_from([(songs, True)]), None, fetch=lambda u: art)
+    with caplog.at_level(logging.INFO):
+        report(plan, None)
+    # "Album" (std, unrenamed) and "Album (Japan Edition)" (jp) become one album, counted after the apply too.
+    assert "Albums: 2 current album name(s) become 1 Spotify album(s)" in caplog.text
+    assert "2 current album name(s): Album; Album (Japan Edition)" in caplog.text
+    assert "2 file write(s), 0 database-only" in caplog.text
+
+
+# ----------------------------------------------------------------------
+# Single → album by ISRC
+# ----------------------------------------------------------------------
+
+
+def _hit(album_id, name, album_type="album", artist="Artist", date="2020-01-01", track=4, isrc="ISRC1"):
+    return {"album": {"id": album_id, "name": name, "album_type": album_type, "artists": [{"name": artist}],
+                      "release_date": date, "total_tracks": 12, "images": [{"url": COVER, "width": 640}]},
+            "track_number": track, "disc_number": 1, "external_ids": {"isrc": isrc}}
+
+
+def _single_songs():
+    return [_song("SGL", "SINGLE", name="Munch", album_type="single", date="2022-08-01", tracks=1, isrc="ISRC1")]
+
+
+def _finder(tmp_path, hits, **kw):
+    from music_scan.canon import AlbumsByIsrc
+
+    searched = []
+
+    def search(isrc):
+        searched.append(isrc)
+        return hits
+
+    return AlbumsByIsrc(cache_file=tmp_path / "isrc.json", search=search, interval=0, **kw), searched
+
+
+def test_single_moves_to_the_same_artists_album_and_keeps_the_current_one(tmp_path):
+    from music_scan.canon import placements_from
+
+    placements = placements_from([(_single_songs(), True)])
+    p = placements["SGL"]
+    hits = [_hit("COMP", "Hits 2023", album_type="compilation", date="2019-01-01"),
+            _hit("OTHER", "Covers", artist="Someone Else", date="2018-01-01"),
+            _hit("STD", "Like..?", date="2023-01-20", track=4),
+            _hit("DLX", "Like..? (Deluxe)", date="2023-07-21", track=6),
+            _hit("WRONG", "Remix", isrc="ISRC9")]
+    albums, searched = _finder(tmp_path, hits)
+    assert albums.album_for(FakeItem(album="Munch"), p, placements).release.album_id == "STD"  # earliest
+    deluxe = albums.album_for(FakeItem(album="Like..? (Deluxe)"), p, placements)
+    assert (deluxe.release.album_id, deluxe.track, deluxe.release.artist) == ("DLX", 6, "Artist")
+    assert searched == ["ISRC1"]  # cached after the first search
+    albums.save()
+
+    again, searched = _finder(tmp_path, [])
+    assert again.album_for(FakeItem(album="Munch"), p, placements).release.album_id == "STD" and searched == []
+
+
+def test_single_with_no_album_stays_and_a_miss_is_retried_after_a_week(tmp_path):
+    from music_scan.canon import placements_from
+
+    placements = placements_from([(_single_songs(), True)])
+    albums, searched = _finder(tmp_path, [_hit("COMP", "Hits", album_type="compilation")])
+    assert albums.album_for(FakeItem(), placements["SGL"], placements) is None
+    albums.cache["ISRC1"]["checked"] = (datetime.now(timezone.utc) - timedelta(days=8)).isoformat()
+    albums.search = lambda isrc: [_hit("STD", "Heavy Metal")]
+    assert albums.album_for(FakeItem(), placements["SGL"], placements).release.name == "Heavy Metal"
+
+
+def test_budget_or_rate_limit_leaves_the_single_waiting(tmp_path):
+    from music_fetch.spotify_limit import SpotifyRateLimited
+    from music_scan.canon import placements_from
+
+    placements = placements_from([(_single_songs(), True)])
+    albums, searched = _finder(tmp_path, [], budget=0)
+    assert albums.album_for(FakeItem(), placements["SGL"], placements) is False and searched == []
+
+    def limited(_):
+        raise SpotifyRateLimited(datetime.now(timezone.utc), 999)
+
+    albums, _ = _finder(tmp_path, [])
+    albums.search = limited
+    assert albums.album_for(FakeItem(), placements["SGL"], placements) is False and albums.limited
+    assert albums.calls == 1 and albums.tracks("ISRC2") is None and albums.calls == 1  # no more calls
+
+
+def test_single_track_is_retagged_to_its_album_and_waits_when_unsearched(tmp_path, ffmpeg, lib, caplog):
+    import logging
+
+    from music_scan.canon import WAIT, canonicalize, placements_from, report
+
+    item = _add(lib, _m4a(tmp_path / "in" / "munch.m4a"), title="Munch", album="Munch", spotify_ids="SGL")
+    placements = placements_from([(_single_songs(), True)])
+    art = _jpeg(tmp_path / "c.jpg")
+
+    waiting, _ = _finder(tmp_path, [], budget=0)
+    plan = canonicalize(lib.all_items(), placements, None, fetch=lambda u: art, albums=waiting)
+    stored = lib.get_item(item.id)
+    assert plan.waiting == 1 and stored.album == "Munch" and stored.get(WAIT) == "1"
+
+    albums, _ = _finder(tmp_path, [_hit("STD", "Heavy Metal", track=4)])
+    plan = canonicalize(lib.all_items(), placements, None, fetch=lambda u: art, albums=albums)
+    stored = lib.get_item(item.id)
+    assert plan.singles == 1 and (stored.album, stored.track, stored.get("spotify_album_id")) == ("Heavy Metal", 4, "STD")
+    assert WAIT not in stored
+    with caplog.at_level(logging.INFO):
+        report(plan, None, albums)
+    assert "Singles: 1 item(s) move from a single to its album by ISRC; Spotify: 1 ISRC search(es)" in caplog.text
