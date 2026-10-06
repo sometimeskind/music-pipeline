@@ -973,3 +973,59 @@ def test_run_logs_no_auth_cookie_warning(tmp_path: Path, monkeypatch: pytest.Mon
 
     assert "No YouTube auth cookie" in caplog.text
     assert all("cookies_expiry" not in body for body, _ in pushes)
+
+
+def test_sync_playlists_fetches_album_fallback_tracks_in_playlist_order(tmp_path: Path) -> None:
+    """An album playlist's fallback tracks share the budget in playlists.conf
+    order, and an album playlist without any is skipped (#205)."""
+    import unittest.mock as mock
+
+    from music_fetch import albums, ingest
+    from music_fetch.metrics import IngestMetrics
+
+    spotdl_dir = tmp_path / "spotdl"
+    spotdl_dir.mkdir()
+    conf = tmp_path / "playlists.conf"
+    conf.write_text(
+        "aaaaaaah  https://open.spotify.com/playlist/A\n"
+        "later     https://open.spotify.com/playlist/L  album\n"
+        "keep      https://open.spotify.com/playlist/K  album\n"
+        "zzz       https://open.spotify.com/playlist/Z\n",
+        encoding="utf-8",
+    )
+    later_songs = [{"url": f"u{i}", "song_id": f"s{i}", "name": f"T{i}", "artists": ["A"]} for i in range(3)]
+    for name, songs in (("aaaaaaah", []), ("later", later_songs), ("keep", []), ("zzz", [])):
+        (spotdl_dir / f"{name}.spotdl").write_text(
+            json.dumps({"type": "sync", "query": ["q"], "songs": songs}), encoding="utf-8"
+        )
+    for name in ("later", "keep"):
+        (spotdl_dir / f"{name}.album").touch()
+    state = albums.State(albums={"a0": {"status": albums.FALLBACK, "fallback_tracks": {"later": ["s2", "s0"]}}})
+    state.save(spotdl_dir / ".albums.json")
+
+    calls: list[tuple[str, int | None]] = []
+
+    def fake_sync(spotdl_file, track_limit=None, **_kwargs):
+        calls.append((spotdl_file.stem, track_limit))
+        return SyncResult(set(), 3, 3, 0, 0, {})
+
+    def fake_fallback(songs, output_dir, track_limit=None, in_library=None, **_kwargs):
+        calls.append((f"fallback:{output_dir.name}:{','.join(s['song_id'] for s in songs)}", track_limit))
+        assert in_library is not None
+        return SyncResult(set(), 2, 2, 0, 0, {})
+
+    metrics = IngestMetrics()
+    with mock.patch.object(ingest, "SPOTDL_DIR", spotdl_dir), \
+         mock.patch.object(ingest, "CONF_PATH", conf), \
+         mock.patch.object(ingest, "COOKIE_FILE", tmp_path / "cookies.txt"), \
+         mock.patch.object(ingest, "FAILURES_FILE", tmp_path / ".failures.json"), \
+         mock.patch.dict("os.environ", {"SYNC_TRACK_LIMIT": "10"}), \
+         mock.patch("music_fetch.ingest.sync_playlist", side_effect=fake_sync), \
+         mock.patch("music_fetch.ingest.download_fallback", side_effect=fake_fallback), \
+         mock.patch("music_fetch.ingest.time.sleep"):
+        ingest.sync_playlists([], metrics, in_library=lambda pl, song: False)
+
+    assert calls == [("aaaaaaah", 10), ("fallback:later:s0,s2", 7), ("zzz", 5)]
+    assert metrics.playlists_skipped == 1  # keep: nothing to fall back on
+    # The album tick owns the album playlist's .spotdl.
+    assert json.loads((spotdl_dir / "later.spotdl").read_text(encoding="utf-8"))["songs"] == later_songs

@@ -331,27 +331,35 @@ def scan_flow() -> None:
 
 
 def _album_library_hooks(lib):
-    """have / complete callbacks over one open beets library.
+    """have / missing / complete callbacks over one open beets library.
 
     ``have`` caches each playlist's track keys and the whole library for a tick;
     ``complete`` imports a finished download and drops the caches, since the
     import changed the library.  ``have`` also counts tracks the library holds
-    under another playlist, and tags them with this one (#187).
+    under another playlist, and tags them with this one (#187).  ``missing``
+    lists the tracks ``have`` would not find, tagging nothing (#205).
     """
     import music_fetch.albums as albums  # noqa: PLC0415
     from music_scan.identity import ItemIndex  # noqa: PLC0415
 
     keys: dict[str | None, ItemIndex] = {}  # None: the whole library
 
-    def have(playlist: str, tracks: list[list]) -> bool:
+    def indexes(playlist: str) -> tuple[ItemIndex, ItemIndex]:
         if playlist not in keys:
             keys[playlist] = ItemIndex(lib.items_by_source(playlist))
         if None not in keys:
             keys[None] = ItemIndex(lib.all_items())
-        return scan.have_or_link(keys[playlist], keys[None], playlist, tracks)
+        return keys[playlist], keys[None]
 
-    def fresh_have(playlist: str, tracks: list[list]) -> bool:
-        return scan.has_tracks(ItemIndex(lib.items_by_source(playlist)), tracks)
+    def have(playlist: str, tracks: list[list]) -> bool:
+        return scan.have_or_link(*indexes(playlist), playlist, tracks)
+
+    def missing(playlist: str, tracks: list[list]) -> list[list]:
+        source, library = indexes(playlist)
+        return scan.missing_tracks(source, tracks, library)
+
+    def fresh_missing(playlist: str, tracks: list[list]) -> list[list]:
+        return scan.missing_tracks(ItemIndex(lib.items_by_source(playlist)), tracks)
 
     def import_inbox() -> None:
         # Waits for a running fetch or scan: beets' SQLite has one writer.
@@ -379,11 +387,11 @@ def _album_library_hooks(lib):
             cover.logger.exception("Album covers: embedding failed; music-embed-covers retries it")
 
     def complete(state, completion) -> str | None:
-        status = albums.complete(state, completion, import_inbox, fresh_have, add_source, tag_ids)
+        status = albums.complete(state, completion, import_inbox, fresh_missing, add_source, tag_ids)
         keys.clear()
         return status
 
-    return have, complete
+    return have, missing, complete
 
 
 @task(name="album-tick", log_prints=True)
@@ -401,7 +409,7 @@ def album_tick_task(settings) -> None:
         return
 
     with MusicLibrary(scan.LIBRARY_DB) as lib:
-        have, complete = _album_library_hooks(lib)
+        have, missing, complete = _album_library_hooks(lib)
         result = albums.tick(
             playlists,
             SpotifyPlaylists(ingest.COOKIE_FILE),
@@ -411,6 +419,7 @@ def album_tick_task(settings) -> None:
             ingest.SPOTDL_DIR,
             settings,
             on_completion=complete,
+            missing=missing,
         )
 
     removed: list = []
@@ -455,7 +464,7 @@ def album_import_flow(nzo_id: str, ok: bool, path: str = "", fail_message: str =
         success = False
         try:
             with MusicLibrary(scan.LIBRARY_DB) as lib:
-                have, complete = _album_library_hooks(lib)
+                have, _, complete = _album_library_hooks(lib)
                 status = complete(state, albums.Completion(nzo_id=nzo_id, ok=ok, path=path, fail_message=fail_message))
                 if status is not None and settings.mode == "on":
                     albums.top_up(state, settings, Prowlarr(), Sabnzbd(), have, albums.TickResult())

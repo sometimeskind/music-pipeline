@@ -807,21 +807,21 @@ def test_run_beet_import_no_asis_flag_by_default() -> None:
 
 
 
-def test_has_tracks_matches_like_regen_playlists() -> None:
+def test_missing_tracks_matches_like_regen_playlists() -> None:
     from music_scan.identity import ItemIndex
-    from music_scan.scan import has_tracks
+    from music_scan.scan import missing_tracks
 
     index = ItemIndex([_lib_item("Song One"), _lib_item("Song Two")])
-    assert has_tracks(index, [["Song One", "Artist"], ["Song Two", "Artist"]])
-    assert not has_tracks(index, [["Song One", "Artist"], ["Song Three", "Artist"]])
+    assert missing_tracks(index, [["Song One", "Artist"], ["Song Two", "Artist"]]) == []
+    assert missing_tracks(index, [["Song One", "Artist"], ["Song Three", "Artist"]]) == [["Song Three", "Artist"]]
 
 
-def test_has_tracks_matches_a_retitled_item_by_isrc() -> None:
+def test_missing_tracks_matches_a_retitled_item_by_isrc() -> None:
     from music_scan.identity import ItemIndex
-    from music_scan.scan import has_tracks
+    from music_scan.scan import missing_tracks
 
     index = ItemIndex([_lib_item("Song One (2011 Remaster)", isrc="GBUM71029604")])
-    assert has_tracks(index, [["Song One", "Artist", "sid1", "GBUM71029604", 1, 1]])
+    assert missing_tracks(index, [["Song One", "Artist", "sid1", "GBUM71029604", 1, 1]]) == []
 
 
 def test_asis_skips_usenet_quarantine(tmp_path: Path) -> None:
@@ -1084,8 +1084,22 @@ def test_have_or_link_tags_nothing_when_a_track_is_missing(real_lib) -> None:
     assert _reload(real_lib, one).get("sources") == "liked"
 
 
+def test_missing_tracks_counts_other_playlists_by_id_only_and_tags_nothing(real_lib) -> None:
+    """The fallback's view (#205): like have_or_link, per track, without tagging."""
+    from music_scan.identity import ItemIndex
+    from music_scan.scan import missing_tracks
+
+    one = _add(real_lib, sources="liked", spotify_ids="T1")
+    _add(real_lib, title="Two", sources="liked")  # title+artist only: not enough outside the playlist
+    tracks = [["Song", "Artist", "T1", None, 1, 1], ["Two", "Artist", "T2", "ISRC2", 1, 2]]
+
+    gaps = missing_tracks(ItemIndex(real_lib.items_by_source("later")), tracks, ItemIndex(real_lib.all_items()))
+    assert gaps == [tracks[1]]
+    assert _reload(real_lib, one).get("sources") == "liked"
+
+
 def test_have_or_link_keeps_the_full_ladder_inside_the_playlist(real_lib) -> None:
-    """Within the playlist, title+artist still counts, as has_tracks did."""
+    """Within the playlist, title+artist still counts."""
     from music_scan.identity import ItemIndex
     from music_scan.scan import have_or_link
 
