@@ -547,7 +547,7 @@ def test_single_track_is_retagged_to_its_album_and_waits_when_unsearched(tmp_pat
     assert "Singles: 1 item(s) move from a single to its album by ISRC; Spotify: 1 ISRC search(es)" in caplog.text
 
 
-def test_with_no_album_a_bigger_ep_counts_and_an_album_still_wins(tmp_path):
+def test_an_ep_counts_only_when_the_item_is_filed_under_it_and_an_album_still_wins(tmp_path):
     from music_scan.canon import placements_from
 
     placements = placements_from([(_single_songs(), True)])
@@ -559,7 +559,7 @@ def test_with_no_album_a_bigger_ep_counts_and_an_album_still_wins(tmp_path):
            _hit("DLX", "Like..? (Deluxe)", album_type="single", tracks=11, date="2023-07-21", track=10)]
     albums, _ = _finder(tmp_path, eps)
     assert albums.album_for(FakeItem(album="Like..? (Deluxe)"), p, placements).release.album_id == "DLX"
-    assert albums.album_for(FakeItem(album="Munch"), p, placements).release.album_id == "EP"
+    assert albums.album_for(FakeItem(album="Munch"), p, placements) is None  # no move onto an EP
 
     (tmp_path / "x").mkdir()
     albums, _ = _finder(tmp_path / "x", eps + [_hit("LP", "Y2K!", date="2024-01-01")])
@@ -573,7 +573,7 @@ def test_an_older_cache_entry_is_searched_again(tmp_path):
     (tmp_path / "isrc.json").write_text(json.dumps({"ISRC1": {"checked": datetime.now(timezone.utc).isoformat(),
                                                               "tracks": []}}), encoding="utf-8")
     albums, searched = _finder(tmp_path, [_hit("EP", "Like..?", album_type="single", tracks=6)])
-    assert albums.album_for(FakeItem(), placements["SGL"], placements).release.album_id == "EP"
+    assert albums.album_for(FakeItem(album="Like..?"), placements["SGL"], placements).release.album_id == "EP"
     assert searched == ["ISRC1"]
 
 

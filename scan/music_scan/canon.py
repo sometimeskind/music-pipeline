@@ -20,11 +20,12 @@ release; then the album ID, so every run agrees.
 
 A track whose chosen release is a single moves to a standard album (``album``,
 never ``compilation``) by the same album artist that holds the same recording,
-found by ISRC with a Spotify track search (:class:`AlbumsByIsrc`).  With no such
-album an EP counts: Spotify files EPs as ``single`` too, so a ``single`` of at
-least :data:`EP_MIN_TRACKS` tracks (Ice Spice *Like..? (Deluxe)*).  Several
-candidates: an album before an EP, then the one the item is already filed under,
-then one a playlist names, then the earliest, then the album ID.  The searches are cached in
+found by ISRC with a Spotify track search (:class:`AlbumsByIsrc`).  An EP (Spotify
+files EPs as ``single`` too: a ``single`` of at least :data:`EP_MIN_TRACKS`
+tracks) counts only when the item is already filed under it, so Ice Spice *Munch*
+stays on *Like..? (Deluxe)* but no track moves onto a remix EP or a reissue.
+Several candidates: an album before an EP, then the one the item is already filed
+under, then one a playlist names, then the earliest, then the album ID.  The searches are cached in
 :data:`ISRC_CACHE` and paced :data:`SPOTIFY_INTERVAL` apart; a search that is
 not done yet (budget spent, rate limit) leaves the item as it is and marks it
 ``canon_wait`` so the next scan picks it up.
@@ -304,18 +305,19 @@ class AlbumsByIsrc:
             return False
         artist = p.release.artist.casefold()
         named = {q.release.album_id: q for q in placements.values()}
+        current = str(item.get("album") or "").casefold()
         options = []
         for t in found:
             release, track, disc = _release_from_track(t)
             if release.artist.casefold() != artist or release.album_id == p.release.album_id:
                 continue
-            if release.album_type != "album" and release.tracks_count <= p.release.tracks_count:
-                continue  # an EP only when it is bigger than the single
+            if release.album_type != "album" and (release.name.casefold() != current
+                                                  or release.tracks_count <= p.release.tracks_count):
+                continue  # an EP only when the item is already filed under it
             known = named.get(release.album_id)
             if known is not None:
                 release = known.release  # the page's data (disc count, ISRCs) over the search's
             options.append(Placement(release, track, disc, known is not None and known.named, p.isrc))
-        current = str(item.get("album") or "").casefold()
 
         def key(q: Placement):
             return (q.release.album_type != "album", q.release.name.casefold() != current, not q.named,
