@@ -544,7 +544,7 @@ def test_single_track_is_retagged_to_its_album_and_waits_when_unsearched(tmp_pat
     assert WAIT not in stored
     with caplog.at_level(logging.INFO):
         report(plan, None, albums)
-    assert "Singles: 1 item(s) move from a single to its album by ISRC; Spotify: 1 ISRC search(es)" in caplog.text
+    assert "Singles: 1 item(s) on their album instead of a single, by ISRC; Spotify: 1 ISRC search(es)" in caplog.text
 
 
 def test_an_ep_counts_only_when_the_item_is_filed_under_it_and_an_album_still_wins(tmp_path):

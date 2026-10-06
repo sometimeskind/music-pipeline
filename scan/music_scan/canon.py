@@ -363,7 +363,7 @@ class Plan:
     noalbum: int = 0
     unchanged: int = 0
     clashes: int = 0
-    singles: int = 0  # items moved off a single onto its album
+    singles: int = 0  # items placed on their album instead of a single (whether or not they change)
     waiting: int = 0  # items left until their single's ISRC search is done
     kinds: Counter = dataclasses.field(default_factory=Counter)
     # Spotify album ID → the (albumartist, album) names its items carry today,
@@ -637,7 +637,7 @@ def report(plan: Plan, resolver: Resolver | None, albums: AlbumsByIsrc | None = 
     logger.info("Albums: %d current album name(s) become %d Spotify album(s)",
                 sum(len(plan.names[a]) for a in renamed), len(renamed))
     if albums is not None:
-        logger.info("Singles: %d item(s) move from a single to its album by ISRC; Spotify: %d ISRC search(es) "
+        logger.info("Singles: %d item(s) on their album instead of a single, by ISRC; Spotify: %d ISRC search(es) "
                     "this run (%.0fs apart%s), %d ISRC(s) cached, %d item(s) wait for a search",
                     plan.singles, albums.calls, albums.interval, ", stopped by a rate limit" if albums.limited else "",
                     len(albums.cache), plan.waiting)
