@@ -63,7 +63,8 @@ def _watch_for_skips(log_path: Path, start_pos: int, skip_limit: int,
         time.sleep(0.5)
 
 
-def run_beet_import(inbox_dir: Path, skip_limit: int | None = None, asis: bool = False) -> None:
+def run_beet_import(inbox_dir: Path, skip_limit: int | None = None, asis: bool = False,
+                    config: Path | None = None) -> None:
     """Run ``beet import --quiet <inbox_dir>``, forwarding SIGTERM to beet.
 
     Args:
@@ -71,8 +72,9 @@ def run_beet_import(inbox_dir: Path, skip_limit: int | None = None, asis: bool =
                     testing without waiting through a full library run).
         asis: If True, pass ``--asis`` to import using existing embedded tags without
               MusicBrainz lookups.
+        config: If set, a beets config file layered over the main one (``beet -c``).
     """
-    cmd = ["beet", "import", "--quiet"]
+    cmd = ["beet", *(["-c", str(config)] if config else []), "import", "--quiet"]
     if asis:
         cmd.append("-A")
     cmd.append(str(inbox_dir))

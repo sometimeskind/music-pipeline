@@ -58,7 +58,9 @@ Responsibilities
 
    Only fires when ``autotag=True`` (production). In ASIS mode
    (``autotag=False``), ``import_asis`` calls ``_resolve_duplicates``
-   directly using ``config duplicate_action``.
+   directly using ``config duplicate_action``: the scan's asis pass sets it
+   to ``skip``, since the main config's ``remove`` would delete the existing
+   item and its file (#202).
 
 Note
 ----
