@@ -43,6 +43,7 @@ CACHE_FILE = Path("/root/Music/inbox/spotdl/.mb-releases.json")
 RETRY_DAYS = 7
 ISRC_SAMPLE = 3
 TIMEOUT = 30
+RETRY_503_SECONDS = 5
 
 URL, ISRC, UPC, NONE = "url", "isrc", "upc", "none"
 
@@ -91,18 +92,33 @@ def _digits(code: str) -> str:
 
 
 class MusicBrainz:
-    """Rate-limited MusicBrainz web service reads.  404 → None."""
+    """Rate-limited MusicBrainz web service reads.  404 → None.
 
-    def __init__(self, interval: float = MB_INTERVAL) -> None:
+    A 503 is MusicBrainz's rate-limit answer: the request is retried once after
+    *retry_after* seconds before the error reaches the caller (which leaves the
+    album pending for the next run)."""
+
+    def __init__(self, interval: float = MB_INTERVAL, retry_after: float = RETRY_503_SECONDS) -> None:
         self.interval = interval
+        self.retry_after = retry_after
         self._last = 0.0
         self.calls = 0
 
     def get(self, path: str, **params: str) -> dict | None:
+        url = MB_API + path + "?" + urllib.parse.urlencode({**params, "fmt": "json"})
+        try:
+            return self._get(url)
+        except urllib.error.HTTPError as exc:
+            if exc.code != 503:
+                raise
+            logger.info("  [MB-503] %s: MusicBrainz is busy; retrying in %gs", path, self.retry_after)
+            time.sleep(self.retry_after)
+            return self._get(url)
+
+    def _get(self, url: str) -> dict | None:
         wait = self._last + self.interval - time.monotonic()
         if wait > 0:
             time.sleep(wait)
-        url = MB_API + path + "?" + urllib.parse.urlencode({**params, "fmt": "json"})
         req = urllib.request.Request(url, headers={"User-Agent": MB_USER_AGENT, "Accept": "application/json"})
         try:
             with urllib.request.urlopen(req, timeout=TIMEOUT) as resp:  # noqa: S310 — fixed https host
