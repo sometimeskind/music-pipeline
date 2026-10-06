@@ -25,7 +25,7 @@ def test_preflight_task_succeeds_when_no_reason():
     from music_service.flows import preflight_task
     with patch("music_service.flows.ingest") as mock_ingest:
         mock_ingest.preflight.return_value = None
-        preflight_task()
+        preflight_task(MagicMock())
         mock_ingest.preflight.assert_called_once()
 
 
@@ -33,42 +33,31 @@ def test_preflight_task_raises_on_failure():
     from music_service.flows import preflight_task
     with patch("music_service.flows.ingest") as mock_ingest:
         mock_ingest.preflight.return_value = "missing_cookies"
+        metrics = MagicMock(failure_reason="")
         with pytest.raises(RuntimeError, match="missing_cookies"):
-            preflight_task()
+            preflight_task(metrics)
+        assert metrics.failure_reason == "missing_cookies"
 
 
 def test_reconcile_playlists_task_returns_remove_sources():
     from music_service.flows import reconcile_playlists_task
     with patch("music_service.flows.ingest") as mock_ingest:
         mock_ingest.reconcile_playlists.return_value = ["old-playlist"]
-        result = reconcile_playlists_task()
+        result = reconcile_playlists_task(MagicMock())
         assert result == ["old-playlist"]
 
 
-def test_spotdl_sync_task_returns_pending_and_pushes_metrics():
+def test_spotdl_sync_task_returns_pending_and_counts_into_metrics():
     from music_service.flows import spotdl_sync_task
     mock_pending = MagicMock()
-    mock_metrics = MagicMock()
+    metrics = MagicMock()
     with patch("music_service.flows.ingest") as mock_ingest, \
-         patch("music_scan.library.MusicLibrary"), \
-         patch("music_service.flows.IngestMetrics", return_value=mock_metrics):
+         patch("music_scan.library.MusicLibrary"):
         mock_ingest.sync_playlists.return_value = mock_pending
-        result = spotdl_sync_task([])
+        result = spotdl_sync_task([], metrics)
         assert result is mock_pending
-        mock_metrics.push.assert_called_once()
-
-
-def test_spotdl_sync_task_pushes_metrics_on_failure():
-    from music_service.flows import spotdl_sync_task
-    mock_metrics = MagicMock()
-    with patch("music_service.flows.ingest") as mock_ingest, \
-         patch("music_scan.library.MusicLibrary"), \
-         patch("music_service.flows.IngestMetrics", return_value=mock_metrics):
-        mock_ingest.sync_playlists.side_effect = RuntimeError("boom")
-        with pytest.raises(RuntimeError):
-            spotdl_sync_task([])
-        mock_metrics.push.assert_called_once()
-        assert mock_metrics.success is False
+        assert mock_ingest.sync_playlists.call_args.args[1] is metrics
+        metrics.push.assert_not_called()
 
 
 def test_spotdl_sync_task_links_tracks_the_library_has(tmp_path):
@@ -91,10 +80,9 @@ def test_spotdl_sync_task_links_tracks_the_library_has(tmp_path):
         return MagicMock()
 
     with patch("music_service.flows.ingest") as mock_ingest, \
-         patch("music_service.flows.scan.LIBRARY_DB", db), \
-         patch("music_service.flows.IngestMetrics", return_value=MagicMock(tracks_linked=1)):
+         patch("music_service.flows.scan.LIBRARY_DB", db):
         mock_ingest.sync_playlists.side_effect = fake_sync
-        spotdl_sync_task([])
+        spotdl_sync_task([], MagicMock(tracks_linked=1))
 
     assert answers == [True, False]
     with MusicLibrary(db, tmp_path) as lib:
@@ -201,12 +189,10 @@ def test_fetch_flow_runs_fetch_then_scan():
     mock_pending = MagicMock()
     mock_pending.tracks = []
     mock_pending.remove_sources = []
-    mock_metrics = MagicMock()
 
     with patch("music_service.flows.ingest") as mock_ingest, \
          patch("music_service.flows.scan") as mock_scan, \
          patch("music_service.flows.reconcile") as mock_reconcile, \
-         patch("music_service.flows.IngestMetrics", return_value=mock_metrics), \
          patch("music_scan.library.MusicLibrary"), \
          patch("music_service.flows.concurrency") as mock_concurrency, \
          patch("music_scan.process.run_beet_update"), \
@@ -225,6 +211,62 @@ def test_fetch_flow_runs_fetch_then_scan():
     assert call_order[:3] == ["preflight", "reconcile-playlists", "spotdl-sync"]
     assert "beet-import" in call_order
     mock_scan.run_inbox_import.assert_called_once()
+
+
+def _flow_ingest_pushes(tmp_path, monkeypatch, *, preflight=None, linked=0):
+    """Run fetch_and_scan_flow with only I/O stubbed: the real ingest_run, the real
+    cookie file parsing and the real IngestMetrics.push, so the flow path itself is
+    what's tested (#203).  Returns the music_ingest push bodies."""
+    import music_fetch.ingest as ingest
+
+    cookies = tmp_path / "cookies.txt"
+    cookies.write_text(
+        "# Netscape HTTP Cookie File\n"
+        ".youtube.com\tTRUE\t/\tTRUE\t1792766198\tSAPISID\tvalue\n",
+        encoding="utf-8",
+    )
+    pending = ingest.PendingRemovals(tracks=[], remove_sources=[])
+
+    def fake_sync(_remove, metrics, in_library=None):
+        metrics.tracks_linked += linked
+        return pending
+
+    pushes: list[tuple[str, str]] = []
+    monkeypatch.setattr("music_fetch.metrics._push", lambda body, job: pushes.append((body, job)))
+    monkeypatch.setattr(ingest, "COOKIE_FILE", cookies)
+    monkeypatch.setattr(ingest, "FAILURES_FILE", tmp_path / "failures.json")
+    monkeypatch.setattr(ingest, "CONF_PATH", tmp_path / "playlists.conf")
+    monkeypatch.setattr(ingest, "preflight", lambda: preflight)
+    monkeypatch.setattr(ingest, "reconcile_playlists", lambda: [])
+    monkeypatch.setattr(ingest, "sync_playlists", fake_sync)
+
+    from music_service.flows import fetch_and_scan_flow
+    with patch("music_service.flows.concurrency"), \
+         patch("music_service.flows._run_scan_tasks"), \
+         patch("music_scan.library.MusicLibrary"):
+        if preflight:
+            with pytest.raises(RuntimeError):
+                fetch_and_scan_flow()
+        else:
+            fetch_and_scan_flow()
+    return [body for body, job in pushes if job == "music_ingest"]
+
+
+def test_fetch_flow_pushes_cookie_expiry_and_linked(tmp_path, monkeypatch):
+    """The nightly flow, not just ingest.run(), pushes the expiry gauge and the
+    linked count in one music_ingest push (#203)."""
+    bodies = _flow_ingest_pushes(tmp_path, monkeypatch, linked=2)
+    assert len(bodies) == 1
+    assert "music_ingest_cookies_expiry_timestamp_seconds 1792766198" in bodies[0]
+    assert "music_ingest_tracks_linked_total 2" in bodies[0]
+    assert "music_ingest_last_run_success 1" in bodies[0]
+
+
+def test_fetch_flow_pushes_cookie_expiry_when_preflight_fails(tmp_path, monkeypatch):
+    bodies = _flow_ingest_pushes(tmp_path, monkeypatch, preflight="auth_spotify")
+    assert len(bodies) == 1
+    assert "music_ingest_cookies_expiry_timestamp_seconds 1792766198" in bodies[0]
+    assert 'reason="auth_spotify"' in bodies[0]
 
 
 def test_scan_flow_runs_all_scan_steps_in_order():
