@@ -20,9 +20,11 @@ release; then the album ID, so every run agrees.
 
 A track whose chosen release is a single moves to a standard album (``album``,
 never ``compilation``) by the same album artist that holds the same recording,
-found by ISRC with a Spotify track search (:class:`AlbumsByIsrc`).  Several such
-albums: the one the item is already filed under, then one a playlist names,
-then the earliest, then the album ID.  The searches are cached in
+found by ISRC with a Spotify track search (:class:`AlbumsByIsrc`).  With no such
+album an EP counts: Spotify files EPs as ``single`` too, so a ``single`` of at
+least :data:`EP_MIN_TRACKS` tracks (Ice Spice *Like..? (Deluxe)*).  Several
+candidates: an album before an EP, then the one the item is already filed under,
+then one a playlist names, then the earliest, then the album ID.  The searches are cached in
 :data:`ISRC_CACHE` and paced :data:`SPOTIFY_INTERVAL` apart; a search that is
 not done yet (budget spent, rate limit) leaves the item as it is and marks it
 ``canon_wait`` so the next scan picks it up.
@@ -70,6 +72,10 @@ ISRC_CACHE = Path("/root/Music/inbox/spotdl/.canon-isrc.json")
 ISRC_RETRY_DAYS = 7
 SPOTIFY_INTERVAL = 1.0
 IMPORT_SEARCH_BUDGET = 20
+# A Spotify "single" with this many tracks is an EP, and a single's track may move onto it.
+EP_MIN_TRACKS = 4
+# Bumped when what the cache keeps changes, so older entries are searched again.
+ISRC_CACHE_VERSION = 2
 WAIT = "canon_wait"
 SPOTIFY_FIELDS = ("album", "albumartist", "year", "month", "day", "track", "tracktotal", "disc", "disctotal")
 
@@ -194,6 +200,11 @@ def _release_from_track(track: dict) -> tuple[Release, int, int]:
     return release, _int(track.get("track_number")), disc
 
 
+def _album_or_ep(album: dict) -> bool:
+    kind = album.get("album_type")
+    return kind == "album" or (kind == "single" and _int(album.get("total_tracks")) >= EP_MIN_TRACKS)
+
+
 def spotify_search_isrc(isrc: str) -> list[dict]:
     """Spotify's tracks with *isrc*.  One call, rate-limit guarded."""
     from music_fetch import ingest  # noqa: PLC0415
@@ -242,7 +253,7 @@ class AlbumsByIsrc:
             logger.warning("Could not save the ISRC album cache %s: %s", self.cache_file, exc)
 
     def _due(self, entry: dict | None) -> bool:
-        if entry is None:
+        if entry is None or entry.get("v") != ISRC_CACHE_VERSION:
             return True
         return not entry["tracks"] and datetime.fromisoformat(entry["checked"]) < _now() - timedelta(days=ISRC_RETRY_DAYS)
 
@@ -252,6 +263,8 @@ class AlbumsByIsrc:
 
         entry = self.cache.get(isrc)
         if self._due(entry):
+            if entry is not None and entry.get("v") != ISRC_CACHE_VERSION:
+                entry = None  # kept less than this version needs
             if self.limited or (self.budget is not None and self.calls >= self.budget):
                 return entry["tracks"] if entry else None
             wait = self._last + self.interval - time.monotonic()
@@ -269,17 +282,18 @@ class AlbumsByIsrc:
                 return entry["tracks"] if entry else None
             finally:
                 self._last = time.monotonic()
-            # Keep only what a Release needs: standard albums carrying this exact ISRC.
+            # Keep only what a Release needs: albums and EPs carrying this exact ISRC.
             keep = [
                 {"album": {k: t["album"].get(k) for k in ("id", "name", "album_type", "artists", "release_date",
                                                           "total_tracks", "images")},
                  "track_number": t.get("track_number"), "disc_number": t.get("disc_number"),
                  "external_ids": {"isrc": isrc}}
                 for t in found
-                if (t.get("album") or {}).get("album_type") == "album" and t["album"].get("id")
+                if _album_or_ep(t.get("album") or {}) and t["album"].get("id")
                 and ((t.get("external_ids") or {}).get("isrc") or "").upper() == isrc.upper()
             ]
-            entry = self.cache[isrc] = {"checked": _now().replace(microsecond=0).isoformat(), "tracks": keep}
+            entry = self.cache[isrc] = {"v": ISRC_CACHE_VERSION, "checked": _now().replace(microsecond=0).isoformat(),
+                                        "tracks": keep}
         return entry["tracks"]
 
     def album_for(self, item, p: Placement, placements: dict[str, Placement]) -> Placement | None | bool:
@@ -293,8 +307,10 @@ class AlbumsByIsrc:
         options = []
         for t in found:
             release, track, disc = _release_from_track(t)
-            if release.artist.casefold() != artist:
+            if release.artist.casefold() != artist or release.album_id == p.release.album_id:
                 continue
+            if release.album_type != "album" and release.tracks_count <= p.release.tracks_count:
+                continue  # an EP only when it is bigger than the single
             known = named.get(release.album_id)
             if known is not None:
                 release = known.release  # the page's data (disc count, ISRCs) over the search's
@@ -302,7 +318,8 @@ class AlbumsByIsrc:
         current = str(item.get("album") or "").casefold()
 
         def key(q: Placement):
-            return (q.release.name.casefold() != current, not q.named, q.release.date or "9999", q.release.album_id)
+            return (q.release.album_type != "album", q.release.name.casefold() != current, not q.named,
+                    q.release.date or "9999", q.release.album_id)
 
         return min(options, key=key) if options else None
 
@@ -436,10 +453,12 @@ def plan_changes(
         dest = os.fsdecode(item.destination())
         for k, v in old.items():
             item[k] = v
-        other = dests.get(dest)
-        if other is not None or (dest != _path(item) and os.path.exists(dest)):
+        if dest != _path(item) and (dest in dests or os.path.exists(dest)):
+            # Moving would overwrite another file: leave this item as it is (a duplicate, #210).
             plan.clashes += 1
-            logger.warning("  [CLASH] %s → %s: another item already has that path", _path(item), dest)
+            logger.warning("  [CLASH] %s → %s: another item already has that path; left as it is",
+                           _path(item), dest)
+            continue
         dests[dest] = item
         plan.changes.append(Change(item, p, diff, dest, art, write))
         plan.kinds[_kind(diff, write)] += 1
@@ -457,7 +476,7 @@ def log_change(change: Change, apply: bool) -> None:
                     "" if apply else " (dry run)")
         return
     shown = [f"{k} {_show(o)}→{_show(n)}" for k, (o, n) in change.diff.items()
-             if k in SPOTIFY_FIELDS or k == "mb_album_via"]
+             if k in SPOTIFY_FIELDS or k == "mb_album_via" or k == "mb_albumid"]
     if change.art:
         shown.append("cover")
     where = f" → {change.dest}" if change.dest != _path(change.item) else ""

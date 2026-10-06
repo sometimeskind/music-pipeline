@@ -452,9 +452,9 @@ def test_report_counts_every_name_an_album_merges(tmp_path, ffmpeg, lib, caplog)
 # ----------------------------------------------------------------------
 
 
-def _hit(album_id, name, album_type="album", artist="Artist", date="2020-01-01", track=4, isrc="ISRC1"):
+def _hit(album_id, name, album_type="album", artist="Artist", date="2020-01-01", track=4, isrc="ISRC1", tracks=12):
     return {"album": {"id": album_id, "name": name, "album_type": album_type, "artists": [{"name": artist}],
-                      "release_date": date, "total_tracks": 12, "images": [{"url": COVER, "width": 640}]},
+                      "release_date": date, "total_tracks": tracks, "images": [{"url": COVER, "width": 640}]},
             "track_number": track, "disc_number": 1, "external_ids": {"isrc": isrc}}
 
 
@@ -545,3 +545,51 @@ def test_single_track_is_retagged_to_its_album_and_waits_when_unsearched(tmp_pat
     with caplog.at_level(logging.INFO):
         report(plan, None, albums)
     assert "Singles: 1 item(s) move from a single to its album by ISRC; Spotify: 1 ISRC search(es)" in caplog.text
+
+
+def test_with_no_album_a_bigger_ep_counts_and_an_album_still_wins(tmp_path):
+    from music_scan.canon import placements_from
+
+    placements = placements_from([(_single_songs(), True)])
+    p = placements["SGL"]
+    # Spotify files EPs as "single": Like..? and its deluxe are EPs; the 1-track single is Munch itself.
+    eps = [_hit("SINGLE", "Munch", album_type="single", tracks=1, track=1),
+           _hit("REMIX", "Munch (Remixes)", album_type="single", tracks=3, date="2022-09-01"),
+           _hit("EP", "Like..?", album_type="single", tracks=6, date="2023-01-20"),
+           _hit("DLX", "Like..? (Deluxe)", album_type="single", tracks=11, date="2023-07-21", track=10)]
+    albums, _ = _finder(tmp_path, eps)
+    assert albums.album_for(FakeItem(album="Like..? (Deluxe)"), p, placements).release.album_id == "DLX"
+    assert albums.album_for(FakeItem(album="Munch"), p, placements).release.album_id == "EP"
+
+    (tmp_path / "x").mkdir()
+    albums, _ = _finder(tmp_path / "x", eps + [_hit("LP", "Y2K!", date="2024-01-01")])
+    assert albums.album_for(FakeItem(album="Like..? (Deluxe)"), p, placements).release.album_id == "LP"
+
+
+def test_an_older_cache_entry_is_searched_again(tmp_path):
+    from music_scan.canon import placements_from
+
+    placements = placements_from([(_single_songs(), True)])
+    (tmp_path / "isrc.json").write_text(json.dumps({"ISRC1": {"checked": datetime.now(timezone.utc).isoformat(),
+                                                              "tracks": []}}), encoding="utf-8")
+    albums, searched = _finder(tmp_path, [_hit("EP", "Like..?", album_type="single", tracks=6)])
+    assert albums.album_for(FakeItem(), placements["SGL"], placements).release.album_id == "EP"
+    assert searched == ["ISRC1"]
+
+
+def test_a_move_onto_another_items_file_is_left_alone(tmp_path, ffmpeg, lib):
+    from music_scan.canon import canonicalize, placements_from, spotify_fields
+
+    songs = [_song("A", track=1), _song("B", track=1)]  # two Spotify IDs for one track slot
+    placements = placements_from([(songs, True)])
+    fields = {k: v for k, v in spotify_fields(placements["A"]).items() if k != "albumartist"}
+    there = _add(lib, _m4a(tmp_path / "library" / "Artist" / "Album" / "01 - One.m4a"), title="One",
+                 spotify_ids="A", **fields)
+    mover = _add(lib, _m4a(tmp_path / "in" / "one.m4a"), title="One", album="One", spotify_ids="B")
+    art = _jpeg(tmp_path / "c.jpg")
+
+    plan = canonicalize(lib.all_items(), placements, None, fetch=lambda u: art)
+    assert plan.clashes == 1 and mover.id not in {c.item.id for c in plan.changes}
+    stored = lib.get_item(mover.id)
+    assert stored.album == "One" and Path(os.fsdecode(stored.path)) == tmp_path / "in" / "one.m4a"
+    assert Path(os.fsdecode(lib.get_item(there.id).path)).exists()
