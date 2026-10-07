@@ -93,6 +93,7 @@ RELEASE = {"id": "REL", "disambiguation": "", "release-group": {"id": "RG", "dis
 
 class FakeMB:
     def __init__(self, url=None, recordings=None, barcode=None):
+        # url: the linked release, or {Spotify album ID: release} to link only some URLs (#229).
         self.url, self.recordings, self.barcode = url, recordings or {}, barcode
         self.calls = 0
         self.paths = []
@@ -101,7 +102,8 @@ class FakeMB:
         self.calls += 1
         self.paths.append(path)
         if path == "url":
-            return {"relations": [{"target-type": "release", "release": {"id": self.url}}]} if self.url else None
+            rel = self.url.get(params["resource"].rsplit("/", 1)[1]) if isinstance(self.url, dict) else self.url
+            return {"relations": [{"target-type": "release", "release": {"id": rel}}]} if rel else None
         if path == "recording":
             code = params["query"].split(":", 1)[1]
             return {"recordings": [{"releases": self.recordings.get(code, [])}]}
@@ -129,6 +131,28 @@ def test_url_rung_wins(tmp_path):
     fields = r.fields(_album())
     assert fields["mb_albumid"] == "URLREL" and fields["mb_albumartistids"] == ["ART"]
     assert r.cache["SP"]["rung"] == "url"
+
+
+def test_url_rung_tries_the_twins_urls_and_a_miss_is_retried_when_a_twin_joins(tmp_path, caplog):
+    import logging
+
+    # Against All Logic *2012 - 2017* (#229): MusicBrainz links the other twin, not the representative.
+    mb = FakeMB(url={"TWIN": "TWINREL"})
+    r = _resolver(mb, tmp_path)
+    assert r.fields(_album())["mb_albumid"] == "" and r.cache["SP"]["rung"] == "none"  # alone: a miss
+    r.save()
+    r = _resolver(mb, tmp_path)
+    with caplog.at_level(logging.INFO):
+        fields = r.fields(_album(twins=("TWIN",)))  # looked up again now, not after a week
+    assert fields["mb_albumid"] == "TWINREL" and r.cache["SP"]["rung"] == "url"
+    assert r.cache["SP"]["twins"] == ["TWIN"] and mb.paths[3:] == ["url", "url", "release/TWINREL"]
+    assert "[MB-URL] SP: MusicBrainz links its twin release TWIN" in caplog.text
+    # A miss that already tried these twins stays a miss until the usual retry.
+    mb = FakeMB()
+    r = _resolver(mb, tmp_path, cached=False)
+    assert r.fields(_album(twins=("TWIN",)))["mb_albumid"] == "" and r.cache["SP"]["twins"] == ["TWIN"]
+    calls = mb.calls
+    assert r.fields(_album(twins=("TWIN",)))["mb_albumid"] == "" and mb.calls == calls
 
 
 def test_isrc_rung_needs_every_isrc_track_count_and_title(tmp_path):
@@ -684,14 +708,18 @@ def test_twin_items_take_the_representatives_id_date_and_numbering(tmp_path, ffm
     assert lib.get_item(on_a.id).get("spotify_album_id") == "A"
 
     albums, _ = _finder(tmp_path, [_hit("A", "Untrue", track=4, isrc="I3")])
-    plan = canonicalize(lib.all_items(), placements, None, fetch=lambda u: art, albums=albums)
+    resolver = _resolver(FakeMB(url={"B": "BREL"}), tmp_path)  # only the twin's URL is linked (#229)
+    plan = canonicalize(lib.all_items(), placements, resolver, fetch=lambda u: art, albums=albums)
     b = lib.get_item(on_b.id)
     assert (b.get("spotify_album_id"), b.track, b.tracktotal, b.year, b.month) == ("A", 4, 10, 2019, 9)
     assert WAIT not in b and plan.twinned == 1 and plan.on_twin == {"A": 1, "B": 1}
+    # One lookup for the group, keyed by the representative, through the twin's URL.
+    assert list(resolver.cache) == ["A"] and resolver.cache["A"]["twins"] == ["B"]
+    assert lib.get_item(on_a.id).get("mb_albumid") == lib.get_item(on_b.id).get("mb_albumid") == "BREL"
     assert plan.names == {"A": {("Artist", "Untrue")}}
     with caplog.at_level(logging.INFO):
         report(plan, None, albums)
     assert ("[TWIN] Artist — Untrue: A (2019-09-17, 10 tracks, 2 entries, 1 items) ← "
             "B (2021-05-05, 11 tracks, 1 entries, 1 items)") in caplog.text
     assert "Twins: 1 group(s) of same-name releases; 1 item(s) moved onto the representative, 0 wait" in caplog.text
-    assert not canonicalize(lib.all_items(), placements, None, fetch=lambda u: art, albums=albums).changes
+    assert not canonicalize(lib.all_items(), placements, resolver, fetch=lambda u: art, albums=albums).changes
