@@ -199,9 +199,13 @@ def _file_tags(path: Path) -> ReplacedFile | None:
 def replaced_files(replaced_dir: Path) -> list[ReplacedFile]:
     from music_scan.scan import AUDIO_EXTS  # noqa: PLC0415
 
-    if not replaced_dir.is_dir():
+    try:
+        if not replaced_dir.is_dir():
+            return []
+        files = sorted(f for f in replaced_dir.rglob("*") if f.is_file() and f.suffix.lower() in AUDIO_EXTS)
+    except OSError as exc:  # unreadable (CI runs the tests as a non-root user)
+        logger.warning("Cannot read %s: %s", replaced_dir, exc)
         return []
-    files = sorted(f for f in replaced_dir.rglob("*") if f.is_file() and f.suffix.lower() in AUDIO_EXTS)
     return [rf for rf in map(_file_tags, files) if rf is not None]
 
 

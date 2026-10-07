@@ -153,7 +153,7 @@ def test_audit_reports_the_slot_fills_and_no_loss(tmp_path: Path, caplog: pytest
 
     with patches[0], patches[1], patches[2], patches[3], patches[4], \
          caplog.at_level(logging.INFO, logger="music_scan.playlists"):
-        assert audit() == 0
+        assert audit(replaced_dir=tmp_path / "replaced") == 0
 
     assert ("pl: on disk 3 | today's path 3 | with slots 4 | filled from library 1 | "
             "entries 4 = own file 3 + shared file 0 + empty 1 | tail lines 1 | empty in replaced 0") in caplog.text
@@ -172,7 +172,7 @@ def test_audit_counts_an_entry_the_file_on_disk_would_lose(tmp_path: Path, caplo
 
     with patches[0], patches[1], patches[2], patches[3], patches[4], \
          caplog.at_level(logging.INFO, logger="music_scan.playlists"):
-        assert audit() == 1
+        assert audit(replaced_dir=tmp_path / "replaced") == 1
 
     assert "- ../library/gone.m4a  (on disk, resolves no more)" in caplog.text
     assert "1 entr(ies) would disappear" in caplog.text
@@ -202,7 +202,7 @@ def test_audit_reports_entries_that_share_a_file(tmp_path: Path, caplog: pytest.
 
     with patches[0], patches[1], patches[2], patches[3], patches[4], \
          caplog.at_level(logging.INFO, logger="music_scan.playlists"):
-        assert audit() == 0
+        assert audit(replaced_dir=tmp_path / "replaced") == 0
 
     assert "entries 2 = own file 0 + shared file 2 + empty 0" in caplog.text
     assert "= ../library/song.m4a (item 42) is the file of 2 entries, written once:" in caplog.text
