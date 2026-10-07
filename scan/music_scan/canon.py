@@ -45,6 +45,8 @@ albums sharing no recording (self-titled records) never merge.
 Navidrome groups by the MusicBrainz album ID before the tags, so the album-level
 MusicBrainz tags follow the canonical album too (:mod:`music_scan.mb_release`);
 ``mb_album_via`` records how (``url``, ``isrc``, ``upc``, ``none`` or ``pending``).
+A twin group is looked up once, for its representative, and the URL rung tries
+every twin's Spotify URL: MusicBrainz may link only the other release (#229).
 Embedded art follows the canonical album when the album name or album artist
 changes, or when the file has none.  A change to beets-only fields
 (``spotify_album_id``, ``mb_album_via``) updates the database and leaves the
@@ -106,8 +108,8 @@ class Release:
     cover_url: str | None
     isrcs: tuple[str, ...]
 
-    def spotify_album(self) -> SpotifyAlbum:
-        return SpotifyAlbum(self.album_id, self.name, self.tracks_count, self.isrcs)
+    def spotify_album(self, twins: Iterable[str] = ()) -> SpotifyAlbum:
+        return SpotifyAlbum(self.album_id, self.name, self.tracks_count, self.isrcs, tuple(twins))
 
 
 @dataclasses.dataclass(frozen=True)
@@ -551,7 +553,10 @@ def plan_changes(
             plan.changes.append(Change(item, p, {WAIT: (item.get(WAIT), "1")}, here, False, False, here))
             continue
         fields = spotify_fields(p)
-        mb = resolver.fields(p.release.spotify_album()) if resolver is not None else None
+        # The representative's lookup tries its twins' URLs too; an item left apart keeps to its own release.
+        twins = ([r.album_id for r in group.others]
+                 if group is not None and p.release.album_id == group.representative.album_id else ())
+        mb = resolver.fields(p.release.spotify_album(twins)) if resolver is not None else None
         if mb is None:
             fields["mb_album_via"] = PENDING
         else:

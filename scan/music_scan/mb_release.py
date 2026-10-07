@@ -4,7 +4,8 @@ Navidrome groups an album by ``musicbrainz_albumid`` first, so the canonical
 Spotify tags only merge editions when every item of the album also carries the
 same MusicBrainz album IDs, or none.  This finds that release, rungs in order:
 
-1. ``[MB-URL]``  the release MusicBrainz links to ``open.spotify.com/album/<id>``;
+1. ``[MB-URL]``  the release MusicBrainz links to ``open.spotify.com/album/<id>``,
+   for the album's ID and then each of its twin releases' (#214, #229);
 2. ``[MB-ISRC]`` a release holding the album's tracks (a recording search per
    ISRC, up to :data:`ISRC_SAMPLE` of them) with Spotify's track count and title;
 3. ``[MB-UPC]``  a release with the album's barcode (one Spotify album call; the
@@ -63,6 +64,7 @@ class SpotifyAlbum:
     name: str
     tracks_count: int
     isrcs: tuple[str, ...] = ()
+    twins: tuple[str, ...] = ()  # the other same-name releases' album IDs (#214)
 
 
 def album_fields(release: dict | None) -> dict:
@@ -133,12 +135,18 @@ class MusicBrainz:
 
 
 def by_url(mb: MusicBrainz, album: SpotifyAlbum) -> str | None:
-    data = mb.get("url", resource=SPOTIFY_ALBUM_URL + album.album_id, inc="release-rels")
-    ids = sorted(
-        r["release"]["id"] for r in (data or {}).get("relations", [])
-        if r.get("target-type") == "release" and r.get("release", {}).get("id")
-    )
-    return ids[0] if ids else None
+    """The release linked to the album's Spotify URL, or to a twin's (#229)."""
+    for album_id in (album.album_id, *album.twins):
+        data = mb.get("url", resource=SPOTIFY_ALBUM_URL + album_id, inc="release-rels")
+        ids = sorted(
+            r["release"]["id"] for r in (data or {}).get("relations", [])
+            if r.get("target-type") == "release" and r.get("release", {}).get("id")
+        )
+        if ids:
+            if album_id != album.album_id:
+                logger.info("  [MB-URL] %s: MusicBrainz links its twin release %s", album.album_id, album_id)
+            return ids[0]
+    return None
 
 
 def _best(releases: Iterable[dict], album: SpotifyAlbum) -> str | None:
@@ -232,18 +240,20 @@ class Resolver:
         except OSError as exc:
             logger.warning("Could not save the MusicBrainz release cache %s: %s", self.cache_file, exc)
 
-    def _due(self, entry: dict | None) -> bool:
+    def _due(self, entry: dict | None, album: SpotifyAlbum) -> bool:
         if entry is None:
             return True
         if entry["rung"] != NONE:
             return False
+        if entry.get("twins", []) != list(album.twins):
+            return True  # a twin joined since the miss; its URL may be the linked one (#229)
         return datetime.fromisoformat(entry["checked"]) < _now() - timedelta(days=RETRY_DAYS)
 
     def fields(self, album: SpotifyAlbum) -> dict | None:
         """The album-level MusicBrainz fields for *album*'s items, or None while
         it is pending (not looked up yet, budget spent, or the lookup failed)."""
         entry = self.cache.get(album.album_id)
-        if self._due(entry):
+        if self._due(entry, album):
             if self.budget is not None and self.looked_up >= self.budget:
                 return album_fields(None) if entry else None  # a stale miss stays a miss
             looked = self._look_up(album)
@@ -278,6 +288,6 @@ class Resolver:
         if release is None:
             logger.info("  [MB-NONE] %s: no MusicBrainz release; add it with %s%s",
                         label, HARMONY_URL, album.album_id)
-            return {"rung": NONE, "checked": checked}
+            return {"rung": NONE, "checked": checked, "twins": list(album.twins)}
         logger.info("  [MB-%s] %s → %s", rung.upper(), label, release["id"])
-        return {"rung": rung, "checked": checked, "fields": album_fields(release)}
+        return {"rung": rung, "checked": checked, "twins": list(album.twins), "fields": album_fields(release)}
