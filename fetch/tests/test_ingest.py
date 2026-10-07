@@ -1029,3 +1029,42 @@ def test_sync_playlists_fetches_album_fallback_tracks_in_playlist_order(tmp_path
     assert metrics.playlists_skipped == 1  # keep: nothing to fall back on
     # The album tick owns the album playlist's .spotdl.
     assert json.loads((spotdl_dir / "later.spotdl").read_text(encoding="utf-8"))["songs"] == later_songs
+
+
+def test_spent_budget_still_checks_the_later_playlists(tmp_path: Path) -> None:
+    """Once SYNC_TRACK_LIMIT is spent the remaining playlists are synced with a
+    limit of 0 (fetched, [HAVE]-linked, removals collected) instead of skipped;
+    they count as deferred (#228)."""
+    import unittest.mock as mock
+    from music_fetch import ingest
+    from music_fetch.metrics import IngestMetrics
+
+    spotdl_dir = tmp_path / "spotdl"
+    spotdl_dir.mkdir()
+    conf = tmp_path / "playlists.conf"
+    conf.write_text("first   https://open.spotify.com/playlist/A\nsecond  https://open.spotify.com/playlist/B\n"
+                    "third   https://open.spotify.com/playlist/C\n", encoding="utf-8")
+    for name in ("first", "second", "third"):
+        (spotdl_dir / f"{name}.spotdl").write_text(
+            '{"type":"sync","query":["https://open.spotify.com/playlist/X"],"songs":[]}', encoding="utf-8")
+
+    calls: list[tuple[str, int | None]] = []
+
+    def fake_sync(spotdl_file, track_limit=None, **_kwargs):
+        calls.append((spotdl_file.stem, track_limit))
+        removed = {"https://open.spotify.com/track/gone"} if spotdl_file.stem == "third" else set()
+        return SyncResult(removed, min(track_limit, 3), min(track_limit, 3), 0, 0, {})
+
+    metrics = IngestMetrics()
+    with mock.patch.object(ingest, "SPOTDL_DIR", spotdl_dir), \
+         mock.patch.object(ingest, "CONF_PATH", conf), \
+         mock.patch.object(ingest, "COOKIE_FILE", tmp_path / "cookies.txt"), \
+         mock.patch.object(ingest, "FAILURES_FILE", tmp_path / ".failures.json"), \
+         mock.patch.dict("os.environ", {"SYNC_TRACK_LIMIT": "2"}), \
+         mock.patch("music_fetch.ingest.sync_playlist", side_effect=fake_sync), \
+         mock.patch("music_fetch.ingest.time.sleep"):
+        ingest.sync_playlists([], metrics)
+
+    assert calls == [("first", 2), ("second", 0), ("third", 0)]
+    assert (metrics.playlists_total, metrics.playlists_deferred, metrics.playlists_skipped) == (3, 2, 0)
+    assert metrics.tracks_attempted == 2

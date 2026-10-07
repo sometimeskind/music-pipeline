@@ -42,6 +42,8 @@ class ScanMetrics:
     lossless_items: int | None = None
     # Downloads the length guard rejected, per reason (#165).
     rejected: dict[str, int] = field(default_factory=lambda: {"duration": 0, "silence": 0})
+    # Playlist entries with no library item, per playlist (#228).
+    slots_empty: dict[str, int] = field(default_factory=dict)
 
     def push(self) -> None:
         lines = [
@@ -55,6 +57,9 @@ class ScanMetrics:
         lines += [f'music_scan_rejected_tracks_total{{reason="{r}"}} {n}' for r, n in sorted(self.rejected.items())]
         if self.lossless_items is not None:
             lines.append(_gauge("music_library_lossless_items", self.lossless_items))
+        if self.slots_empty:
+            lines.append("# TYPE music_playlist_slots_empty gauge")
+            lines += [f'music_playlist_slots_empty{{playlist="{p}"}} {n}' for p, n in sorted(self.slots_empty.items())]
         if not self.success and self.failure_reason:
             lines.append(
                 _gauge("music_scan_last_failure_reason", 1, {"reason": self.failure_reason})

@@ -500,7 +500,7 @@ def test_fail_track_in_backoff_is_skipped(tmp_path: Path, simple_songs) -> None:
         )
 
     assert result.attempted == 0
-    assert mock_spotdl.download_songs.call_args[0][0] == []
+    mock_spotdl.download_songs.assert_not_called()  # an empty batch makes no spotdl call (#228)
 
 
 def test_kind_change_resets_attempts(tmp_path: Path, simple_songs) -> None:
@@ -1011,7 +1011,7 @@ def test_sync_playlist_read_makes_no_per_track_calls(tmp_path: Path) -> None:
         result = sync_playlist(spotdl_file=spotdl_file, output_dir=output_dir, cookie_file=cookie_file)
 
     assert (result.attempted, result.removed_urls) == (0, set())
-    mock_spotdl.download_songs.assert_called_once_with([])
+    mock_spotdl.download_songs.assert_not_called()
     mock_spotdl.search.assert_not_called()
     assert json.loads(spotdl_file.read_text(encoding="utf-8"))["songs"] == known
 
@@ -1220,3 +1220,59 @@ def test_name_cap_is_installed_on_the_downloader() -> None:
         assert downloader.create_file_name is _capped_file_name
     finally:
         downloader.create_file_name = original
+
+
+# ---------------------------------------------------------------------------
+# The want list (#228)
+# ---------------------------------------------------------------------------
+
+
+def test_want_list_drops_linked_and_backed_off_tracks_in_order() -> None:
+    from datetime import datetime, timezone
+
+    from music_fetch.spotdl_ops import want_list
+
+    songs = [_make_mock_song(f"https://open.spotify.com/track/{i}", title=f"T{i}") for i in range(4)]
+    failures = {
+        songs[1].url: {"kind": "fail", "retry_after": "2999-01-01T00:00:00+00:00"},
+        songs[3].url: {"kind": "miss", "retry_after": "2000-01-01T00:00:00+00:00"},  # expired: due again
+    }
+    now = datetime(2026, 1, 1, tzinfo=timezone.utc)
+
+    wanted, linked, backed_off = want_list(songs, lambda song: song["name"] == "T0", failures, now)
+
+    assert [s.url for s in wanted] == [songs[2].url, songs[3].url]
+    assert linked == [songs[0]]
+    assert backed_off == [songs[1]]
+    assert want_list(songs, None, {}, now) == (songs, [], [])
+
+
+def test_zero_budget_checks_the_playlist_and_defers_every_download(tmp_path: Path, simple_songs, caplog) -> None:
+    """A spent budget still fetches, links [HAVE], applies backoff and records
+    removals; it only defers the downloads, with no spotdl download call (#228)."""
+    import logging
+
+    spotdl_file, output_dir, cookie_file = _setup_sync(tmp_path)
+    gone = _make_mock_song("https://open.spotify.com/track/gone", title="Gone")
+    spotdl_file.write_text(
+        json.dumps({"type": "sync", "query": ["https://open.spotify.com/playlist/abc"], "songs": [gone.json]}),
+        encoding="utf-8",
+    )
+    have = _make_mock_song("https://open.spotify.com/track/have", title="Elsewhere")
+    new = _make_mock_song("https://open.spotify.com/track/new", title="New")
+    simple_songs.return_value = [have, new]
+    mock_spotdl = _mock_spotdl([])
+
+    with mock.patch("music_fetch.spotdl_ops._make_spotdl", return_value=mock_spotdl), \
+         caplog.at_level(logging.INFO, logger="music_fetch.spotdl_ops"):
+        result = sync_playlist(
+            spotdl_file=spotdl_file, output_dir=output_dir, cookie_file=cookie_file,
+            track_limit=0, failures_file=tmp_path / ".failures.json", in_library=lambda song: song["url"] == have.url,
+        )
+
+    mock_spotdl.download_songs.assert_not_called()
+    assert (result.attempted, result.downloaded, result.linked) == (0, 0, 1)
+    assert result.removed_urls == {gone.url}
+    assert "[HAVE] Artist - Elsewhere" in caplog.text
+    assert "[DEFER] Artist - New" in caplog.text
+    assert json.loads(spotdl_file.read_text(encoding="utf-8"))["songs"] == [have.json]
