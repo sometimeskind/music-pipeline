@@ -131,14 +131,30 @@ def log_slots(name: str, slots: list[Slot]) -> None:
 # ---------------------------------------------------------------------------
 
 
+def collisions(slots: list[Slot]) -> dict[Path, list[tuple[int, Slot]]]:
+    """Entries resolving to one file (#232): ``{path: [(position, slot), ...]}``
+    for every file two or more slots share.  Regen writes such a file once, so
+    the ``.m3u`` has fewer lines than the playlist has entries; the first case
+    was #210's duplicate merge (wedding 171 entries, 170 lines)."""
+    from music_scan.scan import _item_path  # noqa: PLC0415
+
+    groups: dict[Path, list[tuple[int, Slot]]] = {}
+    for pos, slot in enumerate(slots, 1):
+        if slot.item is not None:
+            groups.setdefault(_item_path(slot.item), []).append((pos, slot))
+    return {path: group for path, group in groups.items() if len(group) > 1}
+
+
 def audit() -> int:
     """Per playlist, compare the ``.m3u`` on disk, today's path and the slots.
-    Prints the entries the slots add and any the file on disk would lose.
-    Returns the number of lost entries (0 is the expected answer)."""
+    Prints the entries the slots add, any the file on disk would lose, and the
+    entries that share one file (shown once in the ``.m3u``), so every entry is
+    accounted for: its own file, shared, or empty.  Returns the number of lost
+    entries (0 is the expected answer); collisions are warnings."""
     from music_scan.library import LIBRARY_DB, MusicLibrary  # noqa: PLC0415
     from music_scan.scan import PLAYLISTS, SPOTDL_DIR, _item_path, playlist_paths  # noqa: PLC0415
 
-    lost_total = 0
+    lost_total = shared_total = groups_total = 0
     with MusicLibrary(LIBRARY_DB) as lib:
         library = ItemIndex(lib.all_items())
         for spotdl_file in sorted(SPOTDL_DIR.glob("*.spotdl")):
@@ -153,9 +169,16 @@ def audit() -> int:
             added = [line for line in new if line not in set(on_disk)]
             lost = [line for line in on_disk if line not in set(new)]
             lost_total += len(lost)
+            shared = collisions(slots)
+            shared_entries = sum(len(g) for g in shared.values())
+            shared_total += shared_entries
+            groups_total += len(shared)
+            resolved = len(slots) - empty_slots(slots)
             logger.info(
-                "%s: on disk %d | today's path %d | with slots %d | filled from library %d | empty slots %d",
-                name, len(on_disk), len(today), len(new), len(filled), empty_slots(slots),
+                "%s: on disk %d | today's path %d | with slots %d | filled from library %d | "
+                "entries %d = own file %d + shared file %d + empty %d",
+                name, len(on_disk), len(today), len(new), len(filled),
+                len(slots), resolved - shared_entries, shared_entries, empty_slots(slots),
             )
             for line in added:
                 slot = filled.get(line)
@@ -163,10 +186,23 @@ def audit() -> int:
                 logger.info("  + %s  (%s)", line, why)
             for line in lost:
                 logger.warning("  - %s  (on disk, resolves no more)", line)
+            for path, group in shared.items():
+                item = group[0][1].item
+                logger.warning("  = %s (item %s) is the file of %d entries, written once:",
+                               os.path.relpath(path, PLAYLISTS), getattr(item, "id", None) or "?", len(group))
+                for pos, slot in group:
+                    e = slot.entry
+                    logger.warning("      #%d %s  id=%s isrc=%s (%s)", pos, e.label, e.song_id or "-", e.isrc or "-", slot.rung)
     if lost_total:
         logger.warning("%d entr(ies) would disappear", lost_total)
+    elif shared_total:
+        logger.warning(
+            "No playlist loses an entry, but %d entr(ies) in %d group(s) share a file with another entry "
+            "and are in the .m3u once (duplicate merges, music-pipeline#210); whether a file may appear twice is open",
+            shared_total, groups_total,
+        )
     else:
-        logger.info("No playlist loses an entry")
+        logger.info("No playlist loses an entry; every entry has its own file or is empty")
     return lost_total
 
 
