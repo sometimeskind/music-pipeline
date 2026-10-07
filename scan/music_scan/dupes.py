@@ -9,9 +9,13 @@ Two tiers, grouped transitively:
 
 * **Certain:** a shared Spotify ID, ISRC or MusicBrainz recording ID, or an
   AcoustID match (a shared ``acoustid_id``, or fingerprints within
-  :data:`MATCH_BER`) with lengths within :data:`LENGTH_SLACK` seconds.
+  :data:`MATCH_BER`) with lengths within :data:`LENGTH_SLACK` seconds and the
+  same title once edition suffixes are dropped.
 * **Uncertain:** the same title and artist after the album matcher's
-  normalisation (#197), or an AcoustID match with lengths further apart.
+  normalisation (#197), or an AcoustID match with lengths further apart.  An
+  AcoustID match between different titles is uncertain too: one file is
+  likely the other's audio under the wrong tags (a wrong download, #221), which
+  ``music-audit-lengths --replace`` fixes and a merge would make worse.
   Reported only: a demo, live take or radio edit must stay its own item.  A
   title+artist pair whose ISRCs are both known and disjoint is the duplicate
   hook's ``[SPLIT]`` decision, so it is counted as distinct and not listed.
@@ -51,7 +55,7 @@ from collections.abc import Callable
 from itertools import combinations
 from pathlib import Path
 
-from music_fetch.usenet import normalise, words
+from music_fetch.usenet import clean_album, normalise, words
 from music_scan.audit import LIBRARY, REPLACED, item_path, pipeline_lock
 from music_scan.identity import (
     add_isrcs, add_to_list, fingerprint, item_isrcs, item_spotify_ids, spotify_id, split_list,
@@ -65,11 +69,13 @@ CERTAIN, UNCERTAIN = "certain", "uncertain"
 LENGTH_SLACK = 2.0
 # Fingerprint comparison: a window of WINDOW sub-fingerprints (about 8 a second)
 # slid up to MAX_SHIFT either way; a bit error rate at or under MATCH_BER is a
-# match.  Different recordings sit near 0.5.
+# match.  Different recordings sit near 0.5, but repetitive tracks by one artist
+# score 0.10-0.15 against each other (The Field); re-encodes and remasters of one
+# recording scored 0.00-0.06 on the library (#221).
 WINDOW = 240
 MAX_SHIFT = 40
 MIN_FRAMES = 40
-MATCH_BER = 0.15
+MATCH_BER = 0.08
 _ARTIST_STOP = frozenset({"the", "and", "feat", "ft", "featuring", "with", "vs", "x"})
 
 
@@ -120,6 +126,11 @@ def bit_error_rate(a: list[int], b: list[int]) -> float:
         diff = _pack(a[sa:sa + n]) ^ _pack(b[sb:sb + n])
         best = min(best, diff.bit_count() / (32 * n))
     return best
+
+
+def _base_title(item) -> str:
+    """The title without edition suffixes: ``Get Down Tonight - 2004 Remaster`` → ``get down tonight``."""
+    return normalise(clean_album(str(item.title or "")))
 
 
 def _title_key(item) -> str:
@@ -195,10 +206,13 @@ def find_dupes(items: list, decoder: Callable[[str], list[int]] = decode) -> tup
             else:
                 continue
             gap = abs(float(a.length or 0) - float(b.length or 0))
-            if gap <= LENGTH_SLACK:
-                join(a, b, f"{why}, {gap:.0f}s apart")
-            else:
+            if gap > LENGTH_SLACK:
                 uncertain_edges.append((a.id, b.id, f"{why} but {gap:.0f}s apart"))
+            elif _base_title(a) != _base_title(b):
+                uncertain_edges.append((a.id, b.id, f"{why}, {gap:.0f}s apart, but the titles differ: "
+                                                    "wrong audio? (music-audit-lengths --replace)"))
+            else:
+                join(a, b, f"{why}, {gap:.0f}s apart")
 
     # Title + artist.
     distinct = 0

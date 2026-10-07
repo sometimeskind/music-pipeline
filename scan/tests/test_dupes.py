@@ -56,8 +56,10 @@ def _noisy(frames: list[int], flips: int, seed: int = 9) -> list[int]:
     return out
 
 
-FPS = {"same-a": _frames(1), "same-b": _noisy(_frames(1), 2), "other": _frames(2),
-       "shifted": [0] * 12 + _frames(1)}
+# A re-encode flips about 1 bit in 32 (BER ~0.03); another track by a repetitive
+# artist about 4 (~0.12, The Field in #221).
+FPS = {"same-a": _frames(1), "same-b": _noisy(_frames(1), 1), "other": _frames(2),
+       "shifted": [0] * 12 + _frames(1), "lookalike": _noisy(_frames(1), 4)}
 
 
 def _decoder(fp):
@@ -112,8 +114,42 @@ def test_fingerprint_match_within_two_seconds_is_certain() -> None:
 
 def test_shared_acoustid_id_is_a_fingerprint_match() -> None:
     a = FakeItem(1, "Song", acoustid_id="acid")
-    b = FakeItem(2, "Track", acoustid_id="acid")
+    b = FakeItem(2, "Song", acoustid_id="acid")
     assert _tiers([a, b])[0] == [[1, 2]]
+
+
+def test_a_lookalike_track_by_a_repetitive_artist_is_no_match() -> None:
+    """The Field: track 04 scored 0.13 against track 02, 1s apart (#221)."""
+    paw = FakeItem(973, "A Paw in My Face", artist="The Field", length=325.0, acoustid_fingerprint="same-a")
+    heart = FakeItem(982, "The Little Heart Beats So Fast", artist="The Field", length=326.0,
+                     acoustid_fingerprint="lookalike")
+    assert 0.08 < bit_error_rate(FPS["same-a"], FPS["lookalike"]) < 0.15
+    assert _tiers([paw, heart])[:2] == ([], [])
+
+
+def test_a_fingerprint_match_between_different_titles_is_wrong_audio_not_a_dupe() -> None:
+    """Talk Talk: 1577 is filed as Eden but its audio is Wealth (#221)."""
+    wealth = FakeItem(1527, "Wealth - 1997 Remaster", artist="Talk Talk", length=404.0, spotify_ids="W",
+                      acoustid_fingerprint="same-a")
+    eden = FakeItem(1577, "Eden - 1997 Remaster", artist="Talk Talk", length=404.0, spotify_ids="E",
+                    acoustid_fingerprint="same-b")
+    certain, uncertain, _, _, groups = _tiers([wealth, eden])
+    assert certain == [] and uncertain == [[1527, 1577]]
+    assert "titles differ" in groups[0].evidence[0][2] and "--replace" in groups[0].evidence[0][2]
+
+
+def test_a_remaster_suffix_does_not_make_titles_differ() -> None:
+    """KC & The Sunshine Band: Get Down Tonight / Get Down Tonight - 2004 Remaster, BER 0.06."""
+    a = FakeItem(739, "Get Down Tonight", artist="KC & The Sunshine Band", length=317.0, acoustid_fingerprint="same-a")
+    b = FakeItem(786, "Get Down Tonight - 2004 Remaster", artist="KC & The Sunshine Band", length=317.0,
+                 acoustid_fingerprint="same-b")
+    assert _tiers([a, b])[0] == [[739, 786]]
+
+
+def test_curly_apostrophes_and_case_do_not_make_titles_differ() -> None:
+    a = FakeItem(341, "This Guy's In Love With You", artist="These New Puritans", acoustid_fingerprint="same-a")
+    b = FakeItem(1662, "This Guy\u2019s in Love With You", artist="These New Puritans", acoustid_fingerprint="same-b")
+    assert _tiers([a, b])[0] == [[341, 1662]]
 
 
 def test_fingerprints_are_compared_only_between_items_sharing_an_artist_word() -> None:
