@@ -132,7 +132,9 @@ def test_url_rung_wins(tmp_path):
 
 
 def test_isrc_rung_needs_every_isrc_track_count_and_title(tmp_path):
-    rel = lambda i, title="Album", count=2: {"id": i, "title": title, "track-count": count, "status": "Official"}
+    def rel(i, title="Album", count=2):
+        return {"id": i, "title": title, "track-count": count, "status": "Official"}
+
     recordings = {
         "I1": [rel("CD"), rel("BOX", count=40), rel("OTHER", title="Best Of")],
         "I2": [rel("CD"), rel("BOX", count=40), {**rel("WEB"), "media": [{"format": "Digital Media"}]}],
@@ -548,7 +550,8 @@ def test_single_track_is_retagged_to_its_album_and_waits_when_unsearched(tmp_pat
     albums, _ = _finder(tmp_path, [_hit("STD", "Heavy Metal", track=4)])
     plan = canonicalize(lib.all_items(), placements, None, fetch=lambda u: art, albums=albums)
     stored = lib.get_item(item.id)
-    assert plan.singles == 1 and (stored.album, stored.track, stored.get("spotify_album_id")) == ("Heavy Metal", 4, "STD")
+    assert plan.singles == 1
+    assert (stored.album, stored.track, stored.get("spotify_album_id")) == ("Heavy Metal", 4, "STD")
     assert WAIT not in stored
     with caplog.at_level(logging.INFO):
         report(plan, None, albums)
@@ -601,3 +604,94 @@ def test_a_move_onto_another_items_file_is_left_alone(tmp_path, ffmpeg, lib):
     stored = lib.get_item(mover.id)
     assert stored.album == "One" and Path(os.fsdecode(stored.path)) == tmp_path / "in" / "one.m4a"
     assert Path(os.fsdecode(lib.get_item(there.id).path)).exists()
+
+
+# ----------------------------------------------------------------------
+# Twin releases (#214)
+# ----------------------------------------------------------------------
+
+
+def _twin_songs():
+    """One album listed twice on Spotify (A, B), a deluxe edition and a self-titled compilation."""
+    return [
+        _song("A1", "A", name="Untrue", track=1, isrc="I1"),
+        _song("A2", "A", name="Untrue", track=2, isrc="I2"),
+        _song("B3", "B", name="untrue ", date="2021-05-05", tracks=11, track=3, isrc="I3"),
+        _song("D1", "DLX", name="Untrue (Deluxe)", tracks=14, isrc="I1"),
+        _song("C1", "COMP", name="Untrue", album_type="compilation", isrc="I1"),
+        _song("C2", "COMP2", name="Untrue", album_type="compilation", isrc="I2"),
+    ]
+
+
+def test_twins_group_by_normalised_name_and_the_busiest_then_earliest_then_biggest_wins():
+    from music_scan.canon import placements_from, twin_groups
+
+    groups = twin_groups(placements_from([(_twin_songs(), True)]))
+    assert set(groups) == {"A", "B"}  # a different name, a compilation: no group
+    g = groups["A"]
+    assert g is groups["B"] and g.representative.album_id == "A" and [r.album_id for r in g.others] == ["B"]
+    assert g.entries == {"A": 2, "B": 1} and set(g.representative.isrcs) == {"I1", "I2", "I3"}
+
+    # Equal entries: the earliest; equal dates: the most tracks; then the ID.
+    songs = [_song("X1", "X", date="2020-01-01", tracks=10), _song("Y1", "Y", date="2019-01-01", tracks=10),
+             _song("Z1", "Z", date="2019-01-01", tracks=12), _song("W1", "W", date="2019-01-01", tracks=12)]
+    assert twin_groups(placements_from([(songs, True)]))["X"].representative.album_id == "W"
+    # Entries an old snapshot knows don't count; EPs group, short singles don't.
+    eps = [_song("E1", "E", name="EP", album_type="single", tracks=4), _song("E2", "F", name="EP",
+                                                                            album_type="single", tracks=4)]
+    singles = [_song("S1", "S", name="Sgl", album_type="single", tracks=1), _song("S2", "T", name="Sgl",
+                                                                                  album_type="single", tracks=1)]
+    assert set(twin_groups(placements_from([(eps + singles, False)]))) == {"E", "F"}
+
+
+def test_twin_confirmed_by_an_entry_or_a_search_else_apart_or_waiting(tmp_path):
+    from music_scan.canon import _on_representative, placements_from, twin_groups
+
+    placements = placements_from([(_twin_songs(), True)])
+    group = twin_groups(placements)["B"]
+    p = placements["B3"]
+    assert _on_representative(p, group, {}) is None  # no entry on A carries I3
+    # An entry on the representative with the same ISRC: no search, its numbering, the group's ISRCs.
+    with_a3 = placements_from([(_twin_songs() + [_song("A3", "A", name="Untrue", track=9, isrc="I3")], True)])
+    on_a = _on_representative(p, group, {("A", "I3"): with_a3["A3"]})
+    assert (on_a.release.album_id, on_a.track, on_a.isrc) == ("A", 9, "I3")
+    assert set(on_a.release.isrcs) == {"I1", "I2", "I3"}
+
+    hits = [_hit("B", "Untrue", track=3, isrc="I3"), _hit("A", "Untrue", track=4, isrc="I3")]
+    albums, searched = _finder(tmp_path, hits)
+    twin = albums.twin_for(p, group)
+    assert (twin.release.album_id, twin.track, twin.named) == ("A", 4, True) and searched == ["I3"]
+    (tmp_path / "apart").mkdir()
+    albums, _ = _finder(tmp_path / "apart", [_hit("B", "Untrue", track=3, isrc="I3")])
+    assert albums.twin_for(p, group) is None  # the recording is only on B: a self-titled record, not a twin
+    albums, _ = _finder(tmp_path / "apart", [], budget=0)
+    assert albums.twin_for(p, group) is False
+
+
+def test_twin_items_take_the_representatives_id_date_and_numbering(tmp_path, ffmpeg, lib, caplog):
+    import logging
+
+    from music_scan.canon import WAIT, canonicalize, placements_from, report
+
+    placements = placements_from([(_twin_songs(), True)])
+    on_a = _add(lib, _m4a(tmp_path / "in" / "a.m4a"), title="One", album="Untrue", track=1, spotify_ids="A1")
+    on_b = _add(lib, _m4a(tmp_path / "in" / "b.m4a"), title="Three", album="Untrue", track=3, spotify_ids="B3")
+    art = _jpeg(tmp_path / "c.jpg")
+
+    waiting, _ = _finder(tmp_path, [], budget=0)
+    plan = canonicalize(lib.all_items(), placements, None, fetch=lambda u: art, albums=waiting)
+    assert (plan.waiting, plan.twin_waiting) == (1, 1) and lib.get_item(on_b.id).get(WAIT) == "1"
+    assert lib.get_item(on_a.id).get("spotify_album_id") == "A"
+
+    albums, _ = _finder(tmp_path, [_hit("A", "Untrue", track=4, isrc="I3")])
+    plan = canonicalize(lib.all_items(), placements, None, fetch=lambda u: art, albums=albums)
+    b = lib.get_item(on_b.id)
+    assert (b.get("spotify_album_id"), b.track, b.tracktotal, b.year, b.month) == ("A", 4, 10, 2019, 9)
+    assert WAIT not in b and plan.twinned == 1 and plan.on_twin == {"A": 1, "B": 1}
+    assert plan.names == {"A": {("Artist", "Untrue")}}
+    with caplog.at_level(logging.INFO):
+        report(plan, None, albums)
+    assert ("[TWIN] Artist — Untrue: A (2019-09-17, 10 tracks, 2 entries, 1 items) ← "
+            "B (2021-05-05, 11 tracks, 1 entries, 1 items)") in caplog.text
+    assert "Twins: 1 group(s) of same-name releases; 1 item(s) moved onto the representative, 0 wait" in caplog.text
+    assert not canonicalize(lib.all_items(), placements, None, fetch=lambda u: art, albums=albums).changes
