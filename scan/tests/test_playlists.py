@@ -11,7 +11,10 @@ from unittest import mock
 import pytest
 
 from music_scan.identity import BY_ID, BY_ISRC, BY_WORDS, ItemIndex, PlaylistTrack
-from music_scan.playlists import BY_SLOT_ID, BY_SLOT_ISRC, Entry, audit, collisions, empty_slots, playlist_entries, resolve
+from music_scan.playlists import (
+    BY_SLOT_ID, BY_SLOT_ISRC, Entry, ReplacedFile, audit, collisions, empty_slots, keeper_candidates, playlist_entries,
+    replaced_matches, resolve, tail_items,
+)
 
 
 def _item(title, path="x.m4a", **flex):
@@ -135,6 +138,7 @@ def test_audit_reports_the_slot_fills_and_no_loss(tmp_path: Path, caplog: pytest
     tagged = _item("Tagged", lib_root / "tagged.m4a", spotify_ids="T1", sources="pl")
     words = _item("Words", lib_root / "words.m4a", sources="pl")
     extra = _item("Extra", lib_root / "extra.m4a", sources="pl")  # tagged, no entry: the alphabetical tail
+    extra.id = 9
     elsewhere = _item("Elsewhere", lib_root / "elsewhere.m4a", spotify_ids="E1", sources="other")
     spotdl_dir, playlists_dir, patches = _regen_env(
         tmp_path, {"pl": [tagged, words, extra]}, [tagged, words, extra, elsewhere],
@@ -149,10 +153,11 @@ def test_audit_reports_the_slot_fills_and_no_loss(tmp_path: Path, caplog: pytest
 
     with patches[0], patches[1], patches[2], patches[3], patches[4], \
          caplog.at_level(logging.INFO, logger="music_scan.playlists"):
-        assert audit() == 0
+        assert audit(replaced_dir=tmp_path / "replaced") == 0
 
     assert ("pl: on disk 3 | today's path 3 | with slots 4 | filled from library 1 | "
-            "entries 4 = own file 3 + shared file 0 + empty 1") in caplog.text
+            "entries 4 = own file 3 + shared file 0 + empty 1 | tail lines 1 | empty in replaced 0") in caplog.text
+    assert "~ item 9 extra.m4a: Artist — Extra  spotify_ids=- isrc=-  (tagged sources=pl, no entry matches it" in caplog.text
     assert f"+ {rel(lib_root / 'elsewhere.m4a')}  (slot:id: Artist — Elsewhere)" in caplog.text
     assert "No playlist loses an entry; every entry has its own file or is empty" in caplog.text
     assert "  - " not in caplog.text and "  = " not in caplog.text
@@ -167,7 +172,7 @@ def test_audit_counts_an_entry_the_file_on_disk_would_lose(tmp_path: Path, caplo
 
     with patches[0], patches[1], patches[2], patches[3], patches[4], \
          caplog.at_level(logging.INFO, logger="music_scan.playlists"):
-        assert audit() == 1
+        assert audit(replaced_dir=tmp_path / "replaced") == 1
 
     assert "- ../library/gone.m4a  (on disk, resolves no more)" in caplog.text
     assert "1 entr(ies) would disappear" in caplog.text
@@ -197,10 +202,59 @@ def test_audit_reports_entries_that_share_a_file(tmp_path: Path, caplog: pytest.
 
     with patches[0], patches[1], patches[2], patches[3], patches[4], \
          caplog.at_level(logging.INFO, logger="music_scan.playlists"):
-        assert audit() == 0
+        assert audit(replaced_dir=tmp_path / "replaced") == 0
 
     assert "entries 2 = own file 0 + shared file 2 + empty 0" in caplog.text
     assert "= ../library/song.m4a (item 42) is the file of 2 entries, written once:" in caplog.text
     assert "#1 Artist — Song  id=A isrc=- (id)" in caplog.text
     assert "#2 Artist — Song (single)  id=B isrc=GBX1 (id)" in caplog.text
     assert "No playlist loses an entry, but 2 entr(ies) in 1 group(s) share a file" in caplog.text
+
+
+def test_tail_items_are_the_tagged_items_no_entry_resolves_to() -> None:
+    tagged = _item("Song", "/lib/song.m4a", spotify_ids="S1")
+    restored = _item("Calico", "/lib/calico.m4a", sources="wedding")
+    slots = resolve([Entry("Song", "Artist", "S1", None)], ItemIndex([tagged, restored]))
+    assert tail_items(slots, [tagged, restored]) == [restored]
+
+
+def test_replaced_matches_and_keeper_candidates() -> None:
+    """An empty entry whose ISRC a quarantine/replaced file carries is a merged-away
+    track; the items sharing its ISRC, MusicBrainz id or words are the possible keepers."""
+    # The merge kept the item but did not carry the loser's ISRC: the entry is empty.
+    keeper = _item("Song", "/lib/song.m4a", spotify_ids="OTHER", isrc="GBX0", mb_trackid="mb-1")
+    words_only = _item("Lost", "/lib/lost.m4a")
+    library = ItemIndex([keeper, words_only])
+    loser = ReplacedFile(Path("/q/replaced/77-Song.m4a"), "Song", "Artist", frozenset(), frozenset({"GBX1"}), "mb-1")
+    lost_file = ReplacedFile(Path("/q/replaced/78-Lost.m4a"), "Lost", "Artist", frozenset({"L1"}), frozenset(), None)
+    slots = resolve([Entry("Song", "Artist", "S2", "GBX1"), Entry("Lost", "Artist", "L1", None),
+                     Entry("Here", "Artist", "OTHER", None), Entry("Nowhere", "Artist", "N1", "GBX9")],
+                    ItemIndex([]), library)
+
+    gone = replaced_matches(slots, [loser, lost_file])
+    assert [(pos, rf.path.name) for pos, _, rf in gone] == [(1, "77-Song.m4a"), (2, "78-Lost.m4a")]
+    assert keeper_candidates(loser, library) == [("mb_trackid mb-1", keeper)]
+    assert keeper_candidates(lost_file, library) == [("title+artist words", words_only)]
+
+
+def test_audit_reports_empty_entries_whose_file_was_replaced(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
+    lib_root = tmp_path / "library"
+    keeper = _item("Song", lib_root / "song.m4a", spotify_ids="A", isrc="GBX1", sources="later")
+    keeper.id = 7
+    spotdl_dir, playlists_dir, patches = _regen_env(tmp_path, {"later": [keeper]}, [keeper])
+    (spotdl_dir / "later.spotdl").write_text(json.dumps({"songs": [_song("Song", "A"), _song("Song (single)", "B", "GBX1X")]}),
+                                             encoding="utf-8")
+    replaced = tmp_path / "replaced"
+    replaced.mkdir()
+    (replaced / "77-Song (single).m4a").write_bytes(b"")
+    tags = ReplacedFile(replaced / "77-Song (single).m4a", "Song (single)", "Artist", frozenset(), frozenset({"GBX1X"}), None)
+
+    with patches[0], patches[1], patches[2], patches[3], patches[4], \
+         mock.patch("music_scan.playlists._file_tags", return_value=tags), \
+         caplog.at_level(logging.INFO, logger="music_scan.playlists"):
+        assert audit(replaced_dir=replaced) == 0
+
+    assert "entries 2 = own file 1 + shared file 0 + empty 1 | tail lines 0 | empty in replaced 1" in caplog.text
+    assert "? #2 Artist — Song (single)  id=B isrc=GBX1X: empty, but 77-Song (single).m4a carries it (isrc=GBX1X mb_trackid=-)" in caplog.text
+    assert "no library item shares its ISRC, MusicBrainz track id or words" in caplog.text
+    assert "1 empty entr(ies) have their track in quarantine/replaced/" in caplog.text
