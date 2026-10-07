@@ -341,7 +341,10 @@ def test_pending_musicbrainz_leaves_mb_tags_until_a_later_scan(tmp_path, ffmpeg,
     assert item.get("mb_album_via") == "url" and item.mb_albumid == "LATE"
 
 
-def test_backfill_dry_run_apply_then_zero(tmp_path, ffmpeg, lib, monkeypatch):
+def test_backfill_dry_run_apply_then_zero(tmp_path, ffmpeg, lib, monkeypatch, caplog):
+    import logging
+
+    caplog.set_level(logging.INFO)
     from music_fetch import ingest
     from music_scan import canon, cover, library, navidrome, scan
     from music_scan.mb_release import Resolver
@@ -357,13 +360,14 @@ def test_backfill_dry_run_apply_then_zero(tmp_path, ffmpeg, lib, monkeypatch):
     monkeypatch.setattr(cover, "download", lambda url: art)
     events = []
     monkeypatch.setattr(navidrome, "trigger_scan", lambda: events.append("rescan"))
-    monkeypatch.setattr(scan, "regen_playlists", lambda: events.append("m3u") or {})
+    monkeypatch.setattr(scan, "regen_playlists", lambda: events.append("m3u") or {"later": 54, "keep": 565})
 
     assert len(canon.run(apply=False).changes) == 2 and events == []
     plan = canon.run(apply=True)
     assert len(plan.changes) == 2 and plan.moved
-    # The moved files' .m3u entries are rewritten before Navidrome rescans (#218).
+    # The moved files' .m3u entries are rewritten before Navidrome rescans (#218), and said so (#223).
     assert events == ["m3u", "rescan"]
+    assert f"Moved {plan.moved} file(s); playlists regenerated: keep 565, later 54" in caplog.text
     assert canon.run(apply=True).changes == []
 
 
