@@ -11,7 +11,7 @@ from unittest import mock
 import pytest
 
 from music_scan.identity import BY_ID, BY_ISRC, BY_WORDS, ItemIndex, PlaylistTrack
-from music_scan.playlists import BY_SLOT_ID, BY_SLOT_ISRC, Entry, audit, empty_slots, playlist_entries, resolve
+from music_scan.playlists import BY_SLOT_ID, BY_SLOT_ISRC, Entry, audit, collisions, empty_slots, playlist_entries, resolve
 
 
 def _item(title, path="x.m4a", **flex):
@@ -151,10 +151,11 @@ def test_audit_reports_the_slot_fills_and_no_loss(tmp_path: Path, caplog: pytest
          caplog.at_level(logging.INFO, logger="music_scan.playlists"):
         assert audit() == 0
 
-    assert "pl: on disk 3 | today's path 3 | with slots 4 | filled from library 1 | empty slots 1" in caplog.text
+    assert ("pl: on disk 3 | today's path 3 | with slots 4 | filled from library 1 | "
+            "entries 4 = own file 3 + shared file 0 + empty 1") in caplog.text
     assert f"+ {rel(lib_root / 'elsewhere.m4a')}  (slot:id: Artist — Elsewhere)" in caplog.text
-    assert "No playlist loses an entry" in caplog.text
-    assert "  - " not in caplog.text
+    assert "No playlist loses an entry; every entry has its own file or is empty" in caplog.text
+    assert "  - " not in caplog.text and "  = " not in caplog.text
 
 
 def test_audit_counts_an_entry_the_file_on_disk_would_lose(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
@@ -170,3 +171,36 @@ def test_audit_counts_an_entry_the_file_on_disk_would_lose(tmp_path: Path, caplo
 
     assert "- ../library/gone.m4a  (on disk, resolves no more)" in caplog.text
     assert "1 entr(ies) would disappear" in caplog.text
+
+
+def test_collisions_groups_the_entries_sharing_one_file() -> None:
+    one = _item("Song", "/lib/one.m4a", spotify_ids="A,B")
+    other = _item("Other", "/lib/other.m4a", spotify_ids="C")
+    slots = resolve([Entry("Song", "Artist", "A", None), Entry("Other", "Artist", "C", None),
+                     Entry("Song (single)", "Artist", "B", "GBX1"), Entry("Gone", "Artist", "Z", None)],
+                    ItemIndex([one, other]))
+    groups = collisions(slots)
+    assert list(groups) == [Path("/lib/one.m4a")]
+    assert [(pos, s.entry.song_id) for pos, s in groups[Path("/lib/one.m4a")]] == [(1, "A"), (3, "B")]
+
+
+def test_audit_reports_entries_that_share_a_file(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
+    """Two entries resolving to one item (a #210 merge) are no loss against the
+    collapsed .m3u, so the audit must list them itself (#232)."""
+    lib_root = tmp_path / "library"
+    merged = _item("Song", lib_root / "song.m4a", spotify_ids="A,B", isrc="GBX1", sources="pl")
+    merged.id = 42
+    spotdl_dir, playlists_dir, patches = _regen_env(tmp_path, {"pl": [merged]}, [merged])
+    (spotdl_dir / "pl.spotdl").write_text(json.dumps({"songs": [_song("Song", "A"), _song("Song (single)", "B", "GBX1")]}),
+                                          encoding="utf-8")
+    (playlists_dir / "pl.m3u").write_text("../library/song.m4a\n", encoding="utf-8")
+
+    with patches[0], patches[1], patches[2], patches[3], patches[4], \
+         caplog.at_level(logging.INFO, logger="music_scan.playlists"):
+        assert audit() == 0
+
+    assert "entries 2 = own file 0 + shared file 2 + empty 0" in caplog.text
+    assert "= ../library/song.m4a (item 42) is the file of 2 entries, written once:" in caplog.text
+    assert "#1 Artist — Song  id=A isrc=- (id)" in caplog.text
+    assert "#2 Artist — Song (single)  id=B isrc=GBX1 (id)" in caplog.text
+    assert "No playlist loses an entry, but 2 entr(ies) in 1 group(s) share a file" in caplog.text
