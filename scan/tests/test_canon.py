@@ -132,7 +132,9 @@ def test_url_rung_wins(tmp_path):
 
 
 def test_isrc_rung_needs_every_isrc_track_count_and_title(tmp_path):
-    rel = lambda i, title="Album", count=2: {"id": i, "title": title, "track-count": count, "status": "Official"}
+    def rel(i, title="Album", count=2):
+        return {"id": i, "title": title, "track-count": count, "status": "Official"}
+
     recordings = {
         "I1": [rel("CD"), rel("BOX", count=40), rel("OTHER", title="Best Of")],
         "I2": [rel("CD"), rel("BOX", count=40), {**rel("WEB"), "media": [{"format": "Digital Media"}]}],
@@ -548,7 +550,8 @@ def test_single_track_is_retagged_to_its_album_and_waits_when_unsearched(tmp_pat
     albums, _ = _finder(tmp_path, [_hit("STD", "Heavy Metal", track=4)])
     plan = canonicalize(lib.all_items(), placements, None, fetch=lambda u: art, albums=albums)
     stored = lib.get_item(item.id)
-    assert plan.singles == 1 and (stored.album, stored.track, stored.get("spotify_album_id")) == ("Heavy Metal", 4, "STD")
+    assert plan.singles == 1
+    assert (stored.album, stored.track, stored.get("spotify_album_id")) == ("Heavy Metal", 4, "STD")
     assert WAIT not in stored
     with caplog.at_level(logging.INFO):
         report(plan, None, albums)

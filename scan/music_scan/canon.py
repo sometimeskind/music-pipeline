@@ -70,7 +70,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from music_scan.identity import item_spotify_ids, spotify_id
-from music_scan.mb_release import MB_ALBUM_FIELDS, Resolver, SpotifyAlbum
+from music_scan.mb_release import Resolver, SpotifyAlbum
 
 logger = logging.getLogger(__name__)
 
@@ -158,7 +158,8 @@ def placements_from(sources: Iterable[tuple[list[dict], bool]]) -> dict[str, Pla
             date=a["song"].get("date") or str(a["song"].get("year") or ""),
             tracks_count=_int(a["song"].get("tracks_count")),
             disc_count=max(a["discs"], 1),
-            cover_url=a["song"].get("cover_url") if str(a["song"].get("cover_url", "")).startswith("https://") else None,
+            cover_url=(a["song"].get("cover_url")
+                       if str(a["song"].get("cover_url", "")).startswith("https://") else None),
             isrcs=tuple(a["isrcs"]),
         )
         for album_id, a in albums.items()
@@ -280,7 +281,8 @@ def spotify_search_isrc(isrc: str) -> list[dict]:
     from spotdl.utils.spotify import SpotifyClient  # noqa: PLC0415
 
     SpotifyPlaylists(ingest.COOKIE_FILE)  # initialises the shared client with the fail-fast adapter
-    return ((SpotifyClient().search(q=f"isrc:{isrc}", type="track", limit=50) or {}).get("tracks") or {}).get("items") or []
+    found = SpotifyClient().search(q=f"isrc:{isrc}", type="track", limit=50) or {}
+    return (found.get("tracks") or {}).get("items") or []
 
 
 class AlbumsByIsrc:
@@ -323,7 +325,8 @@ class AlbumsByIsrc:
     def _due(self, entry: dict | None) -> bool:
         if entry is None or entry.get("v") != ISRC_CACHE_VERSION:
             return True
-        return not entry["tracks"] and datetime.fromisoformat(entry["checked"]) < _now() - timedelta(days=ISRC_RETRY_DAYS)
+        retry_after = _now() - timedelta(days=ISRC_RETRY_DAYS)
+        return not entry["tracks"] and datetime.fromisoformat(entry["checked"]) < retry_after
 
     def tracks(self, isrc: str) -> list[dict] | None:
         """The album tracks with *isrc* (Spotify track objects), or None while not searched yet."""
