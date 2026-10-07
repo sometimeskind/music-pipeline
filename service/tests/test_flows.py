@@ -168,7 +168,7 @@ def test_regen_playlists_task_calls_regen():
     from music_service.flows import regen_playlists_task
     with patch("music_service.flows.scan") as mock_scan:
         regen_playlists_task()
-        mock_scan.regen_playlists.assert_called_once()
+        mock_scan.regen_playlists.assert_called_once_with(None)
 
 
 def test_reconcile_task_calls_reconcile_all():
@@ -283,7 +283,7 @@ def test_scan_flow_runs_all_scan_steps_in_order():
         mock_scan.run_inbox_import.side_effect = lambda: (call_order.append("beet-import"), [])[1]
         mock_scan.quarantine_inbox_leftovers.side_effect = lambda: (call_order.append("quarantine"), 0)[1]
         mock_scan.import_asis_from_quarantine.side_effect = lambda: (call_order.append("asis-import"), 0)[1]
-        mock_scan.regen_playlists.side_effect = lambda: (call_order.append("regen-playlists"), {})[1]
+        mock_scan.regen_playlists.side_effect = lambda metrics: (call_order.append("regen-playlists"), {})[1]
         mock_reconcile.reconcile_all.side_effect = lambda: (call_order.append("reconcile-snapshots"), 0)[1]
 
         with patch("music_scan.process.run_beet_update") as mock_update, \

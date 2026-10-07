@@ -234,10 +234,11 @@ def beet_update_task() -> None:
 
 
 @task(name="regen-playlists", log_prints=True)
-def regen_playlists_task() -> None:
-    """Regenerate .m3u playlist files from the beets library."""
+def regen_playlists_task(metrics: ScanMetrics | None = None) -> None:
+    """Regenerate .m3u playlist files from the beets library; *metrics* takes
+    the empty-slot count per playlist (#228)."""
     logger = get_run_logger()
-    counts = scan.regen_playlists() or {}
+    counts = scan.regen_playlists(metrics) or {}
     if counts:
         total = sum(counts.values())
         logger.info("Regenerated %d playlist(s), %d total track(s)", len(counts), total)
@@ -284,7 +285,7 @@ def _run_scan_tasks() -> None:
         metrics.tracks_imported = len(imported) + asis_import_task()
         canon_task(since)
         beet_update_task()
-        regen_playlists_task()
+        regen_playlists_task(metrics)
         try:
             navidrome_task()
         except Exception:

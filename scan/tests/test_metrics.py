@@ -114,3 +114,22 @@ def test_scan_metrics_rejected_always_pushed(monkeypatch: pytest.MonkeyPatch) ->
 
     ScanMetrics(rejected={"duration": 2, "silence": 1}).push()
     assert 'music_scan_rejected_tracks_total{reason="duration"} 2' in pushed[1]
+
+
+def test_scan_metrics_pushes_empty_slots_per_playlist(monkeypatch: pytest.MonkeyPatch) -> None:
+    """music_playlist_slots_empty{playlist} (#228): one TYPE line, one series per playlist."""
+    pushed: list[str] = []
+    monkeypatch.setattr("music_scan.metrics._push", lambda body, job: pushed.append(body))
+
+    ScanMetrics(slots_empty={"later": 12, "aaaaaaah": 0}).push()
+
+    body = pushed[0]
+    assert body.count("# TYPE music_playlist_slots_empty gauge") == 1
+    assert 'music_playlist_slots_empty{playlist="aaaaaaah"} 0\nmusic_playlist_slots_empty{playlist="later"} 12' in body
+
+
+def test_scan_metrics_omits_slots_when_regen_did_not_run(monkeypatch: pytest.MonkeyPatch) -> None:
+    pushed: list[str] = []
+    monkeypatch.setattr("music_scan.metrics._push", lambda body, job: pushed.append(body))
+    ScanMetrics().push()
+    assert "music_playlist_slots_empty" not in pushed[0]

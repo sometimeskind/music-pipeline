@@ -1,0 +1,172 @@
+"""Playlist slots (#228): the resolver, its logging and the read-only audit."""
+
+from __future__ import annotations
+
+import json
+import logging
+import os
+from pathlib import Path
+from unittest import mock
+
+import pytest
+
+from music_scan.identity import BY_ID, BY_ISRC, BY_WORDS, ItemIndex, PlaylistTrack
+from music_scan.playlists import BY_SLOT_ID, BY_SLOT_ISRC, Entry, audit, empty_slots, playlist_entries, resolve
+
+
+def _item(title, path="x.m4a", **flex):
+    it = mock.MagicMock(title=title, artist="Artist", albumartist="Artist")
+    it.path = str(path).encode()
+    it.get.side_effect = lambda k, d=None: flex.get(k, d)
+    return it
+
+
+def _song(name, song_id=None, isrc=None, url=None):
+    song = {"name": name, "artists": ["Artist"], "url": url or f"https://open.spotify.com/track/{song_id or name}"}
+    if song_id:
+        song["song_id"] = song_id
+    if isrc:
+        song["isrc"] = isrc
+    return song
+
+
+# ---------------------------------------------------------------------------
+# Entries
+# ---------------------------------------------------------------------------
+
+
+def test_entry_from_song_takes_the_id_from_the_url_when_song_id_is_absent() -> None:
+    entry = Entry.from_song({"name": "Song", "artists": ["Artist"], "url": "https://open.spotify.com/track/ABC?si=1"})
+    assert entry == Entry("Song", "Artist", "ABC", None)
+    assert Entry.from_song(_song("Song", "SID", "GBX1")) == Entry("Song", "Artist", "SID", "GBX1")
+
+
+def test_entry_from_track_reads_an_album_record_entry() -> None:
+    assert Entry.from_track(PlaylistTrack.from_entry(["Song", "Artist", "SID", "GBX1", 1, 2])) == Entry("Song", "Artist", "SID", "GBX1")
+    assert Entry.from_track(PlaylistTrack.from_entry(["Song", "Artist"])) == Entry("Song", "Artist", None, None)
+
+
+def test_playlist_entries_reads_the_spotdl_in_order(tmp_path: Path) -> None:
+    spotdl = tmp_path / "pl.spotdl"
+    spotdl.write_text(json.dumps({"songs": [_song("B", "B1"), _song("A", "A1")]}), encoding="utf-8")
+    assert [e.song_id for e in playlist_entries(spotdl)] == ["B1", "A1"]
+    assert playlist_entries(tmp_path / "missing.spotdl") == []
+
+
+# ---------------------------------------------------------------------------
+# Resolution
+# ---------------------------------------------------------------------------
+
+
+def test_resolve_takes_todays_path_first_then_the_whole_library() -> None:
+    """A source item wins by every rung, words included; the library fills only
+    the slots left empty, by ID then ISRC; an entry nothing holds stays empty."""
+    tagged_id = _item("Tagged by id", "tagged-id.m4a", spotify_ids="T1")
+    tagged_words = _item("Only words", "tagged-words.m4a")
+    elsewhere_id = _item("Elsewhere", "elsewhere.m4a", spotify_ids="E1")
+    elsewhere_isrc = _item("Elsewhere (remaster)", "elsewhere-isrc.m4a", isrc="GBX2")
+    twin_words = _item("Only words", "twin.m4a", spotify_ids="W1")  # same words, outside the playlist
+    source = ItemIndex([tagged_id, tagged_words])
+    library = ItemIndex([tagged_id, tagged_words, elsewhere_id, elsewhere_isrc, twin_words])
+
+    entries = [Entry.from_song(s) for s in (
+        _song("Tagged by id", "T1"), _song("Only words", "W1"), _song("Elsewhere", "E1"),
+        _song("Elsewhere", "E2", "GBX2"), _song("Nowhere", "N1", "GBX9"),
+    )]
+    slots = resolve(entries, source, library)
+
+    assert [(s.item, s.rung) for s in slots] == [
+        (tagged_id, BY_ID),
+        (tagged_words, BY_WORDS),  # today's path beats the twin's exact ID: additive
+        (elsewhere_id, BY_SLOT_ID),
+        (elsewhere_isrc, BY_SLOT_ISRC),
+        (None, None),
+    ]
+    assert [s.filled_from_library for s in slots] == [False, False, True, True, False]
+    assert empty_slots(slots) == 1
+
+
+def test_resolve_never_fills_from_the_library_by_words() -> None:
+    library = ItemIndex([_item("Song", "song.m4a", spotify_ids="LIVE")])
+    slots = resolve([Entry("Song", "Artist", "STUDIO", None)], ItemIndex([]), library)
+    assert slots[0].item is None
+
+
+def test_resolve_without_a_library_is_todays_path() -> None:
+    tagged = _item("Song", "song.m4a", spotify_ids="S1")
+    slots = resolve([Entry("Song", "Artist", "S1", None), Entry("Other", "Artist", "O1", None)], ItemIndex([tagged]))
+    assert [s.item for s in slots] == [tagged, None]
+
+
+def test_resolve_counts_source_rungs_on_the_source_index() -> None:
+    """Callers that read ``ItemIndex.rungs`` (the [WORDS] rate) still can."""
+    source = ItemIndex([_item("Song", "s.m4a", isrc="GBX1"), _item("Words", "w.m4a")])
+    resolve([Entry("Song", "Artist", None, "GBX1"), Entry("Words", "Artist", "W1", None)], source, ItemIndex([]))
+    assert source.rungs == {BY_ISRC: 1, BY_WORDS: 1}
+
+
+# ---------------------------------------------------------------------------
+# The audit: nothing disappears
+# ---------------------------------------------------------------------------
+
+
+def _regen_env(tmp_path: Path, items_by_source: dict[str, list], all_items: list):
+    spotdl_dir, playlists_dir = tmp_path / "spotdl", tmp_path / "playlists"
+    spotdl_dir.mkdir()
+    playlists_dir.mkdir()
+    lib = mock.MagicMock()
+    lib.__enter__ = mock.MagicMock(return_value=lib)
+    lib.__exit__ = mock.MagicMock(return_value=False)
+    lib.items_by_source.side_effect = lambda name: items_by_source.get(name, [])
+    lib.all_items.return_value = all_items
+    patches = (
+        mock.patch("music_scan.scan.SPOTDL_DIR", spotdl_dir),
+        mock.patch("music_scan.scan.PLAYLISTS", playlists_dir),
+        mock.patch("music_scan.library.LIBRARY_DB", tmp_path / "library.db"),
+        mock.patch("music_scan.library.MusicLibrary", return_value=lib),
+        mock.patch("music_scan.scan.MusicLibrary", return_value=lib),
+    )
+    return spotdl_dir, playlists_dir, patches
+
+
+def test_audit_reports_the_slot_fills_and_no_loss(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
+    """Against the .m3u today's path wrote: the slots add lines and lose none."""
+    lib_root = tmp_path / "library"
+    tagged = _item("Tagged", lib_root / "tagged.m4a", spotify_ids="T1", sources="pl")
+    words = _item("Words", lib_root / "words.m4a", sources="pl")
+    extra = _item("Extra", lib_root / "extra.m4a", sources="pl")  # tagged, no entry: the alphabetical tail
+    elsewhere = _item("Elsewhere", lib_root / "elsewhere.m4a", spotify_ids="E1", sources="other")
+    spotdl_dir, playlists_dir, patches = _regen_env(
+        tmp_path, {"pl": [tagged, words, extra]}, [tagged, words, extra, elsewhere],
+    )
+    (spotdl_dir / "pl.spotdl").write_text(json.dumps({"songs": [
+        _song("Tagged", "T1"), _song("Words", "W1"), _song("Elsewhere", "E1"), _song("Nowhere", "N1"),
+    ]}), encoding="utf-8")
+    rel = lambda p: os.path.relpath(p, playlists_dir)  # noqa: E731
+    # What today's regen writes: the tagged items, entry order then alphabetical.
+    (playlists_dir / "pl.m3u").write_text("\n".join(rel(p) for p in (
+        lib_root / "tagged.m4a", lib_root / "words.m4a", lib_root / "extra.m4a")) + "\n", encoding="utf-8")
+
+    with patches[0], patches[1], patches[2], patches[3], patches[4], \
+         caplog.at_level(logging.INFO, logger="music_scan.playlists"):
+        assert audit() == 0
+
+    assert "pl: on disk 3 | today's path 3 | with slots 4 | filled from library 1 | empty slots 1" in caplog.text
+    assert f"+ {rel(lib_root / 'elsewhere.m4a')}  (slot:id: Artist — Elsewhere)" in caplog.text
+    assert "No playlist loses an entry" in caplog.text
+    assert "  - " not in caplog.text
+
+
+def test_audit_counts_an_entry_the_file_on_disk_would_lose(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
+    lib_root = tmp_path / "library"
+    tagged = _item("Tagged", lib_root / "tagged.m4a", spotify_ids="T1", sources="pl")
+    spotdl_dir, playlists_dir, patches = _regen_env(tmp_path, {"pl": [tagged]}, [tagged])
+    (spotdl_dir / "pl.spotdl").write_text(json.dumps({"songs": [_song("Tagged", "T1")]}), encoding="utf-8")
+    (playlists_dir / "pl.m3u").write_text("../library/tagged.m4a\n../library/gone.m4a\n", encoding="utf-8")
+
+    with patches[0], patches[1], patches[2], patches[3], patches[4], \
+         caplog.at_level(logging.INFO, logger="music_scan.playlists"):
+        assert audit() == 1
+
+    assert "- ../library/gone.m4a  (on disk, resolves no more)" in caplog.text
+    assert "1 entr(ies) would disappear" in caplog.text

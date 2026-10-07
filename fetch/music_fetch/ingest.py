@@ -6,9 +6,11 @@ On each run:
    b. Reconcile .nosync sentinels.
    c. Queue whole-playlist removals for playlists removed from config.
    d. Delete .spotdl file and download dir for removed playlists.
-2. For each remaining .spotdl playlist:
+2. For each remaining .spotdl playlist, in playlists.conf order:
    a. Diff old vs new Spotify URL sets to find removed tracks.
-   b. Download new tracks (overwrite=skip ignores already-downloaded files).
+   b. Build its want list (new tracks the library lacks, minus backoff) and
+      download from it while SYNC_TRACK_LIMIT lasts.  A spent budget defers
+      downloads, never the check (#228).
 3. Return a PendingRemovals dataclass for the caller (e.g. the service orchestrator) to
    pass to music-scan for beets source-tag cleanup (soft delete — files stay in library).
 """
@@ -366,12 +368,11 @@ def sync_playlists(
                 metrics.playlists_total += 1
                 continue
 
-        # Budget exhausted: defer remaining playlists to the next session.
+        # Budget exhausted: the playlist is still fetched and checked (removals,
+        # [HAVE], backoff); only its downloads wait for the next session (#228).
         if remaining is not None and remaining <= 0:
-            logger.info("==> Track budget exhausted — deferring %s to next session", name)
+            logger.info("==> Track budget exhausted — checking %s, deferring its downloads to next session", name)
             metrics.playlists_deferred += 1
-            metrics.playlists_total += 1
-            continue
 
         # Soft timeout: stop before the Kubernetes activeDeadlineSeconds fires.
         if _deadline_reached(time.monotonic() - start, soft_timeout):
@@ -402,6 +403,7 @@ def sync_playlists(
         output_dir.mkdir(parents=True, exist_ok=True)
 
         playlist_in_library = None if in_library is None else functools.partial(in_library, name)
+        track_limit = None if remaining is None else max(remaining, 0)
         try:
             if fallback is not None:
                 logger.info("[FALLBACK] %d track(s) album mode could not get from Usenet", len(fallback))
@@ -409,7 +411,7 @@ def sync_playlists(
                     fallback,
                     output_dir=output_dir,
                     cookie_file=COOKIE_FILE,
-                    track_limit=remaining,
+                    track_limit=track_limit,
                     failures_file=FAILURES_FILE,
                     in_library=playlist_in_library,
                 )
@@ -418,7 +420,7 @@ def sync_playlists(
                     spotdl_file=spotdl_file,
                     output_dir=output_dir,
                     cookie_file=COOKIE_FILE,
-                    track_limit=remaining,
+                    track_limit=track_limit,
                     failures_file=FAILURES_FILE,
                     in_library=playlist_in_library,
                 )

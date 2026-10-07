@@ -1,6 +1,7 @@
 """Tests for pipeline.scan — pure-Python logic."""
 
 import json
+import logging
 import os
 from pathlib import Path
 import unittest.mock as mock
@@ -361,7 +362,7 @@ def test_run_beet_update_failure_continues_to_regen_playlists(tmp_path: Path) ->
     with mock.patch("music_scan.scan.run_beet_update", side_effect=RuntimeError("db gone")), \
          mock.patch("music_scan.scan.MusicLibrary", return_value=_make_mock_lib()), \
          mock.patch("music_scan.scan.run_beet_import"), \
-         mock.patch("music_scan.scan.regen_playlists", side_effect=lambda: regen_called.append(True)), \
+         mock.patch("music_scan.scan.regen_playlists", side_effect=lambda *_: regen_called.append(True)), \
          mock.patch("music_scan.scan.import_asis_from_quarantine", return_value=0), \
          mock.patch("music_scan.scan.INBOX", tmp_path), \
          mock.patch("music_scan.scan.SPOTDL_DIR", tmp_path), \
@@ -986,7 +987,7 @@ def test_regen_playlists_matches_by_id_before_words(tmp_path: Path, caplog) -> N
          mock.patch("music_scan.scan.PLAYLISTS", playlists_dir), \
          mock.patch("music_scan.scan.LIBRARY_DB", tmp_path / "library.db"), \
          mock.patch("music_scan.scan.MusicLibrary", return_value=mock_lib), \
-         caplog.at_level("INFO", logger="music_scan.scan"):
+         caplog.at_level("INFO", logger="music_scan.playlists"):
         regen_playlists()
 
     lines = (playlists_dir / "pl.m3u").read_text(encoding="utf-8").splitlines()
@@ -1107,3 +1108,92 @@ def test_have_or_link_keeps_the_full_ladder_inside_the_playlist(real_lib) -> Non
     tracks = [["Song", "Artist", "T1", None, 1, 1]]
 
     assert have_or_link(ItemIndex(real_lib.items_by_source("later")), ItemIndex(real_lib.all_items()), "later", tracks)
+
+
+# ---------------------------------------------------------------------------
+# Playlist slots (#228)
+# ---------------------------------------------------------------------------
+
+
+def _slot_regen(tmp_path: Path, songs: list[dict], source_items: list, all_items: list, metrics=None):
+    """Run regen_playlists for one playlist ``pl`` over mocked source and library items."""
+    from music_scan.scan import regen_playlists
+
+    spotdl_dir, playlists_dir = tmp_path / "spotdl", tmp_path / "playlists"
+    spotdl_dir.mkdir()
+    playlists_dir.mkdir()
+    (spotdl_dir / "pl.spotdl").write_text(json.dumps({"songs": songs}), encoding="utf-8")
+    mock_lib = _regen_lib(spotdl_dir, playlists_dir, source_items)
+    mock_lib.all_items.return_value = all_items
+    with mock.patch("music_scan.scan.SPOTDL_DIR", spotdl_dir), \
+         mock.patch("music_scan.scan.PLAYLISTS", playlists_dir), \
+         mock.patch("music_scan.scan.LIBRARY_DB", tmp_path / "library.db"), \
+         mock.patch("music_scan.scan.MusicLibrary", return_value=mock_lib):
+        counts = regen_playlists(metrics)
+    lines = (playlists_dir / "pl.m3u").read_text(encoding="utf-8").splitlines()
+    return counts, lines, mock_lib
+
+
+def test_regen_playlists_fills_a_slot_from_the_whole_library(tmp_path: Path, caplog) -> None:
+    """An entry whose track is in the library under another playlist (or from
+    Usenet, or a manual import) is listed, in playlist order, without a tag write."""
+    from music_scan.metrics import ScanMetrics
+
+    lib_root = tmp_path / "library"
+    tagged = _make_mock_item("Tagged", "Art", lib_root / "tagged.m4a", spotify_ids="T1", sources="pl")
+    elsewhere = _make_mock_item("Elsewhere", "Art", lib_root / "elsewhere.m4a", spotify_ids="E1", sources="keep")
+    by_isrc = _make_mock_item("Remaster", "Art", lib_root / "remaster.m4a", isrc="GBX1", sources="")
+    songs = [
+        {"name": "Elsewhere", "artists": ["Art"], "url": "u1", "song_id": "E1"},
+        {"name": "Tagged", "artists": ["Art"], "url": "u2", "song_id": "T1"},
+        {"name": "Original", "artists": ["Art"], "url": "u3", "song_id": "O1", "isrc": "GBX1"},
+        {"name": "Nowhere", "artists": ["Art"], "url": "u4", "song_id": "N1"},
+    ]
+    metrics = ScanMetrics()
+    with caplog.at_level(logging.INFO, logger="music_scan.playlists"):
+        counts, lines, lib = _slot_regen(tmp_path, songs, [tagged], [tagged, elsewhere, by_isrc], metrics)
+
+    assert lines == ["../library/elsewhere.m4a", "../library/tagged.m4a", "../library/remaster.m4a"]
+    assert counts == {"pl": 3}
+    assert metrics.slots_empty == {"pl": 1}
+    assert "[SLOT] pl: 2 entr(ies) filled from the library by ID/ISRC" in caplog.text
+    for item in (tagged, elsewhere, by_isrc):
+        item.__setitem__.assert_not_called()
+        item.store.assert_not_called()
+
+
+def test_regen_playlists_keeps_every_entry_todays_path_shows(tmp_path: Path) -> None:
+    """Additive: an entry matched only by sources + title/artist words stays,
+    even when another library item carries its exact Spotify ID."""
+    lib_root = tmp_path / "library"
+    words = _make_mock_item("Song", "Art", lib_root / "words.m4a", sources="pl")
+    twin = _make_mock_item("Song", "Art", lib_root / "twin.m4a", spotify_ids="S1", sources="keep")
+    tail = _make_mock_item("Untracked", "Art", lib_root / "a-tail.m4a", sources="pl")
+    songs = [{"name": "Song", "artists": ["Art"], "url": "u", "song_id": "S1"}]
+
+    _, lines, _ = _slot_regen(tmp_path, songs, [words, tail], [words, twin, tail])
+
+    assert lines == ["../library/words.m4a", "../library/a-tail.m4a"]
+
+
+def test_regen_playlists_without_metrics_leaves_them_alone(tmp_path: Path) -> None:
+    counts, lines, _ = _slot_regen(tmp_path, [], [], [])
+    assert (counts, lines) == ({"pl": 0}, [])
+
+
+def test_missing_tracks_and_have_or_link_read_resolved_slots(real_lib) -> None:
+    """The album hooks' view is the same resolution as the .m3u (#205, #228)."""
+    from music_scan.identity import ItemIndex
+    from music_scan.scan import have_or_link, missing_tracks
+
+    _add(real_lib, title="One", sources="later", spotify_ids="T1")
+    two = _add(real_lib, title="Two", sources="keep", isrc="ISRC2")
+    tracks = [["One", "Artist", "T1", None, 1, 1], ["Two", "Artist", "T2", "ISRC2", 1, 2], ["Three", "Artist", "T3", None, 1, 3]]
+    source, library = ItemIndex(real_lib.items_by_source("later")), ItemIndex(real_lib.all_items())
+
+    assert missing_tracks(source, tracks, library) == [tracks[2]]
+    assert missing_tracks(source, tracks) == tracks[1:]
+    assert not have_or_link(source, library, "later", tracks)
+    assert _reload(real_lib, two).get("sources") == "keep"  # nothing tagged while a track is missing
+    assert have_or_link(source, library, "later", tracks[:2])
+    assert _reload(real_lib, two).get("sources") == "keep,later"

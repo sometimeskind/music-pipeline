@@ -16,6 +16,7 @@ music-audit-lengths = "music_scan.audit:main"
 music-embed-covers = "music_scan.cover:main"
 music-canon-albums = "music_scan.canon:main"
 music-audit-dupes = "music_scan.dupes:main"
+music-audit-playlists = "music_scan.playlists:main"
 
 [tool.setuptools.packages.find]
 where = ["."]

@@ -7,7 +7,6 @@ No Spotify or YouTube calls.
 
 from __future__ import annotations
 
-import json
 import logging
 import os
 import shutil
@@ -16,12 +15,14 @@ import time
 from pathlib import Path
 
 from music_fetch.ingest import PendingRemovals
+from music_scan import playlists
 from music_scan.guard import guard_inbox
-from music_scan.identity import BY_WORDS, ItemIndex, PlaylistTrack, add_to_list, spotify_id
+from music_scan.identity import ItemIndex, PlaylistTrack, add_to_list, spotify_id
 from music_scan.identity import name_words as _name_words
 from music_scan.library import MusicLibrary
 from music_scan.metrics import ScanMetrics
 from music_scan.navidrome import trigger_scan
+from music_scan.playlists import Entry, Slot
 from music_scan.process import run_beet_import, run_beet_update
 
 logger = logging.getLogger(__name__)
@@ -211,15 +212,7 @@ def import_asis_from_quarantine() -> int:
     return len(asis_imported)
 
 
-def _spotdl_songs(spotdl_file: Path) -> list[dict]:
-    """Return the song entries of a .spotdl file, in playlist order.
-
-    Returns [] if the file is absent, unreadable, or has no songs.
-    """
-    try:
-        return json.loads(spotdl_file.read_text(encoding="utf-8")).get("songs", [])
-    except Exception:
-        return []
+_spotdl_songs = playlists.spotdl_songs
 
 
 def _item_path(item) -> Path:
@@ -227,12 +220,32 @@ def _item_path(item) -> Path:
     return Path(raw) if Path(raw).is_absolute() else LIBRARY / raw
 
 
-def regen_playlists() -> dict[str, int]:
+def playlist_paths(slots: list[Slot], source_items: list, slot_fills: bool = True) -> list[Path]:
+    """The ``.m3u`` lines of a playlist: its resolved slots in playlist order
+    (each file once), then the *source_items* no entry matched, alphabetically.
+    Without *slot_fills* the slots filled from the whole library are left out:
+    today's path, which the result always contains (#228)."""
+    ordered: list[Path] = []
+    matched: set[Path] = set()
+    for slot in slots:
+        if slot.item is None or (not slot_fills and slot.filled_from_library):
+            continue
+        p = _item_path(slot.item)
+        if p not in matched:
+            ordered.append(p)
+            matched.add(p)
+    unmatched = sorted(p for p in (_item_path(item) for item in source_items) if p not in matched)
+    return ordered + unmatched
+
+
+def regen_playlists(metrics: ScanMetrics | None = None) -> dict[str, int]:
     """Regenerate .m3u files for every .spotdl playlist. Returns {name: track_count}.
 
-    Each .spotdl entry is matched to a library item by the identity ladder
-    (Spotify ID, ISRC, title+artist words); a playlist with title+artist
-    matches logs how many, so the fallback rate is visible.
+    Each entry is a slot (:mod:`music_scan.playlists`): resolved to an item tagged
+    with the playlist by the identity ladder as before, else to any library item
+    by Spotify ID or ISRC (``[SLOT]``), so a track imported by any route reaches
+    every playlist that lists it at the next scan, with no download and no tag
+    write (#228).  *metrics*, when given, takes the empty-slot count per playlist.
     """
     PLAYLISTS.mkdir(parents=True, exist_ok=True)
     spotdl_files = sorted(SPOTDL_DIR.glob("*.spotdl"))
@@ -241,39 +254,24 @@ def regen_playlists() -> dict[str, int]:
         return {}
 
     counts: dict[str, int] = {}
+    empty: dict[str, int] = {}
     with MusicLibrary(LIBRARY_DB) as lib:
+        library = ItemIndex(lib.all_items())
         for spotdl_file in spotdl_files:
             name = spotdl_file.stem
             m3u = PLAYLISTS / f"{name}.m3u"
 
-            index = ItemIndex(lib.items_by_source(name))
-            all_paths = [_item_path(item) for item in index.items]
+            source_items = lib.items_by_source(name)
+            slots = playlists.resolve(playlists.playlist_entries(spotdl_file), ItemIndex(source_items), library)
+            playlists.log_slots(name, slots)
 
-            # Emit in Spotify (.spotdl) order
-            ordered: list[Path] = []
-            matched: set[Path] = set()
-            for song in _spotdl_songs(spotdl_file):
-                item, rung = index.match_song(song)
-                if item is None:
-                    continue
-                if rung == BY_WORDS:
-                    logger.debug("  [WORDS] %s: %s matched by title+artist only", name, song.get("name", ""))
-                p = _item_path(item)
-                if p not in matched:
-                    ordered.append(p)
-                    matched.add(p)
-            if index.rungs[BY_WORDS]:
-                logger.info(
-                    "  %s: %d of %d track(s) matched by title+artist only",
-                    name, index.rungs[BY_WORDS], sum(index.rungs.values()),
-                )
-
-            # Append library tracks not matched by .spotdl, alphabetically
-            unmatched = sorted(p for p in all_paths if p not in matched)
-            lines = [os.path.relpath(p, PLAYLISTS) for p in ordered + unmatched]
+            lines = [os.path.relpath(p, PLAYLISTS) for p in playlist_paths(slots, source_items)]
             m3u.write_text("\n".join(lines) + ("\n" if lines else ""), encoding="utf-8")
             counts[name] = len(lines)
+            empty[name] = playlists.empty_slots(slots)
 
+    if metrics is not None:
+        metrics.slots_empty = empty
     return counts
 
 
@@ -312,33 +310,33 @@ def link_song(index: ItemIndex, source: str, song: dict) -> bool:
     return True
 
 
+def _album_slots(source_index: ItemIndex, tracks: list[list], library: ItemIndex | None) -> list[Slot]:
+    """The slots of an album record's per-playlist *tracks* (#228)."""
+    entries = [Entry.from_track(PlaylistTrack.from_entry(t)) for t in tracks]
+    return playlists.resolve(entries, source_index, library)
+
+
 def missing_tracks(source_index: ItemIndex, tracks: list[list], library: ItemIndex | None = None) -> list[list]:
     """The entries of *tracks* no *source_index* item matches by the full ladder,
-    nor, given *library*, any item by Spotify ID or ISRC (#205).  Tags nothing."""
-    return [
-        entry for entry in tracks
-        if source_index.match_track(track := PlaylistTrack.from_entry(entry))[0] is None
-        and (library is None or library.match_track(track, words=False)[0] is None)
-    ]
+    nor, given *library*, any item by Spotify ID or ISRC (#205): the empty slots.
+    Tags nothing."""
+    return [entry for entry, slot in zip(tracks, _album_slots(source_index, tracks, library)) if slot.item is None]
 
 
 def have_or_link(source_index: ItemIndex, library: ItemIndex, source: str, tracks: list[list]) -> bool:
     """True when the library holds every track, so the album needs no download (#187).
 
-    A track counts when it matches *source*'s items by the full ladder, or any
-    item by Spotify ID or ISRC.  Only when every track is present are the items
-    found outside *source* tagged with it, so its .m3u lists them.
+    A track counts when its slot resolves: to *source*'s items by the full
+    ladder, or to any item by Spotify ID or ISRC.  Only when every track is
+    present are the items found outside *source* tagged with it, so its .m3u
+    lists them.
     """
-    elsewhere = []
-    for track in map(PlaylistTrack.from_entry, tracks):
-        if source_index.match_track(track)[0] is not None:
-            continue
-        item, _ = library.match_track(track, words=False)
-        if item is None:
-            return False
-        elsewhere.append((item, track.song_id))
-    for item, song_id in elsewhere:
-        _link(item, source, song_id)
+    slots = _album_slots(source_index, tracks, library)
+    if any(slot.item is None for slot in slots):
+        return False
+    for slot in slots:
+        if slot.filled_from_library:
+            _link(slot.item, source, slot.entry.song_id)
     return True
 
 
@@ -483,7 +481,7 @@ def run(pending: PendingRemovals | None = None) -> None:
 
         logger.info("==> Regenerating playlists...")
         try:
-            regen_playlists()
+            regen_playlists(metrics)
         except Exception:
             logger.error("Playlist-regeneration step failed", exc_info=True)
 

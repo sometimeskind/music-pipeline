@@ -333,6 +333,31 @@ class _Batch:
         )
 
 
+def want_list(
+    songs: list,
+    in_library: Callable[[dict], bool] | None,
+    failures: dict,
+    now: datetime | None = None,
+) -> tuple[list, list, list]:
+    """A playlist's want list (#228): *songs* in order, minus the entries the
+    library already holds (*in_library*; returned second) and the ones still
+    backed off in *failures* (returned third).  The budget is spent on the
+    result, across playlists in ``playlists.conf`` order."""
+    linked = [] if in_library is None else [song for song in songs if in_library(song.json)]
+    linked_urls = {song.url for song in linked}
+    now = now or datetime.now(timezone.utc)
+    wanted, backed_off = [], []
+    for song in songs:
+        if song.url in linked_urls:
+            continue
+        entry = failures.get(song.url)
+        if entry and datetime.fromisoformat(entry["retry_after"]) > now:
+            backed_off.append(song)
+        else:
+            wanted.append(song)
+    return wanted, linked, backed_off
+
+
 def _download_batch(
     spotdl_obj,
     truly_new: list,
@@ -341,41 +366,26 @@ def _download_batch(
     in_library: Callable[[dict], bool] | None,
     removed_urls: set[str] = frozenset(),
 ) -> _Batch:
-    """Download *truly_new* songs in order: skip those the library has ([HAVE]) or
-    that are backed off ([BACK]), defer those over *track_limit* ([DEFER]), then log
-    each outcome and record [MISS]/[FAIL] backoff in *failures_file*."""
+    """Download the want list of *truly_new* in order: skip those the library has
+    ([HAVE]) or that are backed off ([BACK]), defer those over *track_limit*
+    ([DEFER]), then log each outcome and record [MISS]/[FAIL] backoff in
+    *failures_file*.  A *track_limit* of 0 checks and defers everything."""
+    failures: dict = _load_failures(failures_file) if failures_file is not None else {}
+    truly_new, linked_songs, backed_off = want_list(truly_new, in_library, failures)
     # Tracks the library already has under another playlist or from Usenet (#187).
-    linked: dict[str, dict] = {}
-    if in_library is not None:
-        for song in truly_new:
-            if in_library(song.json):
-                linked[song.url] = song.json
-                logger.info("[HAVE] %s → already in the library", _song_label(song))
-        truly_new = [s for s in truly_new if s.url not in linked]
-
-    # Apply MISS/FAIL backoff: filter out tracks whose retry window hasn't expired yet.
-    failures: dict = {}
-    if failures_file is not None:
-        failures = _load_failures(failures_file)
-        for url in removed_urls | linked.keys():
-            failures.pop(url, None)
-        now = datetime.now(timezone.utc)
-        due, backed_off = [], []
-        for song in truly_new:
-            entry = failures.get(song.url)
-            if entry and datetime.fromisoformat(entry["retry_after"]) > now:
-                backed_off.append(song)
-            else:
-                due.append(song)
-        for song in backed_off:
-            entry = failures[song.url]
-            logger.info(
-                "[BACK] %s → %s backed off until %s",
-                _song_label(song),
-                entry.get("kind", "miss"),
-                entry["retry_after"][:10],
-            )
-        truly_new = due
+    linked: dict[str, dict] = {song.url: song.json for song in linked_songs}
+    for song in linked_songs:
+        logger.info("[HAVE] %s → already in the library", _song_label(song))
+    for url in removed_urls | linked.keys():
+        failures.pop(url, None)
+    for song in backed_off:
+        entry = failures[song.url]
+        logger.info(
+            "[BACK] %s → %s backed off until %s",
+            _song_label(song),
+            entry.get("kind", "miss"),
+            entry["retry_after"][:10],
+        )
 
     total_new = len(truly_new)
 
@@ -403,7 +413,8 @@ def _download_batch(
     causes = _install_cause_capture(spotdl_obj)
     if causes is not None:
         causes.clear()
-    results = spotdl_obj.download_songs(truly_new)
+    # Nothing to download (a spent budget still checks the playlist, #228): no spotdl call.
+    results = spotdl_obj.download_songs(truly_new) if truly_new else []
     # spotdl turns a per-track Spotify error into a failed download; a rate limit
     # must fail the run instead of backing those tracks off as [FAIL] (#195).
     spotify_limit.check()
