@@ -603,7 +603,7 @@ def log_change(change: Change, apply: bool) -> None:
                     change.placement.isrc, "" if apply else " (dry run)")
         return
     shown = [f"{k} {_show(o)}→{_show(n)}" for k, (o, n) in change.diff.items()
-             if k in SPOTIFY_FIELDS or k == "mb_album_via" or k == "mb_albumid"]
+             if k in SPOTIFY_FIELDS or k in ("spotify_album_id", "mb_album_via", "mb_albumid")]
     if change.art:
         shown.append("cover")
     where = f" → {change.dest}" if change.dest != _path(change.item) else ""
