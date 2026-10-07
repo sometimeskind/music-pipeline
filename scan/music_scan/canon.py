@@ -675,7 +675,9 @@ def run(apply: bool = False, refresh: bool = False, mb_budget: int | None = None
     logger.info("Retagged %d item(s)", changed)
     if plan.moved:
         # Navidrome drops .m3u entries whose file moved, so the playlists go first (#218).
-        regen_playlists()
+        counts = regen_playlists()
+        logger.info("Moved %d file(s); playlists regenerated: %s", plan.moved,
+                    ", ".join(f"{k} {v}" for k, v in sorted(counts.items())) or "none")
     if plan.writes:
         trigger_scan()
     return plan
