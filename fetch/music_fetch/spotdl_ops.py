@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import Callable
 
 from music_fetch import spotify_limit
+from music_fetch.names import SPOTDL_NAME_BYTES, truncate_utf8
 
 logger = logging.getLogger(__name__)
 
@@ -192,6 +193,40 @@ def _save_failures(failures_file: Path, data: dict) -> None:
     failures_file.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
 
 
+# spotdl's own cap is in characters; this is the length at which it would start
+# shortening names, pushed out of the way so the byte cap below is the only one.
+_NO_CHAR_CAP = 1 << 20
+
+
+def _capped_file_name(song, template, file_extension, restrict=None, short=False, file_name_length=None):
+    """spotdl's create_file_name with its 255-*character* cap replaced by a byte cap (#225).
+
+    A name over ``SPOTDL_NAME_BYTES`` is cut on a character boundary and gets the
+    Spotify track ID, so truncated names stay unique.  Shorter names are unchanged.
+    """
+    from spotdl.utils.formatter import create_file_name  # noqa: PLC0415
+
+    del file_name_length  # spotdl's character limit: superseded by the byte cap
+    path = create_file_name(song, template, file_extension, restrict=restrict, short=short,
+                            file_name_length=_NO_CHAR_CAP)
+    if len(path.name.encode("utf-8")) <= SPOTDL_NAME_BYTES:
+        return path
+    tail = f" [{song.song_id}].{file_extension}"
+    stem = truncate_utf8(path.stem, SPOTDL_NAME_BYTES - len(tail.encode("utf-8"))).rstrip()
+    capped = path.with_name(stem + tail)
+    logger.warning("%s: file name is %d bytes, over the %d-byte cap; saving as %s",
+                   _song_label(song), len(path.name.encode("utf-8")), SPOTDL_NAME_BYTES, capped.name)
+    return capped
+
+
+def _install_name_cap() -> None:
+    """Route the downloader's output names through _capped_file_name (idempotent)."""
+    from spotdl.download import downloader  # noqa: PLC0415
+
+    if downloader.create_file_name is not _capped_file_name:
+        downloader.create_file_name = _capped_file_name
+
+
 def _song_label(song) -> str:
     """Format 'Artist - Title' from a Song or Song-like object for log output."""
     j = song.json
@@ -238,6 +273,7 @@ def _make_spotdl(settings: dict):
 
     client_id = os.environ["SPOTIFY_CLIENT_ID"]
     client_secret = os.environ["SPOTIFY_CLIENT_SECRET"]
+    _install_name_cap()
     _spotdl_instance = Spotdl(
         client_id=client_id,
         client_secret=client_secret,

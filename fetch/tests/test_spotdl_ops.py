@@ -1153,3 +1153,70 @@ def test_download_fallback_applies_have_backoff_and_budget(tmp_path: Path) -> No
     assert [s.url for s in sent] == [songs[2]["url"]]  # T0 [HAVE], T1 [BACK], T3 [DEFER]
     assert (result.linked, result.attempted, result.downloaded) == (1, 1, 1)
     assert make.call_args[0][0]["output"].startswith(str(tmp_path / "later"))
+
+
+# ---------------------------------------------------------------------------
+# Output file names over 255 bytes (#225)
+# ---------------------------------------------------------------------------
+
+GLYPH = "⃝"  # COMBINING ENCLOSING CIRCLE: one character, three UTF-8 bytes
+
+
+def _real_song(title: str, song_id: str = "4uLU6hMCjMI75M1A2tKUQC", artist: str = "Four Tet"):
+    from spotdl.types.song import Song
+
+    return Song.from_dict({
+        "name": title, "artists": [artist], "artist": artist, "genres": [], "disc_number": 1,
+        "disc_count": 1, "album_name": "album", "album_artist": artist, "duration": 200,
+        "year": 2020, "date": "2020-01-01", "track_number": 1, "tracks_count": 8,
+        "song_id": song_id, "explicit": False, "publisher": "", "isrc": None, "cover_url": None,
+        "copyright_text": None, "url": f"https://open.spotify.com/track/{song_id}",
+    })
+
+
+def test_glyph_title_name_is_capped_in_bytes(tmp_path: Path) -> None:
+    """200 glyph characters is under spotdl's 255-character cap but 600 bytes on disk;
+    the name is cut on a character boundary and keeps the Spotify track ID."""
+    from music_fetch.names import SPOTDL_NAME_BYTES
+    from music_fetch.spotdl_ops import _capped_file_name
+
+    out = _capped_file_name(_real_song(GLYPH * 200), str(tmp_path), "m4a")
+
+    assert out.parent == tmp_path
+    assert len(out.name.encode("utf-8")) <= SPOTDL_NAME_BYTES
+    assert out.name.endswith(" [4uLU6hMCjMI75M1A2tKUQC].m4a")
+    assert out.name.startswith("Four Tet - " + GLYPH)
+    out.touch()  # the point of it all: the filesystem accepts the name
+    assert out.exists()
+
+
+def test_long_glyph_titles_get_distinct_names(tmp_path: Path) -> None:
+    from music_fetch.spotdl_ops import _capped_file_name
+
+    a = _capped_file_name(_real_song(GLYPH * 300, song_id="a" * 22), str(tmp_path), "m4a")
+    b = _capped_file_name(_real_song(GLYPH * 300, song_id="b" * 22), str(tmp_path), "m4a")
+
+    assert a != b
+
+
+def test_ordinary_name_is_unchanged(tmp_path: Path) -> None:
+    from music_fetch.spotdl_ops import _capped_file_name
+
+    out = _capped_file_name(_real_song("Two Thousand and Seventeen"), str(tmp_path), "m4a",
+                            restrict=None, file_name_length=None)
+
+    assert out == tmp_path / "Four Tet - Two Thousand and Seventeen.m4a"
+
+
+def test_name_cap_is_installed_on_the_downloader() -> None:
+    from spotdl.download import downloader
+
+    from music_fetch.spotdl_ops import _capped_file_name, _install_name_cap
+
+    original = downloader.create_file_name
+    try:
+        _install_name_cap()
+        _install_name_cap()
+        assert downloader.create_file_name is _capped_file_name
+    finally:
+        downloader.create_file_name = original
