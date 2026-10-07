@@ -709,7 +709,10 @@ def test_twin_items_take_the_representatives_id_date_and_numbering(tmp_path, ffm
 
     albums, _ = _finder(tmp_path, [_hit("A", "Untrue", track=4, isrc="I3")])
     resolver = _resolver(FakeMB(url={"B": "BREL"}), tmp_path)  # only the twin's URL is linked (#229)
-    plan = canonicalize(lib.all_items(), placements, resolver, fetch=lambda u: art, albums=albums)
+    with caplog.at_level(logging.INFO):
+        plan = canonicalize(lib.all_items(), placements, resolver, fetch=lambda u: art, albums=albums)
+    assert "[RETAG]" in caplog.text and "spotify_album_id None→'A'" in caplog.text  # the line shows it (#230)
+    caplog.clear()
     b = lib.get_item(on_b.id)
     assert (b.get("spotify_album_id"), b.track, b.tracktotal, b.year, b.month) == ("A", 4, 10, 2019, 9)
     assert WAIT not in b and plan.twinned == 1 and plan.on_twin == {"A": 1, "B": 1}
