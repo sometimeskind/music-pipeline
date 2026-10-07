@@ -30,6 +30,18 @@ under, then one a playlist names, then the earliest, then the album ID.  The sea
 not done yet (budget spent, rate limit) leaves the item as it is and marks it
 ``canon_wait`` so the next scan picks it up.
 
+Spotify sometimes lists one album twice (a reissue, a market copy): same name,
+same album artist, two album IDs (#214).  Releases of the same type with the
+same normalised name and album artist form a twin group (albums and EPs only;
+a different name, like a deluxe edition, stays separate), and one of them
+represents it: the one most playlist entries are on today, then the earliest,
+then the one with most tracks, then the album ID.  An item placed on another
+twin moves to the representative once the recording is known to be on it: a
+playlist entry on the representative carries the item's ISRC, or an ISRC search
+(the same :class:`AlbumsByIsrc` searches) lists it.  Its numbering comes from
+that entry or hit; the date and cover are the representative's.  Same-name
+albums sharing no recording (self-titled records) never merge.
+
 Navidrome groups by the MusicBrainz album ID before the tags, so the album-level
 MusicBrainz tags follow the canonical album too (:mod:`music_scan.mb_release`);
 ``mb_album_via`` records how (``url``, ``isrc``, ``upc``, ``none`` or ``pending``).
@@ -51,6 +63,7 @@ import json
 import logging
 import os
 import time
+import unicodedata
 from collections import Counter
 from collections.abc import Callable, Iterable
 from datetime import datetime, timedelta, timezone
@@ -201,9 +214,63 @@ def _release_from_track(track: dict) -> tuple[Release, int, int]:
     return release, _int(track.get("track_number")), disc
 
 
+def _is_album_or_ep(kind: str | None, tracks: int) -> bool:
+    return kind == "album" or (kind == "single" and tracks >= EP_MIN_TRACKS)
+
+
 def _album_or_ep(album: dict) -> bool:
-    kind = album.get("album_type")
-    return kind == "album" or (kind == "single" and _int(album.get("total_tracks")) >= EP_MIN_TRACKS)
+    return _is_album_or_ep(album.get("album_type"), _int(album.get("total_tracks")))
+
+
+# ----------------------------------------------------------------------
+# Twin releases (#214)
+# ----------------------------------------------------------------------
+
+
+@dataclasses.dataclass(frozen=True)
+class Twins:
+    """Same-name releases of one album: the representative (ISRCs of the whole
+    group) and the others, with the playlist entries on each today."""
+
+    representative: Release
+    others: tuple[Release, ...]
+    entries: dict[str, int]  # album ID → named placements
+
+    @property
+    def releases(self) -> tuple[Release, ...]:
+        return (self.representative, *self.others)
+
+
+def _norm(s: str) -> str:
+    return " ".join(unicodedata.normalize("NFKC", s).casefold().split())
+
+
+def twin_groups(placements: dict[str, Placement]) -> dict[str, Twins]:
+    """``{album ID: Twins}`` for every release in a same-name group (albums and EPs)."""
+    entries = Counter(p.release.album_id for p in placements.values() if p.named)
+    releases = {p.release.album_id: p.release for p in placements.values()}
+    by_name: dict[tuple, list[Release]] = {}
+    for r in releases.values():
+        if _is_album_or_ep(r.album_type, r.tracks_count):
+            by_name.setdefault((r.album_type, _norm(r.artist), _norm(r.name)), []).append(r)
+    groups: dict[str, Twins] = {}
+    for twins in by_name.values():
+        if len(twins) < 2:
+            continue
+        twins.sort(key=lambda r: (-entries[r.album_id], r.date or "9999", -r.tracks_count, r.album_id))
+        isrcs = tuple(dict.fromkeys(i for r in twins for i in r.isrcs))
+        group = Twins(dataclasses.replace(twins[0], isrcs=isrcs), tuple(twins[1:]),
+                      {r.album_id: entries[r.album_id] for r in twins})
+        for r in twins:
+            groups[r.album_id] = group
+    return groups
+
+
+def _on_representative(p: Placement, group: Twins, by_isrc: dict[tuple[str, str], Placement]) -> Placement | None:
+    """*p* moved onto the group's representative by a playlist entry there with its ISRC, or None."""
+    rep = group.representative
+    q = by_isrc.get((rep.album_id, p.isrc.upper())) if p.isrc else None
+    return dataclasses.replace(q, release=rep, isrc=p.isrc) if q is not None else None
 
 
 def spotify_search_isrc(isrc: str) -> list[dict]:
@@ -325,6 +392,20 @@ class AlbumsByIsrc:
 
         return min(options, key=key) if options else None
 
+    def twin_for(self, p: Placement, group: Twins) -> Placement | None | bool:
+        """The placement on the group's representative replacing *p*, which is on
+        another twin: a Placement when an ISRC search lists the recording on the
+        representative, None when it does not, or False while the search is still to do."""
+        rep = group.representative
+        found = self.tracks(p.isrc)
+        if found is None:
+            return False
+        for t in found:
+            if (t.get("album") or {}).get("id") == rep.album_id:
+                return Placement(rep, _int(t.get("track_number")), _int(t.get("disc_number")) or 1,
+                                 group.entries.get(rep.album_id, 0) > 0, p.isrc)
+        return None
+
 
 def spotify_fields(p: Placement) -> dict:
     parts = [_int(x) for x in p.release.date.split("-")[:3]] + [0, 0, 0]
@@ -365,7 +446,12 @@ class Plan:
     unchanged: int = 0
     clashes: int = 0
     singles: int = 0  # items placed on their album instead of a single (whether or not they change)
-    waiting: int = 0  # items left until their single's ISRC search is done
+    waiting: int = 0  # items left until an ISRC search is done (a single's album, or a twin)
+    twins: dict[str, "Twins"] = dataclasses.field(default_factory=dict)  # album ID → its twin group
+    on_twin: Counter = dataclasses.field(default_factory=Counter)  # album ID → items placed on it by their entry
+    twinned: int = 0  # items moved from another twin onto the representative
+    apart: int = 0  # items left on their twin: the recording is not on the representative
+    twin_waiting: int = 0  # of waiting, those waiting for a twin's ISRC search
     kinds: Counter = dataclasses.field(default_factory=Counter)
     # Spotify album ID → the (albumartist, album) names its items carry today,
     # changed or not, so the report can say how many names become one album.
@@ -410,7 +496,10 @@ def plan_changes(
 
     from music_scan.cover import has_art  # noqa: PLC0415
 
-    plan = Plan()
+    plan = Plan(twins=twin_groups(placements))
+    # (album ID, ISRC) → a placement on that twin, to confirm a twin without a search.
+    by_isrc = {(q.release.album_id, q.isrc.upper()): q for q in placements.values()
+               if q.isrc and q.release.album_id in plan.twins}
     dests: dict[str, object] = {}
     for item in items:
         plan.scanned += 1
@@ -422,18 +511,42 @@ def plan_changes(
             plan.noalbum += 1
             logger.debug("  [NOALBUM] %s: no playlist entry describes its Spotify IDs", _path(item))
             continue
+        wait = False
         if albums is not None and p.release.album_type == "single" and p.isrc:
             album = albums.album_for(item, p, placements)
             if album is False:
-                plan.waiting += 1
-                here = _path(item)
-                plan.changes.append(Change(item, p, {WAIT: (item.get(WAIT), "1")}, here, False, False, here))
-                continue
-            if album is not None:
+                wait = True
+            elif album is not None:
                 logger.debug("  [ALBUM] %s: single %s → album %s by ISRC %s", _path(item), p.release.name,
                              album.release.name, p.isrc)
                 p = album
                 plan.singles += 1
+        group = plan.twins.get(p.release.album_id) if not wait else None
+        if group is not None:
+            plan.on_twin[p.release.album_id] += 1
+            if p.release.album_id == group.representative.album_id:
+                p = dataclasses.replace(p, release=group.representative)  # the group's ISRCs
+            else:
+                twin = _on_representative(p, group, by_isrc)
+                if twin is None and albums is not None and p.isrc:
+                    twin = albums.twin_for(p, group)
+                if twin is False:
+                    wait = True
+                    plan.twin_waiting += 1
+                elif twin is None:
+                    plan.apart += 1
+                    logger.info("  [NOTWIN] %s: %s (%s) stays apart from %s: ISRC %s is not on it", _path(item),
+                                p.release.name, p.release.album_id, group.representative.album_id, p.isrc or "?")
+                else:
+                    logger.debug("  [TWIN] %s: %s → %s by ISRC %s", _path(item), p.release.album_id,
+                                 twin.release.album_id, p.isrc)
+                    p = twin
+                    plan.twinned += 1
+        if wait:
+            plan.waiting += 1
+            here = _path(item)
+            plan.changes.append(Change(item, p, {WAIT: (item.get(WAIT), "1")}, here, False, False, here))
+            continue
         fields = spotify_fields(p)
         mb = resolver.fields(p.release.spotify_album()) if resolver is not None else None
         if mb is None:
@@ -476,9 +589,10 @@ def _show(v) -> str:
 
 def log_change(change: Change, apply: bool) -> None:
     if WAIT in change.diff and change.diff[WAIT][1]:
-        logger.info("  [WAIT] %s %s: single %s, its ISRC %s not searched yet%s", change.item.id,
-                    _path(change.item), change.placement.release.name, change.placement.isrc,
-                    "" if apply else " (dry run)")
+        r = change.placement.release
+        logger.info("  [WAIT] %s %s: %s %s, its ISRC %s not searched yet%s", change.item.id, _path(change.item),
+                    "single" if r.album_type == "single" else f"twin release {r.album_id} of", r.name,
+                    change.placement.isrc, "" if apply else " (dry run)")
         return
     shown = [f"{k} {_show(o)}→{_show(n)}" for k, (o, n) in change.diff.items()
              if k in SPOTIFY_FIELDS or k == "mb_album_via" or k == "mb_albumid"]
@@ -644,6 +758,15 @@ def report(plan: Plan, resolver: Resolver | None, albums: AlbumsByIsrc | None = 
                     "this run (%.0fs apart%s), %d ISRC(s) cached, %d item(s) wait for a search",
                     plan.singles, albums.calls, albums.interval, ", stopped by a rate limit" if albums.limited else "",
                     len(albums.cache), plan.waiting)
+    groups = {id(g): g for g in plan.twins.values()}
+    for g in sorted(groups.values(), key=lambda g: (g.representative.artist, g.representative.name)):
+        shown = [f"{r.album_id} ({r.date or '?'}, {r.tracks_count} tracks, {g.entries.get(r.album_id, 0)} entries, "
+                 f"{plan.on_twin.get(r.album_id, 0)} items)" for r in g.releases]
+        logger.info("[TWIN] %s — %s: %s ← %s", g.representative.artist, g.representative.name, shown[0],
+                    "; ".join(shown[1:]))
+    logger.info("Twins: %d group(s) of same-name releases; %d item(s) moved onto the representative, "
+                "%d wait for an ISRC search, %d left apart (recording not on it)",
+                len(groups), plan.twinned, plan.twin_waiting, plan.apart)
     if resolver is not None:
         logger.info("MusicBrainz: looked up %d album(s) this run (%s), %d call(s); %d album(s) cached",
                     resolver.looked_up, ", ".join(f"{k} {v}" for k, v in sorted(resolver.rungs.items())) or "none",
