@@ -84,6 +84,18 @@ def item_spotify_ids(item) -> set[str]:
     return ids
 
 
+def fingerprint(path) -> str:
+    """The AcoustID fingerprint of the file at *path*, as beets' ``acoustid_fingerprint`` stores it.
+
+    Computed locally (fpcalc/libchromaprint), no AcoustID lookup.  Evidence for
+    the duplicate audit (#210); raises when the file can't be decoded.
+    """
+    import acoustid  # noqa: PLC0415
+
+    _, fp = acoustid.fingerprint_file(str(path))
+    return fp.decode() if isinstance(fp, bytes) else fp
+
+
 def item_isrcs(item) -> set[str]:
     return set(split_list(item.get("isrc"), ";"))
 

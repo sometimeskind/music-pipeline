@@ -36,7 +36,7 @@ import tempfile
 from pathlib import Path
 
 from music_scan import guard
-from music_scan.identity import BY_WORDS, ItemIndex, item_spotify_ids, spotify_id, split_list
+from music_scan.identity import BY_WORDS, ItemIndex, fingerprint, item_spotify_ids, spotify_id, split_list
 
 logger = logging.getLogger(__name__)
 
@@ -182,6 +182,13 @@ def swap_in(item, new_file: Path, replaced_dir: Path, download_url: str | None) 
     item.path = bytestring_path(str(dest))
     if download_url:
         item["comments"] = download_url
+    # The old audio's fingerprint and AcoustID ID would be written onto the new file (#210).
+    try:
+        item["acoustid_fingerprint"] = fingerprint(dest)
+    except Exception as exc:  # noqa: BLE001 — a missing fingerprint beats a wrong one
+        logger.warning("[REPLACE] item %s: fingerprinting %s failed: %s", item.id, dest, exc)
+        item["acoustid_fingerprint"] = ""
+    item["acoustid_id"] = ""
     item.write()  # beets' tags onto the new file
     item.read()  # length, bitrate, format and mtime from it
     item.store()

@@ -343,7 +343,7 @@ def test_pending_musicbrainz_leaves_mb_tags_until_a_later_scan(tmp_path, ffmpeg,
 
 def test_backfill_dry_run_apply_then_zero(tmp_path, ffmpeg, lib, monkeypatch):
     from music_fetch import ingest
-    from music_scan import canon, cover, library, navidrome
+    from music_scan import canon, cover, library, navidrome, scan
     from music_scan.mb_release import Resolver
 
     _, _, _, songs = _editions(tmp_path, lib)
@@ -355,11 +355,15 @@ def test_backfill_dry_run_apply_then_zero(tmp_path, ffmpeg, lib, monkeypatch):
         cache_file=tmp_path / "mb.json", mb=FakeMB(), upc_of=lambda _: None))
     art = _jpeg(tmp_path / "c.jpg")
     monkeypatch.setattr(cover, "download", lambda url: art)
-    scans = []
-    monkeypatch.setattr(navidrome, "trigger_scan", lambda: scans.append(1))
+    events = []
+    monkeypatch.setattr(navidrome, "trigger_scan", lambda: events.append("rescan"))
+    monkeypatch.setattr(scan, "regen_playlists", lambda: events.append("m3u") or {})
 
-    assert len(canon.run(apply=False).changes) == 2 and scans == []
-    assert len(canon.run(apply=True).changes) == 2 and scans == [1]
+    assert len(canon.run(apply=False).changes) == 2 and events == []
+    plan = canon.run(apply=True)
+    assert len(plan.changes) == 2 and plan.moved
+    # The moved files' .m3u entries are rewritten before Navidrome rescans (#218).
+    assert events == ["m3u", "rescan"]
     assert canon.run(apply=True).changes == []
 
 

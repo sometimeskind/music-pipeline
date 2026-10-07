@@ -353,6 +353,7 @@ class Change:
     dest: str
     art: bool
     write: bool  # the file changes: a tag it stores, or the cover
+    source: str = ""  # the path when planned; dest differs when the file moves
 
 
 @dataclasses.dataclass
@@ -372,7 +373,8 @@ class Plan:
 
     @property
     def moved(self) -> int:
-        return sum(1 for c in self.changes if c.dest != _path(c.item))
+        # Against the planned path: after --apply the item is already at dest (#218).
+        return sum(1 for c in self.changes if c.dest != c.source)
 
     @property
     def art(self) -> int:
@@ -424,7 +426,8 @@ def plan_changes(
             album = albums.album_for(item, p, placements)
             if album is False:
                 plan.waiting += 1
-                plan.changes.append(Change(item, p, {WAIT: (item.get(WAIT), "1")}, _path(item), False, False))
+                here = _path(item)
+                plan.changes.append(Change(item, p, {WAIT: (item.get(WAIT), "1")}, here, False, False, here))
                 continue
             if album is not None:
                 logger.debug("  [ALBUM] %s: single %s → album %s by ISRC %s", _path(item), p.release.name,
@@ -462,7 +465,7 @@ def plan_changes(
                            _path(item), dest)
             continue
         dests[dest] = item
-        plan.changes.append(Change(item, p, diff, dest, art, write))
+        plan.changes.append(Change(item, p, diff, dest, art, write, _path(item)))
         plan.kinds[_kind(diff, write)] += 1
     return plan
 
@@ -652,6 +655,7 @@ def run(apply: bool = False, refresh: bool = False, mb_budget: int | None = None
     from music_fetch import ingest  # noqa: PLC0415
     from music_scan.library import LIBRARY_DB, LIBRARY_DIR, MusicLibrary  # noqa: PLC0415
     from music_scan.navidrome import trigger_scan  # noqa: PLC0415
+    from music_scan.scan import regen_playlists  # noqa: PLC0415
 
     pages = read_pages(refresh)
     placements = placements_from(
@@ -669,6 +673,9 @@ def run(apply: bool = False, refresh: bool = False, mb_budget: int | None = None
         logger.info("Dry run: %d item(s) would change. Re-run with --apply to write.", changed)
         return plan
     logger.info("Retagged %d item(s)", changed)
+    if plan.moved:
+        # Navidrome drops .m3u entries whose file moved, so the playlists go first (#218).
+        regen_playlists()
     if plan.writes:
         trigger_scan()
     return plan
