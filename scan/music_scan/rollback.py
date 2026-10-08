@@ -20,8 +20,11 @@ successful release.  An item is attributed to an album record by album name
 (edition suffixes dropped) and artist; it belongs to the successful release
 when it was added between that record's last grab and its import, and to a
 failed one when it was added before the last grab or the album never
-succeeded.  Items no record claims are listed and kept.  Dry run by default;
-``--apply`` quarantines and regenerates the playlists (#218).
+succeeded.  Items no record claims are listed and kept.  A failed release's
+item that is one of its album's tracks the library still lacks (same title,
+the artist within a ``feat.`` credit, #240) is linked to that track's Spotify
+ID instead of quarantined.  Dry run by default; ``--apply`` links,
+quarantines and regenerates the playlists (#218).
 """
 
 from __future__ import annotations
@@ -36,7 +39,9 @@ from music_fetch.albums import FALLBACK, FILLED, IMPORTED
 from music_fetch.usenet import clean_album, words
 from music_scan.audit import REPLACED, item_path, pipeline_lock
 from music_scan.dupes import _free
-from music_scan.identity import item_isrcs, item_spotify_ids
+from music_scan.identity import (
+    ItemIndex, PlaylistTrack, add_to_list, item_isrcs, item_spotify_ids, release_match,
+)
 from music_scan.playlists import playlist_entries
 
 logger = logging.getLogger(__name__)
@@ -114,17 +119,43 @@ def _from_success(record: dict, added: float) -> bool:
     return grabbed is not None and imported is not None and grabbed <= added <= imported
 
 
-def failed_release_items(items, records: dict[str, dict]) -> tuple[list, list]:
-    """Split unmatched usenet *items* into (from a failed release, unattributed).
-    Items from a successful release are left out of both."""
-    failed, unknown = [], []
+def failed_release_items(items, records: dict[str, dict]) -> tuple[list, list, list]:
+    """Split unmatched usenet *items* into (from a failed release, from a
+    successful one, unattributed)."""
+    failed, kept, unknown = [], [], []
     for item in items:
         claimed = [r for r in records.values() if _claims(r, item)]
         if not claimed:
             unknown.append(item)
-        elif not any(_from_success(r, item.added or 0) for r in claimed):
+        elif any(_from_success(r, item.added or 0) for r in claimed):
+            kept.append(item)
+        else:
             failed.append(item)
-    return failed, unknown
+    return failed, kept, unknown
+
+
+def links(failed: list, records: dict[str, dict], library: ItemIndex) -> list[tuple[object, str]]:
+    """``(item, spotify id)`` for each failed-release item that is one of its
+    album's tracks the library lacks (#240): the release had the track, but
+    its ``feat.`` credit or a curly apostrophe hid it from the ID tagging.
+    Linked, not quarantined.  Each item and each track is taken once."""
+    found, pool, done = [], list(failed), set()
+    for record in records.values():
+        mine = [i for i in pool if _claims(record, i)]
+        for tracks in record.get("playlists", {}).values() if mine else ():
+            for track in map(PlaylistTrack.from_entry, tracks):
+                if not track.song_id or track.song_id in done:
+                    continue
+                if library.match(track.song_id, track.isrc, words=False)[0] is not None:
+                    continue
+                item = release_match(track.name, track.artist, mine)
+                if item is None:
+                    continue
+                mine.remove(item)
+                pool.remove(item)
+                done.add(track.song_id)
+                found.append((item, track.song_id))
+    return found
 
 
 def _describe(item) -> str:
@@ -142,26 +173,36 @@ def run(apply: bool = False) -> int:
     with MusicLibrary(LIBRARY_DB) as lib:
         usenet = [i for i in lib.all_items() if i.get("via") == "usenet"]
         loose = unmatched(usenet, *entry_keys(SPOTDL_DIR))
-        failed, unknown = failed_release_items(loose, records)
-        logger.info("%d usenet item(s), %d on no playlist entry: %d from a failed release, "
-                    "%d from a successful one, %d unattributed",
-                    len(usenet), len(loose), len(failed), len(loose) - len(failed) - len(unknown), len(unknown))
+        failed, kept, unknown = failed_release_items(loose, records)
+        linked = links(failed, records, ItemIndex(lib.all_items()))
+        failed = [i for i in failed if all(i is not item for item, _ in linked)]
+        logger.info("%d usenet item(s), %d on no playlist entry: %d from a failed release (%d of them "
+                    "an album track to link), %d from a successful one, %d unattributed",
+                    len(usenet), len(loose), len(failed) + len(linked), len(linked), len(kept), len(unknown))
+        for item, song_id in linked:
+            logger.info("  [LINK] %s → %s", _describe(item), song_id)
         for item in failed:
             logger.info("  [FAILED] %s", _describe(item))
+        for item in kept:
+            logger.info("  [KEPT] %s — a successful release's extra, local-only", _describe(item))
         for item in unknown:
             logger.info("  [UNKNOWN] %s — no album record claims it, kept", _describe(item))
-        if not failed:
+        if not failed and not linked:
             return 0
         if not apply:
-            logger.info("Dry run — nothing moved. Re-run with --apply to quarantine the [FAILED] items.")
-            return len(failed)
+            logger.info("Dry run — nothing changed. Re-run with --apply to link the [LINK] items "
+                        "and quarantine the [FAILED] ones.")
+            return len(failed) + len(linked)
         with pipeline_lock():
+            for item, song_id in linked:
+                add_to_list(item, "spotify_ids", song_id)
+                item.store()
             quarantine(failed)
             counts = regen_playlists()
-        logger.info("Rolled back %d item(s); playlists regenerated: %s", len(failed),
+        logger.info("Linked %d and rolled back %d item(s); playlists regenerated: %s", len(linked), len(failed),
                     ", ".join(f"{k} {v}" for k, v in sorted(counts.items())))
     trigger_scan()
-    return len(failed)
+    return len(failed) + len(linked)
 
 
 def main() -> None:

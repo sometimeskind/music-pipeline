@@ -891,8 +891,9 @@ def test_count_lossless_items_returns_none_when_library_unreadable() -> None:
 # ---------------------------------------------------------------------------
 
 
-def _lib_item(title, *, isrc="", spotify_ids="", via="usenet", added=100.0, disc=1, track=1, tracktotal=2):
-    it = mock.MagicMock(title=title, artist="Artist", albumartist="Artist", added=added,
+def _lib_item(title, *, isrc="", spotify_ids="", via="usenet", added=100.0, disc=1, track=1, tracktotal=2,
+              artist="Artist"):
+    it = mock.MagicMock(title=title, artist=artist, albumartist="Artist", added=added,
                         disc=disc, track=track, tracktotal=tracktotal)
     data = {"isrc": isrc, "spotify_ids": spotify_ids, "via": via, "sources": "later"}
     it.get.side_effect = lambda k, d=None: data.get(k, d)
@@ -947,6 +948,24 @@ def test_tag_album_ids_skips_tagged_and_idless_tracks() -> None:
     assert _tag([a, b], [["One", "Artist", "sid1", None, 1, 1], ["Two", "Artist"]]) == 0
     a.store.assert_not_called()
     b.store.assert_not_called()
+
+
+def test_tag_album_ids_reads_this_imports_feat_credits(caplog) -> None:
+    """#240: CFCF's release credits `CFCF feat. …`, so the words rung missed 6 of 13."""
+    feat = _lib_item("Kiss Me", artist="Artist feat. Guest", track=9, tracktotal=0)
+    with caplog.at_level("INFO", logger="music_scan.scan"):
+        assert _tag([feat], [["Kiss Me", "Artist", "sid1", None, 1, 1]]) == 1
+    assert feat.data["spotify_ids"] == "sid1"
+    assert "[WORDS]" in caplog.text
+
+
+def test_tag_album_ids_release_rung_takes_each_item_once_and_only_this_import() -> None:
+    first = _lib_item("The Real Her", artist="Artist feat. Guest", track=9, tracktotal=0)
+    older = _lib_item("Bonus", artist="Artist feat. Guest", added=10.0, tracktotal=0)
+    tracks = [["The Real Her", "Artist", "sid1", None, 1, 1], ["The Real Her", "Artist", "sid2", None, 2, 1],
+              ["Bonus", "Artist", "sid3", None, 1, 3]]
+    assert _tag([first, older], tracks) == 1
+    assert first.data["spotify_ids"] == "sid1" and older.data["spotify_ids"] == ""
 
 
 def test_add_source_matches_by_id_and_records_it() -> None:

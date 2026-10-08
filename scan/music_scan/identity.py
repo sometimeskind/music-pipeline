@@ -16,6 +16,8 @@ import re
 from collections import Counter
 from typing import NamedTuple
 
+from music_fetch.usenet import words as release_words
+
 _STOP_WORDS = frozenset({"the", "and", "for", "feat", "ft", "vs", "with", "a", "an", "of", "in", "on"})
 
 # Ladder rungs, as ItemIndex.match reports them.
@@ -147,3 +149,25 @@ class ItemIndex:
             song.get("song_id") or spotify_id(song.get("url")), song.get("isrc"),
             song.get("name", ""), (song.get("artists") or [""])[0], words,
         )
+
+
+def release_match(name: str, artist: str, items):
+    """The first of *items* (one release's fresh tracks) that is the entry
+    *name* by *artist*: the same title words, and every word of *artist* in
+    the item's artist or album artist credit, or None (#240).
+
+    Looser than the words rung, which needs the same title+artist word set:
+    a release credits ``CFCF feat. nuum & Seren Forever`` where Spotify says
+    ``CFCF``, and writes ``Marvin’s`` where Spotify says ``Marvins``.  Words
+    are folded like release names (apostrophes joined, diacritics dropped).
+    Only for a release's own items, so a featured artist can't pull in an
+    unrelated track."""
+    title = set(release_words(name))
+    credit = set(release_words(artist))
+    if not title:
+        return None
+    for item in items:
+        if (set(release_words(item.title or "")) == title
+                and credit <= set(release_words(f"{item.artist or ''} {item.albumartist or ''}"))):
+            return item
+    return None

@@ -17,7 +17,7 @@ from pathlib import Path
 from music_fetch.ingest import PendingRemovals
 from music_scan import playlists
 from music_scan.guard import guard_inbox
-from music_scan.identity import ItemIndex, PlaylistTrack, add_to_list, spotify_id
+from music_scan.identity import ItemIndex, PlaylistTrack, add_to_list, item_spotify_ids, release_match, spotify_id
 from music_scan.identity import name_words as _name_words
 from music_scan.library import MusicLibrary
 from music_scan.metrics import ScanMetrics
@@ -347,15 +347,17 @@ def tag_album_ids(lib: MusicLibrary, source: str, tracks: list[list], since: flo
     1. ISRC among the item's ISRCs;
     2. disc and track number, only on usenet items imported since *since*
        whose release has Spotify's track count (editions renumber tracks);
-    3. title+artist words, logged so the fallback rate is visible.
+    3. title+artist words, logged so the fallback rate is visible;
+    4. the same title among this import's usenet items, with the artist
+       anywhere in a credit that may add ``feat.`` names (#240), logged too.
     Returns the count of items tagged.
     """
     index = ItemIndex(lib.items_by_source(source))
-    fresh = [
-        i for i in index.items
-        if i.get("via") == "usenet" and (i.added or 0) >= since
-        and tracks_count and i.tracktotal == tracks_count
-    ]
+    album_ids = {t.song_id for t in map(PlaylistTrack.from_entry, tracks) if t.song_id}
+    imported = [i for i in index.items if i.get("via") == "usenet" and (i.added or 0) >= since]
+    fresh = [i for i in imported if tracks_count and i.tracktotal == tracks_count]
+    # Rung 4 takes each item once, and never one already holding a track of this album.
+    unclaimed = [i for i in imported if not item_spotify_ids(i) & album_ids]
     count = 0
     for track in map(PlaylistTrack.from_entry, tracks):
         if not track.song_id or track.song_id in index.by_id:
@@ -365,8 +367,12 @@ def tag_album_ids(lib: MusicLibrary, source: str, tracks: list[list], since: flo
             match = next((i for i in fresh if (i.disc, i.track) == (track.disc, track.track)), None)
         if match is None:
             match, _ = index.match(None, None, track.name, track.artist)
+            if match is None:
+                match = release_match(track.name, track.artist, unclaimed)
             if match is not None:
                 logger.info("  [WORDS] %s: %s — %s matched by title+artist only", source, track.name, track.artist)
+        if match in unclaimed:
+            unclaimed.remove(match)
         if match is None:
             logger.info("  [NOID] %s: %s — %s matches no library item", source, track.name, track.artist)
             continue
