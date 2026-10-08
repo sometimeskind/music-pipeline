@@ -671,6 +671,8 @@ def complete(
             # Leftovers beets doesn't import (nfo, sfv, cue, cover scans).
             shutil.rmtree(dest, ignore_errors=True)
         tracks = record["playlists"][first]
+        # Before counting: a track only the release-scoped rung finds counts as imported (#240).
+        tag_ids(first, tracks, started, record.get("tracks_count") or 0)
         gaps = missing(first, tracks)
         imported = not gaps
         partial = settings.partial(len(gaps), len(tracks))
@@ -682,7 +684,7 @@ def complete(
             reason = f"beets did not import {len(gaps)} of {len(tracks)} track(s) (quarantined or unmatched)"
             # Records from before #176 hold only [name, artist].
             gap_keys = sorted({(t[2] if len(t) > 2 else None) or f"{t[0]} — {t[1]}" for t in gaps})
-        for playlist in playlists:
+        for playlist in playlists[1:]:
             tag_ids(playlist, record["playlists"][playlist], started, record.get("tracks_count") or 0)
     elif completion.ok:
         reason = f"completed job dir not found: {completion.path!r}"

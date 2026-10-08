@@ -819,3 +819,18 @@ def test_a_failed_download_between_imports_keeps_the_previous_gap(roots) -> None
     state.albums["a0"]["gaps"] = ["s0", "s1", "s2", "s3", "s4"]
     run_complete(state, albums.Completion("nzo1", False, "album/Artist-Album-FLAC"), roots, have_result=False)
     assert state.albums["a0"]["gaps"] == ["s0", "s1", "s2", "s3", "s4"]
+
+
+def test_complete_tags_the_first_playlist_before_counting_gaps(roots) -> None:
+    """#240: a track only the ID tagging finds must count as imported."""
+    tagged = []
+    state = grabbed_state(playlists={"later": ten_tracks(), "keep": ten_tracks()})
+    status = albums.complete(
+        state, albums.Completion("nzo1", True, "album/Artist-Album-FLAC"), lambda: None,
+        missing=lambda pl, tracks: [] if ("later", 10) in tagged else tracks,
+        add_source=lambda *a: None,
+        tag_ids=lambda pl, tracks, since, count: tagged.append((pl, len(tracks))),
+        complete_root=roots[0], inbox_root=roots[1], quarantine_root=roots[2], settings=Settings(mode="on"),
+    )
+    assert status == albums.IMPORTED
+    assert tagged == [("later", 10), ("keep", 10)]

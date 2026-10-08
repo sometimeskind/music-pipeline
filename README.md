@@ -145,7 +145,8 @@ The optional `album` flag is for playlists that hold only whole albums. spotdl n
 When SABnzbd finishes an album job, its post-processing script POSTs to `/trigger-album-import` (bearer `ALBUM_IMPORT_TOKEN`, which opens only that route). The `music-album-import` flow then:
 1. moves the job into `inbox/usenet/<playlist>/`, so beets tags it `sources=<playlist>` and `via=usenet`;
 2. runs the scan under the `pipeline` lock;
-3. counts the album imported only if every playlist track is now in the library.
+3. records the playlist tracks' Spotify IDs on the new items: by ISRC, then disc and track number (same edition only), then title+artist words, then the same title among this import's items with the artist anywhere in a credit that may add `feat.` names, apostrophes and diacritics folded (#240; the last two log `[WORDS]`);
+4. counts the album imported only if every playlist track is now in the library.
 
 Otherwise (a failed download, or tracks beets quarantined) it blocklists the release, deletes its quarantined tracks, and tries the next release; tracks already in the library are skipped as duplicates, so it only fills the gaps. The blocklisted release is rolled back (#238): the items it imported that match no entry of any playlist by Spotify ID or ISRC (an expanded edition's outtakes or 5.1 mixes) move to `quarantine/replaced/` and leave the library (`[ROLLBACK]`), and the `.m3u` files are regenerated; its matched tracks stay. A successful or partial release's extra tracks (a deluxe edition's bonus tracks) stay as local-only items. A release that misses the same playlist tracks as the previous one is a structural gap (`[GAP]`): those tracks go to spotdl (`fallback_from: gap`) instead of another grab. After 3 failed releases the album is `failed`, and the last release's quarantined tracks are kept for review. A release that imports all but a few tracks (at most `ALBUM_PARTIAL_MAX_MISSING`, or `ALBUM_PARTIAL_MAX_PERCENT` of the album's playlist tracks if that is more) is not blocklisted: it logs `[PART]` and its missing tracks go to spotdl, as below. Usenet tracks never go through the asis pass. A trigger that never arrives is recovered from SABnzbd history by the next tick, an hour after the grab.
 
@@ -328,11 +329,11 @@ kubectl exec -n <ns> deploy/music-pipeline -- music-audit-dupes                 
 kubectl exec -n <ns> deploy/music-pipeline -- music-audit-dupes --apply                 # merge the certain tier
 ```
 
-**Failed releases imported before #238:** `music-rollback-releases` lists the `via=usenet` items that match no playlist entry and came from a failed release, and with `--apply` quarantines them like the rollback above. Each item is attributed to an album record in `.albums.json` by album name (edition suffixes dropped) and artist: it came with the successful release when it was added between the record's last grab and its import (a full or partial import), otherwise from a failed one. Items no record claims are listed as `[UNKNOWN]` and kept.
+**Failed releases imported before #238:** `music-rollback-releases` lists the `via=usenet` items that match no playlist entry and came from a failed release, and with `--apply` quarantines them like the rollback above. Each item is attributed to an album record in `.albums.json` by album name (edition suffixes dropped) and artist: it came with the successful release when it was added between the record's last grab and its import (a full or partial import), otherwise from a failed one. Items no record claims are listed as `[UNKNOWN]` and kept, and a successful release's extras as `[KEPT]`. A failed release's item that is one of its album's tracks the library still lacks (same title, artist within a `feat.` credit, #240) is listed as `[LINK] … → <spotify id>` and gets that ID instead of being quarantined.
 
 ```sh
-kubectl exec -n <ns> deploy/music-pipeline -- music-rollback-releases          # dry run: [FAILED] and [UNKNOWN] items
-kubectl exec -n <ns> deploy/music-pipeline -- music-rollback-releases --apply  # quarantine the [FAILED] items
+kubectl exec -n <ns> deploy/music-pipeline -- music-rollback-releases          # dry run: [LINK], [FAILED], [KEPT], [UNKNOWN]
+kubectl exec -n <ns> deploy/music-pipeline -- music-rollback-releases --apply  # link [LINK], quarantine [FAILED]
 ```
 
 **Album covers (#204):** Usenet album tracks get Spotify's album cover embedded after import (the convert command drops a FLAC's picture, and singleton imports get no `fetchart`/`embedart`). The cover URL comes from the `.spotdl` files, so no Spotify calls. `music-embed-covers` backfills every `via=usenet` item with no embedded art, then triggers a Navidrome rescan:

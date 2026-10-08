@@ -4,7 +4,8 @@ import json
 from datetime import datetime, timezone
 from pathlib import Path
 
-from music_scan.rollback import entry_keys, failed_release_items, quarantine, rollback_release, unmatched
+from music_scan.identity import ItemIndex
+from music_scan.rollback import entry_keys, failed_release_items, links, quarantine, rollback_release, unmatched
 
 GRAB = datetime(2026, 10, 7, 21, 30, tzinfo=timezone.utc)
 IMPORT = datetime(2026, 10, 7, 21, 40, tzinfo=timezone.utc)
@@ -15,6 +16,8 @@ class FakeItem:
 
     def __init__(self, id_, added, **data):
         self.id, self.added, self.data = id_, added, data
+        self.title, self.artist = data["title"], data["artist"]
+        self.albumartist = data.get("albumartist", "")
         self.path = f"/lib/{data['artist']}/{data['title']}-{id_}.m4a".encode()
         self.removed = False
 
@@ -97,14 +100,14 @@ def test_cleanup_keeps_a_successful_releases_bonus_tracks() -> None:
     bonus = item(1, "Bonus", artist="Sports Team", album="Boys These Days (Deluxe Edition)",
                  added=(GRAB.timestamp() + IMPORT.timestamp()) / 2)
     records = {"a": record("imported", name="Boys These Days (Deluxe)", artist="Sports Team")}
-    assert failed_release_items([bonus], records) == ([], [])
+    assert failed_release_items([bonus], records) == ([], [bonus], [])
 
 
 def test_cleanup_takes_items_added_before_the_last_grab() -> None:
     """Talking Heads: the expanded edition failed, the next release succeeded."""
     outtake = item(1, "Outtake", album="Remain in Light (Expanded)", added=GRAB.timestamp() - 600)
     records = {"a": record("imported")}
-    assert failed_release_items([outtake], records) == ([outtake], [])
+    assert failed_release_items([outtake], records) == ([outtake], [], [])
 
 
 def test_cleanup_takes_every_item_of_an_album_that_never_succeeded() -> None:
@@ -112,16 +115,51 @@ def test_cleanup_takes_every_item_of_an_album_that_never_succeeded() -> None:
     records = {"a": record("fallback", name="Take Care (Deluxe)", artist="Drake", fallback_from="failed")}
     feat = item(1, "HYFR", artist="Drake feat. Lil Wayne", album="Take Care", albumartist="Drake",
                 added=IMPORT.timestamp() - 1)
-    assert failed_release_items([feat], records) == ([feat], [])
+    assert failed_release_items([feat], records) == ([feat], [], [])
 
 
 def test_cleanup_keeps_a_partial_imports_extras() -> None:
     extra = item(1, "Extra", album="Remain in Light", added=IMPORT.timestamp())
     records = {"a": record("filled", fallback_from="partial")}
-    assert failed_release_items([extra], records) == ([], [])
+    assert failed_release_items([extra], records) == ([], [extra], [])
 
 
 def test_cleanup_lists_but_keeps_items_no_album_claims() -> None:
     stray = item(1, "Stray", artist="CFCF", album="Something Else", added=IMPORT.timestamp())
     records = {"a": record("wanted", name="L.U.V.", artist="CFCF", attempts=2)}
-    assert failed_release_items([stray], records) == ([], [stray])
+    assert failed_release_items([stray], records) == ([], [], [stray])
+
+
+# --- linking instead of quarantining (#240) -----------------------------------
+
+
+def _drake(playlists) -> dict:
+    return {"a": record("fallback", name="Take Care (Deluxe)", artist="Drake", fallback_from="failed",
+                        playlists=playlists)}
+
+
+def test_links_a_feat_credited_album_track_the_library_lacks() -> None:
+    proud = item(1, "Make Me Proud", artist="Drake feat. Nicki Minaj", album="Take Care", albumartist="Drake")
+    marvin = item(2, "Marvin\u2019s Room", artist="Drake", album="Take Care (Deluxe)")
+    extra = item(3, "Headlines", artist="Drake", album="Take Care")
+    have = item(4, "Headlines", artist="Drake", album="Take Care", spotify_ids="s3")
+    records = _drake({"later": [["Make Me Proud", "Drake", "s1"], ["Marvins Room", "Drake", "s2"],
+                                ["Headlines", "Drake", "s3"]]})
+    found = links([proud, marvin, extra], records, ItemIndex([have]))
+    assert found == [(proud, "s1"), (marvin, "s2")]
+
+
+def test_links_each_track_once() -> None:
+    """The Real Her came twice (Take Care and its Deluxe): one links, the other is a duplicate."""
+    first = item(1, "The Real Her", artist="Drake feat. Lil Wayne", album="Take Care")
+    second = item(2, "The Real Her", artist="Drake feat. Lil Wayne & André 3000", album="Take Care (Deluxe)")
+    records = _drake({"later": [["The Real Her", "Drake", "s1"]], "keep": [["The Real Her", "Drake", "s1"]]})
+    assert links([first, second], records, ItemIndex([])) == [(first, "s1")]
+
+
+def test_links_needs_the_same_title() -> None:
+    """Kiss Me and Kiss Me (Euroversion) are different tracks."""
+    euro = item(1, "Kiss Me (Euroversion)", artist="CFCF feat. nuum & Seren Forever", album="L.U.V.")
+    records = {"a": record("fallback", name="L.U.V.", artist="CFCF", fallback_from="missing",
+                           playlists={"later": [["Kiss Me", "CFCF", "s1"], ["Kiss Me - Euroversion", "CFCF", "s2"]]})}
+    assert links([euro], records, ItemIndex([])) == [(euro, "s2")]

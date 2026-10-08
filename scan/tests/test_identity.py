@@ -11,6 +11,7 @@ from music_scan.identity import (
     add_isrcs,
     add_to_list,
     item_spotify_ids,
+    release_match,
     spotify_id,
     split_list,
 )
@@ -145,3 +146,25 @@ def test_clear_source_tag_by_isrc_then_words(tmp_path: Path, caplog) -> None:
             assert lib.clear_source_tag("Old", "Artist", "a")
         assert lib._lib.get_item(old.id).get("sources") == ""
         assert "[WORDS]" in caplog.text
+
+
+# --- release_match (#240) -----------------------------------------------------
+
+
+def _credit(title, artist, albumartist=""):
+    return MagicMock(title=title, artist=artist, albumartist=albumartist)
+
+
+def test_release_match_reads_through_feat_credits_and_curly_apostrophes() -> None:
+    feat = _credit("Kiss Me", "CFCF feat. nuum & Seren Forever")
+    curly = _credit("Marvin\u2019s Room", "Drake")
+    assert release_match("Kiss Me", "CFCF", [feat]) is feat
+    assert release_match("Marvins Room", "Drake", [curly]) is curly
+    assert release_match("Lord Knows", "Drake", [_credit("Lord Knows", "Rick Ross", "Drake")]) is not None
+
+
+def test_release_match_needs_the_same_title_and_the_artist() -> None:
+    euro = _credit("Kiss Me (Euroversion)", "CFCF")
+    assert release_match("Kiss Me", "CFCF", [euro]) is None
+    assert release_match("Kiss Me - Euroversion", "CFCF", [euro]) is euro
+    assert release_match("Kiss Me", "Someone Else", [_credit("Kiss Me", "CFCF")]) is None
