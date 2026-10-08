@@ -614,6 +614,7 @@ def complete(
     missing: Missing,
     add_source: Callable[[str, str, list[list[str]]], None],
     tag_ids: Callable[[str, list[list], float, int], None],
+    rollback: Callable[[str, float], int] | None = None,
     complete_root: Path = USENET_COMPLETE,
     inbox_root: Path = USENET_INBOX,
     quarantine_root: Path = USENET_QUARANTINE,
@@ -634,6 +635,12 @@ def complete(
     Usenet files carry no Spotify IDs, so after the import *tag_ids* maps each
     playlist's tracks onto the library items and records their Spotify IDs
     (#176), also when the album didn't import completely.
+
+    A blocklisted release is rolled back (#238): *rollback(playlist, since)*
+    quarantines the items it imported that match no playlist entry (an
+    expanded edition's outtakes); its matched items stay.  A release missing
+    the same tracks as the previous one is a structural gap: they go to spotdl
+    instead of another grab.
     """
     found = find_by_nzo(state, completion.nzo_id)
     if found is None:
@@ -648,6 +655,8 @@ def complete(
     settings = settings or Settings.from_env()
     reason = completion.fail_message or "download failed"
     imported = partial = False
+    started: float | None = None
+    gap_keys: list[str] | None = None
     if completion.ok and source is not None and source.is_dir() and playlists:
         first = playlists[0]
         dest = inbox_root / first / job_name
@@ -671,6 +680,8 @@ def complete(
                 add_source(first, other, record["playlists"][other])
         else:
             reason = f"beets did not import {len(gaps)} of {len(tracks)} track(s) (quarantined or unmatched)"
+            # Records from before #176 hold only [name, artist].
+            gap_keys = sorted({(t[2] if len(t) > 2 else None) or f"{t[0]} — {t[1]}" for t in gaps})
         for playlist in playlists:
             tag_ids(playlist, record["playlists"][playlist], started, record.get("tracks_count") or 0)
     elif completion.ok:
@@ -697,6 +708,18 @@ def complete(
     record["attempts"] = record.get("attempts", 0) + 1
     if source is not None:
         shutil.rmtree(source, ignore_errors=True)
+    if started is not None and rollback is not None:
+        n = rollback(playlists[0], started)
+        if n:
+            logger.info("[ROLLBACK] %s: %d unmatched track(s) from %s → quarantine/replaced/", label, n, job_name)
+    same_gap = gap_keys is not None and gap_keys == record.get("gaps")
+    if gap_keys is not None:
+        record["gaps"] = gap_keys
+    if same_gap:
+        # Like a failed album, the last release's quarantined tracks stay for review.
+        logger.warning("[GAP] %s: %s, the same as the previous release — not re-grabbing", label, reason)
+        _queue_fallback(record, missing, "gap")
+        return FALLBACK
     record["status"] = FAILED if record["attempts"] >= MAX_ATTEMPTS else WANTED
     if record["status"] == FAILED:
         # Keep the last release's quarantined tracks for manual review.

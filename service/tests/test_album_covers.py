@@ -13,7 +13,7 @@ def _complete_with_tag_ids(embed_covers):
     lib = MagicMock()
     lib.items_by_source.return_value = [fresh, old]
 
-    def fake_complete(state, completion, import_inbox, missing, add_source, tag_ids):
+    def fake_complete(state, completion, import_inbox, missing, add_source, tag_ids, rollback=None):
         tag_ids("later", [], 100.0, 2)
         return "imported"
 

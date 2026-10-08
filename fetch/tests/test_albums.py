@@ -336,7 +336,8 @@ def grabbed_state(playlists=None) -> State:
     return state
 
 
-def run_complete(state, completion, roots, have_result=True, imported=None, tagged=None, gaps=None, settings=None):
+def run_complete(state, completion, roots, have_result=True, imported=None, tagged=None, gaps=None, settings=None,
+                 rolled_back=None):
     """*gaps* is how many of each playlist's tracks beets left out (default: all
     of them when *have_result* is False, none otherwise)."""
     complete_root, inbox, quarantine = roots
@@ -352,6 +353,7 @@ def run_complete(state, completion, roots, have_result=True, imported=None, tagg
         missing=lambda pl, tracks: [] if have_result else tracks[:len(tracks) if gaps is None else gaps],
         add_source=lambda have_src, new_src, tracks: added.append((have_src, new_src)),
         tag_ids=lambda pl, tracks, since, count: tagged.append((pl, count)),
+        rollback=lambda pl, since: (rolled_back if rolled_back is not None else []).append(pl) or 0,
         complete_root=complete_root, inbox_root=inbox, quarantine_root=quarantine,
         settings=settings or Settings(mode="on"),
     )
@@ -752,3 +754,68 @@ def test_fallback_songs_in_playlist_order() -> None:
     songs = [{"song_id": f"s{i}"} for i in range(1, 4)]
     assert albums.fallback_songs(state, "later", songs) == [{"song_id": "s1"}, {"song_id": "s3"}]
     assert albums.fallback_songs(state, "aaaaaaah", songs) == []
+
+
+# ---------------------------------------------------------------------------
+# Rollback and structural gaps (#238)
+# ---------------------------------------------------------------------------
+
+
+def test_complete_rolls_back_a_blocklisted_release(roots) -> None:
+    rolled = []
+    state = grabbed_state(playlists={"later": ten_tracks(), "keep": ten_tracks()})
+    status, _, _ = run_complete(state, albums.Completion("nzo1", True, "album/Artist-Album-FLAC"), roots,
+                                have_result=False, gaps=5, rolled_back=rolled)
+    assert status == albums.WANTED and rolled == ["later"]
+
+
+def test_complete_never_rolls_back_a_success_or_a_partial(roots) -> None:
+    """A successful deluxe grab's bonus tracks stay local-only (operator decision on #238)."""
+    rolled = []
+    run_complete(grabbed_state(playlists={"later": ten_tracks()}), albums.Completion("nzo1", True, "album/Artist-Album-FLAC"),
+                 roots, rolled_back=rolled)
+    complete_root, _, _ = roots
+    (complete_root / "album" / "Artist-Album-FLAC").mkdir(parents=True)
+    run_complete(grabbed_state(playlists={"later": ten_tracks()}), albums.Completion("nzo1", True, "album/Artist-Album-FLAC"),
+                 roots, have_result=False, gaps=2, rolled_back=rolled)
+    assert rolled == []
+
+
+def test_complete_failed_download_rolls_back_nothing(roots) -> None:
+    rolled = []
+    run_complete(grabbed_state(), albums.Completion("nzo1", False, "album/Artist-Album-FLAC"), roots,
+                 have_result=False, rolled_back=rolled)
+    assert rolled == []
+
+
+def test_complete_same_gap_as_the_previous_release_falls_back_without_a_grab(roots) -> None:
+    """CFCF: two releases missing the same 6 of 13; Drake 8, 8, then 5."""
+    state = grabbed_state(playlists={"later": ten_tracks()})
+    status, _, _ = run_complete(state, albums.Completion("nzo1", True, "album/Artist-Album-FLAC"), roots,
+                                have_result=False, gaps=5)
+    record = state.albums["a0"]
+    assert status == albums.WANTED and record["gaps"] == ["s0", "s1", "s2", "s3", "s4"]
+
+    complete_root, _, _ = roots
+    (complete_root / "album" / "Artist-Album-FLAC").mkdir(parents=True)
+    record.update(status=albums.GRABBED, candidate={"guid": "r2"})
+    status, _, _ = run_complete(state, albums.Completion("nzo1", True, "album/Artist-Album-FLAC"), roots,
+                                have_result=False, gaps=5)
+    assert status == albums.FALLBACK
+    assert record["fallback_from"] == "gap" and record["blocklist"] == ["r1", "r2"]
+    assert record["fallback_tracks"] == {"later": ["s0", "s1", "s2", "s3", "s4"]}
+
+
+def test_complete_a_different_gap_still_retries(roots) -> None:
+    state = grabbed_state(playlists={"later": ten_tracks()})
+    state.albums["a0"]["gaps"] = ["s0", "s1", "s2", "s3"]
+    status, _, _ = run_complete(state, albums.Completion("nzo1", True, "album/Artist-Album-FLAC"), roots,
+                                have_result=False, gaps=5)
+    assert status == albums.WANTED
+
+
+def test_a_failed_download_between_imports_keeps_the_previous_gap(roots) -> None:
+    state = grabbed_state(playlists={"later": ten_tracks()})
+    state.albums["a0"]["gaps"] = ["s0", "s1", "s2", "s3", "s4"]
+    run_complete(state, albums.Completion("nzo1", False, "album/Artist-Album-FLAC"), roots, have_result=False)
+    assert state.albums["a0"]["gaps"] == ["s0", "s1", "s2", "s3", "s4"]
