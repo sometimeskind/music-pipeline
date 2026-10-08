@@ -414,8 +414,23 @@ def _album_library_hooks(lib):
         except Exception:
             cover.logger.exception("Album covers: embedding failed; music-embed-covers retries it")
 
+    def rollback(playlist: str, since: float) -> int:
+        # A blocklisted release's tracks on no playlist entry (#238); the
+        # .m3u tails listed them, so regenerate.
+        from music_scan import rollback as rb  # noqa: PLC0415
+
+        try:
+            with concurrency("pipeline", occupy=1):
+                n = rb.rollback_release(lib, playlist, since, ingest.SPOTDL_DIR)
+                if n:
+                    scan.regen_playlists()
+        except Exception:
+            rb.logger.exception("Rollback failed; the release is still blocklisted, music-rollback-releases cleans up")
+            return 0
+        return n
+
     def complete(state, completion) -> str | None:
-        status = albums.complete(state, completion, import_inbox, fresh_missing, add_source, tag_ids)
+        status = albums.complete(state, completion, import_inbox, fresh_missing, add_source, tag_ids, rollback)
         keys.clear()
         return status
 
