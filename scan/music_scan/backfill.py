@@ -173,7 +173,8 @@ def plan_backfill(
     # 2. The rest by the ladder.  IDs other than spotify_url's came from earlier
     #    artist+title merges, so an ID hit is checked against the ISRCs too.
     for playlist, songs in pending.items():
-        index = ItemIndex(i for i in items if playlist in split_list(i.get("sources")))
+        # Words reach identified items too: a hit on one that the ISRCs contradict is a wrong version.
+        index = ItemIndex((i for i in items if playlist in split_list(i.get("sources"))), identified_words=True)
         for song in songs:
             item, rung = index.match_song(song)
             if item is None:
