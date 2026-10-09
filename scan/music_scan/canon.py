@@ -53,8 +53,23 @@ changes, or when the file has none.  A change to beets-only fields
 file alone, so Navidrome has nothing to rescan.
 
 At import the scan canonicalises new items and those still pending; the album
-completion does it after ``tag_album_ids``.  ``music-canon-albums`` backfills
-the library: dry run by default, ``--apply`` writes.  Safe to re-run.
+completion does it after ``tag_album_ids``.  The scan also takes any item with
+a Spotify ID and no ``spotify_album_id``: one that got its ID after its import
+(a ``music-rollback-releases`` link, a duplicate's merge, #244).
+
+A successful Usenet release's extras (a deluxe edition's bonus tracks, kept as
+local-only items by the #238 decision) have no Spotify ID, so the steps above
+skip them, and they would stay a second album with no cover (#245).  They are
+adopted by the album most of the release's tracks were canonicalised onto:
+they copy its album-level tags (:data:`EXTRA_FIELDS`), cover and folder from
+one of its items, and keep their own title and numbering, renumbered after the
+album's tracks when a disc/track pair is taken.  They stay local-only: no
+Spotify ID, no playlist entry.  An extra is attributed to its album record as
+``music-rollback-releases`` does (:func:`music_scan.rollback.failed_release_items`).
+
+``music-canon-albums`` backfills the library, extras included: dry run by
+default, ``--apply`` writes.  Safe to re-run.  The dry run shows an extra
+taking the album's tags as they are before this run's retags.
 """
 
 from __future__ import annotations
@@ -72,7 +87,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from music_scan.identity import item_spotify_ids, spotify_id
-from music_scan.mb_release import Resolver, SpotifyAlbum
+from music_scan.mb_release import MB_ALBUM_FIELDS, Resolver, SpotifyAlbum
 
 logger = logging.getLogger(__name__)
 
@@ -94,6 +109,9 @@ EP_MIN_TRACKS = 4
 ISRC_CACHE_VERSION = 2
 WAIT = "canon_wait"
 SPOTIFY_FIELDS = ("album", "albumartist", "year", "month", "day", "track", "tracktotal", "disc", "disctotal")
+# What a release's extra copies from its album (#245): everything Navidrome groups by, not the numbering.
+EXTRA_FIELDS = ("album", "albumartist", "year", "month", "day", "tracktotal", "disctotal",
+                "spotify_album_id", "mb_album_via", *MB_ALBUM_FIELDS)
 
 
 @dataclasses.dataclass(frozen=True)
@@ -461,6 +479,7 @@ class Plan:
     # Spotify album ID → the (albumartist, album) names its items carry today,
     # changed or not, so the report can say how many names become one album.
     names: dict[str, set] = dataclasses.field(default_factory=dict)
+    extras: list = dataclasses.field(default_factory=list)  # Extra: the backfill's release extras (#245)
 
     @property
     def moved(self) -> int:
@@ -697,13 +716,154 @@ def canonicalize_items(items: list, spotdl_dir: Path | None = None, budget: int 
 
 def after_scan(lib, since: float) -> int:
     """Items the scan just imported, plus those whose MusicBrainz release is still
-    pending or missing (the queue and its weekly retry) or whose single's ISRC
-    search is still to do."""
+    pending or missing (the queue and its weekly retry), whose single's ISRC
+    search is still to do, or that got a Spotify ID after their import (#244)."""
     items = [
         i for i in lib.all_items()
         if (i.added or 0) >= since or i.get("mb_album_via") in (PENDING, "none") or i.get(WAIT)
+        or (not i.get("spotify_album_id") and item_spotify_ids(i))
     ]
     return canonicalize_items(items)
+
+
+# ----------------------------------------------------------------------
+# A successful release's extras (#245)
+# ----------------------------------------------------------------------
+
+
+@dataclasses.dataclass
+class Extra:
+    item: object
+    album: object  # the album's item it copies from
+    diff: dict  # field → (old, new)
+    dest: str
+    art: bool
+    write: bool
+    source: str
+
+
+def release_extras(items: list, records: dict[str, dict]) -> dict[str, tuple[list, list]]:
+    """``{record key: (extras, items holding its tracks)}`` for each album record
+    whose successful release added usenet items with no Spotify ID."""
+    from music_scan.identity import PlaylistTrack  # noqa: PLC0415
+    from music_scan.rollback import _claims, _from_success  # noqa: PLC0415
+
+    loose = [i for i in items if i.get("via") == "usenet" and not item_spotify_ids(i)]
+    found: dict[str, tuple[list, list]] = {}
+    for key, record in records.items():
+        extras = [i for i in loose if _claims(record, i) and _from_success(record, i.added or 0)]
+        if not extras:
+            continue
+        loose = [i for i in loose if all(i is not e for e in extras)]
+        ids = {t.song_id for tracks in record.get("playlists", {}).values()
+               for t in map(PlaylistTrack.from_entry, tracks) if t.song_id}
+        found[key] = (extras, [i for i in items if item_spotify_ids(i) & ids])
+    return found
+
+
+def _album_item(tracks: list):
+    """An item on the Spotify album most of *tracks* are on (one with a cover if
+    any), or None when none is canonicalised yet."""
+    from music_scan.cover import has_art  # noqa: PLC0415
+
+    on = Counter(i.get("spotify_album_id") for i in tracks if i.get("spotify_album_id"))
+    if not on:
+        return None
+    album_id = min(on, key=lambda a: (-on[a], a))
+    mine = sorted((i for i in tracks if i.get("spotify_album_id") == album_id), key=lambda i: i.id)
+    return next((i for i in mine if has_art(i)), mine[0])
+
+
+def plan_extras(items: list, records: dict[str, dict]) -> list[Extra]:
+    """What adopting the successful releases' extras would change.  Leaves the items as they were."""
+    from beets.library import Item  # noqa: PLC0415
+
+    from music_scan.cover import has_art  # noqa: PLC0415
+
+    planned: list[Extra] = []
+    dests: set[str] = set()
+    for key, (extras, tracks) in release_extras(items, records).items():
+        album = _album_item(tracks)
+        if album is None:
+            logger.info("  [NOREP] %s: %d extra(s) wait, none of its tracks is on a Spotify album yet",
+                        key, len(extras))
+            continue
+        album_id = album.get("spotify_album_id")
+        fields = {k: album.get(k) for k in EXTRA_FIELDS if album.get(k) is not None}
+        album_art = has_art(album)
+        # Disc/track pairs the album's own tracks hold; each extra takes its pair, or the next free track.
+        taken = {(i.disc or 1, i.track) for i in items if i.get("spotify_album_id") == album_id and item_spotify_ids(i)}
+        for item in sorted(extras, key=lambda i: (i.disc or 1, i.track or 0, i.id)):
+            disc, track = item.disc or 1, item.track
+            if (disc, track) in taken:
+                track = max(t for d, t in taken if d == disc) + 1
+            taken.add((disc, track))
+            new = {**fields, "track": track, "disctotal": max(_int(fields.get("disctotal")), disc)}
+            diff = {k: (item.get(k), v) for k, v in new.items() if item.get(k) != v}
+            art = album_art and (_renamed(diff) or not has_art(item))
+            if not diff and not art:
+                continue
+            old = {k: item.get(k) for k in diff}
+            for k, (_, v) in diff.items():
+                item[k] = v
+            dest = os.fsdecode(item.destination())
+            for k, v in old.items():
+                item[k] = v
+            if dest != _path(item) and (dest in dests or os.path.exists(dest)):
+                logger.warning("  [CLASH] %s → %s: another item already has that path; left as it is",
+                               _path(item), dest)
+                continue
+            dests.add(dest)
+            write = art or any(k in Item._media_fields for k in diff)
+            planned.append(Extra(item, album, diff, dest, art, write, _path(item)))
+    return planned
+
+
+def apply_extra(extra: Extra) -> None:
+    from beets.util import MoveOperation  # noqa: PLC0415
+    from mediafile import MediaFile  # noqa: PLC0415
+
+    from music_scan import cover  # noqa: PLC0415
+
+    item = extra.item
+    for k, (_, v) in extra.diff.items():
+        item[k] = v
+    if extra.write:
+        if not item.try_write():
+            raise OSError("could not write the tags")
+        if extra.art:
+            cover.embed(item, MediaFile(_path(extra.album)).images[0].data)
+    if extra.dest != _path(item):
+        item.move(operation=MoveOperation.MOVE, store=False)
+    item.store()
+
+
+def adopt_extras(items: Iterable, records: dict[str, dict], apply: bool = True) -> list[Extra]:
+    """Plan, log and (with *apply*) give the successful releases' extras their album's tags."""
+    planned = plan_extras(list(items), records)
+    for e in planned:
+        shown = [f"{k} {_show(o)}→{_show(n)}" for k, (o, n) in e.diff.items()
+                 if k in SPOTIFY_FIELDS or k in ("spotify_album_id", "mb_albumid")]
+        if e.art:
+            shown.append("cover")
+        where = f" → {e.dest}" if e.dest != e.source else ""
+        logger.info("  [EXTRA] %s %s: %s%s, local-only%s", e.item.id, e.source, ", ".join(shown), where,
+                    "" if apply else " (dry run)")
+        if apply:
+            try:
+                apply_extra(e)
+            except Exception as exc:
+                logger.warning("  [EXTRA] %s: failed, retried next run: %s", e.source, exc)
+    return planned
+
+
+def extras_after_import(lib, record_key: str, record: dict) -> list[Extra]:
+    """The album completion's hook: adopt the extras *record*'s release just added."""
+    extras = adopt_extras(lib.all_items(), {record_key: record})
+    if extras:
+        logger.info("Release extras: %s — %s: %d extra(s) filed under their album, local-only",
+                    record.get("artist"), record.get("name"), len(extras))
+    return extras
 
 
 # ----------------------------------------------------------------------
@@ -784,6 +944,7 @@ def report(plan: Plan, resolver: Resolver | None, albums: AlbumsByIsrc | None = 
 def run(apply: bool = False, refresh: bool = False, mb_budget: int | None = None,
         search_budget: int | None = None) -> Plan:
     from music_fetch import ingest  # noqa: PLC0415
+    from music_fetch.albums import STATE_FILE, State  # noqa: PLC0415
     from music_scan.library import LIBRARY_DB, LIBRARY_DIR, MusicLibrary  # noqa: PLC0415
     from music_scan.navidrome import trigger_scan  # noqa: PLC0415
     from music_scan.scan import regen_playlists  # noqa: PLC0415
@@ -798,18 +959,22 @@ def run(apply: bool = False, refresh: bool = False, mb_budget: int | None = None
     albums = AlbumsByIsrc(budget=search_budget)
     with MusicLibrary(LIBRARY_DB, LIBRARY_DIR) as lib:
         plan = canonicalize(lib.all_items(), placements, resolver, apply=apply, albums=albums)
+        plan.extras = adopt_extras(lib.all_items(), State.load(STATE_FILE).albums, apply=apply)
     report(plan, resolver, albums)
-    changed = len(plan.changes) - plan.waiting
+    moved = plan.moved + sum(1 for e in plan.extras if e.dest != e.source)
+    logger.info("Extras: %d successful-release extra(s) take their album's tags (%d file(s) move), local-only",
+                len(plan.extras), moved - plan.moved)
+    changed = len(plan.changes) - plan.waiting + len(plan.extras)
     if not apply:
         logger.info("Dry run: %d item(s) would change. Re-run with --apply to write.", changed)
         return plan
     logger.info("Retagged %d item(s)", changed)
-    if plan.moved:
+    if moved:
         # Navidrome drops .m3u entries whose file moved, so the playlists go first (#218).
         counts = regen_playlists()
-        logger.info("Moved %d file(s); playlists regenerated: %s", plan.moved,
+        logger.info("Moved %d file(s); playlists regenerated: %s", moved,
                     ", ".join(f"{k} {v}" for k, v in sorted(counts.items())) or "none")
-    if plan.writes:
+    if plan.writes or any(e.write for e in plan.extras):
         trigger_scan()
     return plan
 

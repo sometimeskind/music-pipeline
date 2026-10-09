@@ -284,7 +284,7 @@ def _jpeg(path: Path) -> bytes:
 def _add(lib, path, **fields):
     from beets.library import Item
 
-    item = Item(path=str(path), artist="Artist", albumartist="Artist", **fields)
+    item = Item(path=str(path), **{"artist": "Artist", "albumartist": "Artist", **fields})
     lib._lib.add(item)
     item.write()
     return item
@@ -726,3 +726,145 @@ def test_twin_items_take_the_representatives_id_date_and_numbering(tmp_path, ffm
             "B (2021-05-05, 11 tracks, 1 entries, 1 items)") in caplog.text
     assert "Twins: 1 group(s) of same-name releases; 1 item(s) moved onto the representative, 0 wait" in caplog.text
     assert not canonicalize(lib.all_items(), placements, resolver, fetch=lambda u: art, albums=albums).changes
+
+
+# ----------------------------------------------------------------------
+# Items given a Spotify ID after their import (#244)
+# ----------------------------------------------------------------------
+
+
+def test_after_scan_takes_an_item_linked_after_its_import(tmp_path, ffmpeg, lib, monkeypatch):
+    """A music-rollback-releases [LINK] gives an old item a Spotify ID: the next scan canonicalises it."""
+    from music_fetch import ingest
+    from music_scan import canon, cover
+    from music_scan.mb_release import Resolver
+
+    linked = _add(lib, _m4a(tmp_path / "in" / "Drake feat. X" / "Take Care" / "proud.m4a"), title="Make Me Proud",
+                  album="Take Care", via="usenet", spotify_ids="T1")
+    linked.added = 0
+    linked.store()
+    spotdl_dir = tmp_path / "spotdl"
+    spotdl_dir.mkdir()
+    (spotdl_dir / "p.spotdl").write_text(json.dumps({"songs": [_song("T1", name="Take Care (Deluxe)")]}))
+    monkeypatch.setattr(ingest, "SPOTDL_DIR", spotdl_dir)
+    monkeypatch.setattr(cover, "download", lambda url: _jpeg(tmp_path / "c.jpg"))
+    monkeypatch.setattr(canon, "Resolver", lambda budget=None: Resolver(
+        cache_file=tmp_path / "mb.json", mb=FakeMB(url="REL"), upc_of=lambda _: None))
+
+    assert canon.after_scan(lib, since=10**12) == 1
+    item = lib.get_item(linked.id)
+    assert (item.album, item.get("spotify_album_id"), item.mb_albumid) == ("Take Care (Deluxe)", "A1", "REL")
+    assert canon.after_scan(lib, since=10**12) == 0  # canonical now: no longer picked up
+
+
+# ----------------------------------------------------------------------
+# A successful release's extras (#245)
+# ----------------------------------------------------------------------
+
+
+GRAB = datetime(2026, 10, 8, 22, 0, tzinfo=timezone.utc)
+IMPORTED = datetime(2026, 10, 8, 22, 12, tzinfo=timezone.utc)
+
+
+def _set_added(lib, item, when: datetime):
+    item.added = when.timestamp()
+    item.store()
+    return item
+
+
+def _deluxe(tmp_path, lib):
+    """LCD's This Is Happening: two canonical tracks and the deluxe release's three extras."""
+    art = _jpeg(tmp_path / "c.jpg")
+    canonical = {"album": "This Is Happening", "albumartist": "LCD Soundsystem", "year": 2010, "month": 5, "day": 17,
+                 "tracktotal": 9, "disctotal": 1, "spotify_album_id": "SPALB", "mb_album_via": "url",
+                 "mb_albumid": "REL", "mb_releasegroupid": "RG", "mb_albumartistid": "ART"}
+    lib_dir = tmp_path / "library" / "LCD Soundsystem" / "This Is Happening"
+    tracks = []
+    for n, sid in ((1, "S1"), (2, "S2")):
+        t = _add(lib, _m4a(lib_dir / f"{n:02d} - T{n}.m4a"), title=f"T{n}", track=n, via="usenet", spotify_ids=sid,
+                 **canonical)
+        _with_art(_set_added(lib, t, GRAB + timedelta(minutes=5)), art)
+        tracks.append(t)
+    release = tmp_path / "library" / "LCD Soundsystem" / "This Is Happening (Deluxe Edition)"
+    extras = [_set_added(lib, _add(lib, _m4a(release / f"{n:02d} - {title}.m4a"), title=title, track=n,
+                                   album="This Is Happening (Deluxe Edition)", albumartist="LCD Soundsystem",
+                                   tracktotal=15, year=2010, via="usenet", mb_albumid="DELUXE"),
+                         GRAB + timedelta(minutes=5))
+              for n, title in ((2, "Oh You (Christmas Blues)"), (10, "All I Want (London Session)"))]
+    failed = _set_added(lib, _add(lib, _m4a(release / "11 - Outtake.m4a"), title="Outtake", track=11,
+                                  album="This Is Happening (Deluxe Edition)", via="usenet"),
+                        GRAB - timedelta(days=1))
+    records = {"lcd": {"status": "imported", "name": "This Is Happening", "artist": "LCD Soundsystem",
+                       "grabbed_at": GRAB.isoformat(), "imported_at": IMPORTED.isoformat(),
+                       "playlists": {"p": [["T1", "LCD Soundsystem", "S1"], ["T2", "LCD Soundsystem", "S2"]]}}}
+    return tracks, extras, failed, records, art
+
+
+def test_extras_take_the_albums_tags_cover_and_folder_and_stay_local_only(tmp_path, ffmpeg, lib, caplog):
+    import logging
+
+    from mediafile import MediaFile
+
+    from music_scan.canon import adopt_extras
+
+    caplog.set_level(logging.INFO)
+    _, (christmas, london), failed, records, art = _deluxe(tmp_path, lib)
+
+    dry = adopt_extras(lib.all_items(), records, apply=False)
+    assert {e.item.id for e in dry} == {christmas.id, london.id}
+    assert lib.get_item(christmas.id).album == "This Is Happening (Deluxe Edition)"
+    assert "[EXTRA]" in caplog.text and "(dry run)" in caplog.text
+
+    adopt_extras(lib.all_items(), records)
+    album_dir = tmp_path / "library" / "LCD Soundsystem" / "This Is Happening"
+    for item_id, track in ((christmas.id, 3), (london.id, 10)):  # track 2 is the album's: next free is 3
+        item = lib.get_item(item_id)
+        path = Path(os.fsdecode(item.path))
+        assert (item.album, item.albumartist, item.year, item.month, item.day) == (
+            "This Is Happening", "LCD Soundsystem", 2010, 5, 17)
+        assert (item.track, item.tracktotal) == (track, 9)
+        assert item.mb_albumid == "REL" and item.get("spotify_album_id") == "SPALB"
+        assert not item.get("spotify_ids")  # local-only
+        assert path.parent == album_dir and path.exists()
+        assert MediaFile(str(path)).images[0].data == art
+    assert lib.get_item(failed.id).album == "This Is Happening (Deluxe Edition)"  # not this release's extra
+
+    assert adopt_extras(lib.all_items(), records) == []
+
+
+def test_extras_wait_until_the_album_is_canonical(tmp_path, ffmpeg, lib, caplog):
+    import logging
+
+    from music_scan.canon import adopt_extras
+
+    caplog.set_level(logging.INFO)
+    tracks, _, _, records, _ = _deluxe(tmp_path, lib)
+    for t in tracks:
+        del t["spotify_album_id"]
+        t.store()
+    assert adopt_extras(lib.all_items(), records) == []
+    assert "[NOREP] lcd: 2 extra(s) wait" in caplog.text
+
+
+def test_backfill_adopts_extras_after_the_retags(tmp_path, ffmpeg, lib, monkeypatch):
+    from music_fetch import albums as albums_state
+    from music_fetch import ingest
+    from music_scan import canon, library, navidrome, scan
+
+    _, (christmas, _), _, records, _ = _deluxe(tmp_path, lib)
+    state = tmp_path / ".albums.json"
+    albums_state.State(albums=records).save(state)
+    monkeypatch.setattr(albums_state, "STATE_FILE", state)
+    monkeypatch.setattr(library, "LIBRARY_DB", tmp_path / "library.db")
+    monkeypatch.setattr(library, "LIBRARY_DIR", tmp_path / "library")
+    monkeypatch.setattr(ingest, "SPOTDL_DIR", tmp_path / "nospotdl")
+    monkeypatch.setattr(canon, "read_pages", lambda refresh=False: {})
+    monkeypatch.setattr(canon, "Resolver", lambda budget=None: None)
+    events = []
+    monkeypatch.setattr(navidrome, "trigger_scan", lambda: events.append("rescan"))
+    monkeypatch.setattr(scan, "regen_playlists", lambda: events.append("m3u") or {})
+
+    assert len(canon.run(apply=False).extras) == 2 and events == []
+    assert len(canon.run(apply=True).extras) == 2 and events == ["m3u", "rescan"]
+    assert lib.get_item(christmas.id).album == "This Is Happening"
+    assert canon.run(apply=True).extras == []
