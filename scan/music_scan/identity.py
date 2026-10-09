@@ -39,8 +39,51 @@ def name_words(s: str) -> frozenset[str]:
     return frozenset(w for w in words if len(w) > 2 and w not in _STOP_WORDS)
 
 
+# A trailing title segment that only says the recording was remastered (#243):
+# ``(2018 Remaster)``, ``[2018 Remaster]``, ``- Remastered 2009``, ``; 2013 Remaster``.
+_REMASTER = frozenset({"remaster", "remastered"})
+_REMASTER_FILLER = frozenset({"digital", "digitally", "version", "edition", "deluxe", "anniversary",
+                              "expanded", "the", "of", "from", "and"})
+_EDITION_SUFFIXES = (
+    re.compile(r"\s*[(\[]([^()\[\]]*)[)\]]\s*$"),
+    re.compile(r"\s+-\s+((?:(?!\s-\s).)*)$"),
+    re.compile(r"\s*;\s*([^;]*)$"),
+)
+
+
+def _remaster_note(text: str) -> bool:
+    tokens = re.findall(r"[a-z0-9]+", text.lower())
+    return bool(_REMASTER & set(tokens)) and all(
+        t in _REMASTER or t in _REMASTER_FILLER or re.fullmatch(r"\d{4}|\d+(st|nd|rd|th)", t) for t in tokens
+    )
+
+
+def drop_edition(title: str) -> str:
+    """*title* without trailing remaster notes (#243).
+
+    A remaster album on Spotify names every track ``Miserabilia (2018
+    Remaster)`` and has its own ISRCs, so the words rung is all that can match
+    it to a release or a library item that says ``Miserabilia``.  Only a
+    segment of remaster words, years and filler goes: ``Kiss Me
+    (Euroversion)`` and ``Turning Point - Edit`` are other versions and keep
+    their suffix."""
+    while True:
+        for suffix in _EDITION_SUFFIXES:
+            m = suffix.search(title)
+            if m and _remaster_note(m.group(1)) and title[:m.start()].strip():
+                title = title[:m.start()].rstrip()
+                break
+        else:
+            return title
+
+
+def track_words(title: str, artist: str) -> frozenset[str]:
+    """The words rung's key: title (remaster notes dropped) and artist words."""
+    return name_words(f"{drop_edition(title)} {artist}")
+
+
 def item_words(item) -> frozenset[str]:
-    return name_words(f"{item.title or ''} {item.artist or item.albumartist or ''}")
+    return track_words(item.title or "", item.artist or item.albumartist or "")
 
 
 def split_list(value: str | None, sep: str = ",") -> list[str]:
@@ -135,7 +178,7 @@ class ItemIndex:
             if key and key in index:
                 self.rungs[rung] += 1
                 return index[key], rung
-        if words and (key := name_words(f"{name} {artist}")) and key in self.by_words:
+        if words and (key := track_words(name, artist)) and key in self.by_words:
             self.rungs[BY_WORDS] += 1
             return self.by_words[key], BY_WORDS
         return None, None
@@ -159,15 +202,16 @@ def release_match(name: str, artist: str, items):
     Looser than the words rung, which needs the same title+artist word set:
     a release credits ``CFCF feat. nuum & Seren Forever`` where Spotify says
     ``CFCF``, and writes ``Marvin’s`` where Spotify says ``Marvins``.  Words
-    are folded like release names (apostrophes joined, diacritics dropped).
-    Only for a release's own items, so a featured artist can't pull in an
-    unrelated track."""
-    title = set(release_words(name))
+    are folded like release names (apostrophes joined, diacritics dropped),
+    and a remaster note on either title is dropped (#243).  Only for a
+    release's own items, so a featured artist can't pull in an unrelated
+    track."""
+    title = set(release_words(drop_edition(name)))
     credit = set(release_words(artist))
     if not title:
         return None
     for item in items:
-        if (set(release_words(item.title or "")) == title
+        if (set(release_words(drop_edition(item.title or ""))) == title
                 and credit <= set(release_words(f"{item.artist or ''} {item.albumartist or ''}"))):
             return item
     return None
