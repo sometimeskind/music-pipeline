@@ -179,6 +179,8 @@ def test_on_grabs_up_to_max_in_flight() -> None:
     state = wanted_state(5)
     state.albums["a0"]["status"] = albums.GRABBED
     prowlarr, sab = fakes()
+    # Each album its own release: one another album has in flight waits (#243).
+    prowlarr.search.side_effect = [[release(f"r{i}")] for i in range(1, 5)]
     result = albums.TickResult()
     top_up(state, Settings(mode="on", max_in_flight=3), prowlarr, sab, never_have, result, now=lambda: NOW)
     assert result.grabbed == 2
@@ -834,3 +836,45 @@ def test_complete_tags_the_first_playlist_before_counting_gaps(roots) -> None:
     )
     assert status == albums.IMPORTED
     assert tagged == [("later", 10), ("keep", 10)]
+
+
+# ---------------------------------------------------------------------------
+# An original edition and its remaster share a release (#243)
+# ---------------------------------------------------------------------------
+
+
+def _holder(status: str, guid: str = "r1", **extra) -> dict:
+    return {"status": status, "blocklist": [], "name": "Album", "artist": "Artist", "tracks_count": 2,
+            "playlists": {"keep": [["One", "Artist"], ["Two", "Artist"]]}, "candidate": {"guid": guid}} | extra
+
+
+def test_release_in_flight_for_another_album_waits() -> None:
+    state = wanted_state()
+    state.albums["orig"] = _holder(albums.GRABBED)
+    prowlarr, sab = fakes()
+    top_up(state, Settings(mode="on"), prowlarr, sab, never_have, albums.TickResult(), now=lambda: NOW)
+    assert state.albums["a0"]["status"] == albums.WANTED
+    assert "candidate" not in state.albums["a0"]
+    sab.add_url.assert_not_called()
+
+
+@pytest.mark.parametrize("holder", [
+    _holder(albums.IMPORTED),
+    _holder(albums.FALLBACK, fallback_from="partial"),
+    _holder(albums.FILLED, fallback_from="partial"),
+])
+def test_release_another_album_imported_is_not_grabbed_again(holder) -> None:
+    state = wanted_state()
+    state.albums["orig"] = holder
+    prowlarr, sab = fakes(releases=[release("r1"), release("r2", "Artist-Album-Deluxe-WEB-FLAC-2020")])
+    top_up(state, Settings(mode="on"), prowlarr, sab, never_have, albums.TickResult(), now=lambda: NOW)
+    assert state.albums["a0"]["candidate"]["guid"] == "r2"
+    assert state.albums["a0"]["status"] == albums.GRABBED
+
+
+def test_release_a_failed_album_held_is_grabbed() -> None:
+    state = wanted_state()
+    state.albums["orig"] = _holder(albums.WANTED)
+    prowlarr, sab = fakes()
+    top_up(state, Settings(mode="on"), prowlarr, sab, never_have, albums.TickResult(), now=lambda: NOW)
+    assert state.albums["a0"]["candidate"]["guid"] == "r1"

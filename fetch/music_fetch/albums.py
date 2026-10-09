@@ -330,6 +330,26 @@ def _due(record: dict, now: datetime, mode: str, search: Plan) -> bool:
     return False
 
 
+def _taken(state: State, key: str) -> tuple[set[str], set[str]]:
+    """Releases other album records hold: (in flight, imported) GUIDs (#243).
+
+    An original edition and its remaster can both be on the playlists and
+    match the same release.  One in flight is waited for, so the second record
+    doesn't download it again; one imported holds nothing the library lacks,
+    so it is never grabbed again."""
+    flight, done = set(), set()
+    for other_key, record in state.albums.items():
+        guid = (record.get("candidate") or {}).get("guid")
+        if other_key == key or not guid:
+            continue
+        status = record.get("status")
+        if status == GRABBED:
+            flight.add(guid)
+        elif status == IMPORTED or status in (FALLBACK, FILLED) and record.get("fallback_from") == "partial":
+            done.add(guid)
+    return flight, done
+
+
 def top_up(
     state: State,
     settings: Settings,
@@ -394,7 +414,9 @@ def top_up(
                         settings.hits_per_day, label)
             break  # The album keeps its status; the next window searches it again.
         tracks = record.get("tracks_count") or max(len(t) for t in record["playlists"].values())
-        ranked = rank(releases, search.artist, search.album, tracks, set(record["blocklist"]), record.get("year"),
+        in_flight, imported = _taken(state, key)
+        blocklist = set(record["blocklist"]) | imported
+        ranked = rank(releases, search.artist, search.album, tracks, blocklist, record.get("year"),
                       album_type=record.get("album_type"), seconds=record.get("duration") or 0,
                       any_album=search.any_album)
         record["searched_at"] = _iso(now())
@@ -408,6 +430,10 @@ def top_up(
             continue
 
         best: Release = ranked[0]
+        if settings.mode == "on" and best.guid in in_flight:
+            logger.info("[WAIT] %s: %s is in flight for another album — searching again after its import",
+                        label, best.title)
+            continue
         record["candidate"] = best.as_dict()
         if settings.mode != "on":
             record["status"] = DRY_RUN

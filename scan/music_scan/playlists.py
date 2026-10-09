@@ -32,7 +32,7 @@ from pathlib import Path
 from typing import NamedTuple
 
 from music_scan.identity import (
-    BY_ID, BY_ISRC, BY_WORDS, ItemIndex, PlaylistTrack, name_words, spotify_id,
+    BY_ID, BY_ISRC, BY_WORDS, ItemIndex, PlaylistTrack, spotify_id, track_words,
 )
 
 logger = logging.getLogger(__name__)
@@ -171,7 +171,7 @@ class ReplacedFile(NamedTuple):
 
     @property
     def words(self) -> frozenset[str]:
-        return name_words(f"{self.title} {self.artist}")
+        return track_words(self.title, self.artist)
 
 
 def _file_tags(path: Path) -> ReplacedFile | None:
