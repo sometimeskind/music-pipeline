@@ -968,6 +968,15 @@ def test_tag_album_ids_release_rung_takes_each_item_once_and_only_this_import() 
     assert first.data["spotify_ids"] == "sid1" and older.data["spotify_ids"] == ""
 
 
+
+def test_tag_album_ids_never_gives_another_imports_item_the_id_by_words(caplog) -> None:
+    """The live take already on the playlist must not take the studio entry's ID (#255)."""
+    live = _lib_item("Girlfriend Is Better", added=10.0, tracktotal=16, track=14)
+    with caplog.at_level("INFO", logger="music_scan.scan"):
+        assert _tag([live], [["Girlfriend Is Better", "Artist", "studio", None, 1, 3]]) == 0
+    assert live.data["spotify_ids"] == ""
+    assert "[NOID]" in caplog.text
+
 def test_add_source_matches_by_id_and_records_it() -> None:
     from music_scan.scan import add_source
 

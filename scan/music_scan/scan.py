@@ -347,9 +347,12 @@ def tag_album_ids(lib: MusicLibrary, source: str, tracks: list[list], since: flo
     1. ISRC among the item's ISRCs;
     2. disc and track number, only on usenet items imported since *since*
        whose release has Spotify's track count (editions renumber tracks);
-    3. title+artist words, logged so the fallback rate is visible;
-    4. the same title among this import's usenet items, with the artist
-       anywhere in a credit that may add ``feat.`` names (#240), logged too.
+    3. the same title among this import's usenet items, with the artist
+       anywhere in a credit that may add ``feat.`` names (#240), logged
+       ``[WORDS]`` so the fallback rate is visible.
+    Title words never pick an item outside this import (#255): the
+    playlist's other items are other recordings unless an ID says so, and a
+    live take must not take the studio entry's ID.
     Returns the count of items tagged.
     """
     index = ItemIndex(lib.items_by_source(source))
@@ -366,9 +369,7 @@ def tag_album_ids(lib: MusicLibrary, source: str, tracks: list[list], since: flo
         if match is None and track.disc and track.track:
             match = next((i for i in fresh if (i.disc, i.track) == (track.disc, track.track)), None)
         if match is None:
-            match, _ = index.match(None, None, track.name, track.artist)
-            if match is None:
-                match = release_match(track.name, track.artist, unclaimed)
+            match = release_match(track.name, track.artist, unclaimed)
             if match is not None:
                 logger.info("  [WORDS] %s: %s — %s matched by title+artist only", source, track.name, track.artist)
         if match in unclaimed:
