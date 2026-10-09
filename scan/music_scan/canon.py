@@ -66,6 +66,10 @@ one of its items, and keep their own title and numbering, renumbered after the
 album's tracks when a disc/track pair is taken.  They stay local-only: no
 Spotify ID, no playlist entry.  An extra is attributed to its album record as
 ``music-rollback-releases`` does (:func:`music_scan.rollback.failed_release_items`).
+An extra whose title is one of the record's playlist entries (:func:`album_entry`,
+#250) is no bonus track: another master of a track that has an item is listed
+as ``[DUPE]`` and left as it is; a track with no item yet is linked to the
+entry's Spotify ID (``[LINK]``) and canonicalised like any album track.
 
 ``music-canon-albums`` backfills the library, extras included: dry run by
 default, ``--apply`` writes.  Safe to re-run.  The dry run shows an extra
@@ -480,6 +484,8 @@ class Plan:
     # changed or not, so the report can say how many names become one album.
     names: dict[str, set] = dataclasses.field(default_factory=dict)
     extras: list = dataclasses.field(default_factory=list)  # Extra: the backfill's release extras (#245)
+    links: list = dataclasses.field(default_factory=list)  # (item, entry): extras linked as album tracks (#250)
+    dupes: list = dataclasses.field(default_factory=list)  # (item, entry): extras left as duplicates (#250)
 
     @property
     def moved(self) -> int:
@@ -742,23 +748,68 @@ class Extra:
     source: str
 
 
-def release_extras(items: list, records: dict[str, dict]) -> dict[str, tuple[list, list]]:
-    """``{record key: (extras, items holding its tracks)}`` for each album record
-    whose successful release added usenet items with no Spotify ID."""
+def release_extras(items: list, records: dict[str, dict]) -> dict[str, tuple[list, list, list]]:
+    """``{record key: (extras, items holding its tracks, its playlist entries)}``
+    for each album record whose successful release added usenet items with no Spotify ID."""
     from music_scan.identity import PlaylistTrack  # noqa: PLC0415
     from music_scan.rollback import _claims, _from_success  # noqa: PLC0415
 
     loose = [i for i in items if i.get("via") == "usenet" and not item_spotify_ids(i)]
-    found: dict[str, tuple[list, list]] = {}
+    found: dict[str, tuple[list, list, list]] = {}
     for key, record in records.items():
         extras = [i for i in loose if _claims(record, i) and _from_success(record, i.added or 0)]
         if not extras:
             continue
         loose = [i for i in loose if all(i is not e for e in extras)]
-        ids = {t.song_id for tracks in record.get("playlists", {}).values()
-               for t in map(PlaylistTrack.from_entry, tracks) if t.song_id}
-        found[key] = (extras, [i for i in items if item_spotify_ids(i) & ids])
+        entries = list({t.song_id: t for tracks in record.get("playlists", {}).values()
+                        for t in map(PlaylistTrack.from_entry, tracks) if t.song_id}.values())
+        ids = {t.song_id for t in entries}
+        found[key] = (extras, [i for i in items if item_spotify_ids(i) & ids], entries)
     return found
+
+
+def album_entry(item, entries: list):
+    """The playlist entry extra *item* is, or None for a bonus track (#250):
+    every word of its title (a remaster note and ``version`` dropped) is in the
+    entry's name, so ``Once in a Lifetime (live version)`` is ``Once in a
+    Lifetime - Live`` and ``Genius Of Love (live)`` is ``Genius of Love (Tom Tom
+    Club) - Live``, but ``Drunk Girls (London Session)`` is not ``Drunk Girls``."""
+    from music_fetch.usenet import words  # noqa: PLC0415
+    from music_scan.identity import drop_edition  # noqa: PLC0415
+
+    title = set(words(drop_edition(item.title or ""))) - {"version"}
+    if not title:
+        return None
+    return next((t for t in entries if title <= set(words(drop_edition(t.name)))), None)
+
+
+def link_extras(items: list, records: dict[str, dict], apply: bool = True) -> tuple[list, list]:
+    """Extras that are one of their album's playlist entries (#250): ``(links,
+    dupes)``, each ``(item, entry)``.  A link gets the entry's Spotify ID (with
+    *apply*), so canon files it as the album track; a dupe, another master of
+    a track that already has an item, is left as it is."""
+    from music_scan.identity import add_to_list  # noqa: PLC0415
+
+    links, dupes, taken = [], [], set()
+    for key, (extras, holders, entries) in release_extras(items, records).items():
+        held = {sid for i in holders for sid in item_spotify_ids(i)}
+        for item in sorted(extras, key=lambda i: i.id):
+            entry = album_entry(item, entries)
+            if entry is None:
+                continue
+            if entry.song_id in held or entry.song_id in taken:
+                dupes.append((item, entry))
+                logger.info("  [DUPE] %s %s: another master of %s — %s, which has an item; left as it is",
+                            item.id, _path(item), entry.name, entry.artist)
+                continue
+            taken.add(entry.song_id)
+            links.append((item, entry))
+            logger.info("  [LINK] %s %s: %s — %s → %s, an album track%s", item.id, _path(item), entry.name,
+                        entry.artist, entry.song_id, "" if apply else " (dry run)")
+            if apply:
+                add_to_list(item, "spotify_ids", entry.song_id)
+                item.store()
+    return links, dupes
 
 
 def _album_item(tracks: list):
@@ -782,7 +833,10 @@ def plan_extras(items: list, records: dict[str, dict]) -> list[Extra]:
 
     planned: list[Extra] = []
     dests: set[str] = set()
-    for key, (extras, tracks) in release_extras(items, records).items():
+    for key, (extras, tracks, entries) in release_extras(items, records).items():
+        extras = [i for i in extras if album_entry(i, entries) is None]  # link_extras' (#250)
+        if not extras:
+            continue
         album = _album_item(tracks)
         if album is None:
             logger.info("  [NOREP] %s: %d extra(s) wait, none of its tracks is on a Spotify album yet",
@@ -857,13 +911,18 @@ def adopt_extras(items: Iterable, records: dict[str, dict], apply: bool = True) 
     return planned
 
 
-def extras_after_import(lib, record_key: str, record: dict) -> list[Extra]:
-    """The album completion's hook: adopt the extras *record*'s release just added."""
+def extras_after_import(lib, record_key: str, record: dict) -> tuple[list[Extra], list]:
+    """The album completion's hook: link the extras *record*'s release just
+    added that are album tracks and canonicalise them, then adopt the rest.
+    Returns ``(adopted, links)``."""
+    links, _ = link_extras(lib.all_items(), {record_key: record})
+    if links:
+        canonicalize_items([item for item, _ in links])
     extras = adopt_extras(lib.all_items(), {record_key: record})
-    if extras:
-        logger.info("Release extras: %s — %s: %d extra(s) filed under their album, local-only",
-                    record.get("artist"), record.get("name"), len(extras))
-    return extras
+    if extras or links:
+        logger.info("Release extras: %s — %s: %d extra(s) filed under their album, local-only; %d linked",
+                    record.get("artist"), record.get("name"), len(extras), len(links))
+    return extras, links
 
 
 # ----------------------------------------------------------------------
@@ -958,12 +1017,18 @@ def run(apply: bool = False, refresh: bool = False, mb_budget: int | None = None
     resolver = Resolver(budget=mb_budget)
     albums = AlbumsByIsrc(budget=search_budget)
     with MusicLibrary(LIBRARY_DB, LIBRARY_DIR) as lib:
+        records = State.load(STATE_FILE).albums
+        # Before the retags, so a linked extra is canonicalised in this run (with --apply).
+        links, dupes = link_extras(lib.all_items(), records, apply=apply)
         plan = canonicalize(lib.all_items(), placements, resolver, apply=apply, albums=albums)
-        plan.extras = adopt_extras(lib.all_items(), State.load(STATE_FILE).albums, apply=apply)
+        plan.links, plan.dupes = links, dupes
+        plan.extras = adopt_extras(lib.all_items(), records, apply=apply)
     report(plan, resolver, albums)
     moved = plan.moved + sum(1 for e in plan.extras if e.dest != e.source)
-    logger.info("Extras: %d successful-release extra(s) take their album's tags (%d file(s) move), local-only",
-                len(plan.extras), moved - plan.moved)
+    logger.info("Extras: %d successful-release extra(s) take their album's tags (%d file(s) move), local-only; "
+                "%d linked as album tracks%s, %d duplicate(s) of an album track left as they are",
+                len(plan.extras), moved - plan.moved, len(plan.links),
+                "" if apply else " (retagged by the --apply)", len(plan.dupes))
     changed = len(plan.changes) - plan.waiting + len(plan.extras)
     if not apply:
         logger.info("Dry run: %d item(s) would change. Re-run with --apply to write.", changed)

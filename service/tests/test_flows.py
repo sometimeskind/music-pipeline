@@ -449,7 +449,7 @@ def test_album_completion_adopts_the_releases_extras(status, adopted):
     events = []
     with patch.object(albums, "complete", return_value=status), \
          patch.object(albums, "find_by_nzo", return_value=("lcd", state.albums["lcd"])), \
-         patch.object(canon, "extras_after_import", return_value=[extra]) as adopt, \
+         patch.object(canon, "extras_after_import", return_value=([extra], [])) as adopt, \
          patch.object(flows.scan, "regen_playlists", side_effect=lambda: events.append("m3u")), \
          patch("music_scan.navidrome.trigger_scan", side_effect=lambda: events.append("rescan")), \
          patch.object(flows, "concurrency"):
