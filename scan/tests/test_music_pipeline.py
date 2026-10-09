@@ -305,6 +305,15 @@ def test_tag_source_on_stored_bytes_path() -> None:
     item.store.assert_called_once()
 
 
+def _handle_same(plugin, session, task) -> None:
+    """Run the hook with beets' duplicates also the same recording by identity:
+    the merge mechanics below need an ID match, since title words alone never
+    merge (#255)."""
+    with patch("music_scan.music_pipeline._find_same_recording",
+               side_effect=lambda lib, incoming: list(task.find_duplicates.return_value)):
+        plugin.handle_duplicates(session=session, task=task)
+
+
 # ---------------------------------------------------------------------------
 # MusicPipelinePlugin.handle_duplicates — duplicate handling
 # ---------------------------------------------------------------------------
@@ -340,7 +349,7 @@ def test_handle_duplicates_spotdl_only_appends_and_skips() -> None:
     task.find_duplicates.return_value = [dup]
 
     # Path.unlink(missing_ok=True) is a no-op for non-existent files; no patch needed.
-    plugin.handle_duplicates(session=MagicMock(), task=task)
+    _handle_same(plugin, MagicMock(), task)
 
     task.set_choice.assert_called_once_with(beets_importer.Action.SKIP)
     assert dup._data["sources"] == "rock,jazz"
@@ -353,7 +362,7 @@ def test_handle_duplicates_manual_duplicate_sets_skip() -> None:
     task.find_duplicates.return_value = [_dup(via="")]  # no via = manual
 
     with patch("music_scan.music_pipeline.Path"):
-        plugin.handle_duplicates(session=MagicMock(), task=task)
+        _handle_same(plugin, MagicMock(), task)
 
     task.set_choice.assert_called_once_with(beets_importer.Action.SKIP)
 
@@ -365,7 +374,7 @@ def test_handle_duplicates_manual_duplicate_deletes_inbox_file() -> None:
     task.find_duplicates.return_value = [_dup(via="")]
 
     with patch("music_scan.music_pipeline.Path") as mock_path:
-        plugin.handle_duplicates(session=MagicMock(), task=task)
+        _handle_same(plugin, MagicMock(), task)
 
     mock_path.return_value.unlink.assert_called_once_with(missing_ok=True)
 
@@ -473,7 +482,7 @@ def test_handle_duplicates_appends_to_sources_via_pending() -> None:
     dup = _dup(via="spotdl", sources="playlist-a")
     task.find_duplicates.return_value = [dup]
 
-    plugin.handle_duplicates(session=MagicMock(), task=task)
+    _handle_same(plugin, MagicMock(), task)
 
     assert dup._data["sources"] == "playlist-a,playlist-b"
     task.set_choice.assert_called_once_with(beets_importer.Action.SKIP)
@@ -489,7 +498,7 @@ def test_handle_duplicates_appends_idempotent() -> None:
     dup = _dup(via="spotdl", sources="playlist-a,playlist-b")
     task.find_duplicates.return_value = [dup]
 
-    plugin.handle_duplicates(session=MagicMock(), task=task)
+    _handle_same(plugin, MagicMock(), task)
 
     assert dup._data["sources"] == "playlist-a,playlist-b"
     task.set_choice.assert_called_once_with(beets_importer.Action.SKIP)
@@ -505,7 +514,7 @@ def test_handle_duplicates_fallback_to_path() -> None:
     dup = _dup(via="spotdl", sources="playlist-a")
     task.find_duplicates.return_value = [dup]
 
-    plugin.handle_duplicates(session=MagicMock(), task=task)
+    _handle_same(plugin, MagicMock(), task)
 
     assert dup._data["sources"] == "playlist-a,playlist-b"
     task.set_choice.assert_called_once_with(beets_importer.Action.SKIP)
@@ -538,7 +547,7 @@ def test_handle_duplicates_file_deletion_failure_still_skips() -> None:
     with patch("music_scan.music_pipeline.Path") as mock_path:
         mock_path.return_value.name = "Song.m4a"
         mock_path.return_value.unlink.side_effect = OSError("permission denied")
-        plugin.handle_duplicates(session=MagicMock(), task=task)
+        _handle_same(plugin, MagicMock(), task)
 
     task.set_choice.assert_called_once_with(beets_importer.Action.SKIP)
 
@@ -639,7 +648,7 @@ def test_handle_duplicates_appends_incoming_spotify_id() -> None:
     dup = _dup(via="spotdl", sources="playlist-a", spotify_ids="ALBUM")
     task.find_duplicates.return_value = [dup]
 
-    plugin.handle_duplicates(session=MagicMock(), task=task)
+    _handle_same(plugin, MagicMock(), task)
 
     assert dup._data["sources"] == "playlist-a,playlist-b"
     assert dup._data["spotify_ids"] == "ALBUM,SINGLE"
@@ -656,7 +665,7 @@ def test_handle_duplicates_stores_new_id_when_source_already_present() -> None:
     dup = _dup(via="spotdl", sources="playlist-a", spotify_ids="ALBUM")
     task.find_duplicates.return_value = [dup]
 
-    plugin.handle_duplicates(session=MagicMock(), task=task)
+    _handle_same(plugin, MagicMock(), task)
 
     assert dup._data["spotify_ids"] == "ALBUM,SINGLE"
     dup.store.assert_called_once()
@@ -670,7 +679,7 @@ def test_handle_duplicates_reads_spotify_id_from_file_on_cache_miss() -> None:
     task.find_duplicates.return_value = [dup]
 
     with patch("music_scan.music_pipeline._read_spotdl_tags", return_value=SpotdlTags(URL_X)):
-        plugin.handle_duplicates(session=MagicMock(), task=task)
+        _handle_same(plugin, MagicMock(), task)
 
     assert dup._data["spotify_ids"] == "X"
     assert dup._data["sources"] == "playlist-a,playlist-b"
@@ -750,17 +759,21 @@ def test_handle_duplicates_splits_a_different_recording() -> None:
     assert any("[SPLIT]" in c.args[0] for c in plugin._log.warning.call_args_list)
 
 
-def test_handle_duplicates_without_isrcs_merges_by_words_and_logs() -> None:
-    plugin, item, task = _incoming(SpotdlTags(URL_X))
-    old = _lib_dup(7)
-    task.find_duplicates.return_value = [old]
+def test_handle_duplicates_never_merges_by_words_alone() -> None:
+    """Studio "Girlfriend Is Better" vs the live take, no ISRC on one side: imported
+    alongside, never merged into it (#255)."""
+    plugin, item, task = _incoming(SpotdlTags(URL_X), title="Girlfriend Is Better")
+    live = _lib_dup(2530, isrc="USWB19900873")
+    task.find_duplicates.return_value = [live]
 
     plugin.handle_duplicates(session=_session({}), task=task)
 
-    task.set_choice.assert_called_once_with(beets_importer.Action.SKIP)
-    assert old._data["sources"] == "playlist-a,playlist-b"
-    assert any("[WORDS]" in c.args[0] for c in plugin._log.warning.call_args_list)
-
+    task.set_choice.assert_not_called()
+    assert live._data["sources"] == "playlist-a"
+    assert live._data["spotify_ids"] == ""
+    assert task.find_duplicates(MagicMock()) == []
+    assert any("[APART]" in c.args[0] for c in plugin._log.warning.call_args_list)
+    assert not any("[WORDS]" in c.args[0] for c in plugin._log.warning.call_args_list)
 
 def test_handle_duplicates_same_recording_id_is_never_split() -> None:
     plugin, item, task = _incoming(SpotdlTags(URL_X, "GBA"))

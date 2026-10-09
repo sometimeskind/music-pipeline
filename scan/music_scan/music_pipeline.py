@@ -40,12 +40,13 @@ Responsibilities
 
 2. **Multi-playlist membership** (``import_task_choice``): duplicates are the
    library items that are the same recording by identity (Spotify track ID,
-   ISRC or MusicBrainz recording ID, #176), else beets' artist+title
-   duplicates.  An artist+title duplicate whose ISRCs are disjoint from the
-   incoming track's (and with no shared recording ID) is a different
-   recording — a live take, a remaster, a radio edit — and is hidden from
-   beets' own check so the track imports alongside it (``[SPLIT]``).
-   Artist+title merges log ``[WORDS]``.  When duplicates exist:
+   ISRC or MusicBrainz recording ID, #176).  A single track's artist+title
+   duplicate that shares none of those is a different recording — a live
+   take, a remaster, a radio edit — and is hidden from beets' own check so
+   the track imports alongside it: ``[SPLIT]`` when the ISRCs are disjoint,
+   ``[APART]`` when one side has none (#255).  Title words never merge two
+   recordings; real ID-less duplicates are left to ``music-audit-dupes``,
+   which compares fingerprints.  When duplicates exist:
 
    * Any duplicate has a ``via`` other than spotdl/usenet (manually imported) → skip the
      incoming file AND delete it from the inbox so it does not get
@@ -432,21 +433,21 @@ class MusicPipelinePlugin(BeetsPlugin):
         if same:
             dup_items = same
         elif dup_items and incoming is not None:
-            different = [d for d in dup_items if _different_recording(incoming, d)]
-            dup_items = [d for d in dup_items if d not in different]
-            for dup in different:
-                self._log.warning(
-                    "[SPLIT] {} — {}: a different recording from {} (ISRCs {} vs {}); importing it separately",
-                    items[0].artist, items[0].title, dup, ",".join(sorted(incoming.isrcs)), dup.get("isrc"),
-                )
-            if different and not dup_items:
-                # Hide them from beets' own check, or duplicate_action: remove deletes them.
-                task.find_duplicates = task.duplicate_items = lambda lib: []
-                return
+            # No identifier agrees: never merge by artist+title (#255).
             for dup in dup_items:
-                self._log.warning(
-                    "[WORDS] {} — {}: merged into {} by artist+title only", items[0].artist, items[0].title, dup
-                )
+                if _different_recording(incoming, dup):
+                    self._log.warning(
+                        "[SPLIT] {} — {}: a different recording from {} (ISRCs {} vs {}); importing it separately",
+                        items[0].artist, items[0].title, dup, ",".join(sorted(incoming.isrcs)), dup.get("isrc"),
+                    )
+                else:
+                    self._log.warning(
+                        "[APART] {} — {}: shares no Spotify ID, ISRC or recording ID with {}; importing it separately",
+                        items[0].artist, items[0].title, dup,
+                    )
+            # Hide them from beets' own check, or duplicate_action: remove deletes them.
+            task.find_duplicates = task.duplicate_items = lambda lib: []
+            return
 
         if not dup_items:
             return
@@ -483,7 +484,7 @@ class MusicPipelinePlugin(BeetsPlugin):
                 if same:
                     # Same recording by identity: keep both sides' ISRCs.
                     changed = add_isrcs(dup, sorted(incoming.isrcs)) or changed
-                    # Warning, like [SPLIT]/[WORDS]: beets drops plugin debug lines (#191).
+                    # Warning, like [SPLIT]/[APART]: beets drops plugin debug lines (#191).
                     self._log.warning(
                         "[SAME] {} — {}: same recording as {}; merged (playlist {})",
                         items[0].artist, items[0].title, dup, incoming_playlist,
