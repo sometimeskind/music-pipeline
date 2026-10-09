@@ -173,7 +173,7 @@ def test_release_match_needs_the_same_title_and_the_artist() -> None:
     assert release_match("Kiss Me", "Someone Else", [_credit("Kiss Me", "CFCF")]) is None
 
 
-# --- remaster notes (#243) ----------------------------------------------------
+# --- remaster notes (#243, #252) ----------------------------------------------------
 
 
 @pytest.mark.parametrize(("title", "bare"), [
@@ -194,17 +194,12 @@ def test_drop_edition(title, bare) -> None:
     assert drop_edition(title) == bare
 
 
-def test_release_match_drops_remaster_notes() -> None:
-    """A 2018 remaster album's tracks match a 2008 release's (#243)."""
-    item = _credit("It\u2019s Never That Easy Though, Is It? (Song for the Other Kurt)", "Los Campesinos!")
-    assert release_match("It's Never That Easy Though, Is It? (Song for the Other Kurt) [2018 Remaster]",
-                         "Los Campesinos!", [item]) is item
-    assert release_match("Kiss Me", "CFCF", [_credit("Kiss Me (Euroversion)", "CFCF")]) is None
-
-
-def test_words_rung_drops_remaster_notes() -> None:
-    """The original edition's items count for the remaster's entries (#243)."""
-    original = _item("Miserabilia")
-    index = ItemIndex([original])
-    assert index.match("NOPE", "NOPE", "Miserabilia (2018 Remaster)", "Artist") == (original, BY_WORDS)
-    assert index.match(None, None, "Miserabilia (Live)", "Artist") == (None, None)
+def test_a_remaster_is_another_track() -> None:
+    """Title words never make two masters one track (#252): a remaster has its own ISRCs."""
+    item = _credit("Miserabilia", "Los Campesinos!")
+    assert release_match("Miserabilia (2018 Remaster)", "Los Campesinos!", [item]) is None
+    assert release_match("Miserabilia", "Los Campesinos!", [_credit("Miserabilia (2018 Remaster)", "Los Campesinos!")]) is None
+    index = ItemIndex([_item("Miserabilia")])
+    assert index.match("NOPE", "NOPE", "Miserabilia (2018 Remaster)", "Artist") == (None, None)
+    remaster = _item("Miserabilia (2018 Remaster)", isrc="GBREM1800001")
+    assert ItemIndex([remaster]).match(None, "GBREM1800001", "Miserabilia (Best Of)", "Artist") == (remaster, BY_ISRC)

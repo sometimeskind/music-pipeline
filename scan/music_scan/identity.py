@@ -59,14 +59,13 @@ def _remaster_note(text: str) -> bool:
 
 
 def drop_edition(title: str) -> str:
-    """*title* without trailing remaster notes (#243).
+    """*title* without trailing remaster notes (#243): only a segment of
+    remaster words, years and filler goes, so ``Kiss Me (Euroversion)`` and
+    ``Turning Point - Edit`` keep their suffix.
 
-    A remaster album on Spotify names every track ``Miserabilia (2018
-    Remaster)`` and has its own ISRCs, so the words rung is all that can match
-    it to a release or a library item that says ``Miserabilia``.  Only a
-    segment of remaster words, years and filler goes: ``Kiss Me
-    (Euroversion)`` and ``Turning Point - Edit`` are other versions and keep
-    their suffix."""
+    Not for identity: a remaster is another master with its own ISRCs, so the
+    words rungs and :func:`release_match` compare the whole title (#252).
+    canon's ``album_entry`` (#250) uses it."""
     while True:
         for suffix in _EDITION_SUFFIXES:
             m = suffix.search(title)
@@ -77,13 +76,8 @@ def drop_edition(title: str) -> str:
             return title
 
 
-def track_words(title: str, artist: str) -> frozenset[str]:
-    """The words rung's key: title (remaster notes dropped) and artist words."""
-    return name_words(f"{drop_edition(title)} {artist}")
-
-
 def item_words(item) -> frozenset[str]:
-    return track_words(item.title or "", item.artist or item.albumartist or "")
+    return name_words(f"{item.title or ''} {item.artist or item.albumartist or ''}")
 
 
 def split_list(value: str | None, sep: str = ",") -> list[str]:
@@ -178,7 +172,7 @@ class ItemIndex:
             if key and key in index:
                 self.rungs[rung] += 1
                 return index[key], rung
-        if words and (key := track_words(name, artist)) and key in self.by_words:
+        if words and (key := name_words(f"{name} {artist}")) and key in self.by_words:
             self.rungs[BY_WORDS] += 1
             return self.by_words[key], BY_WORDS
         return None, None
@@ -202,16 +196,16 @@ def release_match(name: str, artist: str, items):
     Looser than the words rung, which needs the same title+artist word set:
     a release credits ``CFCF feat. nuum & Seren Forever`` where Spotify says
     ``CFCF``, and writes ``Marvin’s`` where Spotify says ``Marvins``.  Words
-    are folded like release names (apostrophes joined, diacritics dropped),
-    and a remaster note on either title is dropped (#243).  Only for a
-    release's own items, so a featured artist can't pull in an unrelated
-    track."""
-    title = set(release_words(drop_edition(name)))
+    are folded like release names (apostrophes joined, diacritics dropped).
+    A remaster note counts (#252): ``Miserabilia (2018 Remaster)`` is another
+    master than ``Miserabilia``.  Only for a release's own items, so a
+    featured artist can't pull in an unrelated track."""
+    title = set(release_words(name))
     credit = set(release_words(artist))
     if not title:
         return None
     for item in items:
-        if (set(release_words(drop_edition(item.title or ""))) == title
+        if (set(release_words(item.title or "")) == title
                 and credit <= set(release_words(f"{item.artist or ''} {item.albumartist or ''}"))):
             return item
     return None
