@@ -882,7 +882,9 @@ def test_backfill_adopts_extras_after_the_retags(tmp_path, ffmpeg, lib, monkeypa
     ("Psycho Killer (live)", "Psycho Killer - Live"),
     ("Once in a Lifetime (live version)", "Once in a Lifetime - Live"),
     ("Genius Of Love (live)", "Genius of Love (Tom Tom Club) - Live"),
-    ("The Great Curve", "The Great Curve - 2005 Remaster"),
+    ("The Great Curve - 2005 Remaster", "The Great Curve - 2005 Remaster"),
+    ("The Great Curve (Remastered 2005)", "The Great Curve - 2005 Remaster"),
+    ("The Great Curve", None),  # against the remaster entry: another master is a bonus track (#254)
     ("Thank You for Sending Me an Angel (Country Angel version)", None),
     ("Cities (live version)", None),
     ("Drunk Girls (London Session)", None),
@@ -895,8 +897,8 @@ def test_album_entry_by_title_words(title, entry):
     entries = [PlaylistTrack("Psycho Killer", "Talking Heads", "STUDIO"),
                PlaylistTrack("Thank You for Sending Me an Angel - Live", "Talking Heads", "ANGEL"),
                PlaylistTrack("Drunk Girls", "LCD Soundsystem", "DRUNK")]
-    if entry is not None:
-        entries.append(PlaylistTrack(entry, "Talking Heads", "MATCH"))
+    entries.append(PlaylistTrack(entry or "The Great Curve - 2005 Remaster", "Talking Heads",
+                                 "MATCH" if entry else "REMASTER"))
     found = album_entry(type("Item", (), {"title": title})(), entries)
     assert (found.song_id if found else None) == ("MATCH" if entry else None)
 

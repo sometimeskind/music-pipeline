@@ -773,14 +773,22 @@ def album_entry(item, entries: list):
     every word of its title (a remaster note and ``version`` dropped) is in the
     entry's name, so ``Once in a Lifetime (live version)`` is ``Once in a
     Lifetime - Live`` and ``Genius Of Love (live)`` is ``Genius of Love (Tom Tom
-    Club) - Live``, but ``Drunk Girls (London Session)`` is not ``Drunk Girls``."""
+    Club) - Live``, but ``Drunk Girls (London Session)`` is not ``Drunk Girls``.
+    Both must carry the same remaster note, or none (#254): a remaster is
+    another master, so ``The Great Curve`` is not ``The Great Curve - 2005
+    Remaster``."""
     from music_fetch.usenet import words  # noqa: PLC0415
     from music_scan.identity import drop_edition  # noqa: PLC0415
 
-    title = set(words(drop_edition(item.title or ""))) - {"version"}
+    def split(name: str) -> tuple[set[str], set[str]]:
+        bare = set(words(drop_edition(name)))
+        return bare, {"remaster" if w == "remastered" else w for w in set(words(name)) - bare}
+
+    title, note = split(item.title or "")
+    title -= {"version"}
     if not title:
         return None
-    return next((t for t in entries if title <= set(words(drop_edition(t.name)))), None)
+    return next((t for t in entries if (parts := split(t.name))[1] == note and title <= parts[0]), None)
 
 
 def link_extras(items: list, records: dict[str, dict], apply: bool = True) -> tuple[list, list]:
