@@ -375,7 +375,10 @@ def test_backfill_dry_run_apply_then_zero(tmp_path, ffmpeg, lib, monkeypatch, ca
     from music_scan import canon, cover, library, navidrome, scan
     from music_scan.mb_release import Resolver
 
+    from music_fetch import albums as albums_state
+
     _, _, _, songs = _editions(tmp_path, lib)
+    monkeypatch.setattr(albums_state, "STATE_FILE", tmp_path / "no-albums.json")
     monkeypatch.setattr(library, "LIBRARY_DB", tmp_path / "library.db")
     monkeypatch.setattr(library, "LIBRARY_DIR", tmp_path / "library")
     monkeypatch.setattr(ingest, "SPOTDL_DIR", tmp_path / "nospotdl")
