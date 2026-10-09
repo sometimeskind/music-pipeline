@@ -429,8 +429,29 @@ def _album_library_hooks(lib):
             return 0
         return n
 
+    def adopt_extras(state, completion) -> None:
+        # A successful release's extras take its album's tags, cover and folder (#245);
+        # the .m3u tails list them, so regenerate.
+        from music_scan import canon  # noqa: PLC0415
+        from music_scan.navidrome import trigger_scan  # noqa: PLC0415
+
+        found = albums.find_by_nzo(state, completion.nzo_id)
+        if found is None:
+            return
+        try:
+            with concurrency("pipeline", occupy=1):
+                extras = canon.extras_after_import(lib, *found)
+                if any(e.dest != e.source for e in extras):
+                    scan.regen_playlists()
+            if any(e.write for e in extras):
+                trigger_scan()
+        except Exception:
+            canon.logger.exception("Release extras failed; music-canon-albums retries them")
+
     def complete(state, completion) -> str | None:
         status = albums.complete(state, completion, import_inbox, fresh_missing, add_source, tag_ids, rollback)
+        if status in (albums.IMPORTED, albums.FALLBACK):
+            adopt_extras(state, completion)
         keys.clear()
         return status
 

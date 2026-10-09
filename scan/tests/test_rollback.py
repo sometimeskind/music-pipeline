@@ -24,6 +24,9 @@ class FakeItem:
     def get(self, key, default=None):
         return self.data.get(key, default)
 
+    def __setitem__(self, key, value):
+        self.data[key] = value
+
     def remove(self, delete=False):
         assert delete is False, "a rollback never deletes files"
         self.removed = True
@@ -163,3 +166,30 @@ def test_links_needs_the_same_title() -> None:
     records = {"a": record("fallback", name="L.U.V.", artist="CFCF", fallback_from="missing",
                            playlists={"later": [["Kiss Me", "CFCF", "s1"], ["Kiss Me - Euroversion", "CFCF", "s2"]]})}
     assert links([euro], records, ItemIndex([])) == [(euro, "s2")]
+
+
+def test_cleanup_canonicalises_the_items_it_links(tmp_path, monkeypatch) -> None:
+    """A linked item was skipped by canon at import (no Spotify ID): --apply canonicalises it (#244)."""
+    from contextlib import nullcontext
+
+    import music_fetch.albums as albums
+    from music_scan import canon, library, navidrome, rollback, scan
+
+    proud = item(1, "Make Me Proud", artist="Drake feat. Nicki Minaj", album="Take Care", albumartist="Drake",
+                 via="usenet", added=GRAB.timestamp() - 600)
+    proud.store = lambda: None
+    lib = type("Lib", (), {"all_items": lambda self: [proud], "__enter__": lambda self: self,
+                           "__exit__": lambda self, *a: None})()
+    records = _drake({"later": [["Make Me Proud", "Drake", "s1"]]})
+    monkeypatch.setattr(albums.State, "load", classmethod(lambda cls, path=None: albums.State(albums=records)))
+    monkeypatch.setattr(library, "MusicLibrary", lambda db: lib)
+    monkeypatch.setattr(scan, "SPOTDL_DIR", spotdl(tmp_path, "later", []))
+    monkeypatch.setattr(rollback, "pipeline_lock", nullcontext)
+    events = []
+    monkeypatch.setattr(canon, "canonicalize_items", lambda items, budget=None: events.append(("canon", items)))
+    monkeypatch.setattr(scan, "regen_playlists", lambda: events.append("m3u") or {})
+    monkeypatch.setattr(navidrome, "trigger_scan", lambda: events.append("rescan"))
+
+    assert rollback.run(apply=True) == 1
+    assert proud.get("spotify_ids") == "s1"
+    assert events == [("canon", [proud]), "m3u", "rescan"]

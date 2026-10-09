@@ -23,8 +23,9 @@ failed one when it was added before the last grab or the album never
 succeeded.  Items no record claims are listed and kept.  A failed release's
 item that is one of its album's tracks the library still lacks (same title,
 the artist within a ``feat.`` credit, #240) is linked to that track's Spotify
-ID instead of quarantined.  Dry run by default; ``--apply`` links,
-quarantines and regenerates the playlists (#218).
+ID instead of quarantined, and canonicalised right away (#244): it was
+skipped at import for having no Spotify ID.  Dry run by default; ``--apply``
+links, quarantines and regenerates the playlists (#218).
 """
 
 from __future__ import annotations
@@ -197,6 +198,10 @@ def run(apply: bool = False) -> int:
             for item, song_id in linked:
                 add_to_list(item, "spotify_ids", song_id)
                 item.store()
+            if linked:
+                from music_scan import canon  # noqa: PLC0415
+
+                canon.canonicalize_items([item for item, _ in linked], budget=None)
             quarantine(failed)
             counts = regen_playlists()
         logger.info("Linked %d and rolled back %d item(s); playlists regenerated: %s", len(linked), len(failed),
