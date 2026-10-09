@@ -6,7 +6,7 @@ import logging
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from music_scan.identity import SPOTIFY_TRACK_URL, ItemIndex, split_list
+from music_scan.identity import SPOTIFY_TRACK_URL, ItemIndex, item_spotify_ids, split_list
 
 if TYPE_CHECKING:
     from beets.library import Item
@@ -102,7 +102,9 @@ class MusicLibrary:
         Without either hit (or entries queued before #176), falls back to
         title + artist with beets' substring query — beets has no contains-word
         query; clash validation in load_playlists() prevents false positives —
-        and logs it.  Returns the items modified (empty when nothing matched).
+        among the items with no Spotify ID (#257: one that has one is another
+        recording), and logs it.  Returns the items modified (empty when
+        nothing matched).
         """
         item, _ = ItemIndex(self.items_by_source(source)).match(spotify_id, isrc, words=False)
         if item is not None:
@@ -110,7 +112,7 @@ class MusicLibrary:
         else:
             # Substring match on sources field; load_playlists() ensures no name clashes.
             query = f"title:{title} artist:{artist} sources:{source}"
-            items = list(self._lib.items(query))
+            items = [i for i in self._lib.items(query) if not item_spotify_ids(i)]
             if not items:
                 return []
             logger.info("  [WORDS] %s: removed %s — %s matched by title+artist only", source, title, artist)

@@ -7,7 +7,9 @@ holds several in the ``spotify_ids`` flex attr, a comma list like ``sources``.
 union of MusicBrainz's and Spotify's (they can disagree).
 
 Identity ladder, first hit wins: Spotify track ID, ISRC, MusicBrainz recording
-ID, then title+artist words as a last resort that callers log.
+ID, then title+artist words as a last resort that callers log.  The words rung
+only reaches items with no Spotify ID (#257): an item that has one is that
+track, so a same-title entry with another ID is another recording.
 """
 
 from __future__ import annotations
@@ -152,7 +154,10 @@ def add_isrcs(item, codes) -> bool:
 class ItemIndex:
     """Library items indexed for the identity ladder; ``rungs`` counts the hits."""
 
-    def __init__(self, items) -> None:
+    def __init__(self, items, identified_words: bool = False) -> None:
+        """*identified_words* lets the words rung reach items that have a
+        Spotify ID too: only for the backfill's wrong-version report, which
+        looks for exactly those (#176)."""
         self.items = list(items)
         self.by_id: dict[str, object] = {}
         self.by_isrc: dict[str, object] = {}
@@ -162,7 +167,8 @@ class ItemIndex:
                 self.by_id.setdefault(sid, item)
             for code in item_isrcs(item):
                 self.by_isrc.setdefault(code, item)
-            if words := item_words(item):
+            # An identified item is never another entry by words (#257).
+            if (identified_words or not item_spotify_ids(item)) and (words := item_words(item)):
                 self.by_words.setdefault(words, item)
         self.rungs: Counter = Counter()
 

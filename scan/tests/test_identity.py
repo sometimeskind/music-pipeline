@@ -110,6 +110,16 @@ def test_item_index_ladder() -> None:
     assert dict(index.rungs) == {BY_ID: 2, BY_ISRC: 1, BY_WORDS: 1}
 
 
+
+def test_words_rung_skips_identified_items() -> None:
+    """The live take holds its own ID: it never fills the studio entry by words (#257)."""
+    live = _item("Girlfriend Is Better", spotify_ids="LIVE")
+    index = ItemIndex([live])
+    assert index.match("STUDIO", "USSTUDIO", "Girlfriend Is Better", "Artist") == (None, None)
+    assert index.match("LIVE", None, "Girlfriend Is Better", "Artist") == (live, BY_ID)
+    idless = _item("Girlfriend Is Better")
+    assert ItemIndex([live, idless]).match("STUDIO", None, "Girlfriend Is Better", "Artist") == (idless, BY_WORDS)
+
 def _beets_lib(tmp_path: Path):
     from beets.library import Item
 
@@ -149,6 +159,15 @@ def test_clear_source_tag_by_isrc_then_words(tmp_path: Path, caplog) -> None:
             assert lib.clear_source_tag("Old", "Artist", "a")
         assert lib._lib.get_item(old.id).get("sources") == ""
         assert "[WORDS]" in caplog.text
+
+
+def test_clear_source_tag_words_fallback_skips_identified_items(tmp_path: Path) -> None:
+    """Removing the studio entry by title never clears the live take, which has its own ID (#257)."""
+    lib, add = _beets_lib(tmp_path)
+    with lib:
+        live = add("Girlfriend Is Better", sources="a", spotify_ids="LIVE")
+        assert lib.clear_source_tag("Girlfriend Is Better", "Artist", "a", spotify_id="STUDIO") == []
+        assert lib._lib.get_item(live.id).get("sources") == "a"
 
 
 # --- release_match (#240) -----------------------------------------------------
