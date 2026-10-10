@@ -944,3 +944,26 @@ def test_reset_album_needs_exactly_one_match() -> None:
     state.albums["a1"] = dict(state.albums["a0"])
     assert albums.reset_album(state, state.albums["a0"]["name"]) is None
     assert albums.reset_album(state, "no such album") is None
+
+
+
+def test_complete_an_import_that_always_crashes_counts_against_the_release(roots) -> None:
+    """The retry is bounded: the third crash blocklists like a failed import (#261)."""
+    complete_root, inbox, quarantine = roots
+    state = grabbed_state()
+
+    def crash():
+        raise ValueError("boom")
+
+    statuses = [
+        albums.complete(
+            state, albums.Completion("nzo1", True, "album/Artist-Album-FLAC"), crash,
+            missing=lambda pl, tracks: tracks, add_source=lambda *a: None, tag_ids=lambda *a: None,
+            complete_root=complete_root, inbox_root=inbox, quarantine_root=quarantine, settings=Settings(mode="on"),
+        )
+        for _ in range(albums.MAX_IMPORT_ERRORS)
+    ]
+    record = state.albums["a0"]
+    assert statuses == [albums.GRABBED] * (albums.MAX_IMPORT_ERRORS - 1) + [albums.WANTED]
+    assert record["blocklist"] == ["r1"] and record["attempts"] == 1
+    assert "import_errors" not in record and "import_started" not in record
