@@ -662,6 +662,12 @@ def complete(
     playlist's tracks onto the library items and records their Spotify IDs
     (#176), also when the album didn't import completely.
 
+    An exception from *import_inbox* is not the release's fault (#261): the job
+    dir goes back to the completed dir and the record stays ``grabbed``, so the
+    next tick's lost-trigger recovery imports it again.  A completed job whose
+    dir is gone is logged ``[LOST]`` and grabbed again, without a blocklist
+    entry or an attempt.
+
     A blocklisted release is rolled back (#238): *rollback(playlist, since)*
     quarantines the items it imported that match no playlist entry (an
     expanded edition's outtakes); its matched items stay.  A release missing
@@ -690,12 +696,19 @@ def complete(
         shutil.rmtree(dest, ignore_errors=True)
         shutil.move(str(source), dest)
         logger.info("[IMPT] %s: importing %s", label, job_name)
-        started = time.time()
+        # A retried import counts its items from the first try's start (#261).
+        started = record.setdefault("import_started", time.time())
         try:
             import_inbox()
-        finally:
-            # Leftovers beets doesn't import (nfo, sfv, cue, cover scans).
-            shutil.rmtree(dest, ignore_errors=True)
+        except Exception:
+            logger.exception("[RETRY] %s: the import of %s failed — moving it back, the next tick retries",
+                             label, job_name)
+            if dest.exists():
+                shutil.move(str(dest), source)
+            return GRABBED
+        # Leftovers beets doesn't import (nfo, sfv, cue, cover scans).
+        shutil.rmtree(dest, ignore_errors=True)
+        record.pop("import_started", None)
         tracks = record["playlists"][first]
         # Before counting: a track only the release-scoped rung finds counts as imported (#240).
         tag_ids(first, tracks, started, record.get("tracks_count") or 0)
@@ -712,8 +725,16 @@ def complete(
             gap_keys = sorted({(t[2] if len(t) > 2 else None) or f"{t[0]} — {t[1]}" for t in gaps})
         for playlist in playlists[1:]:
             tag_ids(playlist, record["playlists"][playlist], started, record.get("tracks_count") or 0)
+    elif completion.ok and source is not None and not source.is_dir():
+        # Nothing says the release is bad (#261): grab again, without an attempt.
+        logger.warning("[LOST] %s: completed job dir not found: %r — not blocklisted, grabbing again",
+                       label, completion.path)
+        record["status"] = WANTED
+        record.pop("nzo_id", None)
+        record.pop("import_started", None)
+        return WANTED
     elif completion.ok:
-        reason = f"completed job dir not found: {completion.path!r}"
+        reason = f"completed job dir not usable: {completion.path!r}"
 
     if imported:
         record["status"] = IMPORTED
@@ -779,3 +800,65 @@ def lost_completions(state: State, sabnzbd, now: datetime | None = None) -> list
         )
         for nzo_id, job in found.items()
     ]
+
+
+# ---------------------------------------------------------------------------
+# music-album-reset: undo a release attempt that wasn't the release's fault (#261)
+# ---------------------------------------------------------------------------
+
+
+def reset_album(state: State, query: str) -> tuple[str, dict, dict] | None:
+    """Undo the last release attempt of the one album whose ``artist — name``
+    contains *query* (case-insensitive): status ``wanted``, the last candidate
+    off the blocklist, one attempt fewer, and its fallback cleared, so the next
+    tick searches it again.  Returns ``(key, before, after)``; None when no
+    album or more than one matches (logged)."""
+    q = query.lower()
+    hits = [(k, r) for k, r in state.albums.items() if q in f"{r.get('artist', '')} — {r.get('name', '')}".lower()]
+    if len(hits) != 1:
+        logger.error("%d album(s) match %r%s", len(hits), query,
+                     "".join(f"\n  {k}: {r.get('artist')} — {r.get('name')} ({r.get('status')})" for k, r in hits))
+        return None
+    key, record = hits[0]
+    before = json.loads(json.dumps(record))
+    guid = (record.get("candidate") or {}).get("guid")
+    if guid in record.get("blocklist", []):
+        record["blocklist"].remove(guid)
+    record["attempts"] = max(0, record.get("attempts", 0) - 1)
+    record["status"] = WANTED
+    for field in ("nzo_id", "import_started", "fallback_from", "fallback_at", "fallback_tracks"):
+        record.pop(field, None)
+    return key, before, record
+
+
+def reset_main() -> None:
+    import argparse  # noqa: PLC0415
+    from contextlib import nullcontext  # noqa: PLC0415
+
+    parser = argparse.ArgumentParser(prog="music-album-reset",
+                                     description="Undo an album's last release attempt (#261); dry run unless --apply")
+    parser.add_argument("query", help="part of 'artist — album' that matches exactly one album")
+    parser.add_argument("--apply", action="store_true", help="write .albums.json (default: dry run)")
+    args = parser.parse_args()
+    logging.basicConfig(level=logging.INFO, format="[%(asctime)s] %(message)s", datefmt="%Y-%m-%dT%H:%M:%S%z")
+    lock = nullcontext()
+    if args.apply and os.environ.get("PREFECT_API_URL"):
+        # The tick and the import flow hold this while they read and write .albums.json.
+        from prefect.concurrency.sync import concurrency  # noqa: PLC0415
+        lock = concurrency("albums", occupy=1)
+    with lock:
+        state = State.load()
+        result = reset_album(state, args.query)
+        if result is None:
+            raise SystemExit(1)
+        key, before, after = result
+        fields = ("status", "attempts", "blocklist", "candidate", "nzo_id", "fallback_from", "fallback_tracks")
+        logger.info("%s: %s — %s", key, after.get("artist"), after.get("name"))
+        for f in fields:
+            if before.get(f) != after.get(f):
+                logger.info("  %s: %s → %s", f, json.dumps(before.get(f)), json.dumps(after.get(f)))
+        if args.apply:
+            state.save()
+            logger.info("Saved; the next album tick searches it again")
+        else:
+            logger.info("Dry run; --apply to write")
