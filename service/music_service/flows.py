@@ -160,7 +160,7 @@ def save_removals_task(pending) -> None:
 def apply_removals_task() -> int:
     """Clear beets source tags for tracks removed from Spotify playlists."""
     logger = get_run_logger()
-    pending = ingest.load_and_clear_pending_removals()
+    pending = ingest.load_pending_removals()
     if pending is None:
         logger.info("No pending removals")
         return 0
@@ -172,6 +172,8 @@ def apply_removals_task() -> int:
     from music_scan.library import MusicLibrary  # noqa: PLC0415
     with MusicLibrary(scan.LIBRARY_DB) as lib:
         count = scan.apply_pending_removals(pending, lib)
+    # Only now: a crash above keeps the file for the next scan (#259).
+    ingest.clear_pending_removals(pending)
     logger.info("Cleared the source tag on %d beets item(s)", count)
     return count
 

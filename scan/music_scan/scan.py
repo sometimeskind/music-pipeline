@@ -14,7 +14,7 @@ import tempfile
 import time
 from pathlib import Path
 
-from music_fetch.ingest import PendingRemovals
+from music_fetch.ingest import PendingRemovals, clear_pending_removals
 from music_scan import playlists
 from music_scan.guard import guard_inbox
 from music_scan.identity import ItemIndex, PlaylistTrack, add_to_list, item_spotify_ids, release_match, spotify_id
@@ -388,19 +388,29 @@ def apply_pending_removals(pending: PendingRemovals, lib: MusicLibrary) -> int:
 
     Logs one ``[UNLINK]`` line per item cleared, whichever rung matched it.
     Returns the number of items modified; entries with no library item are
-    logged and counted separately (#190).
+    logged and counted separately (#190).  An entry that raises is logged with
+    its traceback and skipped, so it can't drop the rest (#259).
     """
     logger.info(
         "==> Processing pending removals: %d track(s), %d source(s)...",
         len(pending.tracks),
         len(pending.remove_sources),
     )
-    total = not_found = 0
+    total = not_found = failed = 0
     for track in pending.tracks:
-        items = lib.clear_source_tag(
-            title=track.title, artist=track.artist, source=track.source,
-            spotify_id=track.spotify_id, isrc=track.isrc,
-        )
+        try:
+            items = lib.clear_source_tag(
+                title=track.title, artist=track.artist, source=track.source,
+                spotify_id=track.spotify_id, isrc=track.isrc,
+            )
+        except Exception:
+            logger.error(
+                "  [SKIP] %s: removing %s by %s failed — skipped (spotify_id=%s isrc=%s)",
+                track.source, track.title, track.artist, track.spotify_id or "-", track.isrc or "-",
+                exc_info=True,
+            )
+            failed += 1
+            continue
         if not items:
             logger.warning(
                 "  WARNING: not found in beets — may need manual cleanup: %s by %s (source=%s)",
@@ -426,6 +436,8 @@ def apply_pending_removals(pending: PendingRemovals, lib: MusicLibrary) -> int:
         total += len(items)
 
     logger.info("Cleared the source tag on %d item(s); %d removed entr(ies) not found", total, not_found)
+    if failed:
+        logger.error("%d removed entr(ies) failed and were skipped ([SKIP] above)", failed)
     return total
 
 
@@ -443,6 +455,7 @@ def run(pending: PendingRemovals | None = None) -> None:
             try:
                 with MusicLibrary(LIBRARY_DB) as lib:
                     metrics.tracks_removed = apply_pending_removals(pending, lib)
+                clear_pending_removals(pending)
             except Exception:
                 logger.error("Pending-removals step failed — continuing with import", exc_info=True)
 

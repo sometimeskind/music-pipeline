@@ -65,8 +65,8 @@ def _run_scan() -> None:
     import music_scan.scan as scan
     try:
         logger.info("==> Scan starting")
-        pending = ingest.load_and_clear_pending_removals()
-        scan.run(pending)
+        pending = ingest.load_pending_removals()
+        scan.run(pending)  # clears the removals it applied (#259)
         reconcile.reconcile_all()
         logger.info("==> Scan complete")
     except Exception:

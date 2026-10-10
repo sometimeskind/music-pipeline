@@ -118,7 +118,7 @@ def test_apply_removals_task_skips_when_no_file():
     from music_service.flows import apply_removals_task
     with patch("music_service.flows.ingest") as mock_ingest, \
          patch("music_service.flows.scan") as mock_scan:
-        mock_ingest.load_and_clear_pending_removals.return_value = None
+        mock_ingest.load_pending_removals.return_value = None
         apply_removals_task()
         mock_scan.apply_pending_removals.assert_not_called()
 
@@ -130,11 +130,28 @@ def test_apply_removals_task_calls_apply_pending_removals():
     with patch("music_service.flows.ingest") as mock_ingest, \
          patch("music_service.flows.scan") as mock_scan, \
          patch("music_scan.library.MusicLibrary") as MockLib:
-        mock_ingest.load_and_clear_pending_removals.return_value = mock_pending
+        mock_ingest.load_pending_removals.return_value = mock_pending
         MockLib.return_value.__enter__ = lambda _: mock_lib
         MockLib.return_value.__exit__ = MagicMock(return_value=False)
         apply_removals_task()
         mock_scan.apply_pending_removals.assert_called_once()
+        mock_ingest.clear_pending_removals.assert_called_once_with(mock_pending)
+
+
+def test_apply_removals_task_keeps_the_file_when_apply_crashes():
+    """A crash leaves the pending removals for the next scan (#259)."""
+    from music_service.flows import apply_removals_task
+    mock_lib = MagicMock()
+    with patch("music_service.flows.ingest") as mock_ingest, \
+         patch("music_service.flows.scan") as mock_scan, \
+         patch("music_scan.library.MusicLibrary") as MockLib:
+        mock_ingest.load_pending_removals.return_value = MagicMock()
+        mock_scan.apply_pending_removals.side_effect = RuntimeError("db locked")
+        MockLib.return_value.__enter__ = lambda _: mock_lib
+        MockLib.return_value.__exit__ = MagicMock(return_value=False)
+        with pytest.raises(RuntimeError):
+            apply_removals_task()
+        mock_ingest.clear_pending_removals.assert_not_called()
 
 
 def test_beet_import_task_returns_imported():
@@ -202,7 +219,7 @@ def test_fetch_flow_runs_fetch_then_scan():
         mock_ingest.preflight.side_effect = lambda: call_order.append("preflight")
         mock_ingest.reconcile_playlists.side_effect = lambda: (call_order.append("reconcile-playlists"), [])[1]
         mock_ingest.sync_playlists.side_effect = lambda *_, **__: (call_order.append("spotdl-sync"), mock_pending)[1]
-        mock_ingest.load_and_clear_pending_removals.return_value = None
+        mock_ingest.load_pending_removals.return_value = None
         mock_scan.run_inbox_import.side_effect = lambda: (call_order.append("beet-import"), [])[1]
         mock_reconcile.reconcile_all.return_value = 0
 
@@ -279,7 +296,7 @@ def test_scan_flow_runs_all_scan_steps_in_order():
          patch("music_service.flows.concurrency") as mock_concurrency:
         mock_concurrency.return_value.__enter__.return_value = None
         mock_concurrency.return_value.__exit__.return_value = False
-        mock_ingest.load_and_clear_pending_removals.return_value = None
+        mock_ingest.load_pending_removals.return_value = None
         mock_scan.run_inbox_import.side_effect = lambda: (call_order.append("beet-import"), [])[1]
         mock_scan.quarantine_inbox_leftovers.side_effect = lambda: (call_order.append("quarantine"), 0)[1]
         mock_scan.import_asis_from_quarantine.side_effect = lambda: (call_order.append("asis-import"), 0)[1]
@@ -317,7 +334,7 @@ def test_scan_flow_skips_when_pipeline_busy():
         mock_concurrency.return_value.__enter__.side_effect = TimeoutError
         mock_concurrency.return_value.__exit__.return_value = False
         scan_flow()
-        mock_ingest.load_and_clear_pending_removals.assert_not_called()
+        mock_ingest.load_pending_removals.assert_not_called()
 
 
 # ---------------------------------------------------------------------------
@@ -326,7 +343,7 @@ def test_scan_flow_skips_when_pipeline_busy():
 
 
 def _scan_mocks(mock_scan, mock_ingest):
-    mock_ingest.load_and_clear_pending_removals.return_value = None
+    mock_ingest.load_pending_removals.return_value = None
     mock_scan.run_inbox_import.return_value = [("A", "B"), ("C", "D")]
     mock_scan.quarantine_inbox_leftovers.return_value = 1
     mock_scan.import_asis_from_quarantine.return_value = 3
