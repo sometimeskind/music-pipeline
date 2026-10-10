@@ -804,9 +804,60 @@ def test_save_pending_removals_merges(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setattr(ingest, "PENDING_REMOVALS_PATH", tmp_path / ".pending-removals.json")
     ingest.save_pending_removals(PendingRemovals(tracks=[RemovedTrack("A", "X", "later")], remove_sources=["old"]))
     ingest.save_pending_removals(PendingRemovals(tracks=[RemovedTrack("B", "Y", "keep")], remove_sources=["old"]))
-    loaded = ingest.load_and_clear_pending_removals()
+    loaded = ingest.load_pending_removals()
     assert [t.title for t in loaded.tracks] == ["A", "B"]
     assert loaded.remove_sources == ["old"]
+
+
+
+def test_load_pending_removals_keeps_the_file(tmp_path: Path, monkeypatch) -> None:
+    """Reading doesn't consume: a crash before clear_pending_removals keeps every removal (#259)."""
+    import music_fetch.ingest as ingest
+
+    path = tmp_path / ".pending-removals.json"
+    monkeypatch.setattr(ingest, "PENDING_REMOVALS_PATH", path)
+    ingest.save_pending_removals(PendingRemovals(tracks=[RemovedTrack("A", "X", "keep")], remove_sources=[]))
+    assert ingest.load_pending_removals().tracks == [RemovedTrack("A", "X", "keep")]
+    assert ingest.load_pending_removals().tracks == [RemovedTrack("A", "X", "keep")]
+
+
+def test_clear_pending_removals_keeps_what_was_queued_since(tmp_path: Path, monkeypatch) -> None:
+    import music_fetch.ingest as ingest
+
+    path = tmp_path / ".pending-removals.json"
+    monkeypatch.setattr(ingest, "PENDING_REMOVALS_PATH", path)
+    ingest.save_pending_removals(PendingRemovals(tracks=[RemovedTrack("A", "X", "keep", spotify_id="S1")],
+                                                 remove_sources=["old"]))
+    applied = ingest.load_pending_removals()
+    # The album tick queues more while the scan applies the first batch.
+    ingest.save_pending_removals(PendingRemovals(tracks=[RemovedTrack("B", "Y", "later")], remove_sources=["gone"]))
+    ingest.clear_pending_removals(applied)
+    left = ingest.load_pending_removals()
+    assert left.tracks == [RemovedTrack("B", "Y", "later")]
+    assert left.remove_sources == ["gone"]
+    ingest.clear_pending_removals(left)
+    assert not path.exists()
+
+
+def test_clear_pending_removals_matches_files_queued_before_176(tmp_path: Path, monkeypatch) -> None:
+    import music_fetch.ingest as ingest
+
+    path = tmp_path / ".pending-removals.json"
+    monkeypatch.setattr(ingest, "PENDING_REMOVALS_PATH", path)
+    path.write_text('{"tracks": [{"title": "T", "artist": "A", "source": "pl"}], "remove_sources": []}')
+    ingest.clear_pending_removals(ingest.load_pending_removals())
+    assert not path.exists()
+
+
+def test_unreadable_pending_removals_are_moved_aside(tmp_path: Path, monkeypatch) -> None:
+    import music_fetch.ingest as ingest
+
+    path = tmp_path / ".pending-removals.json"
+    monkeypatch.setattr(ingest, "PENDING_REMOVALS_PATH", path)
+    path.write_text("{not json")
+    assert ingest.load_pending_removals() is None
+    assert not path.exists()
+    assert (tmp_path / ".pending-removals.json.bad").read_text() == "{not json"
 
 
 def test_reconcile_album_sentinel_follows_config(tmp_path: Path) -> None:
@@ -843,7 +894,7 @@ def test_pending_removals_queued_before_176_still_load(tmp_path) -> None:
     path = tmp_path / "pending.json"
     path.write_text('{"tracks": [{"title": "T", "artist": "A", "source": "pl"}], "remove_sources": []}')
     with patch.object(ingest, "PENDING_REMOVALS_PATH", path):
-        pending = ingest.load_and_clear_pending_removals()
+        pending = ingest.load_pending_removals()
     assert pending.tracks == [ingest.RemovedTrack("T", "A", "pl")]
 
 

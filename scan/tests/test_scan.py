@@ -317,6 +317,7 @@ def test_run_pending_removals_failure_continues_to_import(tmp_path: Path) -> Non
         import_called.append(True)
 
     with mock.patch("music_scan.scan.apply_pending_removals", side_effect=RuntimeError("db error")), \
+         mock.patch("music_scan.scan.clear_pending_removals") as mock_clear, \
          mock.patch("music_scan.scan.MusicLibrary", return_value=_make_mock_lib()), \
          mock.patch("music_scan.scan.run_beet_import", side_effect=fake_import), \
          mock.patch("music_scan.scan.run_beet_update"), \
@@ -330,6 +331,51 @@ def test_run_pending_removals_failure_continues_to_import(tmp_path: Path) -> Non
         scan.run(pending=pending)
 
     assert import_called, "import should proceed even when pending-removals raises"
+    mock_clear.assert_not_called()  # the file stays for the next scan (#259)
+
+
+def test_run_clears_the_removals_it_applied(tmp_path: Path) -> None:
+    from music_fetch.ingest import PendingRemovals
+    from music_scan import scan
+
+    pending = PendingRemovals(tracks=[], remove_sources=[])
+    with mock.patch("music_scan.scan.apply_pending_removals", return_value=0), \
+         mock.patch("music_scan.scan.clear_pending_removals") as mock_clear, \
+         mock.patch("music_scan.scan.MusicLibrary", return_value=_make_mock_lib()), \
+         mock.patch("music_scan.scan.run_beet_import"), \
+         mock.patch("music_scan.scan.run_beet_update"), \
+         mock.patch("music_scan.scan._move_asis_eligible", return_value=0), \
+         mock.patch("music_scan.scan.INBOX", tmp_path), \
+         mock.patch("music_scan.scan.SPOTDL_DIR", tmp_path), \
+         mock.patch("music_scan.scan.QUARANTINE", tmp_path), \
+         mock.patch("music_scan.scan.PLAYLISTS", tmp_path), \
+         mock.patch("music_scan.scan.ScanMetrics"), \
+         mock.patch("music_scan.scan.trigger_scan"):
+        scan.run(pending=pending)
+
+    mock_clear.assert_called_once_with(pending)
+
+
+def test_apply_pending_removals_skips_an_entry_that_raises(tmp_path: Path, caplog) -> None:
+    """One bad entry is logged and skipped; the entries after it still apply (#259)."""
+    from music_fetch.ingest import PendingRemovals, RemovedTrack
+    from music_scan.scan import apply_pending_removals
+
+    def clear(**kw):
+        if kw["title"] == "Bad":
+            raise ValueError("No closing quotation")
+        return [{"title": kw["title"], "artist": kw["artist"]}]
+
+    mock_lib = _make_mock_lib()
+    mock_lib.clear_source_tag = mock.MagicMock(side_effect=clear)
+    pending = PendingRemovals(
+        tracks=[RemovedTrack("A", "X", "keep"), RemovedTrack("Bad", "X", "keep"), RemovedTrack("C", "X", "keep")],
+        remove_sources=[],
+    )
+    with caplog.at_level("INFO", logger="music_scan.scan"):
+        assert apply_pending_removals(pending, mock_lib) == 2
+    assert mock_lib.clear_source_tag.call_count == 3
+    assert "[SKIP] keep: removing Bad by X failed" in caplog.text
 
 
 def test_run_asis_import_failure_continues_to_beet_update(tmp_path: Path) -> None:

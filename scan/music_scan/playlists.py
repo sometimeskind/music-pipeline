@@ -19,7 +19,9 @@ Nothing a playlist shows today can disappear: phase 2 only fills the slots
 phase 1 leaves empty.  ``music-audit-playlists`` (:func:`main`) prints the
 proof per playlist, read-only, and accounts for every entry and every line:
 shared files (#232), tagged items no entry matches, and empty entries whose
-track sits in ``quarantine/replaced/`` (#234).
+track sits in ``quarantine/replaced/`` (#234).  ``--clear-tail <playlist>``
+clears that playlist's tag on its tail items that carry a Spotify ID, the
+recovery for removals a crashed scan lost (#259); dry run unless ``--apply``.
 """
 
 from __future__ import annotations
@@ -32,7 +34,7 @@ from pathlib import Path
 from typing import NamedTuple
 
 from music_scan.identity import (
-    BY_ID, BY_ISRC, BY_WORDS, ItemIndex, PlaylistTrack, name_words, spotify_id,
+    BY_ID, BY_ISRC, BY_WORDS, ItemIndex, PlaylistTrack, item_isrcs, item_spotify_ids, name_words, spotify_id,
 )
 
 logger = logging.getLogger(__name__)
@@ -346,8 +348,67 @@ def audit(replaced_dir: Path | None = None) -> int:
     return lost_total
 
 
+# ---------------------------------------------------------------------------
+# --clear-tail: the recovery for removals a crashed scan dropped (#259)
+# ---------------------------------------------------------------------------
+
+
+def clear_tail(lib, name: str, spotdl_dir: Path, apply: bool = False) -> list:
+    """Clear *name* from the ``sources`` of its tail items that carry a Spotify ID.
+
+    A tail item is tagged with the playlist but no entry resolves to it (the
+    audit's ``~`` lines).  One with a Spotify ID is an identified recording no
+    entry agrees with by Spotify ID or ISRC, so by the identity rule it is not
+    on the playlist: a removal that was never applied.  One without is left
+    tagged: a successful release's local-only extra (#245, #238) has no entry
+    on purpose, and an unidentified item can't be judged by ID.  Refuses an
+    empty or unreadable ``.spotdl``, which would make every tagged item a tail
+    item.  Returns the items cleared (or, in a dry run, that would be).
+    """
+    entries = playlist_entries(spotdl_dir / f"{name}.spotdl")
+    if not entries:
+        raise SystemExit(f"{name}: no entries in {spotdl_dir / f'{name}.spotdl'} — refusing to treat every item as tail")
+    source_items = [i for i in lib.items_by_source(name)
+                    if name in [p.strip() for p in (i.get("sources") or "").split(",")]]
+    slots = resolve(entries, ItemIndex(source_items), ItemIndex(lib.all_items()))
+    tail = tail_items(slots, source_items)
+    # An entry resolves to one item; a second item with its ID (a duplicate) is tail but still agrees.
+    entry_ids = {e.song_id for e in entries if e.song_id}
+    entry_isrcs = {e.isrc for e in entries if e.isrc}
+    cleared = []
+    verb = "cleared" if apply else "would clear"
+    for item in tail:
+        if not item_spotify_ids(item):
+            logger.info("  [KEEP] %s  (no Spotify ID: a local-only extra or unidentified, left tagged)", _describe(item))
+            continue
+        if item_spotify_ids(item) & entry_ids or item_isrcs(item) & entry_isrcs:
+            logger.info("  [KEEP] %s  (an entry agrees by Spotify ID or ISRC but resolves to another item)", _describe(item))
+            continue
+        cleared.append(item)
+        logger.info("  [UNTAG] %s  (sources=%s, no entry agrees by Spotify ID or ISRC)", _describe(item), _flex(item, "sources"))
+        if apply:
+            item["sources"] = ",".join(p.strip() for p in item.get("sources").split(",") if p.strip() and p.strip() != name)
+            item.store()
+    logger.info("%s: %d entries, %d tagged items, %d tail: %s %s's tag on %d, kept %d%s",
+                name, len(entries), len(source_items), len(tail), verb, name, len(cleared), len(tail) - len(cleared),
+                "" if apply else " (dry run; --apply to write)")
+    return cleared
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(prog="music-audit-playlists", description=__doc__.splitlines()[0])
-    parser.parse_args()
+    parser.add_argument("--clear-tail", metavar="PLAYLIST",
+                        help="clear PLAYLIST's tag on its tail items that carry a Spotify ID (#259; dry run by default)")
+    parser.add_argument("--apply", action="store_true", help="with --clear-tail: write the changes")
+    args = parser.parse_args()
+    if args.apply and not args.clear_tail:
+        parser.error("--apply needs --clear-tail")
     logging.basicConfig(level=logging.INFO, format="[%(asctime)s] %(message)s", datefmt="%Y-%m-%dT%H:%M:%S%z")
+    if args.clear_tail:
+        from music_scan.library import LIBRARY_DB, MusicLibrary  # noqa: PLC0415
+        from music_scan.scan import SPOTDL_DIR  # noqa: PLC0415
+
+        with MusicLibrary(LIBRARY_DB) as lib:
+            clear_tail(lib, args.clear_tail, SPOTDL_DIR, apply=args.apply)
+        raise SystemExit(0)
     raise SystemExit(1 if audit() else 0)

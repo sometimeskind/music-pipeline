@@ -523,8 +523,13 @@ def save_pending_removals(pending: PendingRemovals) -> None:
     )
 
 
-def load_and_clear_pending_removals() -> PendingRemovals | None:
-    """Read and delete the pending-removals handoff file. Returns None if absent."""
+def load_pending_removals() -> PendingRemovals | None:
+    """Read the pending-removals handoff file without deleting it. Returns None if absent.
+
+    The file stays until :func:`clear_pending_removals` drops what was applied, so a
+    crash part-way keeps the removals for the next scan (#259).  An unreadable file is
+    moved aside to ``.pending-removals.json.bad``, not retried forever.
+    """
     if not PENDING_REMOVALS_PATH.exists():
         return None
     try:
@@ -532,9 +537,43 @@ def load_and_clear_pending_removals() -> PendingRemovals | None:
         tracks = [RemovedTrack(**t) for t in data.get("tracks", [])]
         return PendingRemovals(tracks=tracks, remove_sources=data.get("remove_sources", []))
     except Exception:
-        logger.warning("Failed to load %s — skipping pending removals", PENDING_REMOVALS_PATH, exc_info=True)
+        bad = PENDING_REMOVALS_PATH.with_name(PENDING_REMOVALS_PATH.name + ".bad")
+        logger.warning("Failed to load %s — moved to %s, skipping pending removals",
+                       PENDING_REMOVALS_PATH, bad, exc_info=True)
+        PENDING_REMOVALS_PATH.replace(bad)
         return None
-    finally:
+
+
+def clear_pending_removals(applied: PendingRemovals) -> None:
+    """Drop the *applied* removals from the handoff file, keeping any queued since it was read.
+
+    The album tick may add removals between the scan's read and this call; those stay
+    for the next scan.  The file is deleted once nothing is left.
+    """
+    if not PENDING_REMOVALS_PATH.exists():
+        return
+    try:
+        data = json.loads(PENDING_REMOVALS_PATH.read_text(encoding="utf-8"))
+    except Exception:
+        logger.warning("Could not read %s — deleting it", PENDING_REMOVALS_PATH)
+        PENDING_REMOVALS_PATH.unlink(missing_ok=True)
+        return
+    done = [dataclasses.asdict(t) for t in applied.tracks]
+    tracks = []
+    for t in data.get("tracks", []):
+        # Older files lack the identity keys; compare them as RemovedTrack does.
+        key = dataclasses.asdict(RemovedTrack(**t))
+        if key in done:
+            done.remove(key)
+        else:
+            tracks.append(t)
+    remove_sources = [s for s in data.get("remove_sources", []) if s not in applied.remove_sources]
+    if tracks or remove_sources:
+        PENDING_REMOVALS_PATH.write_text(json.dumps({"tracks": tracks, "remove_sources": remove_sources}),
+                                         encoding="utf-8")
+        logger.info("Kept %d track removal(s) and %d source removal(s) queued since the scan read %s",
+                    len(tracks), len(remove_sources), PENDING_REMOVALS_PATH)
+    else:
         PENDING_REMOVALS_PATH.unlink(missing_ok=True)
 
 

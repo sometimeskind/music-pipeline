@@ -100,24 +100,32 @@ class MusicLibrary:
 
         Matches the entry's Spotify ID, then its ISRC, among the *source* items.
         Without either hit (or entries queued before #176), falls back to
-        title + artist with beets' substring query — beets has no contains-word
-        query; clash validation in load_playlists() prevents false positives —
-        among the items with no Spotify ID (#257: one that has one is another
-        recording), and logs it.  Returns the items modified (empty when
-        nothing matched).
+        title + artist, each a case-insensitive substring as beets' ``field:``
+        query matched it, among the items with no Spotify ID (#257: one that
+        has one is another recording), and logs it.  The fallback compares the
+        values in Python, never through a beets query string, whose shlex
+        parsing breaks on an apostrophe or a quote (#259).  Returns the items
+        modified (empty when nothing matched).
         """
-        item, _ = ItemIndex(self.items_by_source(source)).match(spotify_id, isrc, words=False)
+        source_items = [i for i in self.items_by_source(source) if source in _sources(i)]
+        item, _ = ItemIndex(source_items).match(spotify_id, isrc, words=False)
         if item is not None:
             items = [item]
         else:
-            # Substring match on sources field; load_playlists() ensures no name clashes.
-            query = f"title:{title} artist:{artist} sources:{source}"
-            items = [i for i in self._lib.items(query) if not item_spotify_ids(i)]
+            items = [
+                i for i in source_items
+                if title and not item_spotify_ids(i)
+                and title.lower() in (i.title or "").lower() and artist.lower() in (i.artist or "").lower()
+            ]
             if not items:
                 return []
             logger.info("  [WORDS] %s: removed %s — %s matched by title+artist only", source, title, artist)
         for item in items:
-            parts = [p.strip() for p in (item.get("sources") or "").split(",")]
-            item["sources"] = ",".join(p for p in parts if p and p != source)
+            item["sources"] = ",".join(p for p in _sources(item) if p != source)
             item.store()
         return items
+
+
+def _sources(item) -> list[str]:
+    """The playlists in an item's ``sources`` tag, in order."""
+    return [p.strip() for p in (item.get("sources") or "").split(",") if p.strip()]
