@@ -309,6 +309,17 @@ def test_clear_tail_untags_identified_items_no_entry_agrees_with(tmp_path: Path,
         assert lib._lib.get_item(extra.id).get("sources") == "keep"
 
 
+def test_clear_tail_keeps_a_second_item_an_entry_agrees_with(tmp_path: Path) -> None:
+    """The entry resolves to one of two items with its ID; the other is tail but not removed."""
+    lib, add = _tail_lib(tmp_path)
+    spotdl_dir = _spotdl(tmp_path, "keep", [_song("Song", song_id="S", isrc="GB1")])
+    with lib:
+        add("Song", sources="keep", spotify_ids="S")
+        twin = add("Song (Album)", sources="keep", spotify_ids="OTHER", isrc="GB1")
+        assert clear_tail(lib, "keep", spotdl_dir, apply=True) == []
+        assert lib._lib.get_item(twin.id).get("sources") == "keep"
+
+
 def test_clear_tail_never_judges_by_title_words(tmp_path: Path) -> None:
     """A remaster on the list doesn't keep the original's tag: titles never make two recordings one (#255)."""
     lib, add = _tail_lib(tmp_path)

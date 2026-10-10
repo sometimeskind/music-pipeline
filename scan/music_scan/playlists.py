@@ -34,7 +34,7 @@ from pathlib import Path
 from typing import NamedTuple
 
 from music_scan.identity import (
-    BY_ID, BY_ISRC, BY_WORDS, ItemIndex, PlaylistTrack, item_spotify_ids, name_words, spotify_id,
+    BY_ID, BY_ISRC, BY_WORDS, ItemIndex, PlaylistTrack, item_isrcs, item_spotify_ids, name_words, spotify_id,
 )
 
 logger = logging.getLogger(__name__)
@@ -372,17 +372,24 @@ def clear_tail(lib, name: str, spotdl_dir: Path, apply: bool = False) -> list:
                     if name in [p.strip() for p in (i.get("sources") or "").split(",")]]
     slots = resolve(entries, ItemIndex(source_items), ItemIndex(lib.all_items()))
     tail = tail_items(slots, source_items)
-    cleared = [item for item in tail if item_spotify_ids(item)]
+    # An entry resolves to one item; a second item with its ID (a duplicate) is tail but still agrees.
+    entry_ids = {e.song_id for e in entries if e.song_id}
+    entry_isrcs = {e.isrc for e in entries if e.isrc}
+    cleared = []
     verb = "cleared" if apply else "would clear"
     for item in tail:
         if not item_spotify_ids(item):
             logger.info("  [KEEP] %s  (no Spotify ID: a local-only extra or unidentified, left tagged)", _describe(item))
             continue
+        if item_spotify_ids(item) & entry_ids or item_isrcs(item) & entry_isrcs:
+            logger.info("  [KEEP] %s  (an entry agrees by Spotify ID or ISRC but resolves to another item)", _describe(item))
+            continue
+        cleared.append(item)
         logger.info("  [UNTAG] %s  (sources=%s, no entry agrees by Spotify ID or ISRC)", _describe(item), _flex(item, "sources"))
         if apply:
             item["sources"] = ",".join(p.strip() for p in item.get("sources").split(",") if p.strip() and p.strip() != name)
             item.store()
-    logger.info("%s: %d entries, %d tagged items, %d tail: %s %s's tag on %d, kept %d without a Spotify ID%s",
+    logger.info("%s: %d entries, %d tagged items, %d tail: %s %s's tag on %d, kept %d%s",
                 name, len(entries), len(source_items), len(tail), verb, name, len(cleared), len(tail) - len(cleared),
                 "" if apply else " (dry run; --apply to write)")
     return cleared
