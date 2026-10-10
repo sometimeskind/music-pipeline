@@ -170,6 +170,35 @@ def test_clear_source_tag_words_fallback_skips_identified_items(tmp_path: Path) 
         assert lib._lib.get_item(live.id).get("sources") == "a"
 
 
+@pytest.mark.parametrize("title", ["You'll Need Those Fingers for Crossing (2018 Remaster)", 'The "Real" Thing', "Don't"])
+def test_clear_source_tag_words_fallback_survives_quotes(tmp_path: Path, title) -> None:
+    """An apostrophe or a quote in the title no longer breaks the fallback's query (#259)."""
+    lib, add = _beets_lib(tmp_path)
+    with lib:
+        item = add(title, sources="keep,later")
+        other = add("Another Song", sources="keep")
+        assert [i.id for i in lib.clear_source_tag(title, "Artist", "keep")] == [item.id]
+        assert lib._lib.get_item(item.id).get("sources") == "later"
+        assert lib._lib.get_item(other.id).get("sources") == "keep"
+
+
+def test_clear_source_tag_words_fallback_is_case_insensitive_substring(tmp_path: Path) -> None:
+    lib, add = _beets_lib(tmp_path)
+    with lib:
+        item = add("Song (Live)", sources="a")
+        assert lib.clear_source_tag("song", "artist", "a")
+        assert lib._lib.get_item(item.id).get("sources") == ""
+
+
+def test_clear_source_tag_needs_the_exact_source(tmp_path: Path) -> None:
+    """``keep`` is a substring of ``keepsake``; only an item tagged ``keep`` itself is changed."""
+    lib, add = _beets_lib(tmp_path)
+    with lib:
+        item = add("Song", sources="keepsake")
+        assert lib.clear_source_tag("Song", "Artist", "keep") == []
+        assert lib._lib.get_item(item.id).get("sources") == "keepsake"
+
+
 # --- release_match (#240) -----------------------------------------------------
 
 
