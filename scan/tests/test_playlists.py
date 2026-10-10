@@ -13,7 +13,7 @@ import pytest
 from music_scan.identity import BY_ID, BY_ISRC, BY_WORDS, ItemIndex, PlaylistTrack
 from music_scan.playlists import (
     BY_SLOT_ID, BY_SLOT_ISRC, Entry, ReplacedFile, audit, collisions, empty_slots, keeper_candidates, playlist_entries,
-    replaced_matches, resolve, tail_items,
+    clear_tail, replaced_matches, resolve, tail_items,
 )
 
 
@@ -258,3 +258,72 @@ def test_audit_reports_empty_entries_whose_file_was_replaced(tmp_path: Path, cap
     assert "? #2 Artist — Song (single)  id=B isrc=GBX1X: empty, but 77-Song (single).m4a carries it (isrc=GBX1X mb_trackid=-)" in caplog.text
     assert "no library item shares its ISRC, MusicBrainz track id or words" in caplog.text
     assert "1 empty entr(ies) have their track in quarantine/replaced/" in caplog.text
+
+
+# ---------------------------------------------------------------------------
+# --clear-tail (#259)
+# ---------------------------------------------------------------------------
+
+
+def _tail_lib(tmp_path: Path):
+    from beets.library import Item
+
+    from music_scan.library import MusicLibrary
+
+    lib = MusicLibrary(tmp_path / "library.db", tmp_path)
+
+    def add(title, **flex):
+        item = Item(title=title, artist="Artist", path=str(tmp_path / f"{title}.m4a").encode(), isrc=flex.pop("isrc", ""))
+        for k, v in flex.items():
+            item[k] = v
+        lib._lib.add(item)
+        return item
+
+    return lib, add
+
+
+def _spotdl(tmp_path: Path, name: str, songs: list[dict]) -> Path:
+    spotdl_dir = tmp_path / "spotdl"
+    spotdl_dir.mkdir(exist_ok=True)
+    (spotdl_dir / f"{name}.spotdl").write_text(json.dumps({"songs": songs}), encoding="utf-8")
+    return spotdl_dir
+
+
+def test_clear_tail_untags_identified_items_no_entry_agrees_with(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
+    lib, add = _tail_lib(tmp_path)
+    spotdl_dir = _spotdl(tmp_path, "keep", [_song("On", song_id="ON"), _song("Isrc", song_id="NEW", isrc="GB1")])
+    with lib:
+        on = add("On", sources="keep", spotify_ids="ON")
+        by_isrc = add("Isrc", sources="keep,later", spotify_ids="OLD", isrc="GB1")
+        removed = add("You'll Need Those Fingers (2018 Remaster)", sources="keep,later", spotify_ids="REMASTER")
+        extra = add("Bonus Track", sources="keep")  # #245: a local-only extra, no Spotify ID
+        with caplog.at_level(logging.INFO, logger="music_scan.playlists"):
+            assert [i.id for i in clear_tail(lib, "keep", spotdl_dir)] == [removed.id]
+        assert lib._lib.get_item(removed.id).get("sources") == "keep,later"  # dry run writes nothing
+        assert "[UNTAG]" in caplog.text and "[KEEP]" in caplog.text and "dry run" in caplog.text
+
+        clear_tail(lib, "keep", spotdl_dir, apply=True)
+        assert lib._lib.get_item(removed.id).get("sources") == "later"
+        assert lib._lib.get_item(on.id).get("sources") == "keep"
+        assert lib._lib.get_item(by_isrc.id).get("sources") == "keep,later"
+        assert lib._lib.get_item(extra.id).get("sources") == "keep"
+
+
+def test_clear_tail_never_judges_by_title_words(tmp_path: Path) -> None:
+    """A remaster on the list doesn't keep the original's tag: titles never make two recordings one (#255)."""
+    lib, add = _tail_lib(tmp_path)
+    spotdl_dir = _spotdl(tmp_path, "keep", [_song("Song", song_id="ORIGINAL")])
+    with lib:
+        remaster = add("Song", sources="keep", spotify_ids="REMASTER")
+        clear_tail(lib, "keep", spotdl_dir, apply=True)
+        assert lib._lib.get_item(remaster.id).get("sources") == ""
+
+
+def test_clear_tail_refuses_a_playlist_with_no_entries(tmp_path: Path) -> None:
+    lib, add = _tail_lib(tmp_path)
+    spotdl_dir = _spotdl(tmp_path, "keep", [])
+    with lib:
+        item = add("Song", sources="keep", spotify_ids="S")
+        with pytest.raises(SystemExit):
+            clear_tail(lib, "keep", spotdl_dir, apply=True)
+        assert lib._lib.get_item(item.id).get("sources") == "keep"
