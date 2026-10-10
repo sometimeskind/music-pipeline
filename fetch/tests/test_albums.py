@@ -426,6 +426,52 @@ def test_complete_rejects_a_path_outside_the_complete_dir(roots) -> None:
     assert status == albums.WANTED and seen == []
 
 
+
+def test_complete_import_crash_keeps_the_release_for_a_retry(roots) -> None:
+    """An exception in the import moves the job back and leaves the record grabbed (#261)."""
+    complete_root, inbox, quarantine = roots
+    state = grabbed_state()
+
+    def crash():
+        raise ValueError("No closing quotation")
+
+    status = albums.complete(
+        state, albums.Completion("nzo1", True, "album/Artist-Album-FLAC"), crash,
+        missing=lambda pl, tracks: [], add_source=lambda *a: None, tag_ids=lambda *a: None,
+        complete_root=complete_root, inbox_root=inbox, quarantine_root=quarantine, settings=Settings(mode="on"),
+    )
+    record = state.albums["a0"]
+    assert status == albums.GRABBED and record["status"] == albums.GRABBED
+    assert record["blocklist"] == [] and record.get("attempts", 0) == 0
+    assert (complete_root / "album" / "Artist-Album-FLAC" / "01.flac").exists()
+    assert not (inbox / "later" / "Artist-Album-FLAC").exists()
+    first_start = record["import_started"]
+
+    # The next tick's recovery imports it, counting items from the first try.
+    since = []
+    status = albums.complete(
+        state, albums.Completion("nzo1", True, "album/Artist-Album-FLAC"), lambda: None,
+        missing=lambda pl, tracks: [], add_source=lambda *a: None,
+        tag_ids=lambda pl, tracks, start, count: since.append(start),
+        complete_root=complete_root, inbox_root=inbox, quarantine_root=quarantine, settings=Settings(mode="on"),
+    )
+    assert status == albums.IMPORTED
+    assert since == [first_start] and "import_started" not in record
+
+
+def test_complete_missing_job_dir_grabs_again_without_an_attempt(roots, caplog) -> None:
+    """A completed job whose dir is gone isn't the release's fault (#261)."""
+    state = grabbed_state()
+    state.albums["a0"]["attempts"] = albums.MAX_ATTEMPTS - 1
+    with caplog.at_level("WARNING", logger="music_fetch.albums"):
+        status, seen, _ = run_complete(state, albums.Completion("nzo1", True, "album/Gone"), roots)
+    record = state.albums["a0"]
+    assert status == albums.WANTED and seen == []
+    assert record["blocklist"] == [] and record["attempts"] == albums.MAX_ATTEMPTS - 1
+    assert "nzo_id" not in record
+    assert "[LOST]" in caplog.text
+
+
 def test_lost_completions_only_for_stale_grabs() -> None:
     state = grabbed_state()
     state.albums["a1"] = dict(state.albums["a0"], nzo_id="fresh", grabbed_at=albums._iso(NOW))
@@ -878,3 +924,46 @@ def test_release_a_failed_album_held_is_grabbed() -> None:
     prowlarr, sab = fakes()
     top_up(state, Settings(mode="on"), prowlarr, sab, never_have, albums.TickResult(), now=lambda: NOW)
     assert state.albums["a0"]["candidate"]["guid"] == "r1"
+
+
+
+def test_reset_album_undoes_the_last_attempt() -> None:
+    """Zero 7's vinyl release was blocklisted for a deleted dir (#261): put it back."""
+    state = grabbed_state()
+    record = state.albums["a0"]
+    record.update(status=albums.FALLBACK, attempts=3, blocklist=["r0", "r1"], fallback_from=albums.FAILED,
+                  fallback_tracks={"later": ["s1"]})
+    key, before, after = albums.reset_album(state, record["name"][:4].upper())
+    assert key == "a0" and before["attempts"] == 3
+    assert after["status"] == albums.WANTED and after["attempts"] == 2 and after["blocklist"] == ["r0"]
+    assert "fallback_tracks" not in after and "nzo_id" not in after
+
+
+def test_reset_album_needs_exactly_one_match() -> None:
+    state = grabbed_state()
+    state.albums["a1"] = dict(state.albums["a0"])
+    assert albums.reset_album(state, state.albums["a0"]["name"]) is None
+    assert albums.reset_album(state, "no such album") is None
+
+
+
+def test_complete_an_import_that_always_crashes_counts_against_the_release(roots) -> None:
+    """The retry is bounded: the third crash blocklists like a failed import (#261)."""
+    complete_root, inbox, quarantine = roots
+    state = grabbed_state()
+
+    def crash():
+        raise ValueError("boom")
+
+    statuses = [
+        albums.complete(
+            state, albums.Completion("nzo1", True, "album/Artist-Album-FLAC"), crash,
+            missing=lambda pl, tracks: tracks, add_source=lambda *a: None, tag_ids=lambda *a: None,
+            complete_root=complete_root, inbox_root=inbox, quarantine_root=quarantine, settings=Settings(mode="on"),
+        )
+        for _ in range(albums.MAX_IMPORT_ERRORS)
+    ]
+    record = state.albums["a0"]
+    assert statuses == [albums.GRABBED] * (albums.MAX_IMPORT_ERRORS - 1) + [albums.WANTED]
+    assert record["blocklist"] == ["r1"] and record["attempts"] == 1
+    assert "import_errors" not in record and "import_started" not in record
