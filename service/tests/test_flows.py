@@ -546,7 +546,7 @@ def test_album_completion_supersedes_loose_copies_after_canon():
     lib.items_by_source.return_value = [fresh, old]
     with patch.object(flows.scan, "tag_album_ids", side_effect=lambda *a: events.append("ids")), \
          patch.object(canon, "canonicalize_items", side_effect=lambda items: events.append("canon")), \
-         patch.object(supersede, "after_import", side_effect=lambda lib, items, n: events.append(("sup", items, n)) or 1), \
+         patch.object(supersede, "after_import", side_effect=lambda lib, items, n, tracks: events.append(("sup", items, n)) or 1), \
          patch("music_scan.cover.embed_covers", return_value=0), \
          patch("music_scan.cover.covers_by_id", return_value={}), \
          patch.object(flows.scan, "regen_playlists", side_effect=lambda: events.append("m3u")), \

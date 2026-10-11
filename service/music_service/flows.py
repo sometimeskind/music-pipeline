@@ -416,7 +416,7 @@ def _album_library_hooks(lib):
     def tag_ids(playlist: str, tracks: list[list], since: float, tracks_count: int) -> None:
         scan.tag_album_ids(lib, playlist, tracks, since, tracks_count)
         canon_albums(playlist, since)
-        supersede(playlist, since, tracks_count)
+        supersede(playlist, since, tracks_count, tracks)
         embed_covers(playlist, since)
 
     def canon_albums(playlist: str, since: float) -> None:
@@ -430,7 +430,7 @@ def _album_library_hooks(lib):
         except Exception:
             canon.logger.exception("Canonical albums failed; the next scan or music-canon-albums retries it")
 
-    def supersede(playlist: str, since: float, tracks_count: int) -> None:
+    def supersede(playlist: str, since: float, tracks_count: int, tracks: list[list]) -> None:
         # After canon, which files the loose items' slots (#266).  The .m3u
         # files listed the loose items, so regenerate.
         from music_scan import supersede as sup  # noqa: PLC0415
@@ -440,7 +440,7 @@ def _album_library_hooks(lib):
             with concurrency("pipeline", occupy=1):
                 fresh = [i for i in lib.items_by_source(playlist)
                          if i.get("via") == "usenet" and (i.added or 0) >= since]
-                n = sup.after_import(lib, fresh, tracks_count)
+                n = sup.after_import(lib, fresh, tracks_count, tracks)
                 if n:
                     scan.regen_playlists()
             if n:

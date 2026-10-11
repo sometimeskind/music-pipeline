@@ -21,9 +21,19 @@ Only identity decides which album item replaces a loose one (#255), first hit wi
    count (``tag_album_ids``' guard: editions renumber tracks).  Disjoint
    ISRCs veto it.
 
+A loose item canon moved onto the album from a twin release (#214) holds the
+twin's Spotify ID, which no album item has, so the album's tracklist (the
+record's entries) resolves it (#274):
+
+5. a shared ISRC with a tracklist entry: the album item holding that entry's
+   Spotify ID (not by title words);
+6. disc and track: the entry at the loose item's slot (canon numbered it
+   from the album), each slot once.  Disjoint ISRCs veto it.
+
 Title words never supersede.  A loose item on the album that no rung matches
-is kept and logged ``[KEEP]``; ``music-audit-dupes`` compares the pair's
-fingerprints.  Loose means not ``via=usenet``: another release's item is an
+is kept and logged ``[KEEP]`` with the reason; ``music-audit-dupes`` compares
+the pair's fingerprints.  The album item then takes the loose item's path
+when it sat beside it as a ``.1`` copy.  Loose means not ``via=usenet``: another release's item is an
 album copy too, and a manually imported item (any other ``via``) is never
 replaced (``[MANUAL]``).
 
@@ -40,7 +50,7 @@ import os
 from collections import Counter
 from pathlib import Path
 
-from music_scan.identity import item_isrcs, item_spotify_ids, split_list
+from music_scan.identity import PlaylistTrack, item_isrcs, item_spotify_ids, split_list
 
 logger = logging.getLogger(__name__)
 
@@ -52,6 +62,12 @@ class Pair:
     album: object  # the album item, kept
     loose: list  # the older items it replaces
     how: list  # per loose item, the rung that matched
+
+
+@dataclasses.dataclass
+class Kept:
+    item: object  # a loose item on the album no rung matched
+    why: str
 
 
 def _path(item) -> str:
@@ -79,11 +95,68 @@ def _id_rung(loose, album) -> str | None:
     return None
 
 
-def plan(release: list, library: list, tracks_count: int) -> tuple[list[Pair], list]:
+def _isrcs(item) -> set[str]:
+    return {c.upper() for c in item_isrcs(item)}
+
+
+class _Tracklist:
+    """The album's tracklist entries, and the release item holding each one's Spotify ID."""
+
+    def __init__(self, release: list, tracks) -> None:
+        self.entries = [e for e in map(PlaylistTrack.from_entry, tracks) if e.song_id]
+        self.holder: dict[str, object] = {}  # Spotify ID → release item, not by title words
+        self.by_words: dict[str, object] = {}
+        for album in sorted(release, key=lambda i: i.id):
+            words = set(split_list(album.get("words_ids")))
+            for sid in item_spotify_ids(album):
+                (self.by_words if sid in words else self.holder).setdefault(sid, album)
+        self.taken: set[tuple[int, int]] = set()
+
+    def at(self, slot: tuple[int, int]) -> PlaylistTrack | None:
+        return next((e for e in self.entries if (e.disc or 1, e.track or 0) == slot), None)
+
+    def resolve(self, loose) -> tuple[object, str | None, str]:
+        """``(album item, rung, why not)`` for *loose* through the tracklist (#274)."""
+        isrcs = _isrcs(loose)
+        for e in self.entries:
+            if e.isrc and e.isrc.upper() in isrcs and e.song_id in self.holder:
+                return self.holder[e.song_id], "tracklist isrc", ""
+        ids = item_spotify_ids(loose)
+        own = next((e for e in self.entries if e.song_id in ids), None)
+        if own is not None:
+            return None, None, (f"its Spotify ID is the album's track {own.disc or 1}-{own.track or 0}, "
+                                f"{self._unheld(own)}")
+        slot = _slot(loose)
+        e = self.at(slot)
+        if e is None:
+            return None, None, (f"its Spotify ID is not on the album's tracklist (a twin release's?) and "
+                                f"no entry sits at its disc/track {slot[0]}-{slot[1]}")
+        album = self.holder.get(e.song_id)
+        if album is None:
+            return None, None, (f"its Spotify ID is not on the album's tracklist (a twin release's?); "
+                                f"track {slot[0]}-{slot[1]} is {e.song_id}, {self._unheld(e)}")
+        known = ({e.isrc.upper()} if e.isrc else set()) | _isrcs(album)
+        if isrcs and known and not isrcs & known:
+            return None, None, (f"its ISRCs {';'.join(sorted(isrcs))} differ from track {slot[0]}-{slot[1]}'s "
+                                f"({';'.join(sorted(known))}, album item {album.id})")
+        if slot in self.taken:
+            return None, None, f"another loose item already took track {slot[0]}-{slot[1]}"
+        self.taken.add(slot)
+        return album, "tracklist disc/track", ""
+
+    def _unheld(self, e: PlaylistTrack) -> str:
+        if e.song_id in self.by_words:
+            return f"which album item {self.by_words[e.song_id].id} holds by title words only (#255)"
+        return "which no item of the release holds"
+
+
+def plan(release: list, library: list, tracks_count: int, tracks=()) -> tuple[list[Pair], list[Kept]]:
     """``(pairs, kept)``: which *library* items each item of *release* (one
     import's usenet items) supersedes, and the loose items on its album no
-    rung matched.  Leaves the items as they were."""
+    rung matched.  *tracks* are the album's tracklist entries
+    (:class:`PlaylistTrack` lists).  Leaves the items as they were."""
     mine = {i.id for i in release}
+    tracklist = _Tracklist(release, tracks)
     album_id = _album_id(release)
     # Positional rung: the release's items with no Spotify ID, by their own numbering.
     numbered = {_slot(i): i for i in release
@@ -106,9 +179,17 @@ def plan(release: list, library: list, tracks_count: int) -> tuple[list[Pair], l
                                           and not item_isrcs(album) & item_isrcs(loose)):
                 # One loose item per slot: another one there is another copy, kept.
                 match, how = numbered.pop(_slot(loose)), "disc/track"
+        if match is None and on_album:
+            if not item_spotify_ids(loose):
+                kept.append(Kept(loose, "it has no Spotify ID"))
+                continue
+            if not tracklist.entries:
+                kept.append(Kept(loose, "no ID matches an item of the release, and the record has no tracklist"))
+                continue
+            match, how, why = tracklist.resolve(loose)
+            if match is None:
+                kept.append(Kept(loose, why))
         if match is None:
-            if on_album:
-                kept.append(loose)
             continue
         if (loose.get("via") or "") not in MANAGED_VIA:
             logger.info("  [MANUAL] %s %s: the same track as album item %s (%s), but imported by hand; kept",
@@ -120,18 +201,29 @@ def plan(release: list, library: list, tracks_count: int) -> tuple[list[Pair], l
     return list(pairs.values()), kept
 
 
-def log(pairs: list[Pair], kept: list, apply: bool) -> None:
+def _freed(p: Pair) -> str | None:
+    """The path the album item moves to once its loose items are gone: one of theirs (a ``.1`` clash)."""
+    dest = os.fsdecode(p.album.destination())
+    return dest if dest != _path(p.album) and dest in {_path(i) for i in p.loose} else None
+
+
+def log(pairs: list[Pair], kept: list[Kept], apply: bool) -> None:
     for p in pairs:
         for loose, how in zip(p.loose, p.how):
             logger.info("  [SUPERSEDE] %s %s ← %s %s (%s; playlists %s)%s", p.album.id, _path(p.album), loose.id,
                         _path(loose), how, loose.get("sources") or "-", "" if apply else " (dry run)")
-    for loose in kept:
-        logger.info("  [KEEP] %s %s — %s %s: on the album, but no ID matches an item of the release; kept",
-                    loose.id, loose.get("artist"), loose.get("title"), _path(loose))
+        if dest := _freed(p):
+            logger.info("  [MOVE] %s %s → %s: the path its loose copy held%s", p.album.id, _path(p.album), dest,
+                        "" if apply else " (dry run)")
+    for k in kept:
+        logger.info("  [KEEP] %s %s — %s %s: on the album, but %s; kept",
+                    k.item.id, k.item.get("artist"), k.item.get("title"), _path(k.item), k.why)
 
 
 def apply_pairs(pairs: list[Pair], replaced_dir: Path | None = None) -> int:
     """Merge each pair's loose items onto its album item.  Returns the count replaced."""
+    from beets.util import MoveOperation  # noqa: PLC0415
+
     from music_scan.dupes import REPLACED, merge  # noqa: PLC0415
 
     n = 0
@@ -141,16 +233,21 @@ def apply_pairs(pairs: list[Pair], replaced_dir: Path | None = None) -> int:
         retag = bool(mbid) and p.album.get("mb_trackid") != mbid
         if retag:
             p.album["mb_trackid"] = mbid
+        freed = _freed(p)
         merge(p.album, p.loose, replaced_dir or REPLACED)
         if retag:
             p.album.try_write()
+        # The loose file is in replaced/ now: the album item leaves its .1 path (#274).
+        if freed and not os.path.exists(freed):
+            p.album.move(operation=MoveOperation.MOVE, store=False)
+            p.album.store()
         n += len(p.loose)
     return n
 
 
-def after_import(lib, release: list, tracks_count: int) -> int:
+def after_import(lib, release: list, tracks_count: int, tracks=()) -> int:
     """The album completion's hook: supersede what *release* replaces.  Returns the count."""
-    pairs, kept = plan(release, lib.all_items(), tracks_count)
+    pairs, kept = plan(release, lib.all_items(), tracks_count, tracks)
     log(pairs, kept, apply=True)
     return apply_pairs(pairs)
 
@@ -165,13 +262,15 @@ def release_items(items: list, record: dict) -> list:
 
 def backfill(lib, records: dict[str, dict], apply: bool, replaced_dir: Path | None = None) -> list[Pair]:
     """Supersede for every album record's successful release; with *apply*, merge."""
+    from music_fetch.albums import album_tracks  # noqa: PLC0415
+
     done: list[Pair] = []
     for record in records.values():
         items = lib.all_items()
         release = release_items(items, record)
         if not release:
             continue
-        pairs, kept = plan(release, items, record.get("tracks_count") or 0)
+        pairs, kept = plan(release, items, record.get("tracks_count") or 0, album_tracks(record))
         if pairs or kept:
             logger.info("[ALBUM] %s — %s: %d loose item(s) superseded, %d kept", record.get("artist"),
                         record.get("name"), sum(len(p.loose) for p in pairs), len(kept))

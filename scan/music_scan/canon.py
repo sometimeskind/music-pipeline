@@ -980,11 +980,14 @@ def run(apply: bool = False, refresh: bool = False, mb_budget: int | None = None
     superseded = sum(len(p.loose) for p in plan.supersedes)
     logger.info("Extras: %d successful-release extra(s) take their album's tags (%d file(s) move), local-only; "
                 "%d loose item(s) superseded by their album copy", len(plan.extras), moved - plan.moved, superseded)
-    changed = len(plan.changes) - plan.waiting + len(plan.extras) + superseded
+    retagged = len(plan.changes) - plan.waiting
+    changed = retagged + len(plan.extras) + superseded
+    # The same count as the Changes and Extras lines above, not a fourth one.
+    parts = f"{retagged} retagged, {len(plan.extras)} extra(s), {superseded} superseded"
     if not apply:
-        logger.info("Dry run: %d item(s) would change. Re-run with --apply to write.", changed)
+        logger.info("Dry run: %d item(s) would change (%s). Re-run with --apply to write.", changed, parts)
         return plan
-    logger.info("Retagged %d item(s)", changed)
+    logger.info("Changed %d item(s) (%s)", changed, parts)
     if moved or superseded:
         # Navidrome drops .m3u entries whose file moved, so the playlists go first (#218).
         counts = regen_playlists()
