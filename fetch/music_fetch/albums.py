@@ -61,6 +61,10 @@ MISSING_RETRY = timedelta(days=7)
 MAX_ATTEMPTS = 3
 # Import crashes retried before one counts against the release like a failed import (#261).
 MAX_IMPORT_ERRORS = 3
+# Deferred imports (MusicBrainz down, #264) retried before one counts against the
+# release.  The lost-trigger recovery retries every tick (30 min) once the grab is
+# an hour old, so this waits out an outage of about 6 hours.
+MAX_IMPORT_DEFERRALS = 12
 # A trigger lost for longer than this is recovered from SABnzbd history.
 LOST_TRIGGER_AFTER = timedelta(hours=1)
 # Albums in a row whose searches find nothing at all before a tick stops (#263):
@@ -665,6 +669,12 @@ def _inside(root: Path, rel: str) -> Path | None:
     return target
 
 
+class ImportDeferred(Exception):
+    """*import_inbox* could not judge the release: a service it needs, such as
+    MusicBrainz, was unavailable (#264).  Retried without blame, up to
+    MAX_IMPORT_DEFERRALS times."""
+
+
 def complete(
     state: State,
     completion: Completion,
@@ -698,7 +708,8 @@ def complete(
     dir goes back to the completed dir and the record stays ``grabbed``, so the
     next tick's lost-trigger recovery imports it again.  A completed job whose
     dir is gone is logged ``[LOST]`` and grabbed again, without a blocklist
-    entry or an attempt.
+    entry or an attempt.  An ``ImportDeferred`` (MusicBrainz down, #264) is
+    retried the same way, under its own, longer cap.
 
     A blocklisted release is rolled back (#238): *rollback(playlist, since)*
     quarantines the items it imported that match no playlist entry (an
@@ -730,9 +741,21 @@ def complete(
         logger.info("[IMPT] %s: importing %s", label, job_name)
         # A retried import counts its items from the first try's start (#261).
         started = record.setdefault("import_started", time.time())
-        crashed = False
+        gave_up = ""  # why a retried import now counts against the release
         try:
             import_inbox()
+        except ImportDeferred as exc:
+            record["import_deferrals"] = record.get("import_deferrals", 0) + 1
+            if record["import_deferrals"] <= MAX_IMPORT_DEFERRALS:
+                logger.warning("[RETRY] %s: %s — moving %s back, the next tick retries (%d/%d)",
+                               label, exc, job_name, record["import_deferrals"], MAX_IMPORT_DEFERRALS)
+                if dest.exists():
+                    shutil.move(str(dest), source)
+                return GRABBED
+            # An outage this long: count it against the release rather than wait forever.
+            logger.warning("[FAIL] %s: the import of %s was deferred %d times: %s",
+                           label, job_name, record["import_deferrals"], exc)
+            gave_up = f"the import was deferred {record['import_deferrals']} times"
         except Exception:
             record["import_errors"] = record.get("import_errors", 0) + 1
             if record["import_errors"] < MAX_IMPORT_ERRORS:
@@ -743,11 +766,12 @@ def complete(
                 return GRABBED
             # The same crash every time: count it against the release rather than loop.
             logger.exception("[FAIL] %s: the import of %s failed %d times", label, job_name, record["import_errors"])
-            crashed = True
+            gave_up = f"the import crashed {MAX_IMPORT_ERRORS} times"
         # Leftovers beets doesn't import (nfo, sfv, cue, cover scans).
         shutil.rmtree(dest, ignore_errors=True)
         record.pop("import_started", None)
         record.pop("import_errors", None)
+        record.pop("import_deferrals", None)
         tracks = record["playlists"][first]
         # Before counting: a track only the release-scoped rung finds counts as imported (#240).
         tag_ids(first, tracks, started, record.get("tracks_count") or 0)
@@ -760,8 +784,8 @@ def complete(
                 add_source(first, other, record["playlists"][other])
         else:
             reason = f"beets did not import {len(gaps)} of {len(tracks)} track(s) (quarantined or unmatched)"
-            if crashed:
-                reason = f"the import crashed {MAX_IMPORT_ERRORS} times; {reason}"
+            if gave_up:
+                reason = f"{gave_up}; {reason}"
             # Records from before #176 hold only [name, artist].
             gap_keys = sorted({(t[2] if len(t) > 2 else None) or f"{t[0]} — {t[1]}" for t in gaps})
         for playlist in playlists[1:]:
@@ -774,6 +798,7 @@ def complete(
         record.pop("nzo_id", None)
         record.pop("import_started", None)
         record.pop("import_errors", None)
+        record.pop("import_deferrals", None)
         return WANTED
     elif completion.ok:
         reason = f"completed job dir not usable: {completion.path!r}"
@@ -868,7 +893,7 @@ def reset_album(state: State, query: str) -> tuple[str, dict, dict] | None:
         record["blocklist"].remove(guid)
     record["attempts"] = max(0, record.get("attempts", 0) - 1)
     record["status"] = WANTED
-    for field in ("nzo_id", "import_started", "import_errors", "fallback_from", "fallback_at", "fallback_tracks"):
+    for field in ("nzo_id", "import_started", "import_errors", "import_deferrals", "fallback_from", "fallback_at", "fallback_tracks"):
         record.pop(field, None)
     return key, before, record
 

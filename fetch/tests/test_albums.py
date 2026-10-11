@@ -1090,3 +1090,76 @@ def test_requeue_main_is_a_dry_run_without_apply(tmp_path: Path, monkeypatch) ->
     monkeypatch.setattr("sys.argv", ["music-album-requeue", "--since", "2026-10-10T22:00", "--apply"])
     albums.requeue_main()
     assert State.load(path).albums["new"]["status"] == albums.WANTED
+
+
+def test_complete_musicbrainz_outage_retries_without_blame(roots, caplog) -> None:
+    """Yeezus (#264): a MusicBrainz outage during the import is not the release's fault."""
+    complete_root, inbox, quarantine = roots
+    state = grabbed_state()
+
+    def outage():
+        raise albums.ImportDeferred("MusicBrainz unavailable (503)")
+
+    with caplog.at_level("INFO", logger="music_fetch.albums"):
+        status = albums.complete(
+            state, albums.Completion("nzo1", True, "album/Artist-Album-FLAC"), outage,
+            missing=lambda pl, tracks: tracks, add_source=lambda *a: None, tag_ids=lambda *a: None,
+            complete_root=complete_root, inbox_root=inbox, quarantine_root=quarantine, settings=Settings(mode="on"),
+        )
+    record = state.albums["a0"]
+    assert status == albums.GRABBED and record["status"] == albums.GRABBED
+    assert record["blocklist"] == [] and record.get("attempts", 0) == 0
+    assert record["import_deferrals"] == 1 and "import_errors" not in record
+    assert (complete_root / "album" / "Artist-Album-FLAC" / "01.flac").exists()
+    assert "[RETRY]" in caplog.text and "[FAIL]" not in caplog.text
+
+
+def test_complete_musicbrainz_outage_does_not_spend_the_crash_retries(roots) -> None:
+    """Deferrals have their own, longer cap: an outage outlasts three ticks (#264)."""
+    complete_root, inbox, quarantine = roots
+    state = grabbed_state()
+
+    def outage():
+        raise albums.ImportDeferred("MusicBrainz unavailable (503)")
+
+    statuses = [
+        albums.complete(
+            state, albums.Completion("nzo1", True, "album/Artist-Album-FLAC"), outage,
+            missing=lambda pl, tracks: tracks, add_source=lambda *a: None, tag_ids=lambda *a: None,
+            complete_root=complete_root, inbox_root=inbox, quarantine_root=quarantine, settings=Settings(mode="on"),
+        )
+        for _ in range(albums.MAX_IMPORT_DEFERRALS)
+    ]
+    record = state.albums["a0"]
+    assert albums.MAX_IMPORT_DEFERRALS > albums.MAX_IMPORT_ERRORS
+    assert statuses == [albums.GRABBED] * albums.MAX_IMPORT_DEFERRALS
+    assert record["blocklist"] == [] and record.get("attempts", 0) == 0
+
+    # MusicBrainz is back: the import succeeds and the counters go.
+    status = albums.complete(
+        state, albums.Completion("nzo1", True, "album/Artist-Album-FLAC"), lambda: None,
+        missing=lambda pl, tracks: [], add_source=lambda *a: None, tag_ids=lambda *a: None,
+        complete_root=complete_root, inbox_root=inbox, quarantine_root=quarantine, settings=Settings(mode="on"),
+    )
+    assert status == albums.IMPORTED
+    assert "import_deferrals" not in record and "import_started" not in record
+
+
+def test_complete_an_endless_outage_counts_against_the_release(roots) -> None:
+    """The cap: one deferral past MAX_IMPORT_DEFERRALS blocklists like a failed import (#264)."""
+    complete_root, inbox, quarantine = roots
+    state = grabbed_state()
+    state.albums["a0"]["import_deferrals"] = albums.MAX_IMPORT_DEFERRALS
+
+    def outage():
+        raise albums.ImportDeferred("MusicBrainz unavailable (503)")
+
+    status = albums.complete(
+        state, albums.Completion("nzo1", True, "album/Artist-Album-FLAC"), outage,
+        missing=lambda pl, tracks: tracks, add_source=lambda *a: None, tag_ids=lambda *a: None,
+        complete_root=complete_root, inbox_root=inbox, quarantine_root=quarantine, settings=Settings(mode="on"),
+    )
+    record = state.albums["a0"]
+    assert status == albums.WANTED
+    assert record["blocklist"] == ["r1"] and record["attempts"] == 1
+    assert "import_deferrals" not in record

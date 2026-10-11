@@ -269,7 +269,7 @@ def test_run_trigger_scan_failure_sets_success_false(tmp_path: Path) -> None:
             pass
 
     with mock.patch("music_scan.scan.MusicLibrary", return_value=_make_mock_lib()), \
-         mock.patch("music_scan.scan.run_beet_import"), \
+         mock.patch("music_scan.scan.run_beet_import", return_value=0), \
          mock.patch("music_scan.scan.run_beet_update"), \
          mock.patch("music_scan.scan._move_asis_eligible", return_value=0), \
          mock.patch("music_scan.scan.INBOX", tmp_path), \
@@ -292,7 +292,7 @@ def test_run_with_pending_none_skips_apply(tmp_path: Path) -> None:
 
     with mock.patch("music_scan.scan.apply_pending_removals") as mock_apply, \
          mock.patch("music_scan.scan.MusicLibrary", return_value=_make_mock_lib()), \
-         mock.patch("music_scan.scan.run_beet_import"), \
+         mock.patch("music_scan.scan.run_beet_import", return_value=0), \
          mock.patch("music_scan.scan.run_beet_update"), \
          mock.patch("music_scan.scan._move_asis_eligible", return_value=0), \
          mock.patch("music_scan.scan.INBOX", tmp_path), \
@@ -342,7 +342,7 @@ def test_run_clears_the_removals_it_applied(tmp_path: Path) -> None:
     with mock.patch("music_scan.scan.apply_pending_removals", return_value=0), \
          mock.patch("music_scan.scan.clear_pending_removals") as mock_clear, \
          mock.patch("music_scan.scan.MusicLibrary", return_value=_make_mock_lib()), \
-         mock.patch("music_scan.scan.run_beet_import"), \
+         mock.patch("music_scan.scan.run_beet_import", return_value=0), \
          mock.patch("music_scan.scan.run_beet_update"), \
          mock.patch("music_scan.scan._move_asis_eligible", return_value=0), \
          mock.patch("music_scan.scan.INBOX", tmp_path), \
@@ -386,7 +386,7 @@ def test_run_asis_import_failure_continues_to_beet_update(tmp_path: Path) -> Non
 
     with mock.patch("music_scan.scan.import_asis_from_quarantine", side_effect=RuntimeError("staging error")), \
          mock.patch("music_scan.scan.MusicLibrary", return_value=_make_mock_lib()), \
-         mock.patch("music_scan.scan.run_beet_import"), \
+         mock.patch("music_scan.scan.run_beet_import", return_value=0), \
          mock.patch("music_scan.scan.run_beet_update", side_effect=lambda: update_called.append(True)), \
          mock.patch("music_scan.scan.INBOX", tmp_path), \
          mock.patch("music_scan.scan.SPOTDL_DIR", tmp_path), \
@@ -407,7 +407,7 @@ def test_run_beet_update_failure_continues_to_regen_playlists(tmp_path: Path) ->
 
     with mock.patch("music_scan.scan.run_beet_update", side_effect=RuntimeError("db gone")), \
          mock.patch("music_scan.scan.MusicLibrary", return_value=_make_mock_lib()), \
-         mock.patch("music_scan.scan.run_beet_import"), \
+         mock.patch("music_scan.scan.run_beet_import", return_value=0), \
          mock.patch("music_scan.scan.regen_playlists", side_effect=lambda *_: regen_called.append(True)), \
          mock.patch("music_scan.scan.import_asis_from_quarantine", return_value=0), \
          mock.patch("music_scan.scan.INBOX", tmp_path), \
@@ -1271,3 +1271,84 @@ def test_missing_tracks_and_have_or_link_read_resolved_slots(real_lib) -> None:
     assert _reload(real_lib, two).get("sources") == "keep"  # nothing tagged while a track is missing
     assert have_or_link(source, library, "later", tracks[:2])
     assert _reload(real_lib, two).get("sources") == "keep,later"
+
+
+# beets' stderr during the Yeezus import (#264), as Loki has it.
+MB_503_LINES = [
+    "musicbrainz: Error searching MusicBrainz: HTTPSConnectionPool(host='musicbrainz.org', port=443): Max retries "
+    "exceeded with url: /ws/2/recording?limit=5&query=artist%3A%28kanye+west%29&fmt=json "
+    "(Caused by ResponseError('too many 503 error responses'))",
+    "urllib3.exceptions.MaxRetryError: HTTPSConnectionPool(host='musicbrainz.org', port=443): Max retries exceeded "
+    "with url: /ws/2/recording?limit=5&fmt=json (Caused by ResponseError('too many 503 error responses'))",
+    "requests.exceptions.RetryError: HTTPSConnectionPool(host='musicbrainz.org', port=443): Max retries exceeded "
+    "with url: /ws/2/recording?limit=5&fmt=json (Caused by ResponseError('too many 503 error responses'))",
+]
+
+
+def test_musicbrainz_unavailable_matches_the_yeezus_lines() -> None:
+    from music_scan.process import musicbrainz_unavailable
+
+    assert all(musicbrainz_unavailable(line) for line in MB_503_LINES)
+    assert not musicbrainz_unavailable("urllib3.exceptions.ResponseError: too many 503 error responses")
+    assert not musicbrainz_unavailable(
+        "HTTPSConnectionPool(host='api.acoustid.org', port=443): Max retries exceeded with url: /v2/lookup")
+    assert not musicbrainz_unavailable("Skipping.")
+
+
+def test_run_beet_import_counts_musicbrainz_errors() -> None:
+    from music_scan.process import run_beet_import
+
+    mock_proc = mock.MagicMock()
+    mock_proc.wait.return_value = 0
+    mock_proc.stderr = [line.encode() + b"\n" for line in ["Traceback (most recent call last):", *MB_503_LINES]]
+    with mock.patch("subprocess.Popen", return_value=mock_proc), \
+         mock.patch("music_scan.process.IMPORT_LOG") as mock_log:
+        mock_log.exists.return_value = False
+        assert run_beet_import(Path("/some/dir")) == len(MB_503_LINES)
+
+
+def test_run_inbox_import_raises_when_musicbrainz_was_down(tmp_path: Path) -> None:
+    """beets exits 0 after skipping every track; the import must not pass for a clean run (#264)."""
+    import music_scan.scan as scan
+
+    job = tmp_path / "usenet" / "keep" / "Kanye West-Yeezus-CD-FLAC-2013-PERFECT"
+    job.mkdir(parents=True)
+    (job / "01-on_sight.flac").touch()
+    with mock.patch.object(scan, "INBOX", tmp_path), \
+         mock.patch.object(scan, "run_beet_import", return_value=3), \
+         mock.patch.object(scan, "MusicLibrary", return_value=_make_mock_lib()):
+        with pytest.raises(scan.MusicBrainzUnavailable):
+            scan.run_inbox_import()
+    assert (job / "01-on_sight.flac").exists()
+
+
+def test_run_marks_a_musicbrainz_outage(tmp_path: Path) -> None:
+    """The skipped files stay in the inbox for the next scan, not quarantine (#264)."""
+    from music_scan import scan
+
+    captured = []
+
+    class FakeMetrics(scan.ScanMetrics):
+        def __init__(self):
+            super().__init__()
+            captured.append(self)
+
+        def push(self):
+            pass
+
+    inbox = tmp_path / "inbox"
+    (inbox / "spotdl" / "keep").mkdir(parents=True)
+    (inbox / "spotdl" / "keep" / "Artist - Song.m4a").touch()
+    with mock.patch("music_scan.scan.MusicLibrary", return_value=_make_mock_lib()), \
+         mock.patch("music_scan.scan.run_beet_import", return_value=1), \
+         mock.patch("music_scan.scan.guard_inbox", return_value=0), \
+         mock.patch("music_scan.scan.INBOX", inbox), \
+         mock.patch("music_scan.scan.SPOTDL_DIR", inbox / "spotdl"), \
+         mock.patch("music_scan.scan.QUARANTINE", tmp_path / "quarantine"), \
+         mock.patch("music_scan.scan.ScanMetrics", FakeMetrics), \
+         mock.patch("music_scan.scan.count_lossless_items", return_value=0):
+        with pytest.raises(scan.MusicBrainzUnavailable):
+            scan.run(pending=None)
+
+    assert captured[0].success is False and captured[0].failure_reason == "musicbrainz_unavailable"
+    assert (inbox / "spotdl" / "keep" / "Artist - Song.m4a").exists()

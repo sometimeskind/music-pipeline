@@ -78,8 +78,19 @@ def _check_import_names(inbox_stems: list[str], imported: list[tuple[str, str]])
         logger.info("==> Name check OK: all %d imported tracks resemble their inbox source files", len(imported))
 
 
+class MusicBrainzUnavailable(RuntimeError):
+    """beets could not reach MusicBrainz during the import (#264).
+
+    The tracks it skipped for that reason are no worse than before, so they stay
+    in the inbox for the next scan instead of going to quarantine."""
+
+
 def run_inbox_import(skip_limit: int | None = None) -> list[tuple[str, str]]:
-    """Snapshot inbox, run beet import, check names. Returns (title, artist) pairs."""
+    """Snapshot inbox, run beet import, check names. Returns (title, artist) pairs.
+
+    Raises MusicBrainzUnavailable, after the import, when beets logged that
+    MusicBrainz was unreachable: what it imported stays imported, the rest
+    stays in the inbox."""
     if skip_limit is None:
         skip_limit_env = os.environ.get("BEET_SKIP_LIMIT")
         skip_limit = int(skip_limit_env) if skip_limit_env else None
@@ -88,10 +99,15 @@ def run_inbox_import(skip_limit: int | None = None) -> list[tuple[str, str]]:
     inbox_snapshot = _snapshot_inbox(INBOX)
     logger.info("Inbox snapshot : %d audio file(s) queued for import", len(inbox_snapshot))
     import_start = time.time()
-    run_beet_import(INBOX, skip_limit=skip_limit)
+    mb_errors = run_beet_import(INBOX, skip_limit=skip_limit)
     with MusicLibrary(LIBRARY_DB) as lib:
         imported = lib.items_added_since(import_start)
     logger.info("Newly imported : %d track(s)", len(imported))
+    if mb_errors:
+        raise MusicBrainzUnavailable(
+            f"beets could not reach MusicBrainz ({mb_errors} error line(s)); "
+            f"{len(imported)} of {len(inbox_snapshot)} inbox file(s) imported, the rest stay in the inbox"
+        )
     if inbox_snapshot and not imported:
         logger.warning(
             "==> 0 of %d inbox file(s) were imported — beets skipped all tracks. "
@@ -510,9 +526,9 @@ def run(pending: PendingRemovals | None = None) -> None:
 
         logger.info("==> music-scan import complete")
 
-    except Exception:
+    except Exception as exc:
         metrics.success = False
-        metrics.failure_reason = "unexpected_error"
+        metrics.failure_reason = "musicbrainz_unavailable" if isinstance(exc, MusicBrainzUnavailable) else "unexpected_error"
         logger.exception("music-scan failed")
         raise
     else:

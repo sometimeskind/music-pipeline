@@ -14,6 +14,7 @@ import music_scan.reconcile as reconcile
 import music_scan.scan as scan
 from music_fetch.config import load_playlists
 from music_scan.metrics import ScanMetrics
+from music_scan.scan import MusicBrainzUnavailable
 
 # Prefect runs each flow run in a `python -m prefect.engine` subprocess where its own
 # logging dictConfig owns the root logger (level WARNING). music_fetch / music_scan
@@ -294,10 +295,12 @@ def _run_scan_tasks() -> None:
             metrics.failure_reason = "navidrome_trigger_failed"
             raise
         reconcile_task()
-    except Exception:
+    except Exception as exc:
         metrics.success = False
         if not metrics.failure_reason:
-            metrics.failure_reason = "unexpected_error"
+            metrics.failure_reason = (
+                "musicbrainz_unavailable" if isinstance(exc, MusicBrainzUnavailable) else "unexpected_error"
+            )
         raise
     finally:
         metrics.duration_seconds = int(time.monotonic() - start)
@@ -382,7 +385,11 @@ def _album_library_hooks(lib):
     def import_inbox() -> None:
         # Waits for a running fetch or scan: beets' SQLite has one writer.
         with concurrency("pipeline", occupy=1):
-            _run_scan_tasks()
+            try:
+                _run_scan_tasks()
+            except MusicBrainzUnavailable as exc:
+                # Not the release's fault: retried without blame (#264).
+                raise albums.ImportDeferred(str(exc)) from exc
 
     def add_source(have_source: str, new_source: str, tracks: list[list[str]]) -> None:
         scan.add_source(lib, have_source, new_source, tracks)

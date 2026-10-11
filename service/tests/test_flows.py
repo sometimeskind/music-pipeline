@@ -411,6 +411,48 @@ def test_scan_reports_navidrome_failure_reason():
     assert m.failure_reason == "navidrome_trigger_failed"
 
 
+def test_scan_reports_a_musicbrainz_outage():
+    from music_scan.scan import MusicBrainzUnavailable
+    from music_service.flows import _run_scan_tasks
+    pushed: list = []
+
+    with patch("music_service.flows.ingest") as mock_ingest, \
+         patch("music_service.flows.scan") as mock_scan, \
+         patch("music_service.flows.concurrency"), \
+         patch("music_scan.metrics.ScanMetrics.push", autospec=True, side_effect=pushed.append):
+        _scan_mocks(mock_scan, mock_ingest)
+        mock_scan.run_inbox_import.side_effect = MusicBrainzUnavailable("503")
+        with pytest.raises(MusicBrainzUnavailable):
+            _run_scan_tasks()
+
+    (m,) = pushed
+    assert m.failure_reason == "musicbrainz_unavailable"
+    mock_scan.quarantine_inbox_leftovers.assert_not_called()
+
+
+def test_album_import_defers_on_a_musicbrainz_outage():
+    """The album flow sees an outage as ImportDeferred, not a crash (#264)."""
+    import music_fetch.albums as albums
+    from music_scan.scan import MusicBrainzUnavailable
+    from music_service import flows
+
+    seen = []
+
+    def fake_complete(state, completion, import_inbox, *args):
+        with pytest.raises(albums.ImportDeferred) as exc:
+            import_inbox()
+        seen.append(exc.value)
+        return albums.GRABBED
+
+    with patch.object(albums, "complete", side_effect=fake_complete), \
+         patch.object(flows, "_run_scan_tasks", side_effect=MusicBrainzUnavailable("503")), \
+         patch.object(flows, "concurrency"):
+        _, _, complete = flows._album_library_hooks(MagicMock())
+        assert complete(albums.State(albums={}), albums.Completion(nzo_id="nzo_1", ok=True, path="x")) == albums.GRABBED
+
+    assert len(seen) == 1 and isinstance(seen[0].__cause__, MusicBrainzUnavailable)
+
+
 # ---------------------------------------------------------------------------
 # Skip-if-busy lock against a real Prefect server (#174)
 # ---------------------------------------------------------------------------
