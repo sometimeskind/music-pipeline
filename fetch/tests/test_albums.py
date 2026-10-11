@@ -62,6 +62,7 @@ def release(guid: str = "r1", title: str = "Artist-Album-WEB-FLAC-2020") -> Rele
 def fakes(releases: list[Release] | None = None):
     prowlarr = MagicMock()
     prowlarr.search.return_value = [release()] if releases is None else releases
+    prowlarr.blocked.return_value = []
     prowlarr.nzb_location.return_value = "https://indexer/getnzb?id=1"
     sab = MagicMock()
     sab.add_url.return_value = "SABnzbd_nzo_1"
@@ -263,6 +264,70 @@ def test_search_error_stops_the_tick() -> None:
     top_up(state, Settings(mode="on"), prowlarr, sab, never_have, albums.TickResult(), now=lambda: NOW)
     assert prowlarr.search.call_count == 1
     assert state.albums["a0"]["status"] == albums.WANTED
+
+
+BACKOFF = [{"indexerId": 1, "disabledTill": "2026-10-04T12:15:00Z", "mostRecentFailure": "2026-10-04T11:55:00Z"}]
+
+
+def test_indexer_in_backoff_stops_the_tick_before_any_search(caplog) -> None:
+    state = wanted_state(3)
+    prowlarr, sab = fakes(releases=[])
+    prowlarr.blocked.return_value = BACKOFF
+    with caplog.at_level("INFO"):
+        top_up(state, Settings(mode="on"), prowlarr, sab, never_have, albums.TickResult(), now=lambda: NOW)
+    prowlarr.search.assert_not_called()
+    assert state.used("hit", NOW) == 0
+    assert all(r["status"] == albums.WANTED and "searched_at" not in r for r in state.albums.values())
+    assert caplog.text.count("[ERR]") == 1 and "indexer in Prowlarr backoff: 1 until 2026-10-04T12:15:00Z" in caplog.text
+
+
+def test_empty_result_from_an_indexer_in_backoff_is_not_a_miss(caplog) -> None:
+    """2026-10-10 (#263): the indexer goes into backoff mid-tick and Prowlarr
+    answers 200 [] — no [MISS], no status change, no artist-only retry."""
+    state = wanted_state(3)
+    prowlarr, sab = fakes(releases=[])
+    prowlarr.blocked.side_effect = [[], BACKOFF]
+    with caplog.at_level("INFO"):
+        top_up(state, Settings(mode="on"), prowlarr, sab, never_have, albums.TickResult(), now=lambda: NOW)
+    assert prowlarr.search.call_count == 1 and state.used("hit", NOW) == 1
+    assert all(r["status"] == albums.WANTED for r in state.albums.values())
+    assert "[MISS]" not in caplog.text and caplog.text.count("[ERR]") == 1
+
+
+def test_indexer_status_is_checked_once_while_searches_find_releases() -> None:
+    state = wanted_state(3)
+    prowlarr, sab = fakes()
+    prowlarr.search.side_effect = [[release(f"r{i}")] for i in range(3)]
+    top_up(state, Settings(mode="on"), prowlarr, sab, never_have, albums.TickResult(), now=lambda: NOW)
+    assert prowlarr.blocked.call_count == 1 and sab.add_url.call_count == 3
+
+
+def test_indexer_status_failure_stops_the_tick() -> None:
+    state = wanted_state(2)
+    prowlarr, sab = fakes()
+    prowlarr.blocked.side_effect = RuntimeError("connection refused")
+    top_up(state, Settings(mode="on"), prowlarr, sab, never_have, albums.TickResult(), now=lambda: NOW)
+    prowlarr.search.assert_not_called()
+    assert state.albums["a0"]["status"] == albums.WANTED
+
+
+def test_empty_results_in_a_row_stop_the_tick(caplog) -> None:
+    state = wanted_state(5)
+    prowlarr, sab = fakes(releases=[])
+    with caplog.at_level("INFO"):
+        top_up(state, Settings(mode="on"), prowlarr, sab, never_have, albums.TickResult(), now=lambda: NOW)
+    assert [r["status"] for r in state.albums.values()] == [albums.MISSING] * 2 + [albums.WANTED] * 3
+    assert "3 albums in a row with 0 results" in caplog.text
+
+
+def test_results_reset_the_empty_run() -> None:
+    state = wanted_state(5)
+    prowlarr, sab = fakes()
+    nothing, other = [], [release(title="Other-Thing-WEB-FLAC-2020")]
+    # Two queries per empty album (the artist-only retry), one when anything comes back.
+    prowlarr.search.side_effect = [nothing, nothing, nothing, nothing, other, nothing, nothing, nothing, nothing]
+    top_up(state, Settings(mode="on"), prowlarr, sab, never_have, albums.TickResult(), now=lambda: NOW)
+    assert all(r["status"] == albums.MISSING for r in state.albums.values())
 
 
 # ---------------------------------------------------------------------------
@@ -967,3 +1032,61 @@ def test_complete_an_import_that_always_crashes_counts_against_the_release(roots
     assert statuses == [albums.GRABBED] * (albums.MAX_IMPORT_ERRORS - 1) + [albums.WANTED]
     assert record["blocklist"] == ["r1"] and record["attempts"] == 1
     assert "import_errors" not in record and "import_started" not in record
+
+
+def demoted_state() -> State:
+    state = State()
+    base = {"blocklist": [], "name": "Album", "artist": "Artist", "tracks_count": 2,
+            "playlists": {"later": [["One", "Artist", "s1"], ["Two", "Artist", "s2"]]}}
+    state.albums["old"] = base | {"status": albums.FALLBACK, "fallback_from": albums.MISSING,
+                                  "fallback_at": "2026-10-01T00:00:00+00:00", "fallback_tracks": {"later": ["s1", "s2"]}}
+    state.albums["new"] = base | {"status": albums.FALLBACK, "fallback_from": albums.MISSING,
+                                  "fallback_at": "2026-10-10T23:15:02+00:00", "fallback_tracks": {"later": ["s2"]}}
+    state.albums["failed"] = base | {"status": albums.FALLBACK, "fallback_from": albums.FAILED,
+                                     "fallback_at": "2026-10-10T23:15:02+00:00", "fallback_tracks": {"later": ["s1"]}}
+    state.albums["filled"] = base | {"status": albums.FILLED, "fallback_from": albums.MISSING,
+                                     "fallback_at": "2026-10-10T23:15:02+00:00", "fallback_tracks": {}}
+    return state
+
+
+def test_requeue_since_puts_demoted_misses_back_to_wanted() -> None:
+    state = demoted_state()
+    found = albums.requeue(state, since=datetime(2026, 10, 10, 22, tzinfo=timezone.utc))
+    assert [key for key, _ in found] == ["new"]
+    assert found[0][1]["fallback_tracks"] == {"later": ["s2"]}
+    record = state.albums["new"]
+    assert record["status"] == albums.WANTED
+    assert not {"fallback_from", "fallback_at", "fallback_tracks"} & record.keys()
+    assert albums.fallback_queue(state) == 3  # old and failed still wait for spotdl
+    assert albums.fallback_songs(state, "later", [{"song_id": "s2"}]) == [{"song_id": "s2"}]  # via old
+    assert state.albums["old"]["status"] == state.albums["failed"]["status"] == albums.FALLBACK
+
+
+def test_requeue_by_key_skips_albums_a_miss_did_not_demote(caplog) -> None:
+    state = demoted_state()
+    found = albums.requeue(state, keys=["old", "failed", "filled", "nope"])
+    assert [key for key, _ in found] == ["old"]
+    assert state.albums["failed"]["status"] == albums.FALLBACK
+    assert state.albums["filled"]["status"] == albums.FILLED
+    assert caplog.text.count("not an album a miss demoted") == 3
+
+
+def test_requeued_album_is_searched_by_the_next_tick() -> None:
+    state = demoted_state()
+    albums.requeue(state, keys=["new"])
+    prowlarr, sab = fakes()
+    top_up(state, Settings(mode="on"), prowlarr, sab, never_have, albums.TickResult(), now=lambda: NOW)
+    assert state.albums["new"]["status"] == albums.GRABBED
+
+
+def test_requeue_main_is_a_dry_run_without_apply(tmp_path: Path, monkeypatch) -> None:
+    path = tmp_path / "albums.json"
+    demoted_state().save(path)
+    monkeypatch.setattr(albums, "STATE_FILE", path)
+    monkeypatch.delenv("PREFECT_API_URL", raising=False)
+    monkeypatch.setattr("sys.argv", ["music-album-requeue", "--since", "2026-10-10T22:00"])
+    albums.requeue_main()
+    assert State.load(path).albums["new"]["status"] == albums.FALLBACK
+    monkeypatch.setattr("sys.argv", ["music-album-requeue", "--since", "2026-10-10T22:00", "--apply"])
+    albums.requeue_main()
+    assert State.load(path).albums["new"]["status"] == albums.WANTED

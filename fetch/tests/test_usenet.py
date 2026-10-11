@@ -381,3 +381,12 @@ def test_matches_override_needs_its_words_first() -> None:
     title = "Wingdings-Four Tet-Untitled-TEXT059-WEB-2026-BB"
     assert matches(rel(title, size=102 * MB), "", "wingdings four tet", 0)
     assert not matches(rel("Elvis27-Wingdings Four Tet-WEB-2026-GRP", size=102 * MB), "", "wingdings four tet", 0)
+
+
+def test_prowlarr_blocked_lists_indexers_in_backoff() -> None:
+    resp = MagicMock()
+    resp.json.return_value = [{"indexerId": 1, "disabledTill": "2026-10-10T23:01:00Z"}]
+    with patch("music_fetch.usenet.requests.get", return_value=resp) as get:
+        assert Prowlarr(url="http://p", api_key="k").blocked() == [{"indexerId": 1, "disabledTill": "2026-10-10T23:01:00Z"}]
+    assert get.call_args.args == ("http://p/api/v1/indexerstatus",)
+    assert get.call_args.kwargs["headers"] == {"X-Api-Key": "k"}

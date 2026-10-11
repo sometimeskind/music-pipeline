@@ -63,6 +63,9 @@ MAX_ATTEMPTS = 3
 MAX_IMPORT_ERRORS = 3
 # A trigger lost for longer than this is recovered from SABnzbd history.
 LOST_TRIGGER_AFTER = timedelta(hours=1)
+# Albums in a row whose searches find nothing at all before a tick stops (#263):
+# a guard against an indexer failing silently without Prowlarr's backoff.
+EMPTY_RUN_LIMIT = 3
 
 # SABnzbd's complete dir (/downloads/complete in its pod) and the inbox root
 # album imports are moved to; both on the music-data volume, so the move is a
@@ -352,6 +355,16 @@ def _taken(state: State, key: str) -> tuple[set[str], set[str]]:
     return flight, done
 
 
+def _check_indexers(prowlarr) -> None:
+    """Raise when an indexer is in Prowlarr's failure backoff (#263).  Prowlarr
+    then answers every search with an instant empty list, which would read as
+    a miss and demote the album to spotdl."""
+    blocked = prowlarr.blocked()
+    if blocked:
+        raise RuntimeError("indexer in Prowlarr backoff: " + ", ".join(
+            f"{b.get('indexerId')} until {b.get('disabledTill')}" for b in blocked))
+
+
 def top_up(
     state: State,
     settings: Settings,
@@ -365,8 +378,15 @@ def top_up(
     """Search and grab wanted albums until the queue or a budget is full.
 
     *overrides* default to ``album-overrides.conf``, so every caller searches
-    the same way (#202)."""
+    the same way (#202).
+
+    The indexers' status is checked before the tick's first search and after
+    every empty result: one in backoff stops the tick like a failed search, so
+    no album changes status and no further hit is spent (#263).  So do
+    ``EMPTY_RUN_LIMIT`` albums in a row with no results at all."""
     overrides = load_overrides() if overrides is None else overrides
+    checked = False
+    empty_run = 0
     if settings.mode == "on":
         slots = settings.max_in_flight - state.in_flight()
     else:
@@ -401,6 +421,9 @@ def top_up(
         sent: list[str] = []
         releases: list[Release] = []
         try:
+            if not checked:
+                _check_indexers(prowlarr)
+                checked = True
             for query in search.queries:
                 if sent and (releases or state.used("hit", now()) >= settings.hits_per_day):
                     break
@@ -408,6 +431,8 @@ def top_up(
                 result.searched += 1
                 sent.append(query)
                 releases = prowlarr.search(query)
+                if not releases:
+                    _check_indexers(prowlarr)
         except Exception as exc:
             logger.warning("[ERR]  %s: search failed: %s", label, exc)
             break  # Prowlarr or the indexer is down; the next tick retries.
@@ -415,6 +440,11 @@ def top_up(
             logger.info("Indexer API budget spent (%d/24h) before the artist-only retry for %s — stopping",
                         settings.hits_per_day, label)
             break  # The album keeps its status; the next window searches it again.
+        empty_run = 0 if releases else empty_run + 1
+        if empty_run >= EMPTY_RUN_LIMIT:
+            logger.warning("[ERR]  %s: %d albums in a row with 0 results — stopping; is the indexer failing silently?",
+                           label, empty_run)
+            break  # This album keeps its status; the next tick searches it first.
         tracks = record.get("tracks_count") or max(len(t) for t in record["playlists"].values())
         in_flight, imported = _taken(state, key)
         blocklist = set(record["blocklist"]) | imported
@@ -843,9 +873,18 @@ def reset_album(state: State, query: str) -> tuple[str, dict, dict] | None:
     return key, before, record
 
 
+def _state_lock(apply: bool):
+    """The ``albums`` slot the tick and the import flow hold while they read and
+    write .albums.json; a dry run needs none."""
+    from contextlib import nullcontext  # noqa: PLC0415
+    if not (apply and os.environ.get("PREFECT_API_URL")):
+        return nullcontext()
+    from prefect.concurrency.sync import concurrency  # noqa: PLC0415
+    return concurrency("albums", occupy=1)
+
+
 def reset_main() -> None:
     import argparse  # noqa: PLC0415
-    from contextlib import nullcontext  # noqa: PLC0415
 
     parser = argparse.ArgumentParser(prog="music-album-reset",
                                      description="Undo an album's last release attempt (#261); dry run unless --apply")
@@ -853,12 +892,7 @@ def reset_main() -> None:
     parser.add_argument("--apply", action="store_true", help="write .albums.json (default: dry run)")
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO, format="[%(asctime)s] %(message)s", datefmt="%Y-%m-%dT%H:%M:%S%z")
-    lock = nullcontext()
-    if args.apply and os.environ.get("PREFECT_API_URL"):
-        # The tick and the import flow hold this while they read and write .albums.json.
-        from prefect.concurrency.sync import concurrency  # noqa: PLC0415
-        lock = concurrency("albums", occupy=1)
-    with lock:
+    with _state_lock(args.apply):
         state = State.load()
         result = reset_album(state, args.query)
         if result is None:
@@ -872,5 +906,74 @@ def reset_main() -> None:
         if args.apply:
             state.save()
             logger.info("Saved; the next album tick searches it again")
+        else:
+            logger.info("Dry run; --apply to write")
+
+
+# ---------------------------------------------------------------------------
+# music-album-requeue: undo fallbacks a silent indexer outage caused (#263)
+# ---------------------------------------------------------------------------
+
+
+def requeue(state: State, since: datetime | None = None, keys: list[str] | None = None) -> list[tuple[str, dict]]:
+    """Put albums a miss demoted to spotdl back to ``wanted``: ``fallback``
+    records with ``fallback_from`` ``missing`` that fell back at or after
+    *since*, or whose key is in *keys*.  Their ``fallback_tracks``, the tracks
+    spotdl hasn't downloaded yet, leave the spotdl queue; tracks it already
+    fetched stay in the library, and beets skips them as duplicates when the
+    album is imported.  Returns ``(key, before)`` per requeued album; a key in
+    *keys* that isn't such a record is logged and skipped."""
+    keys = set(keys or [])
+
+    def demoted(record: dict | None) -> bool:
+        return record is not None and record.get("status") == FALLBACK and record.get("fallback_from") == MISSING
+
+    for key in sorted(keys):
+        if not demoted(state.albums.get(key)):
+            logger.warning("%s: not an album a miss demoted — skipping", key)
+    found: list[tuple[str, dict]] = []
+    for key, record in state.albums.items():
+        if not demoted(record):
+            continue
+        at = record.get("fallback_at")
+        if key not in keys and (since is None or not at or datetime.fromisoformat(at) < since):
+            continue
+        found.append((key, json.loads(json.dumps(record))))
+        record["status"] = WANTED
+        for field in ("fallback_from", "fallback_at", "fallback_tracks"):
+            record.pop(field, None)
+    return found
+
+
+def requeue_main() -> None:
+    import argparse  # noqa: PLC0415
+
+    parser = argparse.ArgumentParser(
+        prog="music-album-requeue",
+        description="Put albums a miss demoted to spotdl back to wanted (#263); dry run unless --apply")
+    parser.add_argument("keys", nargs="*", metavar="album_id", help="album keys to requeue")
+    parser.add_argument("--since", type=datetime.fromisoformat,
+                        help="requeue every fallback from a miss at or after this ISO time (UTC if no offset)")
+    parser.add_argument("--apply", action="store_true", help="write .albums.json (default: dry run)")
+    args = parser.parse_args()
+    if not args.keys and args.since is None:
+        parser.error("give album ids, --since, or both")
+    since = args.since
+    if since is not None and since.tzinfo is None:
+        since = since.replace(tzinfo=timezone.utc)
+    logging.basicConfig(level=logging.INFO, format="[%(asctime)s] %(message)s", datefmt="%Y-%m-%dT%H:%M:%S%z")
+    with _state_lock(args.apply):
+        state = State.load(STATE_FILE)
+        found = requeue(state, since, args.keys)
+        for key, before in found:
+            n = sum(len(ids) for ids in before.get("fallback_tracks", {}).values())
+            logger.info("%s: %s — %s (fell back %s): wanted, %d track(s) off the spotdl queue",
+                        key, before.get("artist"), before.get("name"), before.get("fallback_at"), n)
+        logger.info("%d album(s) to requeue", len(found))
+        if not found:
+            return
+        if args.apply:
+            state.save(STATE_FILE)
+            logger.info("Saved; the next album tick searches them again")
         else:
             logger.info("Dry run; --apply to write")
