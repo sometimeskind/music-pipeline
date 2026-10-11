@@ -970,6 +970,7 @@ def test_tag_album_ids_falls_back_to_disc_and_track() -> None:
     b = _lib_item("Dos", track=2)
     assert _tag([a, b], [["One", "Artist", "sid1", None, 1, 1], ["Two", "Artist", "sid2", None, 1, 2]]) == 2
     assert (a.data["spotify_ids"], b.data["spotify_ids"]) == ("sid1", "sid2")
+    assert "words_ids" not in a.data
 
 
 def test_tag_album_ids_track_number_needs_same_edition_and_this_import() -> None:
@@ -984,6 +985,7 @@ def test_tag_album_ids_words_fallback_is_logged(caplog) -> None:
     with caplog.at_level("INFO", logger="music_scan.scan"):
         assert _tag([a], [["One", "Artist", "sid1", None, 1, 1]]) == 1
     assert a.data["spotify_ids"] == "sid1"
+    assert a.data["words_ids"] == "sid1"  # never a supersede's evidence (#266)
     assert "[WORDS]" in caplog.text
 
 

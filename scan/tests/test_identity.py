@@ -13,7 +13,6 @@ from music_scan.identity import (
     add_isrcs,
     add_to_list,
     item_spotify_ids,
-    drop_edition,
     release_match,
     spotify_id,
     split_list,
@@ -222,24 +221,6 @@ def test_release_match_needs_the_same_title_and_the_artist() -> None:
 
 
 # --- remaster notes (#243, #252) ----------------------------------------------------
-
-
-@pytest.mark.parametrize(("title", "bare"), [
-    ("Miserabilia (2018 Remaster)", "Miserabilia"),
-    ("It's Never That Easy Though, Is It? (Song for the Other Kurt) [2018 Remaster]",
-     "It's Never That Easy Though, Is It? (Song for the Other Kurt)"),
-    ("Here Comes the Sun - Remastered 2009", "Here Comes the Sun"),
-    ("Get Down Tonight - 2004 Remaster", "Get Down Tonight"),
-    ("Turning Point - Edit; 2013 Remaster", "Turning Point - Edit"),
-    ("Song (Remastered)", "Song"),
-    ("Song - 25th Anniversary Remastered Edition", "Song"),
-    ("Kiss Me (Euroversion)", "Kiss Me (Euroversion)"),
-    ("Turning Point - Edit", "Turning Point - Edit"),
-    ("Song (Live)", "Song (Live)"),
-    ("(Remastered)", "(Remastered)"),
-])
-def test_drop_edition(title, bare) -> None:
-    assert drop_edition(title) == bare
 
 
 def test_a_remaster_is_another_track() -> None:

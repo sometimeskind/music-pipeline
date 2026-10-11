@@ -21,7 +21,9 @@ def _complete_with_tag_ids(embed_covers):
          patch("music_service.flows.scan.tag_album_ids") as tag_album_ids, \
          patch("music_scan.cover.covers_by_id", return_value={"T1": "https://i.scdn.co/x"}), \
          patch("music_scan.cover.embed_covers", side_effect=embed_covers) as embed, \
-         patch("music_scan.navidrome.trigger_scan") as rescan:
+         patch("music_scan.navidrome.trigger_scan") as rescan, \
+         patch("music_scan.supersede.after_import", return_value=0), \
+         patch("music_service.flows.concurrency"):
         _, _, complete = _album_library_hooks(lib)
         assert complete(MagicMock(), MagicMock()) == "imported"
     tag_album_ids.assert_called_once_with(lib, "later", [], 100.0, 2)

@@ -51,6 +51,9 @@ Responsibilities
    * Any duplicate has a ``via`` other than spotdl/usenet (manually imported) → skip the
      incoming file AND delete it from the inbox so it does not get
      re-attempted on every subsequent beet-import run.
+   * A Usenet album track whose duplicates are all ``via=spotdl`` → import it
+     anyway (``[ALBUM]``): the album copy supersedes them after the import
+     (:mod:`music_scan.supersede`, #266).
    * All duplicates have ``via=spotdl`` or ``usenet`` → append the incoming playlist name to
      the ``sources`` field of every existing duplicate (idempotent), delete the
      incoming inbox file, and set SKIP so beets does not re-import the track.
@@ -430,6 +433,16 @@ class MusicPipelinePlugin(BeetsPlugin):
             else:
                 dup_items.append(dup)
 
+        if same and _via_from_path(items[0].path) == "usenet" and all(d.get("via") == "spotdl" for d in same):
+            # The album copy wins (#266): import it, and the album completion
+            # supersedes the loose copies with it, playlists and all.
+            for dup in same:
+                self._log.warning(
+                    "[ALBUM] {} — {}: same recording as {}; importing the album copy, which supersedes it",
+                    items[0].artist, items[0].title, dup,
+                )
+            task.find_duplicates = task.duplicate_items = lambda lib: []
+            return
         if same:
             dup_items = same
         elif dup_items and incoming is not None:

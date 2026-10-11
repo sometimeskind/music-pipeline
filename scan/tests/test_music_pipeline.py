@@ -547,6 +547,7 @@ def test_handle_duplicates_file_deletion_failure_still_skips() -> None:
     with patch("music_scan.music_pipeline.Path") as mock_path:
         mock_path.return_value.name = "Song.m4a"
         mock_path.return_value.unlink.side_effect = OSError("permission denied")
+        mock_path.return_value.is_relative_to.return_value = False  # a spotdl inbox path, not usenet
         _handle_same(plugin, MagicMock(), task)
 
     task.set_choice.assert_called_once_with(beets_importer.Action.SKIP)
@@ -830,3 +831,35 @@ def test_fingerprint_if_missing_never_fails_the_import() -> None:
         plugin.fingerprint_if_missing(lib=MagicMock(), item=item)
     item.store.assert_not_called()
     plugin._log.warning.assert_called_once()
+
+
+def test_handle_duplicates_imports_the_usenet_album_copy_over_a_spotdl_one() -> None:
+    """The album copy wins (#266): imported alongside, superseded after the import."""
+    plugin = _make_plugin()
+    item = _item("/root/Music/inbox/usenet/keep/Bob Dylan-Blood On The Tracks/04.flac", title="Simple Twist Of Fate")
+    task = _task(item=item)
+    task.chosen_info.return_value = {"track_id": "mb-rec-1", "isrc": None}
+    existing = _lib_dup(7, mb_trackid="mb-rec-1", sources="aaaaaah")
+    session = _session({"mb_trackid:mb-rec-1": [existing]})
+
+    plugin.handle_duplicates(session=session, task=task)
+
+    task.set_choice.assert_not_called()
+    assert task.find_duplicates(session.lib) == []  # hidden from duplicate_action: remove
+    assert existing._data["sources"] == "aaaaaah"
+    assert any("[ALBUM]" in c.args[0] for c in plugin._log.warning.call_args_list)
+
+
+def test_handle_duplicates_merges_a_usenet_copy_into_an_earlier_album_copy() -> None:
+    plugin = _make_plugin()
+    item = _item("/root/Music/inbox/usenet/later/Bob Dylan-Blood On The Tracks/04.flac", title="Simple Twist Of Fate")
+    plugin._pending_sources["simple twist of fate"] = "later"
+    task = _task(item=item)
+    task.chosen_info.return_value = {"track_id": "mb-rec-1", "isrc": None}
+    existing = _lib_dup(7, via="usenet", mb_trackid="mb-rec-1", sources="keep")
+    session = _session({"mb_trackid:mb-rec-1": [existing]})
+
+    plugin.handle_duplicates(session=session, task=task)
+
+    task.set_choice.assert_called_once_with(beets_importer.Action.SKIP)
+    assert existing._data["sources"] == "keep,later"
