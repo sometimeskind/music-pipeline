@@ -16,10 +16,16 @@ Resolution is additive over today's path.  An entry resolves
    and without a ``sources`` write.
 
 Nothing a playlist shows today can disappear: phase 2 only fills the slots
-phase 1 leaves empty.  ``music-audit-playlists`` (:func:`main`) prints the
+phase 1 leaves empty.
+
+An ``album`` playlist is listed at the album level (#268,
+:func:`album_paths`): every local track of every album on it, album by album
+in playlist order, each album in disc/track order.  The entries only decide
+which albums are on it.  ``music-audit-playlists`` (:func:`main`) prints the
 proof per playlist, read-only, and accounts for every entry and every line:
 shared files (#232), tagged items no entry matches, and empty entries whose
-track sits in ``quarantine/replaced/`` (#234).  ``--clear-tail <playlist>``
+track sits in ``quarantine/replaced/`` (#234).  It skips album playlists;
+``--albums`` reports those (:func:`album_audit`).  ``--clear-tail <playlist>``
 clears that playlist's tag on its tail items that carry a Spotify ID, the
 recovery for removals a crashed scan lost (#259); dry run unless ``--apply``.
 """
@@ -30,6 +36,7 @@ import argparse
 import json
 import logging
 import os
+import unicodedata
 from pathlib import Path
 from typing import NamedTuple
 
@@ -110,6 +117,77 @@ def resolve(entries: list[Entry], source: ItemIndex, library: ItemIndex | None =
             rung = _SLOT_RUNG.get(rung) if rung else None
         slots.append(Slot(entry, item, rung))
     return slots
+
+
+# ---------------------------------------------------------------------------
+# Album playlists (#268): every local track of every album on the playlist
+# ---------------------------------------------------------------------------
+
+
+def _norm(s: str) -> str:
+    return " ".join(unicodedata.normalize("NFKC", s or "").casefold().split())
+
+
+def by_album_id(items) -> dict[str, list]:
+    """The *items* per ``spotify_album_id`` (canon's album, #209)."""
+    out: dict[str, list] = {}
+    for item in items:
+        if item.get("spotify_album_id"):
+            out.setdefault(item.get("spotify_album_id"), []).append(item)
+    return out
+
+
+def album_groups(songs: list[dict]) -> dict[str, list[dict]]:
+    """The playlist's *songs* per album (``albums.album_key``), albums in
+    playlist order."""
+    from music_fetch.albums import album_key  # noqa: PLC0415
+
+    groups: dict[str, list[dict]] = {}
+    for song in songs:
+        groups.setdefault(album_key(song), []).append(song)
+    return groups
+
+
+def album_items(key: str, name: str, slots: list[Slot], by_album: dict[str, list]) -> list:
+    """The local tracks of the album *key* (Spotify album ID) named *name*,
+    whose playlist entries resolved to *slots*: the items they resolve to, and
+    every item canon filed on the album.  That is *key*, plus the album a
+    resolved item sits on under the same name (a #214 twin's representative).
+    A resolved item canon moved to another album (a single's track filed on
+    its standard album) is listed alone, not with that album.  The release's
+    local-only extras are on its album by #245.  In disc/track order."""
+    from music_scan.scan import _item_path  # noqa: PLC0415
+
+    found = [s.item for s in slots if s.item is not None]
+    ids = {key} | {i.get("spotify_album_id") for i in found
+                   if i.get("spotify_album_id") and _norm(i.album) == _norm(name)}
+    items: dict = {}
+    for item in [*found, *(i for album_id in sorted(ids) for i in by_album.get(album_id, []))]:
+        items.setdefault(_item_path(item), item)
+    return sorted(items.values(), key=lambda i: (i.disc or 1, i.track or 0, str(_item_path(i))))
+
+
+def album_paths(songs: list[dict], source: ItemIndex, library: ItemIndex,
+                by_album: dict[str, list]) -> tuple[list[Path], list[Slot], int]:
+    """An album playlist's ``.m3u`` lines (#268): ``(paths, slots, albums)``.
+    Every album at least one of *songs* is on, in playlist order, lists its
+    :func:`album_items`, each file once.  An album with no local track yet
+    lists nothing.  *slots* are the entries' slots, for the empty count."""
+    from music_scan.scan import _item_path  # noqa: PLC0415
+
+    paths: list[Path] = []
+    seen: set[Path] = set()
+    all_slots: list[Slot] = []
+    groups = album_groups(songs)
+    for key, group in groups.items():
+        slots = resolve([Entry.from_song(s) for s in group], source, library)
+        all_slots += slots
+        for item in album_items(key, group[0].get("album_name", ""), slots, by_album):
+            p = _item_path(item)
+            if p not in seen:
+                seen.add(p)
+                paths.append(p)
+    return paths, all_slots, len(groups)
 
 
 def empty_slots(slots: list[Slot]) -> int:
@@ -280,6 +358,9 @@ def audit(replaced_dir: Path | None = None) -> int:
         library = ItemIndex(lib.all_items())
         for spotdl_file in sorted(SPOTDL_DIR.glob("*.spotdl")):
             name = spotdl_file.stem
+            if (SPOTDL_DIR / f"{name}.album").exists():
+                logger.info("%s: album playlist, listed at the album level — see --albums", name)
+                continue
             source_items = lib.items_by_source(name)
             slots = resolve(playlist_entries(spotdl_file), ItemIndex(source_items), library)
             today = [os.path.relpath(p, PLAYLISTS) for p in playlist_paths(slots, source_items, slot_fills=False)]
@@ -349,6 +430,82 @@ def audit(replaced_dir: Path | None = None) -> int:
 
 
 # ---------------------------------------------------------------------------
+# --albums: what album-level listing changes (#268), read-only
+# ---------------------------------------------------------------------------
+
+
+def album_audit(state_file: Path | None = None) -> dict[str, tuple[int, int, int]]:
+    """Per album playlist, the ``.m3u`` on disk, the track-level listing
+    (before #268) and the album-level one (after), with the lines the
+    album level adds and drops; then the album records: those whose old
+    ``partial``/``gap`` fallback the next tick settles to ``imported``, and
+    the ``have``/``filled`` albums whose library copy is not whole (left as
+    they are).  Writes nothing.  Returns ``{playlist: (on disk, track level,
+    album level)}``."""
+    from music_fetch.albums import FILLED, HAVE, STATE_FILE, State, settle_imported  # noqa: PLC0415
+    from music_scan.library import LIBRARY_DB, MusicLibrary  # noqa: PLC0415
+    from music_scan.scan import PLAYLISTS, SPOTDL_DIR, have_album, playlist_paths  # noqa: PLC0415
+
+    counts: dict[str, tuple[int, int, int]] = {}
+    with MusicLibrary(LIBRARY_DB) as lib:
+        all_items = lib.all_items()
+        library = ItemIndex(all_items)
+        by_album = by_album_id(all_items)
+        sources: dict[str, ItemIndex] = {}
+        for spotdl_file in sorted(SPOTDL_DIR.glob("*.spotdl")):
+            name = spotdl_file.stem
+            if not (SPOTDL_DIR / f"{name}.album").exists():
+                continue
+            source_items = lib.items_by_source(name)
+            sources[name] = ItemIndex(source_items)
+            songs = spotdl_songs(spotdl_file)
+            track_level = [os.path.relpath(p, PLAYLISTS) for p in playlist_paths(
+                resolve([Entry.from_song(s) for s in songs], sources[name], library), source_items)]
+            paths, slots, n_albums = album_paths(songs, sources[name], library, by_album)
+            album_level = [os.path.relpath(p, PLAYLISTS) for p in paths]
+            m3u = PLAYLISTS / f"{name}.m3u"
+            on_disk = m3u.read_text(encoding="utf-8").splitlines() if m3u.exists() else []
+            counts[name] = (len(on_disk), len(track_level), len(album_level))
+            empty_albums = sum(1 for key, group in album_groups(songs).items()
+                               if not album_items(key, group[0].get("album_name", ""),
+                                                  resolve([Entry.from_song(s) for s in group], sources[name], library),
+                                                  by_album))
+            logger.info("%s: on disk %d | track level %d | album level %d | %d entries on %d album(s), "
+                        "%d album(s) with no local track yet", name, len(on_disk), len(track_level),
+                        len(album_level), len(songs), n_albums, empty_albums)
+            before = set(track_level)
+            after = set(album_level)
+            for line in album_level:
+                if line not in before:
+                    logger.info("  + %s", line)
+            for line in track_level:
+                if line not in after:
+                    logger.info("  - %s  (on no album the playlist holds a track of)", line)
+
+        state = State.load(state_file or SPOTDL_DIR / STATE_FILE.name)
+        settle = not_whole = 0
+        for key, record in state.albums.items():
+            label = f"{key}: {record.get('artist')} — {record.get('name')}"
+            if settle_imported(json.loads(json.dumps(record))):
+                settle += 1
+                n = sum(len(ids) for ids in record.get("fallback_tracks", {}).values())
+                logger.info("  [SETTLE] %s: fallback (%s) → imported; %d track(s) leave the spotdl queue",
+                            label, record.get("fallback_from"), n)
+            elif record.get("status") in (HAVE, FILLED) and record.get("playlists"):
+                def index(pl: str) -> ItemIndex:
+                    if pl not in sources:
+                        sources[pl] = ItemIndex(lib.items_by_source(pl))
+                    return sources[pl]
+                if not have_album(index, library, by_album, key, record):
+                    not_whole += 1
+                    logger.info("  [NOTWHOLE] %s (%s, %d tracks on Spotify): kept as it is", label,
+                                record.get("status"), record.get("tracks_count") or 0)
+        logger.info("Album records: %d fallback(s) the next tick settles to imported; "
+                    "%d have/filled album(s) not whole in the library, left as they are", settle, not_whole)
+    return counts
+
+
+# ---------------------------------------------------------------------------
 # --clear-tail: the recovery for removals a crashed scan dropped (#259)
 # ---------------------------------------------------------------------------
 
@@ -365,6 +522,9 @@ def clear_tail(lib, name: str, spotdl_dir: Path, apply: bool = False) -> list:
     empty or unreadable ``.spotdl``, which would make every tagged item a tail
     item.  Returns the items cleared (or, in a dry run, that would be).
     """
+    if (spotdl_dir / f"{name}.album").exists():
+        # Its other tracks carry Spotify IDs no entry has, and belong on it (#268).
+        raise SystemExit(f"{name}: an album playlist lists every track of its albums, tagged or not — nothing to clear")
     entries = playlist_entries(spotdl_dir / f"{name}.spotdl")
     if not entries:
         raise SystemExit(f"{name}: no entries in {spotdl_dir / f'{name}.spotdl'} — refusing to treat every item as tail")
@@ -400,10 +560,15 @@ def main() -> None:
     parser.add_argument("--clear-tail", metavar="PLAYLIST",
                         help="clear PLAYLIST's tag on its tail items that carry a Spotify ID (#259; dry run by default)")
     parser.add_argument("--apply", action="store_true", help="with --clear-tail: write the changes")
+    parser.add_argument("--albums", action="store_true",
+                        help="album playlists: the .m3u counts before and after album-level listing (#268), read-only")
     args = parser.parse_args()
     if args.apply and not args.clear_tail:
         parser.error("--apply needs --clear-tail")
     logging.basicConfig(level=logging.INFO, format="[%(asctime)s] %(message)s", datefmt="%Y-%m-%dT%H:%M:%S%z")
+    if args.albums:
+        album_audit()
+        raise SystemExit(0)
     if args.clear_tail:
         from music_scan.library import LIBRARY_DB, MusicLibrary  # noqa: PLC0415
         from music_scan.scan import SPOTDL_DIR  # noqa: PLC0415

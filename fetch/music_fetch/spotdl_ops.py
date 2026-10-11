@@ -617,3 +617,13 @@ class SpotifyPlaylists:
         from spotdl.utils.search import get_simple_songs  # noqa: PLC0415
 
         return [s.json for s in get_simple_songs([url])]
+
+    def album_songs(self, album_id: str) -> list[dict]:
+        """The album's whole tracklist, in the .spotdl song format (#268).
+
+        Two calls (the album and its track pages), no per-track lookups; the
+        songs carry no ISRC, which spotdl fills in when it downloads them.
+        """
+        from spotdl.utils.search import get_simple_songs  # noqa: PLC0415
+
+        return [s.json for s in get_simple_songs([f"https://open.spotify.com/album/{album_id}"])]

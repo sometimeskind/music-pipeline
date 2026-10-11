@@ -268,6 +268,9 @@ def regen_playlists(metrics: ScanMetrics | None = None) -> dict[str, int]:
     by Spotify ID or ISRC (``[SLOT]``), so a track imported by any route reaches
     every playlist that lists it at the next scan, with no download and no tag
     write (#228).  *metrics*, when given, takes the empty-slot count per playlist.
+
+    An ``album`` playlist (``<name>.album`` next to its ``.spotdl``) lists every
+    local track of every album on it instead (#268, :func:`playlists.album_paths`).
     """
     PLAYLISTS.mkdir(parents=True, exist_ok=True)
     spotdl_files = sorted(SPOTDL_DIR.glob("*.spotdl"))
@@ -278,16 +281,25 @@ def regen_playlists(metrics: ScanMetrics | None = None) -> dict[str, int]:
     counts: dict[str, int] = {}
     empty: dict[str, int] = {}
     with MusicLibrary(LIBRARY_DB) as lib:
-        library = ItemIndex(lib.all_items())
+        all_items = lib.all_items()
+        library = ItemIndex(all_items)
+        by_album = None
         for spotdl_file in spotdl_files:
             name = spotdl_file.stem
             m3u = PLAYLISTS / f"{name}.m3u"
 
             source_items = lib.items_by_source(name)
-            slots = playlists.resolve(playlists.playlist_entries(spotdl_file), ItemIndex(source_items), library)
+            if (SPOTDL_DIR / f"{name}.album").exists():
+                by_album = playlists.by_album_id(all_items) if by_album is None else by_album
+                paths, slots, n_albums = playlists.album_paths(
+                    playlists.spotdl_songs(spotdl_file), ItemIndex(source_items), library, by_album)
+                logger.info("  %s: %d album(s), %d track(s) (album level)", name, n_albums, len(paths))
+            else:
+                slots = playlists.resolve(playlists.playlist_entries(spotdl_file), ItemIndex(source_items), library)
+                paths = playlist_paths(slots, source_items)
             playlists.log_slots(name, slots)
 
-            lines = [os.path.relpath(p, PLAYLISTS) for p in playlist_paths(slots, source_items)]
+            lines = [os.path.relpath(p, PLAYLISTS) for p in paths]
             m3u.write_text("\n".join(lines) + ("\n" if lines else ""), encoding="utf-8")
             counts[name] = len(lines)
             empty[name] = playlists.empty_slots(slots)
@@ -360,6 +372,23 @@ def have_or_link(source_index: ItemIndex, library: ItemIndex, source: str, track
         if slot.filled_from_library:
             _link(slot.item, source, slot.entry.song_id)
     return True
+
+
+def have_album(indexes, library: ItemIndex, by_album: dict[str, list], key: str, record: dict) -> bool:
+    """True when the library holds the album *record* whole (#268), so it needs no download.
+
+    Every playlist track resolves (*indexes(playlist)*: the playlist's items,
+    then any item by Spotify ID or ISRC), and the album's local tracks
+    (:func:`playlists.album_items`) number at least Spotify's track count.
+    One track already in the library no longer makes an album "have": adding
+    one song on Spotify brings in the whole album."""
+    slots: list[Slot] = []
+    for playlist, tracks in record.get("playlists", {}).items():
+        slots += _album_slots(indexes(playlist), tracks, library)
+    if not slots or any(slot.item is None for slot in slots):
+        return False
+    have = len(playlists.album_items(key, record.get("name", ""), slots, by_album))
+    return have >= (record.get("tracks_count") or 0)
 
 
 def tag_album_ids(lib: MusicLibrary, source: str, tracks: list[list], since: float, tracks_count: int) -> int:
