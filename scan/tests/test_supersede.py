@@ -145,6 +145,7 @@ def test_backfill_attributes_the_release_and_applies_only_with_apply(tmp_path, f
                         "tracks_count": 10, "grabbed_at": GRAB.isoformat(), "imported_at": IMPORTED.isoformat()}}
     assert [p.album.id for p in supersede.backfill(lib, records, apply=False)] == [album.id]
     assert lib.get_item(loose.id) is not None
-    supersede.backfill(lib, records, apply=True)
-    assert lib.get_item(loose.id) is None
-    assert supersede.backfill(lib, records, apply=True) == []
+    replaced = tmp_path / "replaced"
+    supersede.backfill(lib, records, apply=True, replaced_dir=replaced)
+    assert lib.get_item(loose.id) is None and any(replaced.iterdir())
+    assert supersede.backfill(lib, records, apply=True, replaced_dir=replaced) == []

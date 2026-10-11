@@ -163,7 +163,7 @@ def release_items(items: list, record: dict) -> list:
     return [i for i in items if i.get("via") == "usenet" and _claims(record, i) and _from_success(record, i.added or 0)]
 
 
-def backfill(lib, records: dict[str, dict], apply: bool) -> list[Pair]:
+def backfill(lib, records: dict[str, dict], apply: bool, replaced_dir: Path | None = None) -> list[Pair]:
     """Supersede for every album record's successful release; with *apply*, merge."""
     done: list[Pair] = []
     for record in records.values():
@@ -177,6 +177,6 @@ def backfill(lib, records: dict[str, dict], apply: bool) -> list[Pair]:
                         record.get("name"), sum(len(p.loose) for p in pairs), len(kept))
         log(pairs, kept, apply)
         if apply:
-            apply_pairs(pairs)
+            apply_pairs(pairs, replaced_dir)
         done += pairs
     return done

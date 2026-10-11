@@ -81,6 +81,7 @@ taking the album's tags as they are before this run's retags.
 from __future__ import annotations
 
 import argparse
+import contextlib
 import dataclasses
 import json
 import logging
@@ -954,6 +955,7 @@ def run(apply: bool = False, refresh: bool = False, mb_budget: int | None = None
     from music_fetch import ingest  # noqa: PLC0415
     from music_fetch.albums import STATE_FILE, State  # noqa: PLC0415
     from music_scan import supersede  # noqa: PLC0415
+    from music_scan.audit import pipeline_lock  # noqa: PLC0415
     from music_scan.library import LIBRARY_DB, LIBRARY_DIR, MusicLibrary  # noqa: PLC0415
     from music_scan.navidrome import trigger_scan  # noqa: PLC0415
     from music_scan.scan import regen_playlists  # noqa: PLC0415
@@ -966,7 +968,8 @@ def run(apply: bool = False, refresh: bool = False, mb_budget: int | None = None
                 len({p.release.album_id for p in placements.values()}))
     resolver = Resolver(budget=mb_budget)
     albums = AlbumsByIsrc(budget=search_budget)
-    with MusicLibrary(LIBRARY_DB, LIBRARY_DIR) as lib:
+    # --apply moves and merges files (#266): no import may run meanwhile.
+    with (pipeline_lock() if apply else contextlib.nullcontext()), MusicLibrary(LIBRARY_DB, LIBRARY_DIR) as lib:
         records = State.load(STATE_FILE).albums
         plan = canonicalize(lib.all_items(), placements, resolver, apply=apply, albums=albums)
         # Before the extras: a superseded loose item frees its disc/track slot (#266).
