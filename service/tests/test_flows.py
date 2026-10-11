@@ -418,9 +418,13 @@ def test_scan_reports_a_musicbrainz_outage():
 
     with patch("music_service.flows.ingest") as mock_ingest, \
          patch("music_service.flows.scan") as mock_scan, \
+         patch("music_service.flows.reconcile") as mock_reconcile, \
          patch("music_service.flows.concurrency"), \
+         patch("music_scan.process.run_beet_update"), \
+         patch("music_scan.navidrome.trigger_scan"), \
          patch("music_scan.metrics.ScanMetrics.push", autospec=True, side_effect=pushed.append):
         _scan_mocks(mock_scan, mock_ingest)
+        mock_reconcile.reconcile_all.return_value = 0
         mock_scan.run_inbox_import.side_effect = MusicBrainzUnavailable("503", [("A", "B")])
         with pytest.raises(MusicBrainzUnavailable):
             _run_scan_tasks()
