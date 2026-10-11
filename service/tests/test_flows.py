@@ -437,6 +437,7 @@ def test_album_import_flow_grab_next_uses_search_overrides(tmp_path):
     }
     prowlarr = MagicMock()
     prowlarr.search.return_value = []
+    prowlarr.blocked.return_value = []
     complete = MagicMock(return_value="done")
 
     with patch.object(albums, "OVERRIDES_FILE", conf), \

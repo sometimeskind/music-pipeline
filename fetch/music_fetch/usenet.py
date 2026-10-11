@@ -279,6 +279,19 @@ class Prowlarr:
         resp.raise_for_status()
         return [Release.from_api(r) for r in resp.json() if r.get("protocol") == "usenet"]
 
+    def blocked(self) -> list[dict]:
+        """Indexers in Prowlarr's failure backoff (#263), as ``{indexerId,
+        disabledTill, …}``.  Prowlarr lists only those whose ``disabledTill`` is
+        in the future, and meanwhile answers searches with an instant empty list.
+        Costs no indexer API hit."""
+        resp = requests.get(
+            f"{self.url}/api/v1/indexerstatus",
+            headers={"X-Api-Key": self.api_key},
+            timeout=self.timeout,
+        )
+        resp.raise_for_status()
+        return resp.json()
+
     def nzb_location(self, release: Release) -> str:
         """The indexer URL behind a release's download link.  Prowlarr counts this as a grab."""
         resp = requests.get(release.download_url, allow_redirects=False, timeout=self.timeout)

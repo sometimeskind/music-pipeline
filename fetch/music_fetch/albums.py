@@ -63,6 +63,9 @@ MAX_ATTEMPTS = 3
 MAX_IMPORT_ERRORS = 3
 # A trigger lost for longer than this is recovered from SABnzbd history.
 LOST_TRIGGER_AFTER = timedelta(hours=1)
+# Albums in a row whose searches find nothing at all before a tick stops (#263):
+# a guard against an indexer failing silently without Prowlarr's backoff.
+EMPTY_RUN_LIMIT = 3
 
 # SABnzbd's complete dir (/downloads/complete in its pod) and the inbox root
 # album imports are moved to; both on the music-data volume, so the move is a
@@ -352,6 +355,16 @@ def _taken(state: State, key: str) -> tuple[set[str], set[str]]:
     return flight, done
 
 
+def _check_indexers(prowlarr) -> None:
+    """Raise when an indexer is in Prowlarr's failure backoff (#263).  Prowlarr
+    then answers every search with an instant empty list, which would read as
+    a miss and demote the album to spotdl."""
+    blocked = prowlarr.blocked()
+    if blocked:
+        raise RuntimeError("indexer in Prowlarr backoff: " + ", ".join(
+            f"{b.get('indexerId')} until {b.get('disabledTill')}" for b in blocked))
+
+
 def top_up(
     state: State,
     settings: Settings,
@@ -365,8 +378,15 @@ def top_up(
     """Search and grab wanted albums until the queue or a budget is full.
 
     *overrides* default to ``album-overrides.conf``, so every caller searches
-    the same way (#202)."""
+    the same way (#202).
+
+    The indexers' status is checked before the tick's first search and after
+    every empty result: one in backoff stops the tick like a failed search, so
+    no album changes status and no further hit is spent (#263).  So do
+    ``EMPTY_RUN_LIMIT`` albums in a row with no results at all."""
     overrides = load_overrides() if overrides is None else overrides
+    checked = False
+    empty_run = 0
     if settings.mode == "on":
         slots = settings.max_in_flight - state.in_flight()
     else:
@@ -401,6 +421,9 @@ def top_up(
         sent: list[str] = []
         releases: list[Release] = []
         try:
+            if not checked:
+                _check_indexers(prowlarr)
+                checked = True
             for query in search.queries:
                 if sent and (releases or state.used("hit", now()) >= settings.hits_per_day):
                     break
@@ -408,6 +431,8 @@ def top_up(
                 result.searched += 1
                 sent.append(query)
                 releases = prowlarr.search(query)
+                if not releases:
+                    _check_indexers(prowlarr)
         except Exception as exc:
             logger.warning("[ERR]  %s: search failed: %s", label, exc)
             break  # Prowlarr or the indexer is down; the next tick retries.
@@ -415,6 +440,11 @@ def top_up(
             logger.info("Indexer API budget spent (%d/24h) before the artist-only retry for %s — stopping",
                         settings.hits_per_day, label)
             break  # The album keeps its status; the next window searches it again.
+        empty_run = 0 if releases else empty_run + 1
+        if empty_run >= EMPTY_RUN_LIMIT:
+            logger.warning("[ERR]  %s: %d albums in a row with 0 results — stopping; is the indexer failing silently?",
+                           label, empty_run)
+            break  # This album keeps its status; the next tick searches it first.
         tracks = record.get("tracks_count") or max(len(t) for t in record["playlists"].values())
         in_flight, imported = _taken(state, key)
         blocklist = set(record["blocklist"]) | imported
