@@ -1346,9 +1346,14 @@ def test_run_marks_a_musicbrainz_outage(tmp_path: Path) -> None:
          mock.patch("music_scan.scan.SPOTDL_DIR", inbox / "spotdl"), \
          mock.patch("music_scan.scan.QUARANTINE", tmp_path / "quarantine"), \
          mock.patch("music_scan.scan.ScanMetrics", FakeMetrics), \
-         mock.patch("music_scan.scan.count_lossless_items", return_value=0):
+         mock.patch("music_scan.scan.count_lossless_items", return_value=0), \
+         mock.patch("music_scan.scan.run_beet_update"), \
+         mock.patch("music_scan.scan.regen_playlists") as regen, \
+         mock.patch("music_scan.scan.trigger_scan") as rescan:
         with pytest.raises(scan.MusicBrainzUnavailable):
             scan.run(pending=None)
 
     assert captured[0].success is False and captured[0].failure_reason == "musicbrainz_unavailable"
     assert (inbox / "spotdl" / "keep" / "Artist - Song.m4a").exists()
+    regen.assert_called_once()
+    rescan.assert_called_once()

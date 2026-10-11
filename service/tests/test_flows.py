@@ -421,13 +421,16 @@ def test_scan_reports_a_musicbrainz_outage():
          patch("music_service.flows.concurrency"), \
          patch("music_scan.metrics.ScanMetrics.push", autospec=True, side_effect=pushed.append):
         _scan_mocks(mock_scan, mock_ingest)
-        mock_scan.run_inbox_import.side_effect = MusicBrainzUnavailable("503")
+        mock_scan.run_inbox_import.side_effect = MusicBrainzUnavailable("503", [("A", "B")])
         with pytest.raises(MusicBrainzUnavailable):
             _run_scan_tasks()
 
     (m,) = pushed
-    assert m.failure_reason == "musicbrainz_unavailable"
+    assert not m.success and m.failure_reason == "musicbrainz_unavailable"
+    assert m.tracks_imported == 1 + 3  # the import's one, plus the asis pass's
     mock_scan.quarantine_inbox_leftovers.assert_not_called()
+    # What did import still gets the rest of the scan.
+    mock_scan.regen_playlists.assert_called_once()
 
 
 def test_album_import_defers_on_a_musicbrainz_outage():

@@ -283,8 +283,15 @@ def _run_scan_tasks() -> None:
     try:
         metrics.tracks_removed = apply_removals_task()
         since = time.time()
-        imported = beet_import_task()
-        metrics.quarantined_tracks = quarantine_task()
+        outage: MusicBrainzUnavailable | None = None
+        try:
+            imported = beet_import_task()
+        except MusicBrainzUnavailable as exc:
+            # The rest of the scan still runs for what did import; the
+            # skipped files stay in the inbox for the next one (#264).
+            outage, imported = exc, exc.imported
+        if outage is None:
+            metrics.quarantined_tracks = quarantine_task()
         metrics.tracks_imported = len(imported) + asis_import_task()
         canon_task(since)
         beet_update_task()
@@ -295,12 +302,13 @@ def _run_scan_tasks() -> None:
             metrics.failure_reason = "navidrome_trigger_failed"
             raise
         reconcile_task()
-    except Exception as exc:
+        if outage is not None:
+            metrics.failure_reason = "musicbrainz_unavailable"
+            raise outage
+    except Exception:
         metrics.success = False
         if not metrics.failure_reason:
-            metrics.failure_reason = (
-                "musicbrainz_unavailable" if isinstance(exc, MusicBrainzUnavailable) else "unexpected_error"
-            )
+            metrics.failure_reason = "unexpected_error"
         raise
     finally:
         metrics.duration_seconds = int(time.monotonic() - start)

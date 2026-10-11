@@ -82,7 +82,12 @@ class MusicBrainzUnavailable(RuntimeError):
     """beets could not reach MusicBrainz during the import (#264).
 
     The tracks it skipped for that reason are no worse than before, so they stay
-    in the inbox for the next scan instead of going to quarantine."""
+    in the inbox for the next scan instead of going to quarantine.  *imported*
+    holds what the import did bring in, for the rest of the scan."""
+
+    def __init__(self, message: str, imported: list[tuple[str, str]] | None = None) -> None:
+        super().__init__(message)
+        self.imported = imported or []
 
 
 def run_inbox_import(skip_limit: int | None = None) -> list[tuple[str, str]]:
@@ -106,7 +111,8 @@ def run_inbox_import(skip_limit: int | None = None) -> list[tuple[str, str]]:
     if mb_errors:
         raise MusicBrainzUnavailable(
             f"beets could not reach MusicBrainz ({mb_errors} error line(s)); "
-            f"{len(imported)} of {len(inbox_snapshot)} inbox file(s) imported, the rest stay in the inbox"
+            f"{len(imported)} of {len(inbox_snapshot)} inbox file(s) imported, the rest stay in the inbox",
+            imported,
         )
     if inbox_snapshot and not imported:
         logger.warning(
@@ -485,12 +491,19 @@ def run(pending: PendingRemovals | None = None) -> None:
 
         logger.info("==> Importing from inbox...")
         since = time.time()
-        imported = run_inbox_import()
+        outage: MusicBrainzUnavailable | None = None
+        try:
+            imported = run_inbox_import()
+        except MusicBrainzUnavailable as exc:
+            # The rest of the scan still runs for what did import (#264).
+            outage, imported = exc, exc.imported
+            logger.warning("MusicBrainz unavailable: %s", exc)
 
-        logger.info("==> Quarantining skipped files...")
-        moved = quarantine_inbox_leftovers()
-        logger.info("Quarantined : %d file(s) → %s", moved, QUARANTINE)
-        logger.info("Log         : ~/.config/beets/import.log")
+        if outage is None:
+            logger.info("==> Quarantining skipped files...")
+            moved = quarantine_inbox_leftovers()
+            logger.info("Quarantined : %d file(s) → %s", moved, QUARANTINE)
+            logger.info("Log         : ~/.config/beets/import.log")
 
         logger.info("==> Importing quarantine with existing tags (--asis)...")
         asis_count = 0
@@ -526,9 +539,9 @@ def run(pending: PendingRemovals | None = None) -> None:
 
         logger.info("==> music-scan import complete")
 
-    except Exception as exc:
+    except Exception:
         metrics.success = False
-        metrics.failure_reason = "musicbrainz_unavailable" if isinstance(exc, MusicBrainzUnavailable) else "unexpected_error"
+        metrics.failure_reason = "unexpected_error"
         logger.exception("music-scan failed")
         raise
     else:
@@ -539,6 +552,10 @@ def run(pending: PendingRemovals | None = None) -> None:
             metrics.failure_reason = "navidrome_trigger_failed"
             logger.error("Navidrome rescan trigger failed — tracks may not appear in Navidrome: %s", exc)
             raise
+        if outage is not None:
+            metrics.success = False
+            metrics.failure_reason = "musicbrainz_unavailable"
+            raise outage
     finally:
         metrics.duration_seconds = int(time.monotonic() - start)
         metrics.lossless_items = count_lossless_items()
