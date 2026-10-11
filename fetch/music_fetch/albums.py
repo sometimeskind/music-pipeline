@@ -935,7 +935,8 @@ def requeue(state: State, since: datetime | None = None, keys: list[str] | None 
     for key, record in state.albums.items():
         if not demoted(record):
             continue
-        if key not in keys and (since is None or datetime.fromisoformat(record["fallback_at"]) < since):
+        at = record.get("fallback_at")
+        if key not in keys and (since is None or not at or datetime.fromisoformat(at) < since):
             continue
         found.append((key, json.loads(json.dumps(record))))
         record["status"] = WANTED
