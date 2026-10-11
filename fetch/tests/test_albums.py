@@ -1,6 +1,8 @@
 """Tests for music_fetch.albums — playlist reduction, budget and the tick's state transitions."""
 
 import json
+import shutil
+import subprocess
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -444,7 +446,7 @@ def grabbed_state(playlists=None) -> State:
 
 
 def run_complete(state, completion, roots, have_result=True, imported=None, tagged=None, gaps=None, settings=None,
-                 rolled_back=None):
+                 rolled_back=None, read_tags=None):
     """*gaps* is how many of each playlist's tracks beets left out (default: all
     of them when *have_result* is False, none otherwise)."""
     complete_root, inbox, quarantine = roots
@@ -462,7 +464,7 @@ def run_complete(state, completion, roots, have_result=True, imported=None, tagg
         tag_ids=lambda pl, tracks, since, count: tagged.append((pl, count)),
         rollback=lambda pl, since: (rolled_back if rolled_back is not None else []).append(pl) or 0,
         complete_root=complete_root, inbox_root=inbox, quarantine_root=quarantine,
-        settings=settings or Settings(mode="on"),
+        settings=settings or Settings(mode="on"), read_tags=read_tags or (lambda path: {}),
     )
     return status, seen, added
 
@@ -810,6 +812,138 @@ def test_complete_partial_import_is_the_album_and_queues_no_fallback(roots) -> N
     assert added == [("later", "keep")]
     # beets' quarantined tracks of the release stay for review: nothing fetches them now.
     assert (quarantine / "later" / "Artist-Album-FLAC").exists()
+
+
+def full_tracks() -> list[list]:
+    """Ten track entries with ISRC and disc/track, as reduce_to_albums writes them."""
+    return [[f"T{i}", "Artist", f"s{i}", f"ISRC{i}", 1, i + 1] for i in range(10)]
+
+
+def quarantined(roots, tags: dict[str, dict]):
+    """Put the release's rejected files in its quarantine dir; returns a
+    read_tags giving each file *tags*[name]."""
+    job = roots[2] / "later" / "Artist-Album-FLAC"
+    job.mkdir(parents=True, exist_ok=True)
+    for name in tags:
+        (job / name).write_bytes(b"x")
+    (job / "Artist-Album.nfo").write_bytes(b"x")
+    return lambda path: tags[path.name]
+
+
+@pytest.mark.parametrize("tags", [
+    {"isrc": "isrc0", "disc": None, "track": 7},  # ISRC decides over the position
+    {"isrc": None, "disc": None, "track": 1},     # disc 1 by default
+], ids=["isrc", "disc-track"])
+def test_complete_partial_import_queues_its_rejected_track_for_spotdl(roots, tags) -> None:
+    """#272: the release has T0 but beets rejected it; it lacks T1."""
+    state = grabbed_state(playlists={"later": full_tracks()})
+    read_tags = quarantined(roots, {"01.flac": tags})
+    status, _, _ = run_complete(state, albums.Completion("nzo1", True, "album/Artist-Album-FLAC"), roots,
+                                have_result=False, gaps=2, read_tags=read_tags)
+    record = state.albums["a0"]
+    assert status == albums.IMPORTED and record["gaps"] == ["s0", "s1"]
+    assert record["rejected_tracks"] == {"later": ["s0"]}
+    assert not {"fallback_from", "fallback_tracks"} & record.keys()
+    assert albums.fallback_queue(state) == 1
+    songs = [{"song_id": f"s{i}"} for i in range(10)]
+    assert albums.fallback_songs(state, "later", songs) == [{"song_id": "s0"}]
+    # The files stay for review.
+    assert (roots[2] / "later" / "Artist-Album-FLAC" / "01.flac").exists()
+
+
+def test_complete_partial_import_queues_nothing_for_a_track_the_release_lacks(roots) -> None:
+    state = grabbed_state(playlists={"later": full_tracks()})
+    # Its only rejected file is a track the library already has (T5).
+    read_tags = quarantined(roots, {"06.flac": {"isrc": None, "disc": 1, "track": 6}})
+    status, _, _ = run_complete(state, albums.Completion("nzo1", True, "album/Artist-Album-FLAC"), roots,
+                                have_result=False, gaps=2, read_tags=read_tags)
+    assert status == albums.IMPORTED
+    assert "rejected_tracks" not in state.albums["a0"] and albums.fallback_queue(state) == 0
+
+
+@pytest.mark.parametrize("tags", [
+    {"title": "T0", "artist": "Artist"},           # title alone (#255)
+    {"title": "T0", "isrc": "OTHER", "track": 1},  # its ISRC says it is another recording
+    {"title": "T0", "disc": 2, "track": 1},        # disc 2's first track
+], ids=["title", "isrc-mismatch", "other-disc"])
+def test_complete_never_ties_a_rejected_file_to_a_gap_by_title(roots, tags) -> None:
+    state = grabbed_state(playlists={"later": full_tracks()})
+    read_tags = quarantined(roots, {"01.flac": tags})
+    status, _, _ = run_complete(state, albums.Completion("nzo1", True, "album/Artist-Album-FLAC"), roots,
+                                have_result=False, gaps=2, read_tags=read_tags)
+    assert status == albums.IMPORTED and "rejected_tracks" not in state.albums["a0"]
+
+
+def test_complete_a_gap_release_queues_its_rejected_track_too(roots) -> None:
+    state = grabbed_state(playlists={"later": full_tracks()})
+    state.albums["a0"]["gaps"] = ["s0", "s1", "s2", "s3", "s4"]
+    read_tags = quarantined(roots, {"03.flac": {"isrc": "ISRC2", "disc": 1, "track": 3}})
+    status, _, _ = run_complete(state, albums.Completion("nzo1", True, "album/Artist-Album-FLAC"), roots,
+                                have_result=False, gaps=5, read_tags=read_tags)
+    assert status == albums.IMPORTED and state.albums["a0"]["rejected_tracks"] == {"later": ["s2"]}
+
+
+def test_complete_blocklisted_release_queues_no_rejected_track(roots) -> None:
+    state = grabbed_state(playlists={"later": full_tracks()})
+    read_tags = quarantined(roots, {"01.flac": {"isrc": "ISRC0"}})
+    status, _, _ = run_complete(state, albums.Completion("nzo1", True, "album/Artist-Album-FLAC"), roots,
+                                have_result=False, gaps=3, read_tags=read_tags)
+    assert status == albums.WANTED and "rejected_tracks" not in state.albums["a0"]
+
+
+def test_fallbacks_fill_an_imported_release_once_its_rejected_tracks_land() -> None:
+    state = fallback_state(albums.IMPORTED, {"later": full_tracks()})
+    state.albums["a0"]["rejected_tracks"] = {"later": ["s0", "s3"]}
+    lacking = {"s0", "s3"}
+    missing = lambda pl, tracks: [t for t in tracks if t[2] in lacking]  # noqa: E731
+    albums.fallbacks(state, missing)
+    assert state.albums["a0"]["rejected_tracks"] == {"later": ["s0", "s3"]}
+
+    lacking = {"s3"}
+    albums.fallbacks(state, missing)
+    assert state.albums["a0"]["rejected_tracks"] == {"later": ["s3"]}
+    assert albums.fallback_queue(state) == 1
+
+    lacking = set()
+    albums.fallbacks(state, missing)
+    record = state.albums["a0"]
+    assert record["status"] == albums.IMPORTED and "filled_at" in record
+    assert "rejected_tracks" not in record and albums.fallback_queue(state) == 0
+    assert not {"fallback_from", "fallback_tracks"} & record.keys()
+
+
+def test_reset_clears_the_rejected_tracks() -> None:
+    state = fallback_state(albums.IMPORTED, {"later": full_tracks()})
+    state.albums["a0"]["rejected_tracks"] = {"later": ["s0"]}
+    assert albums.reset_album(state, "Album") is not None
+    assert "rejected_tracks" not in state.albums["a0"]
+
+
+@pytest.mark.parametrize("ext", [".flac", ".m4a"])
+def test_file_tags_reads_isrc_and_disc_track(tmp_path, ext) -> None:
+    """Skips where ffmpeg is missing (the bare CI runner); the dev image has it."""
+    if not shutil.which("ffmpeg"):
+        pytest.skip("ffmpeg not installed")
+    path = tmp_path / f"01{ext}"
+    subprocess.run(["ffmpeg", "-v", "error", "-y", "-f", "lavfi", "-i", "anullsrc=r=44100:cl=mono:d=1",
+                    "-c:a", "flac" if ext == ".flac" else "aac", str(path)], check=True)
+    if ext == ".flac":
+        from mutagen.flac import FLAC
+        audio = FLAC(path)
+        audio.update({"isrc": "GBAYE0601498", "discnumber": "2/2", "tracknumber": "7/12"})
+    else:
+        from mutagen.mp4 import MP4, MP4FreeForm
+        audio = MP4(path)
+        audio["----:com.apple.iTunes:ISRC"] = [MP4FreeForm(b"GBAYE0601498")]
+        audio["disk"], audio["trkn"] = [(2, 2)], [(7, 12)]
+    audio.save()
+    assert albums.file_tags(path) == {"isrc": "GBAYE0601498", "disc": 2, "track": 7}
+    assert albums.file_tags(tmp_path / "missing.flac") == {}
+
+
+def test_number_tags() -> None:
+    assert albums._number("5/12") == 5 and albums._number(3) == 3
+    assert albums._number(None) is None and albums._number("") is None
 
 
 def test_complete_one_over_the_threshold_still_blocklists(roots) -> None:
