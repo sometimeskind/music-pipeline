@@ -11,6 +11,7 @@ dependencies = []
 [project.scripts]
 music-ingest = "music_fetch.cli:main"
 music-album-reset = "music_fetch.albums:reset_main"
+music-album-requeue = "music_fetch.albums:requeue_main"
 
 [tool.setuptools.packages.find]
 where = ["."]

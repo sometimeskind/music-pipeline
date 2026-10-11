@@ -1033,3 +1033,60 @@ def test_complete_an_import_that_always_crashes_counts_against_the_release(roots
     assert record["blocklist"] == ["r1"] and record["attempts"] == 1
     assert "import_errors" not in record and "import_started" not in record
 
+
+def demoted_state() -> State:
+    state = State()
+    base = {"blocklist": [], "name": "Album", "artist": "Artist", "tracks_count": 2,
+            "playlists": {"later": [["One", "Artist", "s1"], ["Two", "Artist", "s2"]]}}
+    state.albums["old"] = base | {"status": albums.FALLBACK, "fallback_from": albums.MISSING,
+                                  "fallback_at": "2026-10-01T00:00:00+00:00", "fallback_tracks": {"later": ["s1", "s2"]}}
+    state.albums["new"] = base | {"status": albums.FALLBACK, "fallback_from": albums.MISSING,
+                                  "fallback_at": "2026-10-10T23:15:02+00:00", "fallback_tracks": {"later": ["s2"]}}
+    state.albums["failed"] = base | {"status": albums.FALLBACK, "fallback_from": albums.FAILED,
+                                     "fallback_at": "2026-10-10T23:15:02+00:00", "fallback_tracks": {"later": ["s1"]}}
+    state.albums["filled"] = base | {"status": albums.FILLED, "fallback_from": albums.MISSING,
+                                     "fallback_at": "2026-10-10T23:15:02+00:00", "fallback_tracks": {}}
+    return state
+
+
+def test_requeue_since_puts_demoted_misses_back_to_wanted() -> None:
+    state = demoted_state()
+    found = albums.requeue(state, since=datetime(2026, 10, 10, 22, tzinfo=timezone.utc))
+    assert [key for key, _ in found] == ["new"]
+    assert found[0][1]["fallback_tracks"] == {"later": ["s2"]}
+    record = state.albums["new"]
+    assert record["status"] == albums.WANTED
+    assert not {"fallback_from", "fallback_at", "fallback_tracks"} & record.keys()
+    assert albums.fallback_queue(state) == 3  # old and failed still wait for spotdl
+    assert albums.fallback_songs(state, "later", [{"song_id": "s2"}]) == [{"song_id": "s2"}]  # via old
+    assert state.albums["old"]["status"] == state.albums["failed"]["status"] == albums.FALLBACK
+
+
+def test_requeue_by_key_skips_albums_a_miss_did_not_demote(caplog) -> None:
+    state = demoted_state()
+    found = albums.requeue(state, keys=["old", "failed", "filled", "nope"])
+    assert [key for key, _ in found] == ["old"]
+    assert state.albums["failed"]["status"] == albums.FALLBACK
+    assert state.albums["filled"]["status"] == albums.FILLED
+    assert caplog.text.count("not an album a miss demoted") == 3
+
+
+def test_requeued_album_is_searched_by_the_next_tick() -> None:
+    state = demoted_state()
+    albums.requeue(state, keys=["new"])
+    prowlarr, sab = fakes()
+    top_up(state, Settings(mode="on"), prowlarr, sab, never_have, albums.TickResult(), now=lambda: NOW)
+    assert state.albums["new"]["status"] == albums.GRABBED
+
+
+def test_requeue_main_is_a_dry_run_without_apply(tmp_path: Path, monkeypatch) -> None:
+    path = tmp_path / "albums.json"
+    demoted_state().save(path)
+    monkeypatch.setattr(albums, "STATE_FILE", path)
+    monkeypatch.delenv("PREFECT_API_URL", raising=False)
+    monkeypatch.setattr("sys.argv", ["music-album-requeue", "--since", "2026-10-10T22:00"])
+    albums.requeue_main()
+    assert State.load(path).albums["new"]["status"] == albums.FALLBACK
+    monkeypatch.setattr("sys.argv", ["music-album-requeue", "--since", "2026-10-10T22:00", "--apply"])
+    albums.requeue_main()
+    assert State.load(path).albums["new"]["status"] == albums.WANTED
