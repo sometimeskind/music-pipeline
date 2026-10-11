@@ -41,43 +41,6 @@ def name_words(s: str) -> frozenset[str]:
     return frozenset(w for w in words if len(w) > 2 and w not in _STOP_WORDS)
 
 
-# A trailing title segment that only says the recording was remastered (#243):
-# ``(2018 Remaster)``, ``[2018 Remaster]``, ``- Remastered 2009``, ``; 2013 Remaster``.
-_REMASTER = frozenset({"remaster", "remastered"})
-_REMASTER_FILLER = frozenset({"digital", "digitally", "version", "edition", "deluxe", "anniversary",
-                              "expanded", "the", "of", "from", "and"})
-_EDITION_SUFFIXES = (
-    re.compile(r"\s*[(\[]([^()\[\]]*)[)\]]\s*$"),
-    re.compile(r"\s+-\s+((?:(?!\s-\s).)*)$"),
-    re.compile(r"\s*;\s*([^;]*)$"),
-)
-
-
-def _remaster_note(text: str) -> bool:
-    tokens = re.findall(r"[a-z0-9]+", text.lower())
-    return bool(_REMASTER & set(tokens)) and all(
-        t in _REMASTER or t in _REMASTER_FILLER or re.fullmatch(r"\d{4}|\d+(st|nd|rd|th)", t) for t in tokens
-    )
-
-
-def drop_edition(title: str) -> str:
-    """*title* without trailing remaster notes (#243): only a segment of
-    remaster words, years and filler goes, so ``Kiss Me (Euroversion)`` and
-    ``Turning Point - Edit`` keep their suffix.
-
-    Not for identity: a remaster is another master with its own ISRCs, so the
-    words rungs and :func:`release_match` compare the whole title (#252).
-    canon's ``album_entry`` (#250) uses it."""
-    while True:
-        for suffix in _EDITION_SUFFIXES:
-            m = suffix.search(title)
-            if m and _remaster_note(m.group(1)) and title[:m.start()].strip():
-                title = title[:m.start()].rstrip()
-                break
-        else:
-            return title
-
-
 def item_words(item) -> frozenset[str]:
     return name_words(f"{item.title or ''} {item.artist or item.albumartist or ''}")
 

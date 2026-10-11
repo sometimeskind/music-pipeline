@@ -506,17 +506,20 @@ def test_album_import_flow_grab_next_uses_search_overrides(tmp_path):
 
 @pytest.mark.parametrize("status, adopted", [("imported", True), ("fallback", True), ("wanted", False)])
 def test_album_completion_adopts_the_releases_extras(status, adopted):
-    """A successful release's extras take its album's tags (#245); a failed one's roll back instead."""
+    """A successful release's extras take its album's tags (#245); a failed one's roll back instead.
+
+    complete() has already moved the record on from grabbed, so it is found by
+    its nzo_id whatever its status (#266: find_by_nzo never found it)."""
     import music_fetch.albums as albums
     from music_scan import canon
     from music_service import flows
 
-    state = albums.State(albums={"lcd": {"nzo_id": "nzo_1"}})
+    state = albums.State(albums={"other": {"nzo_id": "nzo_0", "status": status},
+                                 "lcd": {"nzo_id": "nzo_1", "status": status}})
     extra = canon.Extra(item=None, album=None, diff={}, dest="/new", art=True, write=True, source="/old")
     events = []
     with patch.object(albums, "complete", return_value=status), \
-         patch.object(albums, "find_by_nzo", return_value=("lcd", state.albums["lcd"])), \
-         patch.object(canon, "extras_after_import", return_value=([extra], [])) as adopt, \
+         patch.object(canon, "extras_after_import", return_value=[extra]) as adopt, \
          patch.object(flows.scan, "regen_playlists", side_effect=lambda: events.append("m3u")), \
          patch("music_scan.navidrome.trigger_scan", side_effect=lambda: events.append("rescan")), \
          patch.object(flows, "concurrency"):
@@ -524,7 +527,36 @@ def test_album_completion_adopts_the_releases_extras(status, adopted):
         assert complete(state, albums.Completion(nzo_id="nzo_1", ok=True, path="x")) == status
 
     assert adopt.called is adopted
+    if adopted:
+        assert adopt.call_args.args[1:] == ("lcd", state.albums["lcd"])
     assert events == (["m3u", "rescan"] if adopted else [])
+
+
+def test_album_completion_supersedes_loose_copies_after_canon():
+    """The album copy supersedes loose items after the IDs and canon (#266); the .m3u files follow."""
+    import music_fetch.albums as albums
+    from music_scan import canon, supersede
+    from music_service import flows
+
+    events = []
+    lib = MagicMock()
+    fresh, old = MagicMock(added=200.0), MagicMock(added=50.0)
+    for item, via in ((fresh, "usenet"), (old, "usenet")):
+        item.get.side_effect = lambda k, d=None, via=via: via if k == "via" else d
+    lib.items_by_source.return_value = [fresh, old]
+    with patch.object(flows.scan, "tag_album_ids", side_effect=lambda *a: events.append("ids")), \
+         patch.object(canon, "canonicalize_items", side_effect=lambda items: events.append("canon")), \
+         patch.object(supersede, "after_import", side_effect=lambda lib, items, n: events.append(("sup", items, n)) or 1), \
+         patch("music_scan.cover.embed_covers", return_value=0), \
+         patch("music_scan.cover.covers_by_id", return_value={}), \
+         patch.object(flows.scan, "regen_playlists", side_effect=lambda: events.append("m3u")), \
+         patch("music_scan.navidrome.trigger_scan", side_effect=lambda: events.append("rescan")), \
+         patch.object(flows, "concurrency"):
+        hooks = flows._album_library_hooks(lib)
+        with patch.object(albums, "complete", side_effect=lambda state, c, imp, miss, add, tag, rb: tag("keep", [], 100.0, 10)):
+            hooks[2](albums.State(), albums.Completion(nzo_id="n", ok=True, path="x"))
+
+    assert events == ["ids", "canon", ("sup", [fresh], 10), "m3u", "rescan"]
 
 
 def test_skip_if_busy_acquires_a_free_limit():

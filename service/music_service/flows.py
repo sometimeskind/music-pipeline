@@ -405,6 +405,7 @@ def _album_library_hooks(lib):
     def tag_ids(playlist: str, tracks: list[list], since: float, tracks_count: int) -> None:
         scan.tag_album_ids(lib, playlist, tracks, since, tracks_count)
         canon_albums(playlist, since)
+        supersede(playlist, since, tracks_count)
         embed_covers(playlist, since)
 
     def canon_albums(playlist: str, since: float) -> None:
@@ -417,6 +418,24 @@ def _album_library_hooks(lib):
             canon.canonicalize_items(fresh)
         except Exception:
             canon.logger.exception("Canonical albums failed; the next scan or music-canon-albums retries it")
+
+    def supersede(playlist: str, since: float, tracks_count: int) -> None:
+        # After canon, which files the loose items' slots (#266).  The .m3u
+        # files listed the loose items, so regenerate.
+        from music_scan import supersede as sup  # noqa: PLC0415
+        from music_scan.navidrome import trigger_scan  # noqa: PLC0415
+
+        try:
+            with concurrency("pipeline", occupy=1):
+                fresh = [i for i in lib.items_by_source(playlist)
+                         if i.get("via") == "usenet" and (i.added or 0) >= since]
+                n = sup.after_import(lib, fresh, tracks_count)
+                if n:
+                    scan.regen_playlists()
+            if n:
+                trigger_scan()
+        except Exception:
+            sup.logger.exception("Superseding loose copies failed; music-canon-albums retries it")
 
     def embed_covers(playlist: str, since: float) -> None:
         # Needs the Spotify IDs tag_album_ids just set (#204).  The import's
@@ -447,20 +466,21 @@ def _album_library_hooks(lib):
         return n
 
     def adopt_extras(state, completion) -> None:
-        # A successful release's extras take its album's tags, cover and folder (#245),
-        # or its track's Spotify ID when they are one (#250); the .m3u files list them, so regenerate.
+        # A successful release's items with no Spotify ID take its album's tags, cover
+        # and folder (#245, #266); the .m3u files list them, so regenerate.
         from music_scan import canon  # noqa: PLC0415
         from music_scan.navidrome import trigger_scan  # noqa: PLC0415
 
-        found = albums.find_by_nzo(state, completion.nzo_id)
+        # Not find_by_nzo: that finds grabbed records only, and complete() has moved this one on (#266).
+        found = next(((k, r) for k, r in state.albums.items() if r.get("nzo_id") == completion.nzo_id), None)
         if found is None:
             return
         try:
             with concurrency("pipeline", occupy=1):
-                extras, links = canon.extras_after_import(lib, *found)
-                if links or any(e.dest != e.source for e in extras):
+                extras = canon.extras_after_import(lib, *found)
+                if any(e.dest != e.source for e in extras):
                     scan.regen_playlists()
-            if links or any(e.write for e in extras):
+            if any(e.write for e in extras):
                 trigger_scan()
         except Exception:
             canon.logger.exception("Release extras failed; music-canon-albums retries them")

@@ -371,7 +371,9 @@ def tag_album_ids(lib: MusicLibrary, source: str, tracks: list[list], since: flo
        whose release has Spotify's track count (editions renumber tracks);
     3. the same title among this import's usenet items, with the artist
        anywhere in a credit that may add ``feat.`` names (#240), logged
-       ``[WORDS]`` so the fallback rate is visible.
+       ``[WORDS]`` so the fallback rate is visible.  The ID is also listed in
+       ``words_ids``, so the album copy never supersedes a loose item on its
+       strength (#266).
     Title words never pick an item outside this import (#255): the
     playlist's other items are other recordings unless an ID says so, and a
     live take must not take the studio entry's ID.
@@ -390,7 +392,8 @@ def tag_album_ids(lib: MusicLibrary, source: str, tracks: list[list], since: flo
         match, _ = index.match(None, track.isrc, words=False)
         if match is None and track.disc and track.track:
             match = next((i for i in fresh if (i.disc, i.track) == (track.disc, track.track)), None)
-        if match is None:
+        words = match is None
+        if words:
             match = release_match(track.name, track.artist, unclaimed)
             if match is not None:
                 logger.info("  [WORDS] %s: %s — %s matched by title+artist only", source, track.name, track.artist)
@@ -400,6 +403,8 @@ def tag_album_ids(lib: MusicLibrary, source: str, tracks: list[list], since: flo
             logger.info("  [NOID] %s: %s — %s matches no library item", source, track.name, track.artist)
             continue
         add_to_list(match, "spotify_ids", track.song_id)
+        if words:
+            add_to_list(match, "words_ids", track.song_id)
         match.store()
         count += 1
     return count

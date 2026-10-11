@@ -874,33 +874,8 @@ def test_backfill_adopts_extras_after_the_retags(tmp_path, ffmpeg, lib, monkeypa
 
 
 # ----------------------------------------------------------------------
-# Extras that are one of their album's tracks (#250)
+# The release is the album: no Spotify ID by title (#266, replacing #250's [LINK])
 # ----------------------------------------------------------------------
-
-
-@pytest.mark.parametrize("title, entry", [
-    ("Psycho Killer (live)", "Psycho Killer - Live"),
-    ("Once in a Lifetime (live version)", "Once in a Lifetime - Live"),
-    ("Genius Of Love (live)", "Genius of Love (Tom Tom Club) - Live"),
-    ("The Great Curve - 2005 Remaster", "The Great Curve - 2005 Remaster"),
-    ("The Great Curve (Remastered 2005)", "The Great Curve - 2005 Remaster"),
-    ("The Great Curve", None),  # against the remaster entry: another master is a bonus track (#254)
-    ("Thank You for Sending Me an Angel (Country Angel version)", None),
-    ("Cities (live version)", None),
-    ("Drunk Girls (London Session)", None),
-    ("Psycho Killer (live)", None),  # against the studio entry only: a live take is a bonus track
-])
-def test_album_entry_by_title_words(title, entry):
-    from music_scan.canon import album_entry
-    from music_scan.identity import PlaylistTrack
-
-    entries = [PlaylistTrack("Psycho Killer", "Talking Heads", "STUDIO"),
-               PlaylistTrack("Thank You for Sending Me an Angel - Live", "Talking Heads", "ANGEL"),
-               PlaylistTrack("Drunk Girls", "LCD Soundsystem", "DRUNK")]
-    entries.append(PlaylistTrack(entry or "The Great Curve - 2005 Remaster", "Talking Heads",
-                                 "MATCH" if entry else "REMASTER"))
-    found = album_entry(type("Item", (), {"title": title})(), entries)
-    assert (found.song_id if found else None) == ("MATCH" if entry else None)
 
 
 def _live(tmp_path, lib):
@@ -924,38 +899,26 @@ def _live(tmp_path, lib):
     return psycho, extras, records
 
 
-def test_an_album_track_extra_is_linked_or_left_as_a_duplicate(tmp_path, ffmpeg, lib, caplog):
-    import logging
+def test_release_items_matching_no_entry_take_the_album_and_no_title_id(tmp_path, ffmpeg, lib):
+    from mediafile import MediaFile
 
-    from music_scan.canon import adopt_extras, link_extras
-
-    caplog.set_level(logging.INFO)
-    _, extras, records = _live(tmp_path, lib)
-    genius, dupe, cities = (extras[t] for t in ("Genius Of Love (live)", "Psycho Killer (live)",
-                                                "Cities (live version)"))
-
-    links, dupes = link_extras(lib.all_items(), records, apply=False)
-    assert [(i.id, e.song_id) for i, e in links] == [(genius.id, "GENIUS")]
-    assert [(i.id, e.song_id) for i, e in dupes] == [(dupe.id, "PSYCHO")]
-    assert not lib.get_item(genius.id).get("spotify_ids")  # dry run
-    assert "[DUPE]" in caplog.text and "(dry run)" in caplog.text
-
-    link_extras(lib.all_items(), records)
-    assert lib.get_item(genius.id).get("spotify_ids") == "GENIUS"
-    adopted = adopt_extras(lib.all_items(), records)
-    assert [e.item.id for e in adopted] == [cities.id]  # the bonus track only
-    assert lib.get_item(dupe.id).album == "Stop Making Sense"  # left as it is
-    links, dupes = link_extras(lib.all_items(), records)
-    assert links == [] and [i.id for i, _ in dupes] == [dupe.id]  # a rerun links nothing again
-
-
-def test_import_hook_canonicalises_the_links_before_adopting(tmp_path, ffmpeg, lib, monkeypatch):
     from music_scan import canon
 
-    _, extras, records = _live(tmp_path, lib)
-    seen = []
-    monkeypatch.setattr(canon, "canonicalize_items", lambda items, **kw: seen.extend(i.title for i in items))
-    adopted, links = canon.extras_after_import(lib, "sms", records["sms"])
-    assert seen == ["Genius Of Love (live)"]
-    assert [i.title for i, _ in links] == ["Genius Of Love (live)"]
-    assert [e.item.title for e in adopted] == ["Cities (live version)"]
+    psycho, extras, records = _live(tmp_path, lib)
+    art = MediaFile(os.fsdecode(psycho.path)).images[0].data
+
+    adopted = canon.extras_after_import(lib, "sms", records["sms"])
+
+    # Genius Of Love's title is in its entry's name, and Psycho Killer (live) is a second copy:
+    # all three are album tracks without a Spotify ID, none links to an entry by title.
+    assert sorted(e.item.title for e in adopted) == ["Cities (live version)", "Genius Of Love (live)",
+                                                     "Psycho Killer (live)"]
+    album_dir = tmp_path / "library" / "Talking Heads" / "Stop Making Sense (Live)"
+    for extra in extras.values():
+        item = lib.get_item(extra.id)
+        assert (item.album, item.albumartist, item.year) == ("Stop Making Sense (Live)", "Talking Heads", 1984)
+        assert item.get("spotify_album_id") == "SMS" and not item.get("spotify_ids")
+        assert Path(os.fsdecode(item.path)).parent == album_dir
+        assert MediaFile(os.fsdecode(item.path)).images[0].data == art
+    assert lib.get_item(extras["Psycho Killer (live)"].id).track == 2  # track 1 is the album's own
+    assert canon.extras_after_import(lib, "sms", records["sms"]) == []
