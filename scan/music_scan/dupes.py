@@ -32,6 +32,13 @@ deleted) and their rows leave the database.  The ``.m3u`` files are then
 regenerated, so every entry resolves to the keeper.  The keeper is not moved:
 ``music-canon-albums --apply`` files it under its canonical album afterwards.
 
+``--merge KEEP DROP...`` merges items the operator has confirmed, usually an
+uncertain pair, onto KEEP through the same merge as ``--apply``; the audit prints
+the command for each uncertain pair, keeper by the rule above.  It is a dry run
+without ``--apply`` and refuses unknown IDs, KEEP among the drops, and a manually
+imported drop (any ``via`` but spotdl/usenet, as supersede's ``[MANUAL]``) unless
+``--allow-manual``.
+
 ``--fingerprint`` fingerprints items that have no ``acoustid_fingerprint`` (dry
 run counts them; with ``--apply`` it computes and stores them in the database
 only, leaving the files alone).  Run it before the first audit.  New asis
@@ -61,6 +68,7 @@ from music_scan.identity import (
     add_isrcs, add_to_list, fingerprint, item_isrcs, item_spotify_ids, spotify_id, split_list,
 )
 from music_scan.metrics import _gauge, _push
+from music_scan.supersede import MANAGED_VIA
 
 logger = logging.getLogger(__name__)
 
@@ -288,16 +296,27 @@ def report(certain: list[Group], uncertain: list[Group], distinct: int, duration
         _log_group(group, keeper, expected)
     for group in uncertain:
         _log_group(group, None, expected_lengths(group, durations))
+        by_id = {item.id: item for item in group.items}
+        for a, b, _ in group.evidence:
+            logger.info("    if one recording: %s", merge_command(by_id[a], by_id[b], durations))
     logger.info(
         "Dupes: %d certain group(s) (%d surplus item(s)), %d uncertain group(s), %d distinct pair(s) (disjoint ISRCs)",
         len(certain), sum(len(g.items) - 1 for g in certain), len(uncertain), distinct,
     )
 
 
+def merge_command(a, b, durations: dict[str, float]) -> str:
+    """The ``--merge`` command for the pair *a*, *b*, keeper by the certain tier's rule."""
+    expected = expected_lengths(Group(UNCERTAIN, [a, b], []), durations)
+    keeper, loser = sorted([a, b], key=lambda i: keep_order(i, expected))
+    return f"music-audit-dupes --merge {keeper.id} {loser.id}"
+
+
 def _log_group(group: Group, keeper, expected: list[float]) -> None:
     first = group.items[0]
-    logger.info("[%s] %s — %s: %s", group.tier.upper(), first.artist or first.albumartist or "?", first.title or "?",
-                "; ".join(f"{a}~{b} {why}" for a, b, why in group.evidence))
+    evidence = "; ".join(f"{a}~{b} {why}" for a, b, why in group.evidence)
+    logger.info("[%s] %s — %s%s", group.tier.upper(), first.artist or first.albumartist or "?", first.title or "?",
+                f": {evidence}" if evidence else "")
     for item in group.items:
         role = "    " if keeper is None else ("keep" if item is keeper else "drop")
         logger.info("    %s %s  %.0fs %dk  %s  %s", role, item.id, float(item.length or 0),
@@ -345,6 +364,36 @@ def merge(keeper, losers: list, replaced_dir: Path = REPLACED) -> list[Path]:
     return moved
 
 
+def merge_chosen(items: list, ids: list[int], apply: bool, allow_manual: bool,
+                 durations: dict[str, float], replaced_dir: Path = REPLACED) -> list[Path]:
+    """Merge the items *ids* after the first onto the first, as the operator chose; with *apply*
+    only.  Raises :class:`SystemExit` on a refused choice, before anything changes."""
+    keep_id, *drop_ids = ids
+    if not drop_ids:
+        raise SystemExit("--merge needs a keeper and at least one item to drop")
+    if keep_id in drop_ids:
+        raise SystemExit(f"--merge: the keeper {keep_id} is also among the drops")
+    by_id = {item.id: item for item in items}
+    if missing := [i for i in dict.fromkeys(ids) if i not in by_id]:
+        raise SystemExit(f"--merge: no library item with id {', '.join(map(str, missing))}")
+    keeper, drops = by_id[keep_id], [by_id[i] for i in dict.fromkeys(drop_ids)]
+    manual = [d for d in drops if (d.get("via") or "") not in MANAGED_VIA]
+    if manual and not allow_manual:
+        raise SystemExit("--merge: " + ", ".join(f"{d.id} (via={d.get('via') or '-'})" for d in manual)
+                         + " imported by hand; add --allow-manual to drop it anyway")
+
+    group = Group("merge", [keeper, *drops], [])
+    _log_group(group, keeper, expected_lengths(group, durations))
+    gained = [s for d in drops for s in split_list(d.get("sources")) if s not in split_list(keeper.get("sources"))]
+    logger.info("    %s keeps its file and takes the IDs and playlists of %s (new playlists: %s); "
+                "their file(s) → %s", keeper.id, ", ".join(str(d.id) for d in drops),
+                ", ".join(dict.fromkeys(gained)) or "none", replaced_dir)
+    if not apply:
+        logger.info("Dry run — nothing merged. Re-run with --apply.")
+        return []
+    return merge(keeper, drops, replaced_dir)
+
+
 def fingerprint_missing(items: list, apply: bool, ids: list[int] | None = None) -> int:
     """Fingerprint items with no ``acoustid_fingerprint``, or the items *ids* whatever they
     have (a stale one); with *apply*, store them.  Returns the count."""
@@ -388,9 +437,10 @@ def push_metrics(certain: int, uncertain: int) -> None:
     ]), "music_audit_dupes")
 
 
-def run(apply: bool = False, fingerprints: list[int] | None = None) -> tuple[list[Group], list[Group]]:
+def run(apply: bool = False, fingerprints: list[int] | None = None, merge_ids: list[int] | None = None,
+        allow_manual: bool = False) -> tuple[list[Group], list[Group]]:
     """Audit, and with *apply* merge; with *fingerprints* (a list, empty for every item
-    missing one) fingerprint instead."""
+    missing one) fingerprint instead; with *merge_ids* merge those items instead."""
     from music_scan.library import LIBRARY_DB, MusicLibrary  # noqa: PLC0415
     from music_scan.navidrome import trigger_scan  # noqa: PLC0415
     from music_scan.scan import SPOTDL_DIR, regen_playlists  # noqa: PLC0415
@@ -400,8 +450,18 @@ def run(apply: bool = False, fingerprints: list[int] | None = None) -> tuple[lis
         if fingerprints is not None:
             fingerprint_missing(items, apply, fingerprints)
             return [], []
-        certain, uncertain, distinct = find_dupes(items, decode)
         durations = spotify_durations(SPOTDL_DIR)
+        if merge_ids is not None:
+            if not apply:
+                merge_chosen(items, merge_ids, False, allow_manual, durations, REPLACED)
+                return [], []
+            with pipeline_lock():
+                merge_chosen(items, merge_ids, True, allow_manual, durations, REPLACED)
+                counts = regen_playlists()
+            logger.info("Merged; playlists regenerated: %s", ", ".join(f"{k} {v}" for k, v in sorted(counts.items())))
+            trigger_scan()
+            return [], []
+        certain, uncertain, distinct = find_dupes(items, decode)
         report(certain, uncertain, distinct, durations)
         left = len(certain)
         if apply and certain:
@@ -427,6 +487,15 @@ def main() -> None:
     parser.add_argument("--fingerprint", nargs="*", type=int, metavar="ITEM_ID",
                         help="instead: fingerprint items that have none, or these items "
                              "(stored only with --apply)")
+    parser.add_argument("--merge", nargs="+", type=int, metavar="ITEM_ID",
+                        help="instead: merge the items after the first onto the first, a pair the "
+                             "operator confirmed (merged only with --apply)")
+    parser.add_argument("--allow-manual", action="store_true",
+                        help="with --merge: drop a manually imported item too")
     args = parser.parse_args()
+    if args.fingerprint is not None and args.merge is not None:
+        parser.error("--fingerprint and --merge are separate runs")
+    if args.allow_manual and args.merge is None:
+        parser.error("--allow-manual goes with --merge")
     logging.basicConfig(level=logging.INFO, format="[%(asctime)s] %(message)s", datefmt="%Y-%m-%dT%H:%M:%S%z")
-    run(apply=args.apply, fingerprints=args.fingerprint)
+    run(apply=args.apply, fingerprints=args.fingerprint, merge_ids=args.merge, allow_manual=args.allow_manual)

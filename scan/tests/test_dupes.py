@@ -325,6 +325,95 @@ def test_run_apply_merges_regens_and_reports_zero_left(monkeypatch, tmp_path) ->
     assert PUSHED == [(0, 0)]
 
 
+# --- --merge: an uncertain pair the operator confirms (#276) -------------------
+
+def _bright_eyes(tmp_path):
+    """Old Soul Song: the same recording on two items, listed uncertain on title+artist (homelab#1889)."""
+    old = FakeItem(92, "Old Soul Song (For The New World Order)", artist="Bright Eyes", length=269.0,
+                   bitrate=127000, spotify_ids="OLD", sources="aaaaaaah", via="spotdl")
+    new = FakeItem(2898, "Old Soul Song (for the New World Order)", artist="Bright Eyes", length=269.0,
+                   bitrate=258000, spotify_ids="NEW", sources="keep", via="usenet")
+    return [_on_disk(tmp_path, i) for i in (old, new)]
+
+
+def test_merge_dry_run_changes_nothing(monkeypatch, tmp_path, caplog) -> None:
+    items = _bright_eyes(tmp_path)
+    events = _patch_run(monkeypatch, items, tmp_path)
+    caplog.set_level("INFO")
+    dupes.run(merge_ids=[2898, 92])
+    assert not any(i.removed or i.stored for i in items)
+    assert all(Path(i.path.decode()).exists() for i in items)
+    assert events == [] and PUSHED == []
+    assert "keep 2898" in caplog.text and "drop 92" in caplog.text and "Dry run" in caplog.text
+    assert "new playlists: aaaaaaah" in caplog.text
+
+
+def test_merge_apply_merges_and_the_dropped_items_playlists_point_at_the_keeper(monkeypatch, tmp_path) -> None:
+    items = _bright_eyes(tmp_path)
+    old, new = items
+    old_path = Path(old.path.decode())
+    events = _patch_run(monkeypatch, items, tmp_path)
+    dupes.run(apply=True, merge_ids=[2898, 92])
+    assert old.removed and not new.removed
+    assert not old_path.exists() and (tmp_path / "replaced" / f"92-{old_path.name}").exists()
+    assert new.get("sources") == "keep,aaaaaaah"
+    # The .m3u regen finds the keeper for the dropped item's playlist entry.
+    song = {"song_id": "OLD", "name": "Old Soul Song (For The New World Order)", "artists": ["Bright Eyes"]}
+    assert ItemIndex([new]).match_song(song, words=False) == (new, "id")
+    assert events == ["m3u", "rescan"]
+    assert PUSHED == []
+
+
+@pytest.mark.parametrize("ids,why", [
+    ([2898, 999], "no library item with id 999"),
+    ([2898, 92, 2898], "keeper 2898 is also among the drops"),
+    ([2898], "needs a keeper and at least one"),
+])
+def test_merge_refuses_before_changing_anything(monkeypatch, tmp_path, ids, why) -> None:
+    items = _bright_eyes(tmp_path)
+    events = _patch_run(monkeypatch, items, tmp_path)
+    with pytest.raises(SystemExit, match=why):
+        dupes.run(apply=True, merge_ids=ids)
+    assert not any(i.removed or i.stored for i in items) and events == []
+
+
+def test_merge_refuses_a_manual_drop_unless_allowed(monkeypatch, tmp_path) -> None:
+    items = _bright_eyes(tmp_path)
+    items[0]["via"] = "manual"
+    events = _patch_run(monkeypatch, items, tmp_path)
+    with pytest.raises(SystemExit, match=r"92 \(via=manual\) imported by hand"):
+        dupes.run(apply=True, merge_ids=[2898, 92])
+    assert not items[0].removed and events == []
+    dupes.run(apply=True, merge_ids=[2898, 92], allow_manual=True)
+    assert items[0].removed and events == ["m3u", "rescan"]
+
+
+def test_a_manual_keeper_is_fine(monkeypatch, tmp_path) -> None:
+    items = _bright_eyes(tmp_path)
+    items[1]["via"] = ""
+    _patch_run(monkeypatch, items, tmp_path)
+    dupes.run(apply=True, merge_ids=[2898, 92])
+    assert items[0].removed
+
+
+def test_the_audit_prints_a_merge_command_per_uncertain_pair(monkeypatch, tmp_path, caplog) -> None:
+    """Talking Heads: a studio take and two live ones chain into one group; each pair gets its own command."""
+    studio = FakeItem(2538, "This Must Be the Place (Naïve Melody)", artist="Talking Heads", length=294.0,
+                      bitrate=262000)
+    live = FakeItem(2561, "This Must Be the Place (Naive Melody)", artist="Talking Heads", length=297.0,
+                    bitrate=268000, acoustid_id="f67c8b1f")
+    live2 = FakeItem(2595, "This Must Be the Place (Naive Melody) (live)", artist="Talking Heads", length=294.0,
+                     bitrate=267000, acoustid_id="f67c8b1f")
+    items = [_on_disk(tmp_path, i) for i in (studio, live, live2)]
+    _patch_run(monkeypatch, items, tmp_path)
+    caplog.set_level("INFO")
+    _, uncertain = dupes.run()
+    assert [sorted(i.id for i in g.items) for g in uncertain] == [[2538, 2561, 2595]]
+    assert "music-audit-dupes --merge 2561 2595" in caplog.text
+    assert "music-audit-dupes --merge 2561 2538" in caplog.text
+    assert "--merge 2561 2538 2595" not in caplog.text
+
+
 PUSHED: list = []
 
 
