@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import re
 import signal
 import subprocess
 import threading
@@ -14,6 +15,16 @@ from typing import Generator
 logger = logging.getLogger(__name__)
 
 IMPORT_LOG = Path("/root/.config/beets/import.log")
+
+# beets gives up on a MusicBrainz request after its own retries (beets 2.14:
+# urllib3 Retry(total=6, backoff_factor=0.5) on 5xx/429, not configurable),
+# logs it, skips the track and still exits 0 (#264).
+_MB_UNAVAILABLE = re.compile(r"host='musicbrainz\.org'.*Max retries exceeded")
+
+
+def musicbrainz_unavailable(line: str) -> bool:
+    """True when a beets stderr line says MusicBrainz could not be reached."""
+    return bool(_MB_UNAVAILABLE.search(line))
 
 
 @contextmanager
@@ -64,8 +75,10 @@ def _watch_for_skips(log_path: Path, start_pos: int, skip_limit: int,
 
 
 def run_beet_import(inbox_dir: Path, skip_limit: int | None = None, asis: bool = False,
-                    config: Path | None = None) -> None:
+                    config: Path | None = None) -> int:
     """Run ``beet import --quiet <inbox_dir>``, forwarding SIGTERM to beet.
+
+    Returns how many stderr lines said MusicBrainz was unavailable (#264).
 
     Args:
         skip_limit: If set, terminate beet after this many skipped tracks (for threshold
@@ -82,13 +95,16 @@ def run_beet_import(inbox_dir: Path, skip_limit: int | None = None, asis: bool =
 
     log_start = IMPORT_LOG.stat().st_size if IMPORT_LOG.exists() else 0
     proc = subprocess.Popen(cmd, stderr=subprocess.PIPE)
+    mb_errors = 0
 
     def _stream_stderr() -> None:
+        nonlocal mb_errors
         assert proc.stderr is not None
         for line in proc.stderr:
             text = line.decode(errors="replace").rstrip()
             if text:
                 logger.warning("beet: %s", text)
+                mb_errors += musicbrainz_unavailable(text)
 
     stderr_thread = threading.Thread(target=_stream_stderr, daemon=True)
     stderr_thread.start()
@@ -110,6 +126,7 @@ def run_beet_import(inbox_dir: Path, skip_limit: int | None = None, asis: bool =
     # rc=-15 (SIGTERM) is expected when skip_limit fires — not an error
     if rc not in (0, -15):
         raise subprocess.CalledProcessError(rc, cmd)
+    return mb_errors
 
 
 def run_beet_update() -> None:
