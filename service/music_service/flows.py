@@ -364,14 +364,18 @@ def _album_library_hooks(lib):
 
     ``have`` caches each playlist's track keys and the whole library for a tick;
     ``complete`` imports a finished download and drops the caches, since the
-    import changed the library.  ``have`` also counts tracks the library holds
-    under another playlist, and tags them with this one (#187).  ``missing``
-    lists the tracks ``have`` would not find, tagging nothing (#205).
+    import changed the library.  ``have`` is true when the library holds the
+    album whole (#268); it also counts tracks the library holds under another
+    playlist, and then tags them with this one (#187).  ``missing`` lists the
+    tracks the library lacks, tagging nothing (#205).
     """
     import music_fetch.albums as albums  # noqa: PLC0415
     from music_scan.identity import ItemIndex  # noqa: PLC0415
 
+    from music_scan.playlists import by_album_id  # noqa: PLC0415
+
     keys: dict[str | None, ItemIndex] = {}  # None: the whole library
+    albums_by_id: dict[str, list] = {}
 
     def indexes(playlist: str) -> tuple[ItemIndex, ItemIndex]:
         if playlist not in keys:
@@ -380,8 +384,15 @@ def _album_library_hooks(lib):
             keys[None] = ItemIndex(lib.all_items())
         return keys[playlist], keys[None]
 
-    def have(playlist: str, tracks: list[list]) -> bool:
-        return scan.have_or_link(*indexes(playlist), playlist, tracks)
+    def have(key: str, record: dict) -> bool:
+        library = indexes(next(iter(record.get("playlists", {})), ""))[1]
+        if not albums_by_id:
+            albums_by_id.update(by_album_id(library.items))
+        if not scan.have_album(lambda pl: indexes(pl)[0], library, albums_by_id, key, record):
+            return False
+        for playlist, tracks in record["playlists"].items():
+            scan.have_or_link(*indexes(playlist), playlist, tracks)
+        return True
 
     def missing(playlist: str, tracks: list[list]) -> list[list]:
         source, library = indexes(playlist)
@@ -490,6 +501,7 @@ def _album_library_hooks(lib):
         if status in (albums.IMPORTED, albums.FALLBACK):
             adopt_extras(state, completion)
         keys.clear()
+        albums_by_id.clear()
         return status
 
     return have, missing, complete
