@@ -417,11 +417,11 @@ def _album_library_hooks(lib):
         with concurrency("pipeline", occupy=1):
             return release.import_rest(scan.QUARANTINE, scan.INBOX, playlist, job)
 
-    def claim(playlist: str, since: float, key: str, guid: str) -> list[str]:
+    def claim(playlist: str, since: float, key: str, guid: str, job: str) -> list[str]:
         from music_scan import release  # noqa: PLC0415
 
         with concurrency("pipeline", occupy=1):
-            return [i.title or "" for i in release.claim(lib.all_items(), playlist, since, key, guid)]
+            return [i.title or "" for i in release.claim(lib.all_items(), playlist, since, key, guid, job)]
 
     def retire(key: str, record: dict, keep: str | None, drop: str | None) -> int:
         # Another copy of the album, or this one when it is another album (#279);

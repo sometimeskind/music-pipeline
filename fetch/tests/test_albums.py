@@ -445,7 +445,7 @@ def grabbed_state(playlists=None) -> State:
     return state
 
 
-def _claim_all(playlist, since, key, guid):
+def _claim_all(playlist, since, key, guid, job):
     return ["One", "Two"]
 
 
@@ -470,7 +470,7 @@ def run_complete(state, completion, roots, have_result=True, imported=None, tagg
     def import_inbox():
         seen.extend(p.relative_to(inbox).as_posix() for p in inbox.rglob("*.flac"))
 
-    def claim(playlist, since, key, guid):
+    def claim(playlist, since, key, guid, job):
         claimed.append((playlist, key, guid))
         return titles
 
@@ -627,6 +627,21 @@ def test_complete_tags_ids_for_every_playlist(roots) -> None:
     tagged = []
     run_complete(state, albums.Completion("nzo1", True, "album/Artist-Album-FLAC"), roots, tagged=tagged)
     assert tagged == [("later", 2), ("keep", 2)]
+
+
+def test_complete_retires_the_other_copies_before_tagging(roots) -> None:
+    """An old copy holding the canonical paths is gone before canon runs (#283)."""
+    calls = []
+    run_complete(grabbed_state(), albums.Completion("nzo1", True, "album/Artist-Album-FLAC"), roots,
+                 tagged=calls, retired=calls)
+    assert len(calls) == 2 and calls[0][0].startswith("r1@") and calls[1][0] == "later"
+
+
+def test_complete_kept_incomplete_copy_is_tagged_after_retire(roots) -> None:
+    calls = []
+    run_complete(grabbed_state(), albums.Completion("nzo1", True, "album/Artist-Album-FLAC"), roots,
+                 tagged=calls, retired=calls, identity={"missing": 1, "album": "Album", "mb_albumid": "mb1"})
+    assert len(calls) == 2 and calls[0][0].startswith("r1@") and calls[1][0] == "later"
 
 
 def test_complete_failed_download_tags_nothing(roots) -> None:

@@ -785,10 +785,11 @@ class ImportDeferred(Exception):
 # identify(job dir): the release's own MusicBrainz match (#279), or None:
 # {"mb_albumid": …, "album": …, "tracks": n, "files": n, "missing": n, "mb": {MB album fields}}.
 Identify = Callable[[Path], "dict | None"]
-# claim(playlist, since, key, release): stamp the release's fresh items with their
-# album record and this import of the release (``<guid>@<start>``: a release
-# grabbed again after a reset is another copy); returns their titles.
-Claim = Callable[[str, float, str, str], list[str]]
+# claim(playlist, since, key, release, job): stamp the release's fresh items (those
+# imported from inbox folder *job*, #284) with their album record and this import of
+# the release (``<guid>@<start>``: a release grabbed again after a reset is another
+# copy); returns their titles.
+Claim = Callable[[str, float, str, str, str], list[str]]
 # retire(key, record, keep, drop): quarantine the record's other copies: every
 # item of the record but release *keep*'s, or release *drop*'s items.  Returns the count.
 Retire = Callable[[str, dict, "str | None", "str | None"], int]
@@ -859,8 +860,9 @@ def complete(
       Spotify's.  Nothing is quarantined, nothing goes to spotdl.
 
     Whichever copy is kept, *retire* sends the record's other copies (earlier
-    releases, legacy items) to ``quarantine/replaced/``.  *tag_ids* gives
-    Spotify track IDs as a best effort and canonicalises the album; album
+    releases, legacy items) to ``quarantine/replaced/``.  Then *tag_ids* gives
+    the kept copy Spotify track IDs as a best effort and canonicalises the
+    album, onto paths the retired copies no longer hold (#283); album
     membership never depends on them.
 
     An exception from *import_inbox* is not the release's fault (#261): the job
@@ -937,7 +939,7 @@ def complete(
         for field in ("import_started", "import_errors", "import_deferrals"):
             record.pop(field, None)
         this = f"{guid}@{int(started)}"
-        titles = claim(first, started, key, this)
+        titles = claim(first, started, key, this, job_name)
         found, total = titles_found(record, titles)
         if gave_up:
             reason = gave_up
@@ -955,8 +957,6 @@ def complete(
             # The inbox path names one playlist; tag the album's items for the others.
             for other in playlists[1:]:
                 add_source(first, other, record["playlists"][other])
-            for playlist in playlists:
-                tag_ids(playlist, record["playlists"][playlist], started, record.get("tracks_count") or 0)
             if identity:
                 record["release_files"] = identity
             else:
@@ -964,8 +964,16 @@ def complete(
             note = f"; {total - found} of Spotify's {total} titles not in this release" if found < total else ""
             missing = (identity or {}).get("missing") or 0
             best = record.get("best_copy")
+
+            def tag() -> None:
+                # After retire (#283): the copies it quarantined no longer hold the
+                # canonical paths, so canon can move every new item onto them.
+                for playlist in playlists:
+                    tag_ids(playlist, record["playlists"][playlist], started, record.get("tracks_count") or 0)
+
             if not missing:
                 n = retire(key, record, this, None)
+                tag()
                 retired = f"; {n} item(s) of other copies → quarantine/replaced/" if n else ""
                 return _done(record, label, f": {len(titles)} file(s) from {title}{note}{retired}")
             mine = {"guid": guid, "release": this, "title": title, "missing": missing}
@@ -975,6 +983,7 @@ def complete(
                             label, title, missing, best["title"], best["missing"])
             else:
                 retire(key, record, this, None)
+                tag()
                 record["best_copy"] = best = mine
                 logger.info("[INCOMPLETE] %s: %s lacks %d track(s) of its own release (%s); kept for now",
                             label, title, missing, identity.get("album") or identity.get("mb_albumid"))

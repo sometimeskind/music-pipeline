@@ -106,13 +106,20 @@ def test_import_rest_imports_the_unmatched_files_as_they_are(tmp_path) -> None:
 
 
 def test_claim_stamps_this_imports_usenet_items() -> None:
-    fresh = FakeItem(1, 200.0, via="usenet", sources="keep", title="Juicy")
-    other_playlist = FakeItem(2, 200.0, via="usenet", sources="later")
-    older = FakeItem(3, 50.0, via="usenet", sources="keep")
+    def usenet(id_, added=200.0, job="RTD-Job", **f):
+        return FakeItem(id_, added, via="usenet", usenet_job=job, **f)
+
+    fresh = usenet(1, sources="keep", title="Juicy")
+    other_playlist = usenet(2, sources="later")
+    older = usenet(3, 50.0, sources="keep")
     spotdl = FakeItem(4, 200.0, via="spotdl", sources="keep")
-    held = FakeItem(5, 200.0, via="usenet", sources="keep", album_record="OTHER")
-    mine = release.claim([fresh, other_playlist, older, spotdl, held], "keep", 100.0, "RTD", "r1")
+    held = usenet(5, sources="keep", album_record="OTHER")
+    # Another job's leftovers the same scan imported (#284).
+    leftover = usenet(6, sources="keep", job="Hello Sadness-Job")
+    mine = release.claim([fresh, other_playlist, older, spotdl, held, leftover], "keep", 100.0, "RTD", "r1",
+                         "RTD-Job")
     assert mine == [fresh] and fresh["album_record"] == "RTD" and fresh["release"] == "r1" and fresh.stored == 1
+    assert not leftover.get("album_record")
 
 
 RTD = {"name": "Ready to Die (The Remaster)", "artist": "The Notorious B.I.G."}

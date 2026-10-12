@@ -140,13 +140,15 @@ def import_rest(quarantine: Path, inbox: Path, playlist: str, job: str, run_impo
     return len(files)
 
 
-def claim(items, playlist: str, since: float, key: str, guid: str) -> list:
-    """Stamp the usenet *items* of *playlist* added since *since* that no
-    record holds yet with ``album_record`` *key* and ``release`` *guid*.
-    Returns them."""
+def claim(items, playlist: str, since: float, key: str, guid: str, job: str) -> list:
+    """Stamp the usenet *items* of *playlist* imported from job folder *job*
+    since *since* that no record holds yet with ``album_record`` *key* and
+    ``release`` *guid*.  Returns them.  The job folder, not the time window,
+    says whose they are: one scan can import another job's leftovers (#284)."""
     from music_scan.identity import split_list  # noqa: PLC0415
 
     mine = [i for i in items if i.get("via") == "usenet" and (i.added or 0) >= since
+            and i.get("usenet_job") == job
             and playlist in split_list(i.get("sources")) and not i.get("album_record")]
     for item in mine:
         item["album_record"] = key

@@ -202,6 +202,18 @@ def _via_from_path(path: str | bytes) -> str:
     return "usenet" if Path(path).is_relative_to(USENET_INBOX) else "spotdl"
 
 
+def _job_from_path(path: str | bytes) -> str | None:
+    """The album-mode job folder of a usenet inbox file (``usenet/<playlist>/<job>/…``),
+    which tells one release's items from another's imported in the same scan (#284)."""
+    if isinstance(path, bytes):
+        path = path.decode()
+    try:
+        parts = Path(path).relative_to(USENET_INBOX).parts
+    except ValueError:
+        return None
+    return parts[1] if len(parts) >= 3 else None
+
+
 def _all_via_spotdl(duplicates: list) -> bool:
     """Return True if every duplicate in *duplicates* is a pipeline import (spotdl or usenet)."""
     return all((item.get("via") or "") in MANAGED_VIA for item in duplicates)
@@ -274,6 +286,8 @@ class MusicPipelinePlugin(BeetsPlugin):
         self._pending_spotdl: dict[str, SpotdlTags] = {}
         # Same keys → via (spotdl or usenet).
         self._pending_via: dict[str, str] = {}
+        # Same keys → usenet job folder (#284).
+        self._pending_job: dict[str, str] = {}
         self.register_listener("import_task_created", self.tag_source_on_created)
         self.register_listener("item_imported", self.tag_source_on_stored)
         self.register_listener("import_task_choice", self.handle_duplicates)
@@ -302,10 +316,16 @@ class MusicPipelinePlugin(BeetsPlugin):
             filename = Path(path).name
             self._pending_sources[filename] = playlist
             self._pending_via[filename] = via
+            job = _job_from_path(path)
+            if job:
+                item["usenet_job"] = job
+                self._pending_job[filename] = job
             title = (item.title or "").lower()
             if title:
                 self._pending_sources[title] = playlist
                 self._pending_via[title] = via
+                if job:
+                    self._pending_job[title] = job
             tags = _read_spotdl_tags(item.path)
             if tags.url or tags.isrc:
                 self._apply_spotdl_tags(item, tags)
@@ -346,6 +366,11 @@ class MusicPipelinePlugin(BeetsPlugin):
             via = self._pending_via.pop(title, None) or via
         item["sources"] = playlist
         item["via"] = via or "spotdl"
+        job = self._pending_job.pop(Path(path).name, None)
+        if title:
+            job = self._pending_job.pop(title, None) or job
+        if job:
+            item["usenet_job"] = job
         filename = Path(path).name
         tags = self._pending_spotdl.pop(filename, None)
         if tags is not None:
