@@ -21,9 +21,12 @@ record is that album, imported whole.  This module holds the library side of
   Canon, playlists and :func:`retire` read the album from them, never from
   track IDs.
 - :func:`retire` sends a record's other copies to ``quarantine/replaced/``
-  (never deleted, #202): items of an earlier or worse release, and the record's
+  (never deleted, #202): items of an earlier or worse release, the record's
   legacy items from before #279 (claimed by album name and artist, as
-  ``music-rollback-releases`` attributes them, and on no other Spotify album).
+  ``music-rollback-releases`` attributes them, and on no other Spotify album),
+  and spotdl's top-ups of the album (on its Spotify album and on no playlist
+  but the record's own): the album stays one source.  A spotdl copy another
+  playlist also lists is a loose copy, left to supersede.
 """
 
 from __future__ import annotations
@@ -154,14 +157,22 @@ def claim(items, playlist: str, since: float, key: str, guid: str) -> list:
 
 def copies(items, key: str, record: dict, keep: str | None, drop: str | None) -> list:
     """The record's items :func:`retire` takes: with *drop*, that release's;
-    else every copy but release *keep*'s, legacy items included."""
+    else every copy but release *keep*'s, legacy items and spotdl top-ups included."""
+    from music_scan.identity import split_list  # noqa: PLC0415
     from music_scan.rollback import _claims  # noqa: PLC0415
 
     if drop is not None:
         return [i for i in items if i.get("album_record") == key and i.get("release") == drop]
+    own = set(record.get("playlists") or {})
+
+    def topup(i) -> bool:
+        return (i.get("via") == "spotdl" and i.get("spotify_album_id") == key
+                and set(split_list(i.get("sources"))) <= own)
+
     return [i for i in items if (i.get("album_record") == key and i.get("release") != keep)
             or (not i.get("album_record") and i.get("via") == "usenet" and _claims(record, i)
-                and i.get("spotify_album_id") in (None, "", key))]
+                and i.get("spotify_album_id") in (None, "", key))
+            or (not i.get("album_record") and topup(i))]
 
 
 def retire(lib, key: str, record: dict, keep: str | None, drop: str | None) -> int:
