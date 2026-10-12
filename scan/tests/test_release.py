@@ -130,7 +130,7 @@ def test_copies_takes_every_other_copy_and_the_legacy_items_of_the_album() -> No
     another_album = _legacy(5, spotify_album_id="BESTOF")
     other_record = FakeItem(6, album_record="OTHER", release="r9")
     spotdl = FakeItem(7, via="spotdl", album="Ready to Die", albumartist="The Notorious B.I.G.",
-                      spotify_album_id="RTD")
+                      spotify_album_id="RTD", sources="aaaaaah")  # a loose copy: supersede's
     items = [kept, earlier, legacy, legacy_no_album, another_album, other_record, spotdl]
     assert release.copies(items, "RTD", RTD, "r2", None) == [earlier, legacy, legacy_no_album]
     assert release.copies(items, "RTD", RTD, None, "r1") == [earlier]
@@ -160,3 +160,15 @@ def test_copies_tells_two_imports_of_one_release_apart() -> None:
     old = FakeItem(1, album_record="RTD", release="r1@100")
     new = FakeItem(2, album_record="RTD", release="r1@200")
     assert release.copies([old, new], "RTD", RTD, "r1@200", None) == [old]
+
+
+def test_copies_takes_spotdls_top_ups_but_not_a_loose_copy_another_playlist_lists() -> None:
+    """Mellon Collie's 14 tracks spotdl fetched (#272/#205) go with a reset's re-import (#279);
+    a spotdl copy aaaaaah also lists stays, for supersede."""
+    record = {**RTD, "playlists": {"keep": [], "later": []}}
+    topup = FakeItem(1, via="spotdl", spotify_album_id="RTD", sources="keep")
+    unlinked = FakeItem(2, via="spotdl", spotify_album_id="RTD", sources="")
+    loose = FakeItem(3, via="spotdl", spotify_album_id="RTD", sources="keep,aaaaaah")
+    elsewhere = FakeItem(4, via="spotdl", spotify_album_id="OTHER", sources="keep")
+    assert release.copies([topup, unlinked, loose, elsewhere], "RTD", record, "r1@1", None) == [topup, unlinked]
+    assert release.copies([topup], "RTD", record, None, "r1@1") == []
