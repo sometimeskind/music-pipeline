@@ -56,6 +56,11 @@ _TAG_WORDS = {
     "us", "uk", "eu", "jp", "de",
 } | _SINGLE_WORDS
 MAX_LEFTOVER_WORDS = 2
+# Edition words that tell one edition of an album from another (#279), each
+# folded to one spelling.  "edition" itself names none.
+_EDITION_WORDS = {"deluxe": "deluxe", "expanded": "expanded", "anniversary": "anniversary",
+                  "remaster": "remaster", "remastered": "remaster", "reissue": "reissue",
+                  "special": "special", "bonus": "bonus", "limited": "limited"}
 # Words a release name may add or drop around a name ("The Beatles", "Love & Devotion").
 _ARTICLES = {"the", "a", "and"}
 
@@ -167,6 +172,18 @@ def leftover(release: Release, artist: str, album: str) -> list[str]:
     return [w for w in words(title) if w not in known and (w in lead or not any(c.isdigit() for c in w))]
 
 
+def edition(text: str) -> frozenset[str]:
+    """The edition words of an album name or release title (#279):
+    ``Ready to Die (The Remaster)`` → ``{remaster}``."""
+    return frozenset(_EDITION_WORDS[w] for w in words(text) if w in _EDITION_WORDS)
+
+
+def edition_miss(release: Release, album: str) -> int:
+    """How far the release's edition is from the Spotify album's: edition
+    words one names and the other doesn't.  0 is the same edition."""
+    return len(edition(release.title) ^ edition(album))
+
+
 def _leads_with_artist(title_words: list[str], artist: str, album: str) -> bool:
     """True when the title starts with the artist, as scene names do
     (``Artist-Album-…``); a collaboration may follow (``Artist X Other-…``).
@@ -246,9 +263,12 @@ def rank(
     seconds: int = 0,
     any_album: bool = False,
 ) -> list[Release]:
-    """Matching releases, best first: tier, then fewest leftover title words,
-    then the Spotify year in the title (a remaster or reissue usually carries a
-    different one), then grabs (a proxy for completion)."""
+    """Matching releases, best first: the Spotify album's edition (#279: its
+    deluxe, remaster or anniversary words, and no others), then tier, then
+    fewest leftover title words, then the Spotify year in the title (a remaster
+    or reissue usually carries a different one), then grabs (a proxy for
+    completion).  Another edition still matches: it is the album when Usenet
+    has no copy of Spotify's."""
     candidates = [
         r for r in releases
         if r.guid not in blocklist and r.download_url
@@ -259,7 +279,8 @@ def rank(
     def other_year(r: Release) -> int:
         return 0 if year_word is None or year_word in words(r.title) else 1
 
-    return sorted(candidates, key=lambda r: (tier(r), len(leftover(r, artist, album)), other_year(r), -r.grabs, r.size))
+    return sorted(candidates, key=lambda r: (edition_miss(r, album), tier(r), len(leftover(r, artist, album)),
+                                             other_year(r), -r.grabs, r.size))
 
 
 class Prowlarr:

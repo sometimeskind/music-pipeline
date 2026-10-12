@@ -55,12 +55,12 @@ Responsibilities
      anyway (``[ALBUM]``): the album copy supersedes them after the import
      (:mod:`music_scan.supersede`, #266).
    * A Usenet album track that is the same recording as another release's
-     item on another album, or as an item this same import added → import it
-     alongside (``[BOTH]``, #278).  A release stays one album: each album keeps
-     its own copy, and playlists resolve the slot to one item by ID.  Two
-     files of one release that claim one recording are a wrong MusicBrainz
-     match (*Love* tagged *Bodies*), never one track.  Only an earlier release
-     of the same album merges (``[SAME]``): a retry fills the gaps.
+     item → import it alongside (``[BOTH]``, #278, #279).  A release is one
+     album, imported whole: each album keeps its own copy, and two files of
+     one release that claim one recording are a wrong MusicBrainz match
+     (*Love* tagged *Bodies*), never one track.  An earlier copy of the same
+     album isn't merged into either: the album completion keeps one copy
+     and retires the other (:mod:`music_scan.release`).
    * All duplicates have ``via=spotdl`` or ``usenet`` → append the incoming playlist name to
      the ``sources`` field of every existing duplicate (idempotent), delete the
      incoming inbox file, and set SKIP so beets does not re-import the track.
@@ -104,8 +104,6 @@ from beets import importer as beets_importer
 from beets import library as beets_library
 from beets.plugins import BeetsPlugin
 
-from music_fetch.usenet import clean_album
-from music_fetch.usenet import words as release_words
 from music_scan.identity import (
     add_isrcs, add_to_list, fingerprint, item_isrcs, item_spotify_ids, split_list, spotify_id,
 )
@@ -204,17 +202,6 @@ def _via_from_path(path: str | bytes) -> str:
     return "usenet" if Path(path).is_relative_to(USENET_INBOX) else "spotdl"
 
 
-def _album_words(item) -> set[str]:
-    return set(release_words(clean_album(str(item.get("album") or ""))))
-
-
-def _other_album(item, dup) -> bool:
-    """True when *dup* is filed under another album than the incoming *item*'s
-    tags name, edition notes dropped; False when either has no album."""
-    mine, theirs = _album_words(item), _album_words(dup)
-    return bool(mine and theirs) and mine != theirs
-
-
 def _all_via_spotdl(duplicates: list) -> bool:
     """Return True if every duplicate in *duplicates* is a pipeline import (spotdl or usenet)."""
     return all((item.get("via") or "") in MANAGED_VIA for item in duplicates)
@@ -287,8 +274,6 @@ class MusicPipelinePlugin(BeetsPlugin):
         self._pending_spotdl: dict[str, SpotdlTags] = {}
         # Same keys → via (spotdl or usenet).
         self._pending_via: dict[str, str] = {}
-        # Usenet items this beets run imported: a release's own tracks (#278).
-        self._usenet_imported: set[int] = set()
         self.register_listener("import_task_created", self.tag_source_on_created)
         self.register_listener("item_imported", self.tag_source_on_stored)
         self.register_listener("import_task_choice", self.handle_duplicates)
@@ -371,8 +356,6 @@ class MusicPipelinePlugin(BeetsPlugin):
         if tags is not None:
             self._apply_spotdl_tags(item, tags)
         item.store()
-        if item.get("via") == "usenet":
-            self._usenet_imported.add(item.id)
         self._log.debug(
             "persisted source={} via={} on stored item: {}", playlist, item["via"], item.path
         )
@@ -458,20 +441,16 @@ class MusicPipelinePlugin(BeetsPlugin):
                 dup_items.append(dup)
 
         usenet = same and _via_from_path(items[0].path) == "usenet"
-        # Another release's item on another album, or one this import added: kept apart (#278).
-        apart = [d for d in same if d.get("via") == "usenet"
-                 and (d.id in self._usenet_imported or _other_album(items[0], d))] if usenet else []
-        merge_into = [d for d in same if all(d is not a for a in apart)]
-        if usenet and _all_via_spotdl(same) and all(d.get("via") != "usenet" for d in merge_into):
+        # Another release's item: kept apart, the release is one album (#278, #279).
+        apart = [d for d in same if d.get("via") == "usenet"] if usenet else []
+        if usenet and _all_via_spotdl(same):
             # The album copy wins (#266): import it, and the album completion
             # supersedes the loose copies with it, playlists and all.
             for dup in same:
                 if any(dup is a for a in apart):
                     self._log.warning(
-                        "[BOTH] {} — {}: same recording as {}, {}; importing it alongside",
+                        "[BOTH] {} — {}: same recording as {}, another release's copy; importing it alongside",
                         items[0].artist, items[0].title, dup,
-                        "which this import added too (a wrong match?)" if dup.id in self._usenet_imported
-                        else "another release's copy on another album",
                     )
                 else:
                     self._log.warning(
@@ -481,8 +460,7 @@ class MusicPipelinePlugin(BeetsPlugin):
             task.find_duplicates = task.duplicate_items = lambda lib: []
             return
         if same:
-            # An earlier release of this album: it fills the gaps, merged (the other album's copies stay apart).
-            dup_items = merge_into
+            dup_items = same
         elif dup_items and incoming is not None:
             # No identifier agrees: never merge by artist+title (#255).
             for dup in dup_items:

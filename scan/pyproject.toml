@@ -18,6 +18,7 @@ music-canon-albums = "music_scan.canon:main"
 music-audit-dupes = "music_scan.dupes:main"
 music-audit-playlists = "music_scan.playlists:main"
 music-rollback-releases = "music_scan.rollback:main"
+music-album-audit-releases = "music_scan.release:audit_main"
 
 [tool.setuptools.packages.find]
 where = ["."]

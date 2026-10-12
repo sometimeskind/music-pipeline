@@ -445,7 +445,7 @@ def test_album_import_defers_on_a_musicbrainz_outage():
 
     seen = []
 
-    def fake_complete(state, completion, import_inbox, *args):
+    def fake_complete(state, completion, import_inbox, *args, **kw):
         with pytest.raises(albums.ImportDeferred) as exc:
             import_inbox()
         seen.append(exc.value)
@@ -504,32 +504,40 @@ def test_album_import_flow_grab_next_uses_search_overrides(tmp_path):
     assert prowlarr.search.call_args_list[0].args == ("webdings four tet",)
 
 
-@pytest.mark.parametrize("status, adopted", [("imported", True), ("fallback", True), ("wanted", False)])
-def test_album_completion_adopts_the_releases_extras(status, adopted):
-    """A successful release's extras take its album's tags (#245); a failed one's roll back instead.
-
-    complete() has already moved the record on from grabbed, so it is found by
-    its nzo_id whatever its status (#266: find_by_nzo never found it)."""
+def test_album_completion_wires_the_release_hooks():
+    """#279: complete() gets the release's identification, the import of the files beets
+    couldn't match, the claim and the retirement of other copies (playlists regenerated)."""
     import music_fetch.albums as albums
-    from music_scan import canon
+    from music_scan import release
     from music_service import flows
 
-    state = albums.State(albums={"other": {"nzo_id": "nzo_0", "status": status},
-                                 "lcd": {"nzo_id": "nzo_1", "status": status}})
-    extra = canon.Extra(item=None, album=None, diff={}, dest="/new", art=True, write=True, source="/old")
-    events = []
-    with patch.object(albums, "complete", return_value=status), \
-         patch.object(canon, "extras_after_import", return_value=[extra]) as adopt, \
-         patch.object(flows.scan, "regen_playlists", side_effect=lambda: events.append("m3u")), \
-         patch("music_scan.navidrome.trigger_scan", side_effect=lambda: events.append("rescan")), \
-         patch.object(flows, "concurrency"):
-        _, _, complete = flows._album_library_hooks(MagicMock())
-        assert complete(state, albums.Completion(nzo_id="nzo_1", ok=True, path="x")) == status
+    lib = MagicMock()
+    lib.all_items.return_value = []
+    events, kw = [], {}
 
-    assert adopt.called is adopted
-    if adopted:
-        assert adopt.call_args.args[1:] == ("lcd", state.albums["lcd"])
-    assert events == (["m3u", "rescan"] if adopted else [])
+    def fake_complete(state, completion, import_inbox, claim, add_source, tag_ids, retire, **hooks):
+        kw.update(hooks)
+        events.append(("claim", claim("keep", 100.0, "K", "r1")))
+        events.append(("retire", retire("K", {}, "r1", None)))
+        events.append(("rest", hooks["import_rest"]("keep", "Job")))
+        events.append(("identify", hooks["identify"]("/x")))
+        return albums.IMPORTED
+
+    title = MagicMock(title="Juicy")
+    with patch.object(albums, "complete", side_effect=fake_complete), \
+         patch.object(release, "claim", return_value=[title]) as claim, \
+         patch.object(release, "retire", return_value=2) as retire, \
+         patch.object(release, "import_rest", return_value=1) as rest, \
+         patch.object(release, "identify", return_value={"missing": 0}), \
+         patch.object(flows.scan, "regen_playlists", side_effect=lambda: events.append("m3u")), \
+         patch.object(flows, "concurrency"):
+        _, _, complete = flows._album_library_hooks(lib)
+        assert complete(albums.State(), albums.Completion(nzo_id="n", ok=True, path="x")) == albums.IMPORTED
+
+    assert events == [("claim", ["Juicy"]), "m3u", ("retire", 2), ("rest", 1), ("identify", {"missing": 0})]
+    assert claim.call_args.args[1:] == ("keep", 100.0, "K", "r1")
+    assert retire.call_args.args[1:] == ("K", {}, "r1", None)
+    assert rest.call_args.args[2:] == ("keep", "Job")
 
 
 def test_album_completion_supersedes_loose_copies_after_canon():
@@ -553,7 +561,8 @@ def test_album_completion_supersedes_loose_copies_after_canon():
          patch("music_scan.navidrome.trigger_scan", side_effect=lambda: events.append("rescan")), \
          patch.object(flows, "concurrency"):
         hooks = flows._album_library_hooks(lib)
-        with patch.object(albums, "complete", side_effect=lambda state, c, imp, miss, add, tag, rb: tag("keep", [], 100.0, 10)):
+        with patch.object(albums, "complete",
+                          side_effect=lambda state, c, imp, claim, add, tag, retire, **kw: tag("keep", [], 100.0, 10)):
             hooks[2](albums.State(), albums.Completion(nzo_id="n", ok=True, path="x"))
 
     assert events == ["ids", "canon", ("sup", [fresh], 10), "m3u", "rescan"]

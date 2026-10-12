@@ -174,3 +174,18 @@ def test_album_audit_reports_before_and_after_and_the_records(tmp_path: Path, re
     assert "[SETTLE] ALB: Artist — Album: fallback (partial) → imported; 1 track(s) leave the spotdl queue" in caplog.text
     assert "[NOTWHOLE] HAV: Artist — Half (have, 10 tracks on Spotify): kept as it is" in caplog.text
     assert json.loads((spotdl_dir / ".albums.json").read_text())["albums"]["ALB"]["status"] == "fallback"
+
+
+def test_an_album_records_release_alone_is_the_album() -> None:
+    """#279: once its items carry album_record, the release is listed, nothing else on the album ID."""
+    from types import SimpleNamespace
+
+    from music_scan.playlists import album_items
+
+    def item(path, disc, track, **f):
+        return SimpleNamespace(path=path, disc=disc, track=track, album="Album", get=lambda k, d=None: f.get(k, d))
+
+    second = item("/m/a/2.m4a", 1, 2, album_record="K")
+    first = item("/m/a/1.m4a", 1, 1, album_record="K")
+    stray = item("/m/b/1.m4a", 1, 1)
+    assert album_items("K", "Album", [], {"K": [second, stray, first]}) == [first, second]

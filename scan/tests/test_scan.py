@@ -991,15 +991,6 @@ def test_tag_album_ids_track_number_needs_same_edition_and_this_import() -> None
     assert _tag([deluxe, older, spotdl], [["One", "Artist", "sid1", None, 1, 1]]) == 0
 
 
-def test_tag_album_ids_words_fallback_is_logged(caplog) -> None:
-    a = _lib_item("One", track=9, tracktotal=0)
-    with caplog.at_level("INFO", logger="music_scan.scan"):
-        assert _tag([a], [["One", "Artist", "sid1", None, 1, 1]]) == 1
-    assert a.data["spotify_ids"] == "sid1"
-    assert a.data["words_ids"] == "sid1"  # never a supersede's evidence (#266)
-    assert "[WORDS]" in caplog.text
-
-
 def test_tag_album_ids_skips_tagged_and_idless_tracks() -> None:
     a = _lib_item("One", spotify_ids="sid1")
     b = _lib_item("Two", track=2)
@@ -1008,33 +999,6 @@ def test_tag_album_ids_skips_tagged_and_idless_tracks() -> None:
     a.store.assert_not_called()
     b.store.assert_not_called()
 
-
-def test_tag_album_ids_reads_this_imports_feat_credits(caplog) -> None:
-    """#240: CFCF's release credits `CFCF feat. …`, so the words rung missed 6 of 13."""
-    feat = _lib_item("Kiss Me", artist="Artist feat. Guest", track=9, tracktotal=0)
-    with caplog.at_level("INFO", logger="music_scan.scan"):
-        assert _tag([feat], [["Kiss Me", "Artist", "sid1", None, 1, 1]]) == 1
-    assert feat.data["spotify_ids"] == "sid1"
-    assert "[WORDS]" in caplog.text
-
-
-def test_tag_album_ids_release_rung_takes_each_item_once_and_only_this_import() -> None:
-    first = _lib_item("The Real Her", artist="Artist feat. Guest", track=9, tracktotal=0)
-    older = _lib_item("Bonus", artist="Artist feat. Guest", added=10.0, tracktotal=0)
-    tracks = [["The Real Her", "Artist", "sid1", None, 1, 1], ["The Real Her", "Artist", "sid2", None, 2, 1],
-              ["Bonus", "Artist", "sid3", None, 1, 3]]
-    assert _tag([first, older], tracks) == 1
-    assert first.data["spotify_ids"] == "sid1" and older.data["spotify_ids"] == ""
-
-
-
-def test_tag_album_ids_never_gives_another_imports_item_the_id_by_words(caplog) -> None:
-    """The live take already on the playlist must not take the studio entry's ID (#255)."""
-    live = _lib_item("Girlfriend Is Better", added=10.0, tracktotal=16, track=14)
-    with caplog.at_level("INFO", logger="music_scan.scan"):
-        assert _tag([live], [["Girlfriend Is Better", "Artist", "studio", None, 1, 3]]) == 0
-    assert live.data["spotify_ids"] == ""
-    assert "[NOID]" in caplog.text
 
 def test_add_source_matches_by_id_and_records_it() -> None:
     from music_scan.scan import add_source

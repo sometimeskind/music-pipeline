@@ -30,7 +30,6 @@ def _make_plugin() -> MusicPipelinePlugin:
     plugin._pending_sources = {}
     plugin._pending_spotdl = {}
     plugin._pending_via = {}
-    plugin._usenet_imported = set()
     return plugin
 
 
@@ -851,7 +850,8 @@ def test_handle_duplicates_imports_the_usenet_album_copy_over_a_spotdl_one() -> 
     assert any("[ALBUM]" in c.args[0] for c in plugin._log.warning.call_args_list)
 
 
-def test_handle_duplicates_merges_a_usenet_copy_into_an_earlier_album_copy() -> None:
+def test_handle_duplicates_never_merges_a_usenet_copy_into_an_earlier_album_copy() -> None:
+    """#279: an earlier copy of the album isn't merged into; the completion keeps one copy."""
     plugin = _make_plugin()
     item = _item("/root/Music/inbox/usenet/later/Bob Dylan-Blood On The Tracks/04.flac", title="Simple Twist Of Fate")
     plugin._pending_sources["simple twist of fate"] = "later"
@@ -862,8 +862,10 @@ def test_handle_duplicates_merges_a_usenet_copy_into_an_earlier_album_copy() -> 
 
     plugin.handle_duplicates(session=session, task=task)
 
-    task.set_choice.assert_called_once_with(beets_importer.Action.SKIP)
-    assert existing._data["sources"] == "keep,later"
+    task.set_choice.assert_not_called()
+    assert task.find_duplicates(session.lib) == []
+    assert existing._data["sources"] == "keep"
+    assert any("[BOTH]" in c.args[0] for c in plugin._log.warning.call_args_list)
 
 
 # ---------------------------------------------------------------------------
@@ -904,7 +906,6 @@ def test_handle_duplicates_never_merges_two_files_of_one_release() -> None:
     plugin = _make_plugin()
     album = "Mellon Collie and the Infinite Sadness"
     love_as_bodies = _lib_dup(3008, via="usenet", mb_trackid="mb-bodies", sources="keep", album=album)
-    plugin._usenet_imported.add(3008)  # imported earlier in this beets run
     item = _release_item(f"{MELLON}/202-bodies_(remastered_2012).flac", "Bodies (remastered 2012)", album)
     task = _task(item=item)
     task.chosen_info.return_value = {"track_id": "mb-bodies", "isrc": None}
@@ -914,24 +915,7 @@ def test_handle_duplicates_never_merges_two_files_of_one_release() -> None:
 
     task.set_choice.assert_not_called()
     assert task.find_duplicates(session.lib) == []
-    assert any("[BOTH]" in c.args[0] and "this import" in c.args[4] for c in plugin._log.warning.call_args_list)
-
-
-def test_handle_duplicates_still_merges_into_an_earlier_release_of_the_same_album() -> None:
-    """A retry fills the gaps: the first release's copy, same album edition notes aside, keeps the track."""
-    plugin = _make_plugin()
-    item = _release_item("/root/Music/inbox/usenet/keep/Bob Dylan-Blood On The Tracks-2/04.flac",
-                         "Simple Twist Of Fate", "Blood on the Tracks (2018 Remaster)")
-    plugin._pending_sources["simple twist of fate"] = "keep"
-    task = _task(item=item)
-    task.chosen_info.return_value = {"track_id": "mb-rec-1", "isrc": None}
-    first = _lib_dup(7, via="usenet", mb_trackid="mb-rec-1", sources="keep", album="Blood On The Tracks")
-    session = _session({"mb_trackid:mb-rec-1": [first]})
-
-    plugin.handle_duplicates(session=session, task=task)
-
-    task.set_choice.assert_called_once_with(beets_importer.Action.SKIP)
-    assert any("[SAME]" in c.args[0] for c in plugin._log.warning.call_args_list)
+    assert any("[BOTH]" in c.args[0] for c in plugin._log.warning.call_args_list)
 
 
 def test_handle_duplicates_keeps_apart_and_supersede_takes_the_spotdl_copy() -> None:
@@ -951,13 +935,3 @@ def test_handle_duplicates_keeps_apart_and_supersede_takes_the_spotdl_copy() -> 
     assert any("[BOTH]" in line for line in lines) and any("[ALBUM]" in line for line in lines)
 
 
-def test_tag_source_on_stored_remembers_this_runs_usenet_items() -> None:
-    plugin = _make_plugin()
-    item = _item(f"{MELLON}/109-love.flac", title="Love")
-    item.id = 3008
-    plugin._pending_sources["love"] = "keep"
-    plugin._pending_via["love"] = "usenet"
-
-    plugin.tag_source_on_stored(lib=None, item=item)
-
-    assert plugin._usenet_imported == {3008}

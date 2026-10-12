@@ -390,3 +390,29 @@ def test_prowlarr_blocked_lists_indexers_in_backoff() -> None:
         assert Prowlarr(url="http://p", api_key="k").blocked() == [{"indexerId": 1, "disabledTill": "2026-10-10T23:01:00Z"}]
     assert get.call_args.args == ("http://p/api/v1/indexerstatus",)
     assert get.call_args.kwargs["headers"] == {"X-Api-Key": "k"}
+
+
+def test_rank_prefers_the_spotify_albums_edition_first() -> None:
+    """#279: Ready to Die (The Remaster) takes a remastered release over a better-tier plain one."""
+    from music_fetch.usenet import edition, edition_miss, rank
+
+    plain = Release("r1", "Notorious_BIG-Ready_To_Die-CD-FLAC-1994", 400_000_000, 1, "u1", [3040])
+    remaster = Release("r2", "Notorious BIG-Ready To Die (The Remaster)-MP3-320-2004", 150_000_000, 1, "u2",
+                       [3010])
+    assert edition("Ready to Die (The Remaster)") == {"remaster"}
+    assert edition_miss(remaster, "Ready to Die (The Remaster)") == 0 and edition_miss(plain, "Ready to Die") == 0
+    ranked = rank([plain, remaster], "Notorious BIG", "Ready to Die (The Remaster)", 19, set())
+    assert [r.guid for r in ranked] == ["r2", "r1"]
+
+
+def test_rank_takes_another_edition_when_spotifys_is_not_there() -> None:
+    """Mellon Collie's 30th Anniversary Edition has no Usenet copy: the deluxe is the album."""
+    from music_fetch.usenet import rank
+
+    deluxe = Release("r1", "The_Smashing_Pumpkins-Mellon_Collie_And_The_Infinite_Sadness-Deluxe_Edition-WEB-FLAC-2012",
+                     2_000_000_000, 1, "u1", [3040])
+    remastered = Release("r2", "The Smashing Pumpkins-Mellon Collie And The Infinite Sadness-24-96-WEB-FLAC-"
+                               "REMASTERED-2013-OBZEN", 2_900_000_000, 1, "u2", [3040])
+    ranked = rank([deluxe, remastered], "The Smashing Pumpkins",
+                  "Mellon Collie And The Infinite Sadness (30th Anniversary Edition)", 42, set(), seconds=12000)
+    assert {r.guid for r in ranked} == {"r1", "r2"} and len(ranked) == 2

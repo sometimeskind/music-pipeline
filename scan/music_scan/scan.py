@@ -18,7 +18,7 @@ from music_fetch.ingest import PendingRemovals, clear_pending_removals
 from music_scan import playlists
 from music_scan.guard import guard_inbox
 from music_scan.identity import (
-    ItemIndex, PlaylistTrack, add_to_list, item_isrcs, item_spotify_ids, release_match, same_base_title, spotify_id,
+    ItemIndex, PlaylistTrack, add_to_list, item_isrcs, same_base_title, spotify_id,
 )
 from music_scan.identity import name_words as _name_words
 from music_scan.library import MusicLibrary
@@ -421,23 +421,15 @@ def tag_album_ids(lib: MusicLibrary, source: str, tracks: list[list], since: flo
        whose release has Spotify's track count (editions renumber tracks),
        and only when the title agrees too, edition notes dropped (#278): a
        number alone is not identity.  A file beets matched to another
-       recording (*Love* tagged *Bodies*) gets no ID, and logs ``[NUMBER]``;
-    3. the same title among this import's usenet items, with the artist
-       anywhere in a credit that may add ``feat.`` names (#240), logged
-       ``[WORDS]`` so the fallback rate is visible.  The ID is also listed in
-       ``words_ids``, so the album copy never supersedes a loose item on its
-       strength (#266).
-    Title words never pick an item outside this import (#255): the
-    playlist's other items are other recordings unless an ID says so, and a
-    live take must not take the studio entry's ID.
+       recording (*Love* tagged *Bodies*) gets no ID, and logs ``[NUMBER]``.
+    Title words never give an ID (#279): the IDs are a best effort, and an
+    album record's membership never depends on them (``album_record``,
+    :mod:`music_scan.release`).  The words rung of #240 is gone.
     Returns the count of items tagged.
     """
     index = ItemIndex(lib.items_by_source(source))
-    album_ids = {t.song_id for t in map(PlaylistTrack.from_entry, tracks) if t.song_id}
     imported = [i for i in index.items if i.get("via") == "usenet" and (i.added or 0) >= since]
     fresh = [i for i in imported if tracks_count and i.tracktotal == tracks_count]
-    # Rung 4 takes each item once, and never one already holding a track of this album.
-    unclaimed = [i for i in imported if not item_spotify_ids(i) & album_ids]
     count = 0
     for track in map(PlaylistTrack.from_entry, tracks):
         if not track.song_id or track.song_id in index.by_id:
@@ -456,19 +448,10 @@ def tag_album_ids(lib: MusicLibrary, source: str, tracks: list[list], since: flo
             elif at is not None:
                 logger.info("  [NUMBER] %s: %s — %s is at %d-%d, but the item there is %r; no ID by number",
                             source, track.name, track.artist, track.disc, track.track, at.title)
-        words = match is None
-        if words:
-            match = release_match(track.name, track.artist, unclaimed)
-            if match is not None:
-                logger.info("  [WORDS] %s: %s — %s matched by title+artist only", source, track.name, track.artist)
-        if match in unclaimed:
-            unclaimed.remove(match)
         if match is None:
-            logger.info("  [NOID] %s: %s — %s matches no library item", source, track.name, track.artist)
+            logger.debug("  [NOID] %s: %s — %s matches no library item", source, track.name, track.artist)
             continue
         add_to_list(match, "spotify_ids", track.song_id)
-        if words:
-            add_to_list(match, "words_ids", track.song_id)
         match.store()
         count += 1
     return count

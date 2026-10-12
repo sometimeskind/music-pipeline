@@ -155,16 +155,26 @@ def album_items(key: str, name: str, slots: list[Slot], by_album: dict[str, list
     resolved item sits on under the same name (a #214 twin's representative).
     A resolved item canon moved to another album (a single's track filed on
     its standard album) is listed alone, not with that album.  The release's
-    local-only extras are on its album by #245.  In disc/track order."""
+    local-only extras are on its album by #245.  In disc/track order.
+
+    An album record's release is the album (#279): once its items carry
+    ``album_record``, they alone are listed, whatever the slots resolve to
+    (a same recording kept on another album stays there)."""
     from music_scan.scan import _item_path  # noqa: PLC0415
 
+    def ordered(items) -> list:
+        return sorted(items, key=lambda i: (i.disc or 1, i.track or 0, str(_item_path(i))))
+
+    release = [i for i in by_album.get(key, []) if i.get("album_record") == key]
+    if release:
+        return ordered(release)
     found = [s.item for s in slots if s.item is not None]
     ids = {key} | {i.get("spotify_album_id") for i in found
                    if i.get("spotify_album_id") and _norm(i.album) == _norm(name)}
     items: dict = {}
     for item in [*found, *(i for album_id in sorted(ids) for i in by_album.get(album_id, []))]:
         items.setdefault(_item_path(item), item)
-    return sorted(items.values(), key=lambda i: (i.disc or 1, i.track or 0, str(_item_path(i))))
+    return ordered(items.values())
 
 
 def album_paths(songs: list[dict], source: ItemIndex, library: ItemIndex,

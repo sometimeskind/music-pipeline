@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from music_scan.identity import ItemIndex
-from music_scan.rollback import entry_keys, failed_release_items, links, quarantine, rollback_release, unmatched
+from music_scan.rollback import entry_keys, failed_release_items, links, quarantine, unmatched
 
 GRAB = datetime(2026, 10, 7, 21, 30, tzinfo=timezone.utc)
 IMPORT = datetime(2026, 10, 7, 21, 40, tzinfo=timezone.utc)
@@ -81,21 +81,6 @@ class FakeLib:
 
     def items_by_source(self, source):
         return [i for i in self.items if source in (i.get("sources") or "").split(",")]
-
-
-def test_rollback_release_takes_only_this_imports_unmatched_usenet_items(tmp_path) -> None:
-    spotdl_dir = spotdl(tmp_path, "later", [{"song_id": "s1"}])
-    since = 1000.0
-    matched = _on_disk(tmp_path, item(1, "Once in a Lifetime", added=since + 5, via="usenet",
-                                      sources="later", spotify_ids="s1"))
-    outtake = _on_disk(tmp_path, item(2, "Outtake", added=since + 5, via="usenet", sources="later"))
-    older = _on_disk(tmp_path, item(3, "Bonus", added=since - 5, via="usenet", sources="later"))
-    spotdl_item = _on_disk(tmp_path, item(4, "Local", added=since + 5, via="spotdl", sources="later"))
-    other_list = _on_disk(tmp_path, item(5, "Other", added=since + 5, via="usenet", sources="keep"))
-    lib = FakeLib([matched, outtake, older, spotdl_item, other_list])
-    assert rollback_release(lib, "later", since, spotdl_dir, tmp_path / "replaced") == 1
-    assert outtake.removed
-    assert not any(i.removed for i in (matched, older, spotdl_item, other_list))
 
 
 def test_cleanup_keeps_a_successful_releases_bonus_tracks() -> None:

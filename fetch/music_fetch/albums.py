@@ -7,21 +7,26 @@ A playlist flagged ``album`` in playlists.conf is never synced by spotdl.  Inste
    re-reads the track list, which is written to the playlist's ``.spotdl`` file
    and reduced to distinct albums.
 2. Top the Usenet queue up to ``ALBUM_MAX_IN_FLIGHT``: for each wanted album not
-   already whole in the library, search Prowlarr, rank the releases and send
-   the best to SABnzbd.
-3. Hand what Usenet can't supply to spotdl (#205): a missing or failed album's
-   absent tracks become ``fallback`` tracks the nightly sync downloads into the
-   playlist's inbox.  Once the library holds them all the album is ``filled``.
+   already whole in the library, search Prowlarr, rank the releases (Spotify's
+   edition first, #279) and send the best to SABnzbd.
+3. Hand a missing or failed album to spotdl whole (#205): its tracks become
+   ``fallback`` tracks the nightly sync downloads into the playlist's inbox.
+   Once the library holds them all the album is ``filled``.
+
+On album playlists the album is the unit, not its tracks (#279, operator
+2026-10-12).  The release grabbed for an album is imported whole as that
+album, whatever its tracklist: an edition other than Spotify's, a missing or
+extra track, a file beets can't match.  Nothing of it is quarantined, and
+nothing it lacks goes to spotdl.  A release fails only for a broken download,
+for being another album (:func:`wrong_album`), or for lacking tracks of its own
+MusicBrainz release, when another copy of the same edition is tried
+(:func:`complete`).
 
 Album playlists sync at the album level (#268).  Spotify decides *which*
 albums are on the playlist; the local release decides *what is on* each album.
 An album is on the playlist while at least one of its tracks is, and leaves it
 (its tracks unlinked, its lines gone from the ``.m3u``) when none remain:
-removing one track of several does nothing.  So the "tracks" of an album are
-its Spotify tracklist (:func:`album_tracks`), not the playlist's: an imported
-release with tracklist differences is the album, and never queues a fallback.
-Only the tracks it *has* but beets rejected go to spotdl (``rejected_tracks``,
-#272).
+removing one track of several does nothing.
 
 ``ALBUM_MODE`` is ``off`` (default), ``dry-run`` (search and log the pick, never
 grab) or ``on``.  Indexer use is capped by a rolling-24h budget counted from our
@@ -44,7 +49,7 @@ from pathlib import Path
 from typing import Callable, Protocol
 
 from music_fetch.metrics import _gauge, _push
-from music_fetch.usenet import Release, clean_album, normalise, rank, readable
+from music_fetch.usenet import Release, clean_album, edition, normalise, rank, readable, words
 
 logger = logging.getLogger(__name__)
 
@@ -91,6 +96,9 @@ AUDIO_EXTS = {".mp3", ".flac", ".ogg", ".opus", ".m4a", ".aac", ".wav", ".wma", 
 WINDOW = timedelta(hours=24)
 # Spotify album tracklists read per tick for spotdl fallbacks (#268): two calls each.
 TRACKLISTS_PER_TICK = 10
+# Albums shorter than this aren't judged by their titles (#279): a single's
+# one title proves little either way.
+WRONG_ALBUM_MIN_TRACKS = 4
 
 
 def _env_int(name: str, default: int) -> int:
@@ -111,10 +119,6 @@ class Settings:
     # so dry-run only samples: a few per tick, dry_run_limit in total.
     dry_run_per_tick: int = 3
     dry_run_limit: int = 25
-    # A release that imports all but this many tracks (or this share of the
-    # album's playlist tracks, if more) is the album: not re-grabbed (#268).
-    partial_max_missing: int = 2
-    partial_max_percent: int = 20
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -128,14 +132,7 @@ class Settings:
             grabs_per_day=_env_int("ALBUM_GRABS_PER_DAY", 18),
             hits_per_day=_env_int("ALBUM_HITS_PER_DAY", 90),
             dry_run_limit=_env_int("ALBUM_DRY_RUN_LIMIT", 25),
-            partial_max_missing=_env_int("ALBUM_PARTIAL_MAX_MISSING", 2),
-            partial_max_percent=_env_int("ALBUM_PARTIAL_MAX_PERCENT", 20),
         )
-
-    def partial(self, missing: int, tracks: int) -> bool:
-        """True when an import missing *missing* of *tracks* is close enough to
-        count as the album.  At least one track must have imported."""
-        return 0 < missing < tracks and missing <= max(self.partial_max_missing, tracks * self.partial_max_percent // 100)
 
 
 # ---------------------------------------------------------------------------
@@ -403,6 +400,8 @@ def _taken(state: State, key: str) -> tuple[set[str], set[str]]:
             flight.add(guid)
         elif status == IMPORTED or status in (FALLBACK, FILLED) and record.get("fallback_from") == PARTIAL:
             done.add(guid)
+        if record.get("best_copy"):
+            done.add(record["best_copy"]["guid"])
     return flight, done
 
 
@@ -459,7 +458,8 @@ def top_up(
         recheck = settings.mode != "on" and record.get("dry_run") and _requery(record, search)
         if slots <= 0 and not recheck:
             continue
-        if have(key, record):
+        # A copy kept for now, or a reset to import again, isn't "have" (#279).
+        if not (record.get("best_copy") or record.get("reimport")) and have(key, record):
             record["status"] = HAVE
             continue
         if state.used("hit", now()) >= settings.hits_per_day:
@@ -506,6 +506,14 @@ def top_up(
         record["query"] = search.queries[0]
         if settings.mode != "on":
             record["dry_run"] = True
+        if record.get("edition") is not None:
+            # An incomplete copy is in the library: only the same edition replaces it (#279).
+            ranked = [r for r in ranked if sorted(edition(r.title)) == record["edition"]]
+            if not ranked and record.get("best_copy"):
+                best_copy = record["best_copy"]
+                _done(record, label, f": no other copy of {best_copy['title']}'s edition; it is the album, "
+                                     f"lacking {best_copy['missing']} track(s) of its own release")
+                continue
         if not ranked:
             record["status"] = MISSING
             logger.info("[MISS] %s%s: %d result(s), none match; queries: %s",
@@ -599,24 +607,6 @@ def settle_imported(record: dict) -> bool:
     return True
 
 
-def _settle_rejected(record: dict, missing: Missing) -> None:
-    """Drop the rejected tracks (#272) the library now holds; once none are
-    left the release's album is whole (``[FILLED]``).  The record stays
-    ``imported``: the release is still the album (#243, #268)."""
-    left: dict[str, list[str]] = {}
-    for playlist, ids in record["rejected_tracks"].items():
-        entries = [t for t in record.get("playlists", {}).get(playlist, []) if len(t) > 2 and t[2] in ids]
-        still = [t[2] for t in missing(playlist, entries)]
-        if still:
-            left[playlist] = still
-    if left:
-        record["rejected_tracks"] = left
-        return
-    record.pop("rejected_tracks")
-    record["filled_at"] = _iso(_now())
-    logger.info("[FILLED] %s — %s: the release's rejected tracks came from spotdl", record["artist"], record["name"])
-
-
 def fallbacks(state: State, missing: Missing, album_songs: AlbumSongs | None = None) -> None:
     """Hand missing and failed albums to spotdl, and mark fallback albums the
     library now completes as filled (``on`` only).  An album in fallback is no
@@ -626,8 +616,8 @@ def fallbacks(state: State, missing: Missing, album_songs: AlbumSongs | None = N
     album by *album_songs* (``TRACKLISTS_PER_TICK`` a tick; a failed read stops
     the reads until the next tick).  Until it is read the playlist's tracks
     stand in, and the album can't be ``filled``.  An imported release's old
-    partial or gap fallback is settled (:func:`settle_imported`), and its
-    rejected tracks leave the queue as they land (:func:`_settle_rejected`)."""
+    partial or gap fallback is settled (:func:`settle_imported`).  An imported
+    release sends nothing to spotdl (#279): the release is the album."""
     reads = 0
     for key, record in state.albums.items():
         if settle_imported(record):
@@ -635,9 +625,6 @@ def fallbacks(state: State, missing: Missing, album_songs: AlbumSongs | None = N
                         record["artist"], record["name"], record["settled_from"])
             continue
         status = record.get("status")
-        if status == IMPORTED and record.get("rejected_tracks"):
-            _settle_rejected(record, missing)
-            continue
         if status not in (MISSING, FAILED, FALLBACK):
             continue
         if album_songs is not None and _spotify_album(key) and "album_songs" not in record \
@@ -660,12 +647,10 @@ def fallbacks(state: State, missing: Missing, album_songs: AlbumSongs | None = N
 
 def _spotdl_tracks(record: dict) -> dict[str, list[str]]:
     """The Spotify IDs of *record*'s tracks left to spotdl, by playlist: a
-    fallback album's absent tracks, or an imported release's rejected ones (#272)."""
-    status = record.get("status")
-    if status == FALLBACK:
+    fallback album's absent tracks.  An imported release's rejected ones no
+    longer go (#279)."""
+    if record.get("status") == FALLBACK:
         return record.get("fallback_tracks", {})
-    if status == IMPORTED:
-        return record.get("rejected_tracks", {})
     return {}
 
 
@@ -791,132 +776,119 @@ def _inside(root: Path, rel: str) -> Path | None:
     return target
 
 
-# A quarantined file's tags (#272): {"isrc": str | None, "disc": int | None, "track": int | None}.
-ReadTags = Callable[[Path], dict]
-
-
-def _number(value) -> int | None:
-    """A disc or track number tag ("5", "5/12") as an int."""
-    try:
-        return int(str(value).split("/")[0])
-    except (TypeError, ValueError):
-        return None
-
-
-def file_tags(path: Path) -> dict:
-    """*path*'s ISRC and disc/track numbers; {} when mutagen can't read it."""
-    from mutagen import File  # noqa: PLC0415 — a beets and spotdl dependency
-    from mutagen.easymp4 import EasyMP4Tags  # noqa: PLC0415
-
-    if "isrc" not in EasyMP4Tags.Get:
-        EasyMP4Tags.RegisterFreeformKey("isrc", "ISRC")
-    try:
-        tags = File(path, easy=True)
-    except Exception:
-        return {}
-    if tags is None:
-        return {}
-
-    def first(key: str):
-        values = tags.get(key) or [None]
-        return values[0]
-
-    return {"isrc": first("isrc"), "disc": _number(first("discnumber")), "track": _number(first("tracknumber"))}
-
-
-def _corresponds(track: list, tags: dict) -> bool:
-    """Whether a quarantined file is the album *track* (``track_entry``): by
-    ISRC when both carry one, else by disc/track against the Spotify
-    tracklist.  Never by title (#255): a different mix shares the title."""
-    isrc = track[3] if len(track) > 3 else None
-    if isrc and tags.get("isrc"):
-        return isrc.strip().upper() == str(tags["isrc"]).strip().upper()
-    number = track[5] if len(track) > 5 else None
-    disc = (track[4] if len(track) > 4 else None) or 1
-    return number is not None and tags.get("track") == number and (tags.get("disc") or 1) == disc
-
-
-def rejected_gaps(gaps: list[list], job_dir: Path, read_tags: ReadTags) -> list[list]:
-    """The *gaps* a quarantined file of the release in *job_dir* corresponds
-    to (:func:`_corresponds`): beets rejected the release's copy (#272).  The
-    other gaps are tracks the release lacks."""
-    files = [read_tags(f) for f in sorted(job_dir.rglob("*"))
-             if f.is_file() and f.suffix.lower() in AUDIO_EXTS] if job_dir.is_dir() else []
-    return [t for t in gaps if any(_corresponds(t, tags) for tags in files)]
-
-
 class ImportDeferred(Exception):
     """*import_inbox* could not judge the release: a service it needs, such as
     MusicBrainz, was unavailable (#264).  Retried without blame, up to
     MAX_IMPORT_DEFERRALS times."""
 
 
+# identify(job dir): the release's own MusicBrainz match (#279), or None:
+# {"mb_albumid": …, "album": …, "tracks": n, "files": n, "missing": n, "mb": {MB album fields}}.
+Identify = Callable[[Path], "dict | None"]
+# claim(playlist, since, key, release): stamp the release's fresh items with their
+# album record and this import of the release (``<guid>@<start>``: a release
+# grabbed again after a reset is another copy); returns their titles.
+Claim = Callable[[str, float, str, str], list[str]]
+# retire(key, record, keep, drop): quarantine the record's other copies: every
+# item of the record but release *keep*'s, or release *drop*'s items.  Returns the count.
+Retire = Callable[[str, dict, "str | None", "str | None"], int]
+
+
+def base_title(title: str) -> tuple[str, ...]:
+    """A title's words with edition notes dropped, as release names spell them."""
+    return tuple(words(clean_album(title or "")))
+
+
+def titles_found(record: dict, titles: list[str]) -> tuple[int, int]:
+    """``(found, total)``: how many of the album's Spotify titles (edition
+    notes dropped) the release's items carry."""
+    have = {base_title(t) for t in titles}
+    spotify = [base_title(t[0]) for t in album_tracks(record) if t and t[0]]
+    return sum(1 for t in spotify if t in have), len(spotify)
+
+
+def wrong_album(found: int, total: int) -> bool:
+    """A release that names fewer than half the album's titles is another album
+    (#279).  Records of fewer than WRONG_ALBUM_MIN_TRACKS tracks aren't judged."""
+    return total >= WRONG_ALBUM_MIN_TRACKS and found * 2 < total
+
+
+def _done(record: dict, label: str, note: str) -> str:
+    record["status"] = IMPORTED
+    record["imported_at"] = _iso(_now())
+    for field in ("best_copy", "edition", "reimport", "gaps", "rejected_tracks"):
+        record.pop(field, None)
+    logger.info("[DONE] %s%s", label, note)
+    return IMPORTED
+
+
 def complete(
     state: State,
     completion: Completion,
     import_inbox: Callable[[], None],
-    missing: Missing,
+    claim: Claim,
     add_source: Callable[[str, str, list[list[str]]], None],
     tag_ids: Callable[[str, list[list], float, int], None],
-    rollback: Callable[[str, float], int] | None = None,
+    retire: Retire,
+    identify: Identify | None = None,
+    import_rest: Callable[[str, str], int] | None = None,
     complete_root: Path = USENET_COMPLETE,
     inbox_root: Path = USENET_INBOX,
     quarantine_root: Path = USENET_QUARANTINE,
-    settings: Settings | None = None,
-    read_tags: ReadTags = file_tags,
 ) -> str | None:
     """Handle one finished SABnzbd job.  Returns the album's new status, or None
     when the job isn't one of ours (a manual SABnzbd add).
 
-    On success the job dir moves to ``inbox/usenet/<playlist>/`` and
-    *import_inbox* runs the beets import.  The album counts as imported only if
-    every playlist track is then in the library (*missing* finds none): beets
-    quarantining a track, or the download failing, blocklists the release.  The
-    next tick, or the caller's top-up, tries the next one.  Tracks the library
-    already had are skipped as duplicates by beets, so a second release only
-    fills the gaps.  An import only a few tracks short (``Settings.partial``,
-    ``[PART]``) is the album too (#268): the release decides what is on it, so
-    the tracks it lacks are not chased.  Its tracks beets rejected, a
-    quarantined file *read_tags* ties to a gap track (:func:`rejected_gaps`),
-    go to spotdl as ``rejected_tracks`` (#272); the files stay for review.
-    A failed album's tracks go to spotdl (#205).
+    The album is the unit (#279): the whole release is the album, whatever its
+    tracklist.  The job dir moves to ``inbox/usenet/<playlist>/``; *identify*
+    matches it as a whole to a MusicBrainz release first (the files' own
+    edition, and how many of that release's tracks have no file).
+    *import_inbox* runs the beets import, and *import_rest* imports, as they
+    are, the files beets couldn't match (a file present is never missing).
+    *claim* stamps the release's items with the album record and the release,
+    and the import is judged:
 
-    Usenet files carry no Spotify IDs, so after the import *tag_ids* maps each
-    playlist's tracks onto the library items and records their Spotify IDs
-    (#176), also when the album didn't import completely.
+    - a release naming under half of the album's Spotify titles is another
+      album (``[WRONG]``): its items are retired, and it is blocklisted;
+    - a release missing tracks of its own MusicBrainz release is an incomplete
+      copy (``[INCOMPLETE]``): blocklisted, and the next release of the same
+      edition is grabbed.  The most complete copy stays in the library; after
+      MAX_ATTEMPTS, or when no copy of that edition is left (:func:`top_up`),
+      it is the album;
+    - anything else is ``[DONE]``, with a note when the tracklist differs from
+      Spotify's.  Nothing is quarantined, nothing goes to spotdl.
+
+    Whichever copy is kept, *retire* sends the record's other copies (earlier
+    releases, legacy items) to ``quarantine/replaced/``.  *tag_ids* gives
+    Spotify track IDs as a best effort and canonicalises the album; album
+    membership never depends on them.
 
     An exception from *import_inbox* is not the release's fault (#261): the job
     dir goes back to the completed dir and the record stays ``grabbed``, so the
     next tick's lost-trigger recovery imports it again.  A completed job whose
     dir is gone is logged ``[LOST]`` and grabbed again, without a blocklist
     entry or an attempt.  An ``ImportDeferred`` (MusicBrainz down, #264) is
-    retried the same way, under its own, longer cap.
-
-    A blocklisted release is rolled back (#238): *rollback(playlist, since)*
-    quarantines the items it imported that match no playlist entry (an
-    expanded edition's outtakes); its matched items stay.  A release missing
-    the same tracks as the previous one is a structural gap (``[GAP]``): the
-    tracklists differ, so it is the album, imported like ``[PART]``, with no
-    blocklist entry and no rollback.
+    retried the same way, under its own, longer cap.  A broken download is
+    blocklisted; after MAX_ATTEMPTS the album is ``failed``, and the next tick
+    hands it to spotdl whole (#205), unless an incomplete copy is in the
+    library, which is then the album.  A failed release's files beets left in
+    quarantine are removed; the last one's stay for review.
     """
-    found = find_by_nzo(state, completion.nzo_id)
-    if found is None:
+    found_record = find_by_nzo(state, completion.nzo_id)
+    if found_record is None:
         logger.info("Album import: %s is not an album-mode job — ignoring", completion.nzo_id)
         return None
-    _, record = found
+    key, record = found_record
     label = f"{record['artist']} — {record['name']}"
     playlists = list(record.get("playlists", {}))
     source = _inside(complete_root, completion.path)
     job_name = source.name if source else ""
+    guid = (record.get("candidate") or {}).get("guid") or ""
+    title = (record.get("candidate") or {}).get("title") or job_name
 
-    settings = settings or Settings.from_env()
     reason = completion.fail_message or "download failed"
-    imported = False
-    short = ""  # imported short of the playlist's tracks, yet the album: PART or GAP
+    imported: list[str] | None = None  # the release's item titles, once imported
     started: float | None = None
-    gap_keys: list[str] | None = None
-    rejected: list[list] = []
-    gap_count = 0
     if completion.ok and source is not None and source.is_dir() and playlists:
         first = playlists[0]
         dest = inbox_root / first / job_name
@@ -926,9 +898,17 @@ def complete(
         logger.info("[IMPT] %s: importing %s", label, job_name)
         # A retried import counts its items from the first try's start (#261).
         started = record.setdefault("import_started", time.time())
+        identity = None
+        if identify is not None:
+            try:
+                identity = identify(dest)
+            except Exception:
+                logger.exception("[NOMB] %s: identifying %s failed; its completeness is unknown", label, job_name)
         gave_up = ""  # why a retried import now counts against the release
         try:
             import_inbox()
+            if import_rest is not None:
+                import_rest(first, job_name)
         except ImportDeferred as exc:
             record["import_deferrals"] = record.get("import_deferrals", 0) + 1
             if record["import_deferrals"] <= MAX_IMPORT_DEFERRALS:
@@ -954,34 +934,59 @@ def complete(
             gave_up = f"the import crashed {MAX_IMPORT_ERRORS} times"
         # Leftovers beets doesn't import (nfo, sfv, cue, cover scans).
         shutil.rmtree(dest, ignore_errors=True)
-        record.pop("import_started", None)
-        record.pop("import_errors", None)
-        record.pop("import_deferrals", None)
-        tracks = record["playlists"][first]
-        # Before counting: a track only the release-scoped rung finds counts as imported (#240).
-        tag_ids(first, tracks, started, record.get("tracks_count") or 0)
-        gaps = missing(first, tracks)
-        imported = not gaps
-        if not imported:
-            reason = f"beets did not import {len(gaps)} of {len(tracks)} track(s) (quarantined or unmatched)"
-            if gave_up:
-                reason = f"{gave_up}; {reason}"
-            # Records from before #176 hold only [name, artist].
-            gap_keys = sorted({(t[2] if len(t) > 2 else None) or f"{t[0]} — {t[1]}" for t in gaps})
-            if settings.partial(len(gaps), len(tracks)):
-                short = "PART"
-            elif gap_keys == record.get("gaps"):
-                short = "GAP"
-                reason += ", the same as the previous release"
-            if short:
-                gap_count = len(gaps)
-                rejected = rejected_gaps(gaps, quarantine_root / first / job_name, read_tags)
-        if imported or short:
-            # The inbox path names one playlist; tag the album's tracks for the others.
+        for field in ("import_started", "import_errors", "import_deferrals"):
+            record.pop(field, None)
+        this = f"{guid}@{int(started)}"
+        titles = claim(first, started, key, this)
+        found, total = titles_found(record, titles)
+        if gave_up:
+            reason = gave_up
+        elif not titles:
+            reason = "beets imported none of its files"
+        elif wrong_album(found, total):
+            reason = f"another album: {found} of the album's {total} titles in it"
+            logger.warning("[WRONG] %s: %s is %s", label, job_name, reason)
+        else:
+            imported = titles
+        if imported is None and titles:
+            n = retire(key, record, None, this)
+            logger.info("[ROLLBACK] %s: %d item(s) of %s → quarantine/replaced/", label, n, job_name)
+        if imported is not None:
+            # The inbox path names one playlist; tag the album's items for the others.
             for other in playlists[1:]:
                 add_source(first, other, record["playlists"][other])
-        for playlist in playlists[1:]:
-            tag_ids(playlist, record["playlists"][playlist], started, record.get("tracks_count") or 0)
+            for playlist in playlists:
+                tag_ids(playlist, record["playlists"][playlist], started, record.get("tracks_count") or 0)
+            if identity:
+                record["release_files"] = identity
+            else:
+                record.pop("release_files", None)
+            note = f"; {total - found} of Spotify's {total} titles not in this release" if found < total else ""
+            missing = (identity or {}).get("missing") or 0
+            best = record.get("best_copy")
+            if not missing:
+                n = retire(key, record, this, None)
+                retired = f"; {n} item(s) of other copies → quarantine/replaced/" if n else ""
+                return _done(record, label, f": {len(titles)} file(s) from {title}{note}{retired}")
+            mine = {"guid": guid, "release": this, "title": title, "missing": missing}
+            if best and best["missing"] <= missing:
+                retire(key, record, best.get("release", best["guid"]), None)
+                logger.info("[INCOMPLETE] %s: %s lacks %d track(s) of its own release; %s (%d) stays",
+                            label, title, missing, best["title"], best["missing"])
+            else:
+                retire(key, record, this, None)
+                record["best_copy"] = best = mine
+                logger.info("[INCOMPLETE] %s: %s lacks %d track(s) of its own release (%s); kept for now",
+                            label, title, missing, identity.get("album") or identity.get("mb_albumid"))
+            if guid and guid not in record["blocklist"]:
+                record["blocklist"].append(guid)
+            record["attempts"] = record.get("attempts", 0) + 1
+            if record["attempts"] >= MAX_ATTEMPTS:
+                return _done(record, label, f": the most complete copy, {best['title']}, lacks {best['missing']} "
+                                            f"track(s) of its own release{note}")
+            record["edition"] = sorted(edition(title))
+            record["status"] = WANTED
+            return WANTED
     elif completion.ok and source is not None and not source.is_dir():
         # Nothing says the release is bad (#261): grab again, without an attempt.
         logger.warning("[LOST] %s: completed job dir not found: %r — not blocklisted, grabbing again",
@@ -995,38 +1000,19 @@ def complete(
     elif completion.ok:
         reason = f"completed job dir not usable: {completion.path!r}"
 
-    if imported or short:
-        record["status"] = IMPORTED
-        record["imported_at"] = _iso(_now())
-        record.pop("rejected_tracks", None)
-        if imported:
-            logger.info("[DONE] %s", label)
-        else:
-            record["gaps"] = gap_keys
-            ids = list(dict.fromkeys(t[2] for t in rejected if len(t) > 2 and t[2]))
-            if ids:
-                record["rejected_tracks"] = {playlists[0]: ids}
-            logger.info("[%s] %s: %s — the release is the album, not re-grabbing; %d rejected → spotdl, %d absent",
-                        short, label, reason, len(ids), gap_count - len(ids))
-        return IMPORTED
-
-    guid = (record.get("candidate") or {}).get("guid")
     if guid and guid not in record["blocklist"]:
         record["blocklist"].append(guid)
     record["attempts"] = record.get("attempts", 0) + 1
     if source is not None:
         shutil.rmtree(source, ignore_errors=True)
-    if started is not None and rollback is not None:
-        n = rollback(playlists[0], started)
-        if n:
-            logger.info("[ROLLBACK] %s: %d unmatched track(s) from %s → quarantine/replaced/", label, n, job_name)
-    if gap_keys is not None:
-        record["gaps"] = gap_keys
+    best = record.get("best_copy")
+    if record["attempts"] >= MAX_ATTEMPTS and best:
+        logger.warning("[FAIL] %s: %s — gave up after %d release(s)", label, reason, record["attempts"])
+        return _done(record, label, f": the most complete copy, {best['title']}, lacks {best['missing']} "
+                                    "track(s) of its own release")
     record["status"] = FAILED if record["attempts"] >= MAX_ATTEMPTS else WANTED
     if record["status"] == FAILED:
-        # Keep the last release's quarantined tracks for manual review.
         logger.warning("[FAIL] %s: %s — gave up after %d release(s)", label, reason, record["attempts"])
-        _queue_fallback(record, missing, FAILED)
     else:
         if job_name:
             for playlist in playlists:
@@ -1060,12 +1046,18 @@ def lost_completions(state: State, sabnzbd, now: datetime | None = None) -> list
 # ---------------------------------------------------------------------------
 
 
-def reset_album(state: State, query: str) -> tuple[str, dict, dict] | None:
+def reset_album(state: State, query: str, reimport: bool = False) -> tuple[str, dict, dict] | None:
     """Undo the last release attempt of the one album whose ``artist — name``
     contains *query* (case-insensitive): status ``wanted``, the last candidate
     off the blocklist, one attempt fewer, and its fallback cleared, so the next
-    tick searches it again.  Returns ``(key, before, after)``; None when no
-    album or more than one matches (logged)."""
+    tick searches it again.
+
+    With *reimport* (#279) the album starts over from one release: the whole
+    blocklist and every attempt are cleared, and the record is grabbed even
+    though the library holds its tracks.  The import then retires the copies
+    already there (an album mixed from several releases, spotdl's top-ups
+    aside).  Returns ``(key, before, after)``; None when no album or more than
+    one matches (logged)."""
     q = query.lower()
     hits = [(k, r) for k, r in state.albums.items() if q in f"{r.get('artist', '')} — {r.get('name', '')}".lower()]
     if len(hits) != 1:
@@ -1080,8 +1072,12 @@ def reset_album(state: State, query: str) -> tuple[str, dict, dict] | None:
     record["attempts"] = max(0, record.get("attempts", 0) - 1)
     record["status"] = WANTED
     for field in ("nzo_id", "import_started", "import_errors", "import_deferrals", "fallback_from", "fallback_at",
-                  "fallback_tracks", "rejected_tracks"):
+                  "fallback_tracks", "rejected_tracks", "best_copy", "edition"):
         record.pop(field, None)
+    if reimport:
+        record.update(blocklist=[], attempts=0, reimport=True)
+        for field in ("gaps", "settled_from", "filled_at", "release_files"):
+            record.pop(field, None)
     return key, before, record
 
 
@@ -1101,17 +1097,20 @@ def reset_main() -> None:
     parser = argparse.ArgumentParser(prog="music-album-reset",
                                      description="Undo an album's last release attempt (#261); dry run unless --apply")
     parser.add_argument("query", help="part of 'artist — album' that matches exactly one album")
+    parser.add_argument("--reimport", action="store_true",
+                        help="start over from one release: clear the blocklist and attempts, grab it although the "
+                             "library has its tracks, and retire the copies there on import (#279)")
     parser.add_argument("--apply", action="store_true", help="write .albums.json (default: dry run)")
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO, format="[%(asctime)s] %(message)s", datefmt="%Y-%m-%dT%H:%M:%S%z")
     with _state_lock(args.apply):
         state = State.load()
-        result = reset_album(state, args.query)
+        result = reset_album(state, args.query, reimport=args.reimport)
         if result is None:
             raise SystemExit(1)
         key, before, after = result
         fields = ("status", "attempts", "blocklist", "candidate", "nzo_id", "fallback_from", "fallback_tracks",
-                  "rejected_tracks")
+                  "rejected_tracks", "best_copy", "edition", "reimport")
         logger.info("%s: %s — %s", key, after.get("artist"), after.get("name"))
         for f in fields:
             if before.get(f) != after.get(f):
