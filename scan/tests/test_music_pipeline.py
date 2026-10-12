@@ -30,6 +30,7 @@ def _make_plugin() -> MusicPipelinePlugin:
     plugin._pending_sources = {}
     plugin._pending_spotdl = {}
     plugin._pending_via = {}
+    plugin._pending_job = {}
     return plugin
 
 
@@ -592,6 +593,31 @@ def test_usenet_import_keeps_via_usenet_through_the_rename() -> None:
     plugin.tag_source_on_stored(lib=MagicMock(), item=stored)
     stored.__setitem__.assert_any_call("sources", "later")
     stored.__setitem__.assert_any_call("via", "usenet")
+
+
+def test_job_from_path() -> None:
+    from music_scan.music_pipeline import _job_from_path
+
+    assert _job_from_path(b"/root/Music/inbox/usenet/keep/Artist-Album-FLAC/CD1/01.flac") == "Artist-Album-FLAC"
+    assert _job_from_path("/root/Music/inbox/usenet/keep/01.flac") is None
+    assert _job_from_path("/root/Music/inbox/spotdl/keep/a.m4a") is None
+
+
+def test_usenet_import_keeps_its_job_folder_through_the_rename() -> None:
+    """Two releases imported in one scan stay apart: each item keeps its job folder (#284)."""
+    plugin = _make_plugin()
+    mine = _item("/root/Music/inbox/usenet/keep/Los Campesinos-Hello Sadness-2011-FNT/04-life.mp3",
+                 title="Life Is a Long Time")
+    theirs = _item("/root/Music/inbox/usenet/keep/Los Campesinos-We Are Beautiful-2009/02-miserabilia.mp3",
+                   title="Miserabilia")
+    with patch("music_scan.music_pipeline._read_spotdl_tags", return_value=SpotdlTags()):
+        for incoming in (mine, theirs):
+            plugin.tag_source_on_created(session=MagicMock(), task=_task(item=incoming))
+    mine.__setitem__.assert_any_call("usenet_job", "Los Campesinos-Hello Sadness-2011-FNT")
+
+    stored = _item("/root/Music/library/Los Campesinos!/We Are Beautiful/02 - Miserabilia.mp3", title="Miserabilia")
+    plugin.tag_source_on_stored(lib=MagicMock(), item=stored)
+    stored.__setitem__.assert_any_call("usenet_job", "Los Campesinos-We Are Beautiful-2009")
 
 
 # ---------------------------------------------------------------------------

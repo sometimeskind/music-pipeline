@@ -517,7 +517,7 @@ def test_album_completion_wires_the_release_hooks():
 
     def fake_complete(state, completion, import_inbox, claim, add_source, tag_ids, retire, **hooks):
         kw.update(hooks)
-        events.append(("claim", claim("keep", 100.0, "K", "r1")))
+        events.append(("claim", claim("keep", 100.0, "K", "r1", "Job")))
         events.append(("retire", retire("K", {}, "r1", None)))
         events.append(("rest", hooks["import_rest"]("keep", "Job")))
         events.append(("identify", hooks["identify"]("/x")))
@@ -535,7 +535,7 @@ def test_album_completion_wires_the_release_hooks():
         assert complete(albums.State(), albums.Completion(nzo_id="n", ok=True, path="x")) == albums.IMPORTED
 
     assert events == [("claim", ["Juicy"]), "m3u", ("retire", 2), ("rest", 1), ("identify", {"missing": 0})]
-    assert claim.call_args.args[1:] == ("keep", 100.0, "K", "r1")
+    assert claim.call_args.args[1:] == ("keep", 100.0, "K", "r1", "Job")
     assert retire.call_args.args[1:] == ("K", {}, "r1", None)
     assert rest.call_args.args[2:] == ("keep", "Job")
 
