@@ -922,3 +922,145 @@ def test_release_items_matching_no_entry_take_the_album_and_no_title_id(tmp_path
         assert MediaFile(os.fsdecode(item.path)).images[0].data == art
     assert lib.get_item(extras["Psycho Killer (live)"].id).track == 2  # track 1 is the album's own
     assert canon.extras_after_import(lib, "sms", records["sms"]) == []
+
+
+# ----------------------------------------------------------------------
+# A Usenet release stays one album (#278)
+# ----------------------------------------------------------------------
+
+MC = "Mellon Collie And The Infinite Sadness (30th Anniversary Edition)"
+RA = "(Rotten Apples) The Smashing Pumpkins Greatest Hits"
+PUMPKINS = "The Smashing Pumpkins"
+
+
+def _pumpkins_songs():
+    """1979 on the 2025 edition the album record is for, and on a 2001 best-of."""
+    def song(sid, album_id, name, date, track, disc=1):
+        return {**_song(sid, album_id, name, date=date, track=track, disc=disc, tracks=37), "album_artist": PUMPKINS}
+
+    return [song("MC1979", "MC30", MC, "2025-11-21", 31), song("MCTONIGHT", "MC30", MC, "2025-11-21", 2),
+            song("RA1979", "RA", RA, "2001-11-13", 9)]
+
+
+def _pumpkins_records():
+    return {"MC30": {"status": "imported", "name": MC, "artist": PUMPKINS},
+            "RA": {"status": "imported", "name": RA, "artist": PUMPKINS}}
+
+
+class _Item(FakeItem):
+    def __init__(self, id_, added, **fields):
+        super().__init__(**{"via": "usenet", "artist": PUMPKINS, "albumartist": PUMPKINS, **fields})
+        self.id, self.added = id_, added
+
+
+def test_choose_puts_a_release_item_on_its_album_records_album_first():
+    """2026-10-11: 3092's IDs are on both; the earliest release (2001) won, splitting Mellon Collie."""
+    from music_scan.canon import choose, placements_from
+
+    placements = placements_from([(_pumpkins_songs(), True)])
+    item = FakeItem(spotify_ids="MC1979,RA1979")
+    assert choose(item, placements).release.album_id == "RA"
+    assert choose(item, placements, {"MC30"}).release.album_id == "MC30"
+    # A home its IDs aren't on changes nothing.
+    assert choose(item, placements, {"ELSEWHERE"}).release.album_id == "RA"
+
+
+def test_record_homes_by_name_and_by_import_time():
+    from music_scan.canon import record_homes
+
+    records = _pumpkins_records()
+    mellon = [_Item(n, 1000 + 10 * n, album=MC) for n in (1, 2, 4)]
+    moved = _Item(3092, 1030, album=RA)  # imported with Mellon Collie, renamed by canon since
+    best_of = [_Item(n, 5000 + 10 * n, album=RA) for n in (10, 11)]
+    spotdl = _Item(7, 1025, album=MC, via="spotdl")
+    items = [*mellon, moved, *best_of, spotdl]
+
+    by_name = record_homes(items, records)
+    assert by_name[1] == {"MC30"} and by_name[3092] == {"RA"} and by_name[10] == {"RA"}
+    assert 7 not in by_name  # loose spotdl tracks keep today's rules
+
+    by_time = record_homes(items, records, by_time=True)
+    assert by_time[3092] == {"MC30"}
+    assert by_time[10] == by_time[11] == {"RA"} and by_time[2] == {"MC30"}
+
+
+def test_record_homes_import_time_needs_neighbours_within_one_import():
+    """A retried album's two releases, days apart, don't enclose another record's import."""
+    from music_scan.canon import record_homes
+
+    records = _pumpkins_records()
+    first, retry = _Item(1, 0, album=MC), _Item(2, 3 * 86400, album=MC)
+    between = _Item(3, 86400, album=RA)
+    assert record_homes([first, retry, between], records, by_time=True)[3] == {"RA"}
+
+
+def _pumpkins(tmp_path, lib, moved: bool):
+    """Mellon Collie's release: Tonight, Tonight, and 1979, moved to the best-of by canon before #278 or not."""
+    t0 = datetime(2026, 10, 11, 22, 24, tzinfo=timezone.utc)
+    mc_dir = tmp_path / "library" / PUMPKINS / MC
+    tonight = _set_added(lib, _add(lib, _m4a(mc_dir / "02 - Tonight, Tonight.m4a"), title="Tonight, Tonight",
+                                   artist=PUMPKINS, albumartist=PUMPKINS, album=MC, track=2, tracktotal=37,
+                                   via="usenet", spotify_ids="MCTONIGHT", spotify_album_id="MC30"), t0)
+    after = _set_added(lib, _add(lib, _m4a(mc_dir / "03 - Here Is No Why.m4a"), title="Here Is No Why",
+                                 artist=PUMPKINS, albumartist=PUMPKINS, album=MC, track=3, tracktotal=37,
+                                 via="usenet"), t0 + timedelta(minutes=4))
+    if moved:
+        where = dict(album=RA, track=9, spotify_album_id="RA", year=2001)
+        path = tmp_path / "library" / PUMPKINS / RA / "09 - 1979.m4a"
+    else:
+        where = dict(album=MC, track=31, spotify_album_id="MC30", year=2025)
+        path = mc_dir / "31 - 1979.m4a"
+    the_1979 = _set_added(lib, _add(lib, _m4a(path), title="1979", artist=PUMPKINS, albumartist=PUMPKINS,
+                                    tracktotal=37, via="usenet", spotify_ids="MC1979,RA1979", **where),
+                          t0 + timedelta(minutes=2))
+    return tonight, after, the_1979
+
+
+def test_import_canon_keeps_1979_on_mellon_collie(tmp_path, ffmpeg, lib, monkeypatch):
+    from music_scan import canon
+
+    _, _, the_1979 = _pumpkins(tmp_path, lib, moved=False)
+    spotdl = tmp_path / "spotdl"
+    spotdl.mkdir()
+    (spotdl / "keep.spotdl").write_text(json.dumps({"songs": _pumpkins_songs()}))
+    monkeypatch.setattr(canon, "Resolver", lambda budget=None: None)
+    monkeypatch.setattr(canon, "AlbumsByIsrc", lambda budget=None: None)
+
+    canon.canonicalize_items([lib.get_item(the_1979.id)], spotdl, records=_pumpkins_records())
+
+    item = lib.get_item(the_1979.id)
+    assert (item.get("spotify_album_id"), item.album, item.track) == ("MC30", MC, 31)
+
+
+def test_backfill_moves_3092_back_to_mellon_collie(tmp_path, ffmpeg, lib, monkeypatch, caplog):
+    import logging
+
+    from music_fetch import albums as albums_state
+    from music_fetch import ingest
+    from music_scan import canon, cover, library, navidrome, scan
+
+    caplog.set_level(logging.INFO)
+    _, _, the_1979 = _pumpkins(tmp_path, lib, moved=True)
+    state = tmp_path / ".albums.json"
+    albums_state.State(albums=_pumpkins_records()).save(state)
+    monkeypatch.setattr(albums_state, "STATE_FILE", state)
+    monkeypatch.setattr(library, "LIBRARY_DB", tmp_path / "library.db")
+    monkeypatch.setattr(library, "LIBRARY_DIR", tmp_path / "library")
+    monkeypatch.setattr(ingest, "SPOTDL_DIR", tmp_path / "nospotdl")
+    monkeypatch.setattr(canon, "read_pages", lambda refresh=False: {"keep": _pumpkins_songs()})
+    monkeypatch.setattr(canon, "Resolver", lambda budget=None: None)
+    art = _jpeg(tmp_path / "c.jpg")
+    monkeypatch.setattr(cover, "download", lambda url: art)
+    monkeypatch.setattr(navidrome, "trigger_scan", lambda: None)
+    monkeypatch.setattr(scan, "regen_playlists", lambda: {})
+
+    dry = canon.run(apply=False)
+    assert dry.homed == 1 and f"[HOME] {the_1979.id} " in caplog.text
+    assert "1 release item(s) on another album go back" in caplog.text
+    assert lib.get_item(the_1979.id).get("spotify_album_id") == "RA"
+
+    canon.run(apply=True)
+    item = lib.get_item(the_1979.id)
+    assert (item.get("spotify_album_id"), item.album, item.track) == ("MC30", MC, 31)
+    assert Path(os.fsdecode(item.path)).parent == tmp_path / "library" / PUMPKINS / MC
+    assert canon.run(apply=True).homed == 0

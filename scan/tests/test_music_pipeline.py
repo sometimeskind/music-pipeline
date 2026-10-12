@@ -30,6 +30,7 @@ def _make_plugin() -> MusicPipelinePlugin:
     plugin._pending_sources = {}
     plugin._pending_spotdl = {}
     plugin._pending_via = {}
+    plugin._usenet_imported = set()
     return plugin
 
 
@@ -863,3 +864,100 @@ def test_handle_duplicates_merges_a_usenet_copy_into_an_earlier_album_copy() -> 
 
     task.set_choice.assert_called_once_with(beets_importer.Action.SKIP)
     assert existing._data["sources"] == "keep,later"
+
+
+# ---------------------------------------------------------------------------
+# handle_duplicates — a Usenet release stays one album (#278)
+# ---------------------------------------------------------------------------
+
+MELLON = "/root/Music/inbox/usenet/keep/The Smashing Pumpkins-Mellon Collie And The Infinite Sadness-24-96-WEB-FLAC-REMASTERED-2013-OBZEN"
+
+
+def _release_item(path: str, title: str, album: str) -> MagicMock:
+    item = _item(path, title=title)
+    item["album"] = album
+    return item
+
+
+def test_handle_duplicates_keeps_a_release_track_that_another_album_holds() -> None:
+    """2026-10-11: Mellon Collie's *1979* is the same recording as a best-of's: each album keeps its copy."""
+    plugin = _make_plugin()
+    item = _release_item(f"{MELLON}/205-1979.flac", "1979", "Mellon Collie and the Infinite Sadness (Remastered 2012)")
+    task = _task(item=item)
+    task.chosen_info.return_value = {"track_id": "mb-1979", "isrc": None}
+    best_of = _lib_dup(1979, via="usenet", mb_trackid="mb-1979", sources="keep",
+                       album="(Rotten Apples) The Smashing Pumpkins Greatest Hits")
+    session = _session({"mb_trackid:mb-1979": [best_of]})
+
+    plugin.handle_duplicates(session=session, task=task)
+
+    task.set_choice.assert_not_called()
+    assert task.find_duplicates(session.lib) == []  # hidden from duplicate_action: remove
+    assert best_of._data["sources"] == "keep"
+    lines = [c.args[0] for c in plugin._log.warning.call_args_list]
+    assert any("[BOTH]" in line for line in lines) and not any("[SAME]" in line for line in lines)
+
+
+def test_handle_duplicates_never_merges_two_files_of_one_release() -> None:
+    """2026-10-11 22:26: beets matched the release's *Love* to *Bodies*' recording, and
+    the real *Bodies* then merged into it: two files of one import are never one track."""
+    plugin = _make_plugin()
+    album = "Mellon Collie and the Infinite Sadness"
+    love_as_bodies = _lib_dup(3008, via="usenet", mb_trackid="mb-bodies", sources="keep", album=album)
+    plugin._usenet_imported.add(3008)  # imported earlier in this beets run
+    item = _release_item(f"{MELLON}/202-bodies_(remastered_2012).flac", "Bodies (remastered 2012)", album)
+    task = _task(item=item)
+    task.chosen_info.return_value = {"track_id": "mb-bodies", "isrc": None}
+    session = _session({"mb_trackid:mb-bodies": [love_as_bodies]})
+
+    plugin.handle_duplicates(session=session, task=task)
+
+    task.set_choice.assert_not_called()
+    assert task.find_duplicates(session.lib) == []
+    assert any("[BOTH]" in c.args[0] and "this import" in c.args[4] for c in plugin._log.warning.call_args_list)
+
+
+def test_handle_duplicates_still_merges_into_an_earlier_release_of_the_same_album() -> None:
+    """A retry fills the gaps: the first release's copy, same album edition notes aside, keeps the track."""
+    plugin = _make_plugin()
+    item = _release_item("/root/Music/inbox/usenet/keep/Bob Dylan-Blood On The Tracks-2/04.flac",
+                         "Simple Twist Of Fate", "Blood on the Tracks (2018 Remaster)")
+    plugin._pending_sources["simple twist of fate"] = "keep"
+    task = _task(item=item)
+    task.chosen_info.return_value = {"track_id": "mb-rec-1", "isrc": None}
+    first = _lib_dup(7, via="usenet", mb_trackid="mb-rec-1", sources="keep", album="Blood On The Tracks")
+    session = _session({"mb_trackid:mb-rec-1": [first]})
+
+    plugin.handle_duplicates(session=session, task=task)
+
+    task.set_choice.assert_called_once_with(beets_importer.Action.SKIP)
+    assert any("[SAME]" in c.args[0] for c in plugin._log.warning.call_args_list)
+
+
+def test_handle_duplicates_keeps_apart_and_supersede_takes_the_spotdl_copy() -> None:
+    """Another album's release copy stays, and a loose spotdl copy is left to supersede (#266)."""
+    plugin = _make_plugin()
+    item = _release_item(f"{MELLON}/205-1979.flac", "1979", "Mellon Collie and the Infinite Sadness")
+    task = _task(item=item)
+    task.chosen_info.return_value = {"track_id": "mb-1979", "isrc": None}
+    best_of = _lib_dup(1979, via="usenet", mb_trackid="mb-1979", album="Greatest Hits")
+    loose = _lib_dup(12, via="spotdl", mb_trackid="mb-1979", sources="aaaaaah", album="1979")
+    session = _session({"mb_trackid:mb-1979": [best_of, loose]})
+
+    plugin.handle_duplicates(session=session, task=task)
+
+    task.set_choice.assert_not_called()
+    lines = [c.args[0] for c in plugin._log.warning.call_args_list]
+    assert any("[BOTH]" in line for line in lines) and any("[ALBUM]" in line for line in lines)
+
+
+def test_tag_source_on_stored_remembers_this_runs_usenet_items() -> None:
+    plugin = _make_plugin()
+    item = _item(f"{MELLON}/109-love.flac", title="Love")
+    item.id = 3008
+    plugin._pending_sources["love"] = "keep"
+    plugin._pending_via["love"] = "usenet"
+
+    plugin.tag_source_on_stored(lib=None, item=item)
+
+    assert plugin._usenet_imported == {3008}

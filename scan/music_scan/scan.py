@@ -17,7 +17,9 @@ from pathlib import Path
 from music_fetch.ingest import PendingRemovals, clear_pending_removals
 from music_scan import playlists
 from music_scan.guard import guard_inbox
-from music_scan.identity import ItemIndex, PlaylistTrack, add_to_list, item_spotify_ids, release_match, spotify_id
+from music_scan.identity import (
+    ItemIndex, PlaylistTrack, add_to_list, item_isrcs, item_spotify_ids, release_match, same_base_title, spotify_id,
+)
 from music_scan.identity import name_words as _name_words
 from music_scan.library import MusicLibrary
 from music_scan.metrics import ScanMetrics
@@ -391,13 +393,35 @@ def have_album(indexes, library: ItemIndex, by_album: dict[str, list], key: str,
     return have >= (record.get("tracks_count") or 0)
 
 
+def _release_isrc_match(track: PlaylistTrack, items: list):
+    """``(item, ambiguous)``: the one of *items* (this import's) carrying
+    *track*'s ISRC.  When several do, the one whose title and then disc/track
+    agree; when that leaves a tie, none (#278): beets matched two files to one
+    recording (*Love* tagged *Bodies*), and only a listen tells which is which."""
+    have = [i for i in items if track.isrc in item_isrcs(i)]
+
+    def key(i):
+        return (not same_base_title(track.name, i.title or ""), (i.disc, i.track) != (track.disc, track.track))
+
+    have.sort(key=key)
+    if len(have) > 1 and key(have[0]) == key(have[1]):
+        return None, True
+    return (have[0] if have else None), False
+
+
 def tag_album_ids(lib: MusicLibrary, source: str, tracks: list[list], since: float, tracks_count: int) -> int:
     """Record each album-mode playlist track's Spotify ID on the *source* item it maps to.
 
     Usenet files carry no Spotify IDs (#176).  Per track, first hit wins:
-    1. ISRC among the item's ISRCs;
+    1. ISRC among the item's ISRCs: this import's usenet items first, the one
+       whose title (edition notes dropped) and then disc/track agree when
+       several carry it, none (``[AMBIG]``) when that leaves a tie (#278);
+       else any of *source*'s items;
     2. disc and track number, only on usenet items imported since *since*
-       whose release has Spotify's track count (editions renumber tracks);
+       whose release has Spotify's track count (editions renumber tracks),
+       and only when the title agrees too, edition notes dropped (#278): a
+       number alone is not identity.  A file beets matched to another
+       recording (*Love* tagged *Bodies*) gets no ID, and logs ``[NUMBER]``;
     3. the same title among this import's usenet items, with the artist
        anywhere in a credit that may add ``feat.`` names (#240), logged
        ``[WORDS]`` so the fallback rate is visible.  The ID is also listed in
@@ -418,9 +442,20 @@ def tag_album_ids(lib: MusicLibrary, source: str, tracks: list[list], since: flo
     for track in map(PlaylistTrack.from_entry, tracks):
         if not track.song_id or track.song_id in index.by_id:
             continue
-        match, _ = index.match(None, track.isrc, words=False)
+        match, ambiguous = _release_isrc_match(track, imported) if track.isrc else (None, False)
+        if ambiguous:
+            logger.warning("  [AMBIG] %s: %s — %s: several of this release's items carry ISRC %s and none is "
+                           "told apart by title or disc/track; no ID", source, track.name, track.artist, track.isrc)
+            continue
+        if match is None:
+            match, _ = index.match(None, track.isrc, words=False)
         if match is None and track.disc and track.track:
-            match = next((i for i in fresh if (i.disc, i.track) == (track.disc, track.track)), None)
+            at = next((i for i in fresh if (i.disc, i.track) == (track.disc, track.track)), None)
+            if at is not None and same_base_title(track.name, at.title or ""):
+                match = at
+            elif at is not None:
+                logger.info("  [NUMBER] %s: %s — %s is at %d-%d, but the item there is %r; no ID by number",
+                            source, track.name, track.artist, track.disc, track.track, at.title)
         words = match is None
         if words:
             match = release_match(track.name, track.artist, unclaimed)
@@ -437,6 +472,7 @@ def tag_album_ids(lib: MusicLibrary, source: str, tracks: list[list], since: flo
         match.store()
         count += 1
     return count
+
 
 
 def apply_pending_removals(pending: PendingRemovals, lib: MusicLibrary) -> int:

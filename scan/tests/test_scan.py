@@ -965,12 +965,23 @@ def test_tag_album_ids_prefers_isrc_over_track_number() -> None:
     assert b.data["spotify_ids"] == ""
 
 
-def test_tag_album_ids_falls_back_to_disc_and_track() -> None:
-    a = _lib_item("Uno", track=1)
-    b = _lib_item("Dos", track=2)
-    assert _tag([a, b], [["One", "Artist", "sid1", None, 1, 1], ["Two", "Artist", "sid2", None, 1, 2]]) == 2
+def test_tag_album_ids_falls_back_to_disc_and_track_when_the_title_agrees() -> None:
+    # Edition notes aside: "One (2011 Remaster)" is Spotify's "One - Remastered 2011".
+    a = _lib_item("One (2011 Remaster)", track=1, artist="Someone Else")
+    b = _lib_item("Two [Remastered]", track=2, artist="Someone Else")
+    tracks = [["One - Remastered 2011", "Artist", "sid1", None, 1, 1], ["Two", "Artist", "sid2", None, 1, 2]]
+    assert _tag([a, b], tracks) == 2
     assert (a.data["spotify_ids"], b.data["spotify_ids"]) == ("sid1", "sid2")
     assert "words_ids" not in a.data
+
+
+def test_tag_album_ids_a_number_alone_is_not_identity(caplog) -> None:
+    """#278: the item at Spotify's slot has another title, so it gets no ID by number."""
+    a = _lib_item("Uno", track=1)
+    with caplog.at_level("INFO", logger="music_scan.scan"):
+        assert _tag([a], [["One", "Artist", "sid1", None, 1, 1]]) == 0
+    assert a.data["spotify_ids"] == ""
+    assert "[NUMBER]" in caplog.text
 
 
 def test_tag_album_ids_track_number_needs_same_edition_and_this_import() -> None:
@@ -1359,3 +1370,40 @@ def test_run_marks_a_musicbrainz_outage(tmp_path: Path) -> None:
     assert (inbox / "spotdl" / "keep" / "Artist - Song.m4a").exists()
     regen.assert_called_once()
     rescan.assert_called_once()
+
+
+def test_tag_album_ids_love_tagged_bodies_takes_neither_id(caplog) -> None:
+    """2026-10-11 (#278): beets matched Mellon Collie's *Love* (1-9) to *Bodies*' recording, so
+    two of the release's items carry *Bodies*' ISRC.  Disc/track tells the real *Bodies* (2-2)
+    apart; *Love*'s slot holds a file titled *Bodies*, so *Love* gets no ID by number."""
+    love_as_bodies = _lib_item("Bodies (remastered 2012)", isrc="USVI29500016", disc=1, track=9, tracktotal=14)
+    bodies = _lib_item("Bodies (remastered 2012)", isrc="USVI29500016", disc=2, track=2, tracktotal=14)
+    tracks = [["Love - Remastered 2012", "The Smashing Pumpkins", "sid-love", "USVI29500011", 1, 9],
+              ["Bodies - Remastered 2012", "The Smashing Pumpkins", "sid-bodies", "USVI29500016", 2, 2]]
+    with caplog.at_level("INFO", logger="music_scan.scan"):
+        assert _tag([love_as_bodies, bodies], tracks, tracks_count=14) == 1
+    assert bodies.data["spotify_ids"] == "sid-bodies"
+    assert love_as_bodies.data["spotify_ids"] == ""
+    assert "[NUMBER]" in caplog.text
+
+
+def test_tag_album_ids_two_release_items_with_one_isrc_and_no_tiebreak_get_no_id(caplog) -> None:
+    """Spotify numbers the 30th Anniversary edition on one disc (*Bodies* is 1-16), so neither
+    file's slot agrees: which one is *Bodies* takes a listen (#278)."""
+    love_as_bodies = _lib_item("Bodies (remastered 2012)", isrc="USVI29500016", disc=1, track=9)
+    bodies = _lib_item("Bodies (remastered 2012)", isrc="USVI29500016", disc=2, track=2)
+    with caplog.at_level("INFO", logger="music_scan.scan"):
+        assert _tag([love_as_bodies, bodies],
+                    [["Bodies - Remastered 2012", "The Smashing Pumpkins", "sid-bodies", "USVI29500016", 1, 16]]) == 0
+    assert love_as_bodies.data["spotify_ids"] == bodies.data["spotify_ids"] == ""
+    assert "[AMBIG]" in caplog.text
+
+
+def test_tag_album_ids_isrc_prefers_this_release_over_another_albums_copy() -> None:
+    """The other album's copy is kept apart (#278): this release's item takes this album's ID."""
+    other = _lib_item("1979", isrc="USVI29500020", spotify_ids="sid-best-of", added=10.0)
+    mine = _lib_item("1979 (Remastered 2012)", isrc="USVI29500020", track=5)
+    assert _tag([other, mine], [["1979 - Remastered 2012", "The Smashing Pumpkins", "sid-mc", "USVI29500020", 2, 5]],
+                tracks_count=28) == 1
+    assert mine.data["spotify_ids"] == "sid-mc" and other.data["spotify_ids"] == "sid-best-of"
+
