@@ -18,6 +18,7 @@ import re
 from collections import Counter
 from typing import NamedTuple
 
+from music_fetch.usenet import clean_album
 from music_fetch.usenet import words as release_words
 
 _STOP_WORDS = frozenset({"the", "and", "for", "feat", "ft", "vs", "with", "a", "an", "of", "in", "on"})
@@ -178,3 +179,14 @@ def release_match(name: str, artist: str, items):
                 and credit <= set(release_words(f"{item.artist or ''} {item.albumartist or ''}"))):
             return item
     return None
+
+
+def same_base_title(name: str, title: str) -> bool:
+    """True when Spotify's *name* and an item's *title* are one title once
+    edition notes are dropped: any bracketed note and any `` - `` suffix, as
+    :func:`music_fetch.usenet.clean_album` drops them from album names.
+    ``Love - Remastered 2012`` is ``Love (Remastered 2012)``, never ``Bodies
+    (remastered 2012)``.  Only a check on a match some number already made
+    (#278): it never matches two recordings by itself."""
+    base = release_words(clean_album(name))
+    return bool(base) and base == release_words(clean_album(title))

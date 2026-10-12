@@ -14,9 +14,17 @@ store them: no Spotify calls at import.  The pages carry no disc count, so
 fully fetched entry has ``disc_count``.
 
 Release preference, for an item whose ``spotify_ids`` are on several releases:
-``album`` over ``single`` over ``compilation``; then a release a playlist entry
-names today over one known only from an old snapshot; then the earliest
-release; then the album ID, so every run agrees.
+its album record's Spotify album, for an item a Usenet release imported
+(:func:`record_homes`, #278); then ``album`` over ``single`` over
+``compilation``; then a release a playlist entry names today over one known
+only from an old snapshot; then the earliest release; then the album ID, so
+every run agrees.
+
+A Usenet release stays one album (#278): an item on its record's Spotify album
+stays there, whatever else its IDs are on.  It skips the single and twin steps
+below, so its ``[RETAG]`` never changes ``spotify_album_id`` away from the
+record's.  An item canon moved off before this goes back (``[HOME]``).  Loose
+spotdl tracks keep the rules below.
 
 A track whose chosen release is a single moves to a standard album (``album``,
 never ``compilation``) by the same album artist that holds the same recording,
@@ -88,6 +96,7 @@ import logging
 import os
 import time
 import unicodedata
+from bisect import bisect_left, bisect_right
 from collections import Counter
 from collections.abc import Callable, Iterable
 from datetime import datetime, timedelta, timezone
@@ -115,6 +124,8 @@ EP_MIN_TRACKS = 4
 # Bumped when what the cache keeps changes, so older entries are searched again.
 ISRC_CACHE_VERSION = 2
 WAIT = "canon_wait"
+# Seconds between two items of one release's import, at most (#278): a track takes ~10 s to convert.
+IMPORT_GAP = 600
 SPOTIFY_FIELDS = ("album", "albumartist", "year", "month", "day", "track", "tracktotal", "disc", "disctotal")
 # What a release's extra copies from its album (#245): everything Navidrome groups by, not the numbering.
 EXTRA_FIELDS = ("album", "albumartist", "year", "month", "day", "tracktotal", "disctotal",
@@ -212,10 +223,57 @@ def spotdl_songs(spotdl_dir: Path) -> list[dict]:
     return songs
 
 
-def choose(item, placements: dict[str, Placement]) -> Placement | None:
-    """The item's canonical release (see the module docstring), or None."""
+def choose(item, placements: dict[str, Placement], homes: Iterable[str] = ()) -> Placement | None:
+    """The item's canonical release (see the module docstring), or None.
+
+    *homes* are the album records the item belongs to (:func:`record_homes`):
+    a placement on one of them wins over any other preference (#278)."""
     found = [placements[s] for s in item_spotify_ids(item) if s in placements]
-    return min(found, key=Placement.key) if found else None
+    homes = set(homes)
+    home = [p for p in found if p.release.album_id in homes]
+    return min(home or found, key=Placement.key) if found else None
+
+
+def record_homes(items: Iterable, records: dict[str, dict], by_time: bool = False) -> dict[int, frozenset[str]]:
+    """``{item id: album record keys}`` for the usenet *items* a release imported (#278).
+
+    An item belongs to the records that claim it by album name and artist, as
+    ``music-rollback-releases`` attributes it
+    (:func:`music_scan.rollback.failed_release_items`).  With *by_time* (the
+    backfill), an item added while a record's release was importing (that
+    record's own items were added both before and after it) belongs to that
+    record instead (neighbours within :data:`IMPORT_GAP`): canon may already
+    have renamed it to another album, which the name no longer claims (3092,
+    *1979*, moved to a best-of).  Imports run one at a time, so two releases'
+    items don't interleave."""
+    from music_scan.rollback import _claims  # noqa: PLC0415
+
+    usenet = [i for i in items if i.get("via") == "usenet"]
+    claimed = {i.id: frozenset(k for k, r in records.items() if _claims(r, i)) for i in usenet}
+    times: dict[str, list[float]] = {}
+    if by_time:
+        for i in usenet:
+            for k in claimed[i.id]:
+                times.setdefault(k, []).append(i.added or 0)
+        for t in times.values():
+            t.sort()
+    homes: dict[int, frozenset[str]] = {}
+    for i in usenet:
+        t = i.added or 0
+        mine = claimed[i.id]
+        covering = frozenset(k for k, ts in times.items() if _inside(ts, t))
+        if covering or mine:
+            homes[i.id] = covering or mine
+    return homes
+
+
+def _inside(ts: list[float], t: float) -> bool:
+    """True when sorted *ts* hold a time strictly before *t* and one strictly
+    after it, each within :data:`IMPORT_GAP`: *t* is inside one import (the
+    item's own time doesn't count).  The gap keeps a retried album's two
+    releases, days apart, from enclosing another record's import."""
+    before, after = bisect_left(ts, t), bisect_right(ts, t)
+    return before > 0 and after < len(ts) and t - ts[before - 1] <= IMPORT_GAP and ts[after] - t <= IMPORT_GAP
 
 
 def _now() -> datetime:
@@ -486,6 +544,7 @@ class Plan:
     # Spotify album ID → the (albumartist, album) names its items carry today,
     # changed or not, so the report can say how many names become one album.
     names: dict[str, set] = dataclasses.field(default_factory=dict)
+    homed: int = 0  # album-record items moved back onto their record's album from another (#278)
     extras: list = dataclasses.field(default_factory=list)  # Extra: the backfill's release extras (#245)
     supersedes: list = dataclasses.field(default_factory=list)  # supersede.Pair: loose copies replaced (#266)
 
@@ -522,8 +581,11 @@ def plan_changes(
     placements: dict[str, Placement],
     resolver: Resolver | None,
     albums: AlbumsByIsrc | None = None,
+    homes: dict[int, frozenset[str]] | None = None,
 ) -> Plan:
-    """What canonicalising *items* would change.  Leaves the items as they were."""
+    """What canonicalising *items* would change.  Leaves the items as they were.
+
+    *homes* (:func:`record_homes`) keep a release's items on their album record's album (#278)."""
     from beets.library import Item  # noqa: PLC0415
 
     from music_scan.cover import has_art  # noqa: PLC0415
@@ -538,13 +600,19 @@ def plan_changes(
         if not item_spotify_ids(item):
             continue
         plan.with_id += 1
-        p = choose(item, placements)
+        p = choose(item, placements, (homes or {}).get(item.id, ()))
         if p is None:
             plan.noalbum += 1
             logger.debug("  [NOALBUM] %s: no playlist entry describes its Spotify IDs", _path(item))
             continue
+        # On its album record's album: no single or twin step moves it off (#278).
+        home = p.release.album_id in (homes or {}).get(item.id, ())
+        if home and item.get("spotify_album_id") not in (None, "", p.release.album_id):
+            plan.homed += 1
+            logger.info("  [HOME] %s %s: on %s, but a track of its album record's %s (%s); goes back",
+                        item.id, _path(item), item.get("spotify_album_id"), p.release.name, p.release.album_id)
         wait = False
-        if albums is not None and p.release.album_type == "single" and p.isrc:
+        if albums is not None and not home and p.release.album_type == "single" and p.isrc:
             album = albums.album_for(item, p, placements)
             if album is False:
                 wait = True
@@ -553,7 +621,7 @@ def plan_changes(
                              album.release.name, p.isrc)
                 p = album
                 plan.singles += 1
-        group = plan.twins.get(p.release.album_id) if not wait else None
+        group = plan.twins.get(p.release.album_id) if not wait and not home else None
         if group is not None:
             plan.on_twin[p.release.album_id] += 1
             if p.release.album_id == group.representative.album_id:
@@ -687,12 +755,13 @@ def canonicalize(
     apply: bool = True,
     fetch: Callable[[str], bytes] | None = None,
     albums: AlbumsByIsrc | None = None,
+    homes: dict[int, frozenset[str]] | None = None,
 ) -> Plan:
     """Plan, log and (with *apply*) write the canonical tags on *items*."""
     from music_scan import cover  # noqa: PLC0415
 
     fetch = fetch or cover.download
-    plan = plan_changes(items, placements, resolver, albums)
+    plan = plan_changes(items, placements, resolver, albums, homes)
     images: dict[str, bytes | None] = {}
     for change in plan.changes:
         log_change(change, apply)
@@ -708,14 +777,30 @@ def canonicalize(
     return plan
 
 
-def canonicalize_items(items: list, spotdl_dir: Path | None = None, budget: int | None = IMPORT_BUDGET) -> int:
-    """The import hook: canonicalise *items* from the ``.spotdl`` snapshots."""
+def _records() -> dict[str, dict]:
+    """The album records, or none when the state can't be read (canon goes on without homes)."""
+    from music_fetch import albums  # noqa: PLC0415
+
+    try:
+        return albums.State.load(albums.STATE_FILE).albums
+    except (OSError, ValueError) as exc:
+        logger.warning("Could not read the album records (%s); no item kept on its record's album", exc)
+        return {}
+
+
+def canonicalize_items(items: list, spotdl_dir: Path | None = None, budget: int | None = IMPORT_BUDGET,
+                       records: dict[str, dict] | None = None) -> int:
+    """The import hook: canonicalise *items* from the ``.spotdl`` snapshots.
+    A release's items stay on their album record's album (*records*, read from
+    the album state when not given; #278)."""
     from music_fetch import ingest  # noqa: PLC0415
 
     if not items:
         return 0
     placements = placements_from([(spotdl_songs(spotdl_dir or ingest.SPOTDL_DIR), True)])
-    plan = canonicalize(items, placements, Resolver(budget=budget), albums=AlbumsByIsrc(budget=IMPORT_SEARCH_BUDGET))
+    homes = record_homes(items, _records() if records is None else records)
+    plan = canonicalize(items, placements, Resolver(budget=budget), albums=AlbumsByIsrc(budget=IMPORT_SEARCH_BUDGET),
+                        homes=homes)
     if plan.changes:
         logger.info("Canonical albums: retagged %d item(s), moved %d, %d waiting for an ISRC search",
                     len(plan.changes) - plan.waiting, plan.moved, plan.waiting)
@@ -922,6 +1007,8 @@ def report(plan: Plan, resolver: Resolver | None, albums: AlbumsByIsrc | None = 
                     len(changes), len(old), "; ".join(old))
     logger.info("Items: %d scanned, %d with a Spotify ID, %d with no album data (NOALBUM), %d unchanged",
                 plan.scanned, plan.with_id, plan.noalbum, plan.unchanged)
+    logger.info("Album records: %d release item(s) on another album go back to their record's album (HOME)",
+                plan.homed)
     changes = len(plan.changes) - plan.waiting
     logger.info("Changes: %d item(s) (%s); %d file write(s), %d database-only; %d file(s) move, "
                 "%d cover(s) replaced, %d clash(es)",
@@ -971,7 +1058,9 @@ def run(apply: bool = False, refresh: bool = False, mb_budget: int | None = None
     # --apply moves and merges files (#266): no import may run meanwhile.
     with (pipeline_lock() if apply else contextlib.nullcontext()), MusicLibrary(LIBRARY_DB, LIBRARY_DIR) as lib:
         records = State.load(STATE_FILE).albums
-        plan = canonicalize(lib.all_items(), placements, resolver, apply=apply, albums=albums)
+        # Items canon moved off their record's album before #278 go back: by import time too.
+        homes = record_homes(lib.all_items(), records, by_time=True)
+        plan = canonicalize(lib.all_items(), placements, resolver, apply=apply, albums=albums, homes=homes)
         # Before the extras: a superseded loose item frees its disc/track slot (#266).
         plan.supersedes = supersede.backfill(lib, records, apply=apply)
         plan.extras = adopt_extras(lib.all_items(), records, apply=apply)
