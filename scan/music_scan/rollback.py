@@ -1,12 +1,12 @@
-"""Roll back a failed Usenet release's unmatched tracks (#238).
+"""Roll back failed Usenet releases' unmatched tracks (#238): the legacy cleanup.
 
-A release that album mode's ``complete()`` blocklists may already have put
-tracks in the library: beets imports what it can and skips the rest.  Those
-matching a playlist entry stay (the next release only fills the gaps); the
-rest, an expanded edition's 5.1 mixes and outtakes, match nothing and would
-sit in the library forever, never canonicalised or listed.  Rolling back moves
-their files to ``quarantine/replaced/`` (never deleted, #202) and drops their
-rows, like a ``music-audit-dupes`` merge.
+Before #279 a release that album mode's ``complete()`` blocklisted had
+already put tracks in the library: beets imported what it could and skipped
+the rest, and the tracks matching no playlist entry were rolled back to
+``quarantine/replaced/`` (never deleted, #202).  Since #279 the release is the
+album, imported whole, and a copy that isn't kept is retired as a whole
+(:mod:`music_scan.release`).  This module keeps ``music-rollback-releases`` for
+items imported before, and the album-record attribution others reuse.
 
 "Matches an entry" is the #228 resolver's whole-library rung: a Spotify ID or
 ISRC of any entry in any playlist's ``.spotdl``.
@@ -81,15 +81,6 @@ def quarantine(items, replaced_dir: Path = REPLACED) -> list[Path]:
                            item.id, item.get("artist"), item.get("title"), old)
         item.remove(delete=False)
     return moved
-
-
-def rollback_release(lib, playlist: str, since: float, spotdl_dir: Path, replaced_dir: Path = REPLACED) -> int:
-    """Quarantine the usenet items *playlist*'s import added since *since* that
-    match no playlist entry.  Returns the count."""
-    fresh = [i for i in lib.items_by_source(playlist) if i.get("via") == "usenet" and (i.added or 0) >= since]
-    gone = unmatched(fresh, *entry_keys(spotdl_dir))
-    quarantine(gone, replaced_dir)
-    return len(gone)
 
 
 # ---------------------------------------------------------------------------

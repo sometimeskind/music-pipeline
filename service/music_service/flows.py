@@ -398,9 +398,6 @@ def _album_library_hooks(lib):
         source, library = indexes(playlist)
         return scan.missing_tracks(source, tracks, library)
 
-    def fresh_missing(playlist: str, tracks: list[list]) -> list[list]:
-        return scan.missing_tracks(ItemIndex(lib.items_by_source(playlist)), tracks)
-
     def import_inbox() -> None:
         # Waits for a running fetch or scan: beets' SQLite has one writer.
         with concurrency("pipeline", occupy=1):
@@ -412,6 +409,35 @@ def _album_library_hooks(lib):
 
     def add_source(have_source: str, new_source: str, tracks: list[list[str]]) -> None:
         scan.add_source(lib, have_source, new_source, tracks)
+
+    def import_rest(playlist: str, job: str) -> int:
+        # The files the singleton import couldn't match are the album's too (#279).
+        from music_scan import release  # noqa: PLC0415
+
+        with concurrency("pipeline", occupy=1):
+            return release.import_rest(scan.QUARANTINE, scan.INBOX, playlist, job)
+
+    def claim(playlist: str, since: float, key: str, guid: str) -> list[str]:
+        from music_scan import release  # noqa: PLC0415
+
+        with concurrency("pipeline", occupy=1):
+            return [i.title or "" for i in release.claim(lib.all_items(), playlist, since, key, guid)]
+
+    def retire(key: str, record: dict, keep: str | None, drop: str | None) -> int:
+        # Another copy of the album, or this one when it is another album (#279);
+        # the .m3u files listed them, so regenerate.
+        from music_scan import release  # noqa: PLC0415
+
+        with concurrency("pipeline", occupy=1):
+            n = release.retire(lib, key, record, keep, drop)
+            if n:
+                scan.regen_playlists()
+        return n
+
+    def identify(folder) -> dict | None:
+        from music_scan import release  # noqa: PLC0415
+
+        return release.identify(folder)
 
     def tag_ids(playlist: str, tracks: list[list], since: float, tracks_count: int) -> None:
         scan.tag_album_ids(lib, playlist, tracks, since, tracks_count)
@@ -461,45 +487,9 @@ def _album_library_hooks(lib):
         except Exception:
             cover.logger.exception("Album covers: embedding failed; music-embed-covers retries it")
 
-    def rollback(playlist: str, since: float) -> int:
-        # A blocklisted release's tracks on no playlist entry (#238); the
-        # .m3u tails listed them, so regenerate.
-        from music_scan import rollback as rb  # noqa: PLC0415
-
-        try:
-            with concurrency("pipeline", occupy=1):
-                n = rb.rollback_release(lib, playlist, since, ingest.SPOTDL_DIR)
-                if n:
-                    scan.regen_playlists()
-        except Exception:
-            rb.logger.exception("Rollback failed; the release is still blocklisted, music-rollback-releases cleans up")
-            return 0
-        return n
-
-    def adopt_extras(state, completion) -> None:
-        # A successful release's items with no Spotify ID take its album's tags, cover
-        # and folder (#245, #266); the .m3u files list them, so regenerate.
-        from music_scan import canon  # noqa: PLC0415
-        from music_scan.navidrome import trigger_scan  # noqa: PLC0415
-
-        # Not find_by_nzo: that finds grabbed records only, and complete() has moved this one on (#266).
-        found = next(((k, r) for k, r in state.albums.items() if r.get("nzo_id") == completion.nzo_id), None)
-        if found is None:
-            return
-        try:
-            with concurrency("pipeline", occupy=1):
-                extras = canon.extras_after_import(lib, *found)
-                if any(e.dest != e.source for e in extras):
-                    scan.regen_playlists()
-            if any(e.write for e in extras):
-                trigger_scan()
-        except Exception:
-            canon.logger.exception("Release extras failed; music-canon-albums retries them")
-
     def complete(state, completion) -> str | None:
-        status = albums.complete(state, completion, import_inbox, fresh_missing, add_source, tag_ids, rollback)
-        if status in (albums.IMPORTED, albums.FALLBACK):
-            adopt_extras(state, completion)
+        status = albums.complete(state, completion, import_inbox, claim, add_source, tag_ids, retire,
+                                 identify=identify, import_rest=import_rest)
         keys.clear()
         albums_by_id.clear()
         return status

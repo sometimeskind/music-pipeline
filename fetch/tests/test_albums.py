@@ -445,26 +445,43 @@ def grabbed_state(playlists=None) -> State:
     return state
 
 
-def run_complete(state, completion, roots, have_result=True, imported=None, tagged=None, gaps=None, settings=None,
-                 rolled_back=None, read_tags=None):
-    """*gaps* is how many of each playlist's tracks beets left out (default: all
-    of them when *have_result* is False, none otherwise)."""
+def _claim_all(playlist, since, key, guid):
+    return ["One", "Two"]
+
+
+def _no_retire(key, record, keep, drop):
+    return 0
+
+
+def run_complete(state, completion, roots, have_result=True, imported=None, tagged=None, titles=None,
+                 identity=None, retired=None, claimed=None, rest=None):
+    """*titles* are the titles of the release's items beets imported (default:
+    the album's, or none when *have_result* is False); *identity* is the
+    release's MusicBrainz match; *retired* collects ``(keep, drop)`` calls."""
     complete_root, inbox, quarantine = roots
     seen = imported if imported is not None else []
     added = []
     tagged = tagged if tagged is not None else []
+    retired = retired if retired is not None else []
+    claimed = claimed if claimed is not None else []
+    if titles is None:
+        titles = [t[0] for t in albums.album_tracks(next(iter(state.albums.values())))] if have_result else []
 
     def import_inbox():
         seen.extend(p.relative_to(inbox).as_posix() for p in inbox.rglob("*.flac"))
 
+    def claim(playlist, since, key, guid):
+        claimed.append((playlist, key, guid))
+        return titles
+
     status = albums.complete(
-        state, completion, import_inbox,
-        missing=lambda pl, tracks: [] if have_result else tracks[:len(tracks) if gaps is None else gaps],
+        state, completion, import_inbox, claim,
         add_source=lambda have_src, new_src, tracks: added.append((have_src, new_src)),
         tag_ids=lambda pl, tracks, since, count: tagged.append((pl, count)),
-        rollback=lambda pl, since: (rolled_back if rolled_back is not None else []).append(pl) or 0,
+        retire=lambda key, record, keep, drop: retired.append((keep, drop)) or 0,
+        identify=(lambda folder: identity),
+        import_rest=(lambda pl, job: (rest if rest is not None else []).append((pl, job)) or 0),
         complete_root=complete_root, inbox_root=inbox, quarantine_root=quarantine,
-        settings=settings or Settings(mode="on"), read_tags=read_tags or (lambda path: {}),
     )
     return status, seen, added
 
@@ -514,10 +531,11 @@ def test_complete_gives_up_after_max_attempts_and_falls_back_to_spotdl(roots) ->
     status, _, _ = run_complete(state, albums.Completion("nzo1", False, "album/Artist-Album-FLAC"), roots,
                                 have_result=False)
     record = state.albums["a0"]
-    assert status == albums.FALLBACK
-    assert record["fallback_from"] == albums.FAILED
+    assert status == albums.FAILED and record["attempts"] == albums.MAX_ATTEMPTS
+    # The next tick hands it to spotdl whole.
+    albums.fallbacks(state, lambda pl, tracks: tracks)
+    assert record["status"] == albums.FALLBACK and record["fallback_from"] == albums.FAILED
     assert record["fallback_tracks"] == {"later": ["s1", "s2"]}
-    assert record["attempts"] == albums.MAX_ATTEMPTS
 
 
 def test_complete_ignores_jobs_it_did_not_grab(roots) -> None:
@@ -544,8 +562,8 @@ def test_complete_import_crash_keeps_the_release_for_a_retry(roots) -> None:
 
     status = albums.complete(
         state, albums.Completion("nzo1", True, "album/Artist-Album-FLAC"), crash,
-        missing=lambda pl, tracks: [], add_source=lambda *a: None, tag_ids=lambda *a: None,
-        complete_root=complete_root, inbox_root=inbox, quarantine_root=quarantine, settings=Settings(mode="on"),
+        claim=_claim_all, add_source=lambda *a: None, retire=_no_retire, tag_ids=lambda *a: None,
+        complete_root=complete_root, inbox_root=inbox, quarantine_root=quarantine,
     )
     record = state.albums["a0"]
     assert status == albums.GRABBED and record["status"] == albums.GRABBED
@@ -558,9 +576,9 @@ def test_complete_import_crash_keeps_the_release_for_a_retry(roots) -> None:
     since = []
     status = albums.complete(
         state, albums.Completion("nzo1", True, "album/Artist-Album-FLAC"), lambda: None,
-        missing=lambda pl, tracks: [], add_source=lambda *a: None,
+        claim=_claim_all, add_source=lambda *a: None, retire=_no_retire,
         tag_ids=lambda pl, tracks, start, count: since.append(start),
-        complete_root=complete_root, inbox_root=inbox, quarantine_root=quarantine, settings=Settings(mode="on"),
+        complete_root=complete_root, inbox_root=inbox, quarantine_root=quarantine,
     )
     assert status == albums.IMPORTED
     assert since == [first_start] and "import_started" not in record
@@ -609,15 +627,6 @@ def test_complete_tags_ids_for_every_playlist(roots) -> None:
     tagged = []
     run_complete(state, albums.Completion("nzo1", True, "album/Artist-Album-FLAC"), roots, tagged=tagged)
     assert tagged == [("later", 2), ("keep", 2)]
-
-
-def test_complete_tags_ids_even_when_the_album_is_incomplete(roots) -> None:
-    """Tracks that did import keep their IDs; the next release only fills gaps."""
-    tagged = []
-    run_complete(state := grabbed_state(), albums.Completion("nzo1", True, "album/Artist-Album-FLAC"), roots,
-                 have_result=False, tagged=tagged)
-    assert tagged == [("later", 2)]
-    assert state.albums["a0"]["status"] == albums.WANTED
 
 
 def test_complete_failed_download_tags_nothing(roots) -> None:
@@ -787,33 +796,6 @@ def ten_tracks() -> list[list]:
     return [[f"T{i}", "Artist", f"s{i}"] for i in range(10)]
 
 
-def test_partial_threshold() -> None:
-    settings = Settings()
-    assert settings.partial(2, 10) and not settings.partial(3, 10)
-    assert settings.partial(4, 20) and not settings.partial(5, 20)  # 20% beats 2
-    assert not settings.partial(0, 10)                               # complete, not partial
-    assert not settings.partial(2, 2)                                # nothing imported
-    assert Settings(partial_max_missing=0, partial_max_percent=0).partial(1, 10) is False
-
-
-def test_complete_partial_import_is_the_album_and_queues_no_fallback(roots) -> None:
-    """#268: tracklist differences (Destiny vs Destiny - Extended Mix) are not chased."""
-    state = grabbed_state(playlists={"later": ten_tracks(), "keep": ten_tracks()})
-    _, _, quarantine = roots
-    (quarantine / "later" / "Artist-Album-FLAC").mkdir(parents=True)
-    status, _, added = run_complete(state, albums.Completion("nzo1", True, "album/Artist-Album-FLAC"), roots,
-                                    have_result=False, gaps=2)
-    record = state.albums["a0"]
-    assert status == albums.IMPORTED
-    assert not {"fallback_from", "fallback_tracks"} & record.keys()
-    assert albums.fallback_queue(state) == 0
-    assert record["blocklist"] == [] and record.get("attempts", 0) == 0
-    assert "imported_at" in record and record["gaps"] == ["s0", "s1"]
-    assert added == [("later", "keep")]
-    # beets' quarantined tracks of the release stay for review: nothing fetches them now.
-    assert (quarantine / "later" / "Artist-Album-FLAC").exists()
-
-
 def full_tracks() -> list[list]:
     """Ten track entries with ISRC and disc/track, as reduce_to_albums writes them."""
     return [[f"T{i}", "Artist", f"s{i}", f"ISRC{i}", 1, i + 1] for i in range(10)]
@@ -830,135 +812,11 @@ def quarantined(roots, tags: dict[str, dict]):
     return lambda path: tags[path.name]
 
 
-@pytest.mark.parametrize("tags", [
-    {"isrc": "isrc0", "disc": None, "track": 7},  # ISRC decides over the position
-    {"isrc": None, "disc": None, "track": 1},     # disc 1 by default
-], ids=["isrc", "disc-track"])
-def test_complete_partial_import_queues_its_rejected_track_for_spotdl(roots, tags) -> None:
-    """#272: the release has T0 but beets rejected it; it lacks T1."""
-    state = grabbed_state(playlists={"later": full_tracks()})
-    read_tags = quarantined(roots, {"01.flac": tags})
-    status, _, _ = run_complete(state, albums.Completion("nzo1", True, "album/Artist-Album-FLAC"), roots,
-                                have_result=False, gaps=2, read_tags=read_tags)
-    record = state.albums["a0"]
-    assert status == albums.IMPORTED and record["gaps"] == ["s0", "s1"]
-    assert record["rejected_tracks"] == {"later": ["s0"]}
-    assert not {"fallback_from", "fallback_tracks"} & record.keys()
-    assert albums.fallback_queue(state) == 1
-    songs = [{"song_id": f"s{i}"} for i in range(10)]
-    assert albums.fallback_songs(state, "later", songs) == [{"song_id": "s0"}]
-    # The files stay for review.
-    assert (roots[2] / "later" / "Artist-Album-FLAC" / "01.flac").exists()
-
-
-def test_complete_partial_import_queues_nothing_for_a_track_the_release_lacks(roots) -> None:
-    state = grabbed_state(playlists={"later": full_tracks()})
-    # Its only rejected file is a track the library already has (T5).
-    read_tags = quarantined(roots, {"06.flac": {"isrc": None, "disc": 1, "track": 6}})
-    status, _, _ = run_complete(state, albums.Completion("nzo1", True, "album/Artist-Album-FLAC"), roots,
-                                have_result=False, gaps=2, read_tags=read_tags)
-    assert status == albums.IMPORTED
-    assert "rejected_tracks" not in state.albums["a0"] and albums.fallback_queue(state) == 0
-
-
-@pytest.mark.parametrize("tags", [
-    {"title": "T0", "artist": "Artist"},           # title alone (#255)
-    {"title": "T0", "isrc": "OTHER", "track": 1},  # its ISRC says it is another recording
-    {"title": "T0", "disc": 2, "track": 1},        # disc 2's first track
-], ids=["title", "isrc-mismatch", "other-disc"])
-def test_complete_never_ties_a_rejected_file_to_a_gap_by_title(roots, tags) -> None:
-    state = grabbed_state(playlists={"later": full_tracks()})
-    read_tags = quarantined(roots, {"01.flac": tags})
-    status, _, _ = run_complete(state, albums.Completion("nzo1", True, "album/Artist-Album-FLAC"), roots,
-                                have_result=False, gaps=2, read_tags=read_tags)
-    assert status == albums.IMPORTED and "rejected_tracks" not in state.albums["a0"]
-
-
-def test_complete_a_gap_release_queues_its_rejected_track_too(roots) -> None:
-    state = grabbed_state(playlists={"later": full_tracks()})
-    state.albums["a0"]["gaps"] = ["s0", "s1", "s2", "s3", "s4"]
-    read_tags = quarantined(roots, {"03.flac": {"isrc": "ISRC2", "disc": 1, "track": 3}})
-    status, _, _ = run_complete(state, albums.Completion("nzo1", True, "album/Artist-Album-FLAC"), roots,
-                                have_result=False, gaps=5, read_tags=read_tags)
-    assert status == albums.IMPORTED and state.albums["a0"]["rejected_tracks"] == {"later": ["s2"]}
-
-
-def test_complete_blocklisted_release_queues_no_rejected_track(roots) -> None:
-    state = grabbed_state(playlists={"later": full_tracks()})
-    read_tags = quarantined(roots, {"01.flac": {"isrc": "ISRC0"}})
-    status, _, _ = run_complete(state, albums.Completion("nzo1", True, "album/Artist-Album-FLAC"), roots,
-                                have_result=False, gaps=3, read_tags=read_tags)
-    assert status == albums.WANTED and "rejected_tracks" not in state.albums["a0"]
-
-
-def test_fallbacks_fill_an_imported_release_once_its_rejected_tracks_land() -> None:
-    state = fallback_state(albums.IMPORTED, {"later": full_tracks()})
-    state.albums["a0"]["rejected_tracks"] = {"later": ["s0", "s3"]}
-    lacking = {"s0", "s3"}
-    missing = lambda pl, tracks: [t for t in tracks if t[2] in lacking]  # noqa: E731
-    albums.fallbacks(state, missing)
-    assert state.albums["a0"]["rejected_tracks"] == {"later": ["s0", "s3"]}
-
-    lacking = {"s3"}
-    albums.fallbacks(state, missing)
-    assert state.albums["a0"]["rejected_tracks"] == {"later": ["s3"]}
-    assert albums.fallback_queue(state) == 1
-
-    lacking = set()
-    albums.fallbacks(state, missing)
-    record = state.albums["a0"]
-    assert record["status"] == albums.IMPORTED and "filled_at" in record
-    assert "rejected_tracks" not in record and albums.fallback_queue(state) == 0
-    assert not {"fallback_from", "fallback_tracks"} & record.keys()
-
-
 def test_reset_clears_the_rejected_tracks() -> None:
     state = fallback_state(albums.IMPORTED, {"later": full_tracks()})
     state.albums["a0"]["rejected_tracks"] = {"later": ["s0"]}
     assert albums.reset_album(state, "Album") is not None
     assert "rejected_tracks" not in state.albums["a0"]
-
-
-@pytest.mark.parametrize("ext", [".flac", ".m4a"])
-def test_file_tags_reads_isrc_and_disc_track(tmp_path, ext) -> None:
-    """Skips where ffmpeg is missing (the bare CI runner); the dev image has it."""
-    if not shutil.which("ffmpeg"):
-        pytest.skip("ffmpeg not installed")
-    path = tmp_path / f"01{ext}"
-    subprocess.run(["ffmpeg", "-v", "error", "-y", "-f", "lavfi", "-i", "anullsrc=r=44100:cl=mono:d=1",
-                    "-c:a", "flac" if ext == ".flac" else "aac", str(path)], check=True)
-    if ext == ".flac":
-        from mutagen.flac import FLAC
-        audio = FLAC(path)
-        audio.update({"isrc": "GBAYE0601498", "discnumber": "2/2", "tracknumber": "7/12"})
-    else:
-        from mutagen.mp4 import MP4, MP4FreeForm
-        audio = MP4(path)
-        audio["----:com.apple.iTunes:ISRC"] = [MP4FreeForm(b"GBAYE0601498")]
-        audio["disk"], audio["trkn"] = [(2, 2)], [(7, 12)]
-    audio.save()
-    assert albums.file_tags(path) == {"isrc": "GBAYE0601498", "disc": 2, "track": 7}
-    assert albums.file_tags(tmp_path / "missing.flac") == {}
-
-
-def test_number_tags() -> None:
-    assert albums._number("5/12") == 5 and albums._number(3) == 3
-    assert albums._number(None) is None and albums._number("") is None
-
-
-def test_complete_one_over_the_threshold_still_blocklists(roots) -> None:
-    state = grabbed_state(playlists={"later": ten_tracks()})
-    status, _, _ = run_complete(state, albums.Completion("nzo1", True, "album/Artist-Album-FLAC"), roots,
-                                have_result=False, gaps=3)
-    assert status == albums.WANTED
-    assert state.albums["a0"]["blocklist"] == ["r1"]
-
-
-def test_a_failed_download_is_never_partial(roots) -> None:
-    state = grabbed_state(playlists={"later": ten_tracks()})
-    status, _, _ = run_complete(state, albums.Completion("nzo1", False, "album/Artist-Album-FLAC"), roots,
-                                have_result=False, gaps=1)
-    assert status == albums.WANTED
 
 
 def fallback_state(status: str, playlists: dict) -> State:
@@ -1038,157 +896,6 @@ def test_fallbacks_leave_other_statuses_alone() -> None:
         assert state.albums["a0"]["status"] == status
 
 
-@pytest.mark.parametrize("source", [albums.PARTIAL, albums.GAP])
-def test_fallbacks_settle_an_imported_releases_old_fallback(source) -> None:
-    """Migration (#268): keep what spotdl fetched, stop chasing the rest."""
-    state = fallback_state(albums.FALLBACK, {"later": [["One", "Artist", "s1"]]})
-    state.albums["a0"].update(fallback_from=source, fallback_at="2026-10-01T00:00:00+00:00",
-                              fallback_tracks={"later": ["s1"]})
-    albums.fallbacks(state, lambda pl, ts: ts, lambda album_id: pytest.fail("no tracklist read"))
-    record = state.albums["a0"]
-    assert record["status"] == albums.IMPORTED and record["settled_from"] == source
-    assert record["imported_at"] == "2026-10-01T00:00:00+00:00"
-    assert not {"fallback_from", "fallback_at", "fallback_tracks"} & record.keys()
-    assert albums.fallback_songs(state, "later", [{"song_id": "s1"}]) == []
-
-
-def test_fallbacks_leave_a_failed_albums_fallback_queued() -> None:
-    state = fallback_state(albums.FALLBACK, {"later": [["One", "Artist", "s1"]]})
-    state.albums["a0"].update(fallback_from=albums.FAILED, fallback_tracks={"later": ["s1"]})
-    albums.fallbacks(state, lambda pl, ts: ts)
-    assert state.albums["a0"]["status"] == albums.FALLBACK
-
-
-def test_a_fallback_album_is_not_searched_again() -> None:
-    state = fallback_state(albums.FALLBACK, {"later": [["One", "Artist", "s1"]]})
-    state.albums["a0"]["searched_at"] = albums._iso(NOW - timedelta(days=30))
-    prowlarr, sab = fakes()
-    top_up(state, Settings(mode="on"), prowlarr, sab, never_have, albums.TickResult(), now=lambda: NOW)
-    prowlarr.search.assert_not_called()
-
-
-def test_tick_falls_back_only_when_on(tmp_path: Path) -> None:
-    prowlarr, sab = fakes(releases=[])
-    for mode, expected in (("dry-run", albums.MISSING), ("on", albums.FALLBACK)):
-        state = fallback_state(albums.MISSING, {"later": [["One", "Artist", "s1"]]})
-        state.albums["a0"]["searched_at"] = albums._iso(datetime.now(timezone.utc))
-        state.albums["a0"]["query"] = "artist album"
-        state.save(tmp_path / "state.json")
-        tick([], FakeSpotify("s", []), prowlarr, sab, never_have, tmp_path, Settings(mode=mode),
-             tmp_path / "state.json", missing=lambda pl, ts: ts)
-        assert State.load(tmp_path / "state.json").albums["a0"]["status"] == expected
-
-
-def test_push_metrics_reports_the_fallback_queue() -> None:
-    state = fallback_state(albums.FALLBACK, {"later": [["One", "Artist", "s1"]]})
-    state.albums["a0"]["fallback_tracks"] = {"later": ["s1", "s2"], "keep": ["s3"]}
-    with patch.object(albums, "_push") as push:
-        albums.push_metrics(state, True)
-    body = push.call_args[0][0]
-    assert "music_albums_fallback_tracks 3" in body
-    assert 'music_albums{status="fallback"} 1' in body
-    assert 'music_albums{status="filled"} 0' in body
-
-
-def test_fallback_songs_in_playlist_order() -> None:
-    state = fallback_state(albums.FALLBACK, {})
-    state.albums["a0"]["fallback_tracks"] = {"later": ["s3", "s1"], "keep": ["s2"]}
-    state.albums["a1"] = {"status": albums.FILLED, "fallback_tracks": {"later": ["s2"]}}
-    songs = [{"song_id": f"s{i}"} for i in range(1, 4)]
-    assert albums.fallback_songs(state, "later", songs) == [{"song_id": "s1"}, {"song_id": "s3"}]
-    assert albums.fallback_songs(state, "aaaaaaah", songs) == []
-
-
-def test_fallback_songs_come_from_the_album_tracklist_once_read() -> None:
-    state = fallback_state(albums.FALLBACK, {})
-    state.albums["a0"].update(fallback_tracks={"later": ["s1", "s4"]},
-                              album_songs=[album_song(1), album_song(4)])
-    assert albums.fallback_songs(state, "later", [{"song_id": "s9"}]) == [album_song(1), album_song(4)]
-
-
-# ---------------------------------------------------------------------------
-# Rollback and structural gaps (#238)
-# ---------------------------------------------------------------------------
-
-
-def test_complete_rolls_back_a_blocklisted_release(roots) -> None:
-    rolled = []
-    state = grabbed_state(playlists={"later": ten_tracks(), "keep": ten_tracks()})
-    status, _, _ = run_complete(state, albums.Completion("nzo1", True, "album/Artist-Album-FLAC"), roots,
-                                have_result=False, gaps=5, rolled_back=rolled)
-    assert status == albums.WANTED and rolled == ["later"]
-
-
-def test_complete_never_rolls_back_a_success_or_a_partial(roots) -> None:
-    """A successful deluxe grab's bonus tracks stay local-only (operator decision on #238)."""
-    rolled = []
-    run_complete(grabbed_state(playlists={"later": ten_tracks()}), albums.Completion("nzo1", True, "album/Artist-Album-FLAC"),
-                 roots, rolled_back=rolled)
-    complete_root, _, _ = roots
-    (complete_root / "album" / "Artist-Album-FLAC").mkdir(parents=True)
-    run_complete(grabbed_state(playlists={"later": ten_tracks()}), albums.Completion("nzo1", True, "album/Artist-Album-FLAC"),
-                 roots, have_result=False, gaps=2, rolled_back=rolled)
-    assert rolled == []
-
-
-def test_complete_failed_download_rolls_back_nothing(roots) -> None:
-    rolled = []
-    run_complete(grabbed_state(), albums.Completion("nzo1", False, "album/Artist-Album-FLAC"), roots,
-                 have_result=False, rolled_back=rolled)
-    assert rolled == []
-
-
-def test_complete_same_gap_as_the_previous_release_is_the_album(roots) -> None:
-    """CFCF: two releases missing the same 6 of 13; Drake 8, 8, then 5.  The
-    tracklists differ, so the release is the album (#268): no blocklist entry,
-    no rollback and no fallback."""
-    state = grabbed_state(playlists={"later": ten_tracks()})
-    status, _, _ = run_complete(state, albums.Completion("nzo1", True, "album/Artist-Album-FLAC"), roots,
-                                have_result=False, gaps=5)
-    record = state.albums["a0"]
-    assert status == albums.WANTED and record["gaps"] == ["s0", "s1", "s2", "s3", "s4"]
-
-    complete_root, _, _ = roots
-    (complete_root / "album" / "Artist-Album-FLAC").mkdir(parents=True)
-    record.update(status=albums.GRABBED, candidate={"guid": "r2"})
-    rolled = []
-    status, _, _ = run_complete(state, albums.Completion("nzo1", True, "album/Artist-Album-FLAC"), roots,
-                                have_result=False, gaps=5, rolled_back=rolled)
-    assert status == albums.IMPORTED and "imported_at" in record
-    assert record["blocklist"] == ["r1"] and rolled == []
-    assert not {"fallback_from", "fallback_tracks"} & record.keys()
-
-
-def test_complete_a_different_gap_still_retries(roots) -> None:
-    state = grabbed_state(playlists={"later": ten_tracks()})
-    state.albums["a0"]["gaps"] = ["s0", "s1", "s2", "s3"]
-    status, _, _ = run_complete(state, albums.Completion("nzo1", True, "album/Artist-Album-FLAC"), roots,
-                                have_result=False, gaps=5)
-    assert status == albums.WANTED
-
-
-def test_a_failed_download_between_imports_keeps_the_previous_gap(roots) -> None:
-    state = grabbed_state(playlists={"later": ten_tracks()})
-    state.albums["a0"]["gaps"] = ["s0", "s1", "s2", "s3", "s4"]
-    run_complete(state, albums.Completion("nzo1", False, "album/Artist-Album-FLAC"), roots, have_result=False)
-    assert state.albums["a0"]["gaps"] == ["s0", "s1", "s2", "s3", "s4"]
-
-
-def test_complete_tags_the_first_playlist_before_counting_gaps(roots) -> None:
-    """#240: a track only the ID tagging finds must count as imported."""
-    tagged = []
-    state = grabbed_state(playlists={"later": ten_tracks(), "keep": ten_tracks()})
-    status = albums.complete(
-        state, albums.Completion("nzo1", True, "album/Artist-Album-FLAC"), lambda: None,
-        missing=lambda pl, tracks: [] if ("later", 10) in tagged else tracks,
-        add_source=lambda *a: None,
-        tag_ids=lambda pl, tracks, since, count: tagged.append((pl, len(tracks))),
-        complete_root=roots[0], inbox_root=roots[1], quarantine_root=roots[2], settings=Settings(mode="on"),
-    )
-    assert status == albums.IMPORTED
-    assert tagged == [("later", 10), ("keep", 10)]
-
-
 # ---------------------------------------------------------------------------
 # An original edition and its remaster share a release (#243)
 # ---------------------------------------------------------------------------
@@ -1263,8 +970,8 @@ def test_complete_an_import_that_always_crashes_counts_against_the_release(roots
     statuses = [
         albums.complete(
             state, albums.Completion("nzo1", True, "album/Artist-Album-FLAC"), crash,
-            missing=lambda pl, tracks: tracks, add_source=lambda *a: None, tag_ids=lambda *a: None,
-            complete_root=complete_root, inbox_root=inbox, quarantine_root=quarantine, settings=Settings(mode="on"),
+            claim=_claim_all, add_source=lambda *a: None, retire=_no_retire, tag_ids=lambda *a: None,
+            complete_root=complete_root, inbox_root=inbox, quarantine_root=quarantine,
         )
         for _ in range(albums.MAX_IMPORT_ERRORS)
     ]
@@ -1343,8 +1050,8 @@ def test_complete_musicbrainz_outage_retries_without_blame(roots, caplog) -> Non
     with caplog.at_level("INFO", logger="music_fetch.albums"):
         status = albums.complete(
             state, albums.Completion("nzo1", True, "album/Artist-Album-FLAC"), outage,
-            missing=lambda pl, tracks: tracks, add_source=lambda *a: None, tag_ids=lambda *a: None,
-            complete_root=complete_root, inbox_root=inbox, quarantine_root=quarantine, settings=Settings(mode="on"),
+            claim=_claim_all, add_source=lambda *a: None, retire=_no_retire, tag_ids=lambda *a: None,
+            complete_root=complete_root, inbox_root=inbox, quarantine_root=quarantine,
         )
     record = state.albums["a0"]
     assert status == albums.GRABBED and record["status"] == albums.GRABBED
@@ -1365,8 +1072,8 @@ def test_complete_musicbrainz_outage_does_not_spend_the_crash_retries(roots) -> 
     statuses = [
         albums.complete(
             state, albums.Completion("nzo1", True, "album/Artist-Album-FLAC"), outage,
-            missing=lambda pl, tracks: tracks, add_source=lambda *a: None, tag_ids=lambda *a: None,
-            complete_root=complete_root, inbox_root=inbox, quarantine_root=quarantine, settings=Settings(mode="on"),
+            claim=_claim_all, add_source=lambda *a: None, retire=_no_retire, tag_ids=lambda *a: None,
+            complete_root=complete_root, inbox_root=inbox, quarantine_root=quarantine,
         )
         for _ in range(albums.MAX_IMPORT_DEFERRALS)
     ]
@@ -1378,8 +1085,8 @@ def test_complete_musicbrainz_outage_does_not_spend_the_crash_retries(roots) -> 
     # MusicBrainz is back: the import succeeds and the counters go.
     status = albums.complete(
         state, albums.Completion("nzo1", True, "album/Artist-Album-FLAC"), lambda: None,
-        missing=lambda pl, tracks: [], add_source=lambda *a: None, tag_ids=lambda *a: None,
-        complete_root=complete_root, inbox_root=inbox, quarantine_root=quarantine, settings=Settings(mode="on"),
+        claim=_claim_all, add_source=lambda *a: None, retire=_no_retire, tag_ids=lambda *a: None,
+        complete_root=complete_root, inbox_root=inbox, quarantine_root=quarantine,
     )
     assert status == albums.IMPORTED
     assert "import_deferrals" not in record and "import_started" not in record
@@ -1396,10 +1103,164 @@ def test_complete_an_endless_outage_counts_against_the_release(roots) -> None:
 
     status = albums.complete(
         state, albums.Completion("nzo1", True, "album/Artist-Album-FLAC"), outage,
-        missing=lambda pl, tracks: tracks, add_source=lambda *a: None, tag_ids=lambda *a: None,
-        complete_root=complete_root, inbox_root=inbox, quarantine_root=quarantine, settings=Settings(mode="on"),
+        claim=_claim_all, add_source=lambda *a: None, retire=_no_retire, tag_ids=lambda *a: None,
+        complete_root=complete_root, inbox_root=inbox, quarantine_root=quarantine,
     )
     record = state.albums["a0"]
     assert status == albums.WANTED
     assert record["blocklist"] == ["r1"] and record["attempts"] == 1
     assert "import_deferrals" not in record
+
+
+# ---------------------------------------------------------------------------
+# The album is the unit (#279)
+# ---------------------------------------------------------------------------
+
+RTD = ["Intro", "Things Done Changed", "Gimme the Loot", "Machine Gun Funk", "Warning", "Ready to Die",
+       "One More Chance", "#!*@ Me (Interlude)", "The What", "Juicy", "Everyday Struggle", "Me & My Bitch",
+       "Big Poppa", "Respect", "Friend of Mine", "Unbelievable", "Suicidal Thoughts"]
+RTD_REMASTER = [*RTD[:12], "Who Shot Ya?", *RTD[12:], "Just Playing (Dreams)"]
+
+
+def ready_to_die() -> State:
+    """Spotify's 19-track *Ready to Die (The Remaster)*, grabbed as the 1994 CD."""
+    tracks = [[f"{t} - 2005 Remaster", "The Notorious B.I.G.", f"s{n}", None, 1, n]
+              for n, t in enumerate(RTD_REMASTER, 1)]
+    state = grabbed_state(playlists={"keep": tracks})
+    state.albums["a0"].update(name="Ready to Die (The Remaster)", artist="The Notorious B.I.G.", tracks_count=19,
+                              candidate={"guid": "r1", "title": "The_Notorious_BIG-Ready_To_Die-CD-FLAC-1994"})
+    return state
+
+
+def test_ready_to_die_cd_is_the_album_whole(roots, caplog) -> None:
+    """2026-10-11: the 1994 CD had 7 tracks rolled back and the LP grabbed on top.
+    Now it is imported whole, nothing to spotdl, nothing quarantined."""
+    state = ready_to_die()
+    retired, tagged, rest = [], [], []
+    with caplog.at_level("INFO", logger="music_fetch.albums"):
+        status, _, _ = run_complete(state, albums.Completion("nzo1", True, "album/Artist-Album-FLAC"), roots,
+                                    titles=RTD, retired=retired, tagged=tagged, rest=rest,
+                                    identity={"mb_albumid": "cd94", "album": "Ready to Die", "missing": 0,
+                                              "mb": {"mb_albumid": "cd94"}})
+    record = state.albums["a0"]
+    assert status == albums.IMPORTED and record["blocklist"] == [] and not record.get("attempts")
+    assert [(k and k.split("@")[0], d) for k, d in retired] == [("r1", None)]  # every other copy goes
+    assert rest == [("keep", "Artist-Album-FLAC")] and tagged == [("keep", 19)]
+    assert record["release_files"]["mb_albumid"] == "cd94"
+    assert "rejected_tracks" not in record and "fallback_tracks" not in record
+    assert albums.fallback_queue(state) == 0
+    assert "[DONE]" in caplog.text and "2 of Spotify's 19 titles not in this release" in caplog.text
+
+
+def test_another_album_fails_the_title_check(roots, caplog) -> None:
+    state = ready_to_die()
+    retired = []
+    with caplog.at_level("INFO", logger="music_fetch.albums"):
+        status, _, _ = run_complete(state, albums.Completion("nzo1", True, "album/Artist-Album-FLAC"), roots,
+                                    titles=["Hypnotize", "Mo Money Mo Problems", "Juicy"], retired=retired)
+    record = state.albums["a0"]
+    assert status == albums.WANTED and record["blocklist"] == ["r1"] and record["attempts"] == 1
+    assert [(k, d.split("@")[0]) for k, d in retired] == [(None, "r1")]  # the release's own items go
+    assert "[WRONG]" in caplog.text
+
+
+def test_wrong_album_check_skips_short_records() -> None:
+    assert not albums.wrong_album(0, 3)
+    assert albums.wrong_album(1, 4) and not albums.wrong_album(2, 4)
+
+
+def test_an_incomplete_copy_is_kept_and_the_same_edition_grabbed_again(roots, caplog) -> None:
+    state = ready_to_die()
+    retired = []
+    identity = {"mb_albumid": "cd94", "album": "Ready to Die", "missing": 1}
+    with caplog.at_level("INFO", logger="music_fetch.albums"):
+        status, _, _ = run_complete(state, albums.Completion("nzo1", True, "album/Artist-Album-FLAC"), roots,
+                                    titles=RTD[:-1], retired=retired, identity=identity)
+    record = state.albums["a0"]
+    assert status == albums.WANTED and record["blocklist"] == ["r1"] and record["attempts"] == 1
+    best = record["best_copy"]
+    assert (best["guid"], best["title"], best["missing"]) == ("r1", "The_Notorious_BIG-Ready_To_Die-CD-FLAC-1994", 1)
+    assert best["release"].startswith("r1@")
+    assert record["edition"] == []  # the CD names no edition: only another plain copy replaces it
+    assert retired == [(best["release"], None)]  # kept for now; older copies go
+    assert "[INCOMPLETE]" in caplog.text
+
+    # The next copy of that edition is whole: it is the album, the incomplete one goes.
+    record.update(status=albums.GRABBED, nzo_id="nzo2", candidate={"guid": "r2", "title": "BIG-Ready_To_Die-CD-1994"})
+    (roots[0] / "album" / "Two").mkdir(parents=True)
+    (roots[0] / "album" / "Two" / "01.flac").write_bytes(b"x")
+    status, _, _ = run_complete(state, albums.Completion("nzo2", True, "album/Two"), roots, titles=RTD,
+                                retired=retired, identity={"mb_albumid": "cd94", "album": "Ready to Die",
+                                                           "missing": 0})
+    assert status == albums.IMPORTED and retired[-1][0].startswith("r2@")
+    assert "best_copy" not in record and "edition" not in record
+
+
+def test_every_copy_incomplete_keeps_the_most_complete(roots, caplog) -> None:
+    state = ready_to_die()
+    record = state.albums["a0"]
+    record.update(attempts=albums.MAX_ATTEMPTS - 1, blocklist=["r0"],
+                  best_copy={"guid": "r0", "title": "older", "missing": 3})
+    retired = []
+    with caplog.at_level("INFO", logger="music_fetch.albums"):
+        status, _, _ = run_complete(state, albums.Completion("nzo1", True, "album/Artist-Album-FLAC"), roots,
+                                    titles=RTD, retired=retired, identity={"album": "Ready to Die", "missing": 1})
+    assert status == albums.IMPORTED and retired[0][0].startswith("r1@")  # r1 lacks less: r0 goes
+    assert "lacks 1 track(s) of its own release" in caplog.text
+
+    # A worse copy than the one kept: it goes instead.
+    state = ready_to_die()
+    state.albums["a0"]["best_copy"] = {"guid": "r0", "title": "older", "missing": 1}
+    retired = []
+    (roots[0] / "album" / "Artist-Album-FLAC").mkdir(parents=True)
+    (roots[0] / "album" / "Artist-Album-FLAC" / "01.flac").write_bytes(b"x")
+    run_complete(state, albums.Completion("nzo1", True, "album/Artist-Album-FLAC"), roots, titles=RTD,
+                 retired=retired, identity={"album": "Ready to Die", "missing": 2})
+    assert retired == [("r0", None)] and state.albums["a0"]["best_copy"]["guid"] == "r0"
+
+
+def test_an_unmatched_file_in_a_complete_release_is_not_missing(roots) -> None:
+    """A file beets can't match is imported as it is (import_rest) and counts for nothing."""
+    state = ready_to_die()
+    rest = []
+    status, _, _ = run_complete(state, albums.Completion("nzo1", True, "album/Artist-Album-FLAC"), roots,
+                                titles=RTD, rest=rest,
+                                identity={"album": "Ready to Die", "missing": 0, "unmatched": 1})
+    assert status == albums.IMPORTED and rest == [("keep", "Artist-Album-FLAC")]
+
+
+def test_no_more_copies_of_the_edition_keeps_the_incomplete_one() -> None:
+    state = wanted_state()
+    record = state.albums["a0"]
+    record.update(edition=["remaster"], best_copy={"guid": "r0", "title": "Artist-Album-REMASTERED", "missing": 1},
+                  blocklist=["r0"])
+    prowlarr, sab = fakes([release("r2", "Artist-Album-WEB-FLAC-2020")])  # another edition only
+    top_up(state, Settings(mode="on"), prowlarr, sab, lambda key, r: True, albums.TickResult(), now=lambda: NOW)
+    assert record["status"] == albums.IMPORTED and "best_copy" not in record
+    sab.add_url.assert_not_called()
+
+
+def test_a_copy_of_the_same_edition_replaces_the_incomplete_one() -> None:
+    state = wanted_state()
+    record = state.albums["a0"]
+    record.update(edition=["remaster"], best_copy={"guid": "r0", "title": "Artist-Album-REMASTERED", "missing": 1},
+                  blocklist=["r0"])
+    prowlarr, sab = fakes([release("r2", "Artist-Album-WEB-FLAC-2020"),
+                           release("r3", "Artist-Album-REMASTERED-WEB-FLAC-2020")])
+    # The library "has" the album through the kept copy: that doesn't stop the search.
+    top_up(state, Settings(mode="on"), prowlarr, sab, lambda key, r: True, albums.TickResult(), now=lambda: NOW)
+    assert record["status"] == albums.GRABBED and record["candidate"]["guid"] == "r3"
+
+
+def test_reset_reimport_starts_over_from_one_release() -> None:
+    """The operator's reset of an album mixed from several releases (#279)."""
+    state = grabbed_state()
+    record = state.albums["a0"]
+    record.update(status=albums.IMPORTED, attempts=2, blocklist=["r0", "r1"], gaps=["s2"],
+                  rejected_tracks={"later": ["s2"]}, filled_at="2026-10-11T00:00:00+00:00")
+    _, _, after = albums.reset_album(state, "Album", reimport=True)
+    assert after["status"] == albums.WANTED and after["blocklist"] == [] and after["attempts"] == 0
+    assert after["reimport"] is True and "gaps" not in after and "filled_at" not in after
+    prowlarr, sab = fakes()
+    top_up(state, Settings(mode="on"), prowlarr, sab, lambda key, r: True, albums.TickResult(), now=lambda: NOW)
+    assert record["status"] == albums.GRABBED  # grabbed although the library "has" it
