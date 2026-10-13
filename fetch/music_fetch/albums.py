@@ -18,7 +18,9 @@ several releases (#288), as ``music-album-reset --reimport`` does, so the
 top-up grabs them again whole: ``ALBUM_AUTO_REIMPORTS_PER_DAY`` (default 3,
 ``0`` turns it off) in a rolling 24 hours, while the grab budget has room.  An
 album the operator holds (a ``hold <album id>`` line in album-overrides.conf)
-is never reset, and an album is reset automatically only once.
+is never reset, and an album is reset automatically only once.  An album
+imported whole since #279 is never mixed (#295): a loose spotdl copy or a
+local-only extra left on it is not something a reimport would retire.
 
 On album playlists the album is the unit, not its tracks (#279, operator
 2026-10-12).  The release grabbed for an album is imported whole as that

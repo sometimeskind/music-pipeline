@@ -52,8 +52,10 @@ record is that album, imported whole.  This module holds the library side of
   canon moves the release's items onto paths they may hold.
 
 ``music-album-audit-releases`` (:func:`audit_main`) lists the albums still
-mixed from several releases, each with its reset command.  ``--replaced``
-lists one album's files in ``quarantine/replaced/`` (:func:`replaced_copies`)
+mixed from several releases (:func:`mixed_reasons`), each with its reset
+command.  An album imported whole since #279 is never mixed, and neither
+extras nor a loose spotdl copy count (#295): a reimport retires neither.
+``--replaced`` lists one album's files in ``quarantine/replaced/`` (:func:`replaced_copies`)
 and with ``--apply`` deletes those whose recording the library holds
 (``[REPLACED]``, superseded).  A file whose recording no library item holds
 is the only copy (``[ONLYCOPY]``) and stays, unless ``--only-copies`` is given
@@ -204,21 +206,24 @@ def copies(items, key: str, record: dict, keep: str | None, drop: str | None) ->
     """The record's copies :func:`retire` weighs: with *drop*, that release's;
     else every copy but release *keep*'s, legacy items, spotdl top-ups and
     earlier extras included."""
-    from music_scan.identity import split_list  # noqa: PLC0415
     from music_scan.rollback import _claims  # noqa: PLC0415
 
     if drop is not None:
         return [i for i in items if i.get("album_record") == key and i.get("release") == drop]
-    own = set(record.get("playlists") or {})
-
-    def topup(i) -> bool:
-        return (i.get("via") == "spotdl" and i.get("spotify_album_id") == key
-                and set(split_list(i.get("sources"))) <= own)
-
     return [i for i in items if (i.get("album_record") == key and i.get("release") != keep)
             or (not i.get("album_record") and i.get("via") == "usenet" and _claims(record, i)
                 and i.get("spotify_album_id") in (None, "", key))
-            or (not i.get("album_record") and topup(i))]
+            or (not i.get("album_record") and _topup(i, key, record))]
+
+
+def _topup(item, key: str, record: dict) -> bool:
+    """A spotdl copy on the album's Spotify album that no playlist but the
+    record's own lists: spotdl's top-up, which a reimport retires.  A spotdl
+    copy another playlist also lists is a loose copy, left to supersede."""
+    from music_scan.identity import split_list  # noqa: PLC0415
+
+    return (item.get("via") == "spotdl" and item.get("spotify_album_id") == key
+            and set(split_list(item.get("sources"))) <= set(record.get("playlists") or {}))
 
 
 def superseded(items, key: str, keep: str, others: list) -> tuple[list, list]:
@@ -298,13 +303,21 @@ def retire_held(lib) -> int:
 
 def mixed_reasons(key: str, record: dict, items: list) -> list[str]:
     """Why an imported album record's album is not one release: what the
-    track-level rules before #279 did to it.  Empty for one release."""
+    track-level rules before #279 did to it, and a reimport would undo.
+    Empty for one release.
+
+    An album imported whole since #279 (an item of the record's own release
+    on it) is one release: its import retired every copy :func:`copies`
+    takes, so a reimport would only grab the same album again (#295).  Nor
+    do local-only extras count, or a spotdl copy another playlist also lists:
+    :func:`retire` leaves both on purpose."""
     from music_fetch.albums import GAP, IMPORTED, PARTIAL  # noqa: PLC0415
 
     if record.get("status") != IMPORTED and record.get("fallback_from") not in (PARTIAL, GAP):
         return []
-    mine = [i for i in items if i.get("spotify_album_id") == key]
-    if mine and all(i.get("album_record") == key for i in mine):
+    mine = [i for i in items if i.get("spotify_album_id") == key and not i.get(EXTRA)
+            and not (i.get("via") == "spotdl" and not _topup(i, key, record))]
+    if any(i.get("album_record") == key for i in mine):
         return []  # imported whole since #279
     reasons = []
     if record.get("gaps") or record.get("settled_from") or record.get("fallback_from") in (PARTIAL, GAP):

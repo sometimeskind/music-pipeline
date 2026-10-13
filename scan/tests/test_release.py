@@ -375,3 +375,33 @@ def test_retire_held_leaves_extras_the_release_lacks_and_other_records_alone(qua
     assert release.retire_held(FakeLib([bonus, *cd, other, orphan])) == 0
     assert quarantined == []
 
+
+def test_mixed_reasons_a_whole_import_with_a_loose_spotdl_copy_is_not_mixed() -> None:
+    """Zero 7 Simple Things (#295): imported whole since #279 after a reset by
+    hand, plus one spotdl copy another playlist also lists, which retire leaves
+    on purpose.  A reimport would grab the same release again."""
+    record = {"name": "Simple Things", "artist": "Zero 7", "status": "imported", "blocklist": ["r0"],
+              "playlists": {"keep": []}}
+    release_items = [FakeItem(n, via="usenet", spotify_album_id="Z7", album_record="Z7", release="v@1")
+                     for n in range(1, 12)]
+    loose = FakeItem(20, via="spotdl", spotify_album_id="Z7", sources="keep,aaaaaah")
+    extra = FakeItem(21, via="usenet", spotify_album_id="Z7", album_record="Z7", album_extra="1")
+    assert release.mixed_reasons("Z7", record, [*release_items, loose, extra]) == []
+    # Nor any other leftover: the import already retired every copy a reimport would.
+    stray = FakeItem(22, via="usenet", spotify_album_id="Z7", album="Simple Things (Remastered)")
+    assert release.mixed_reasons("Z7", record, [*release_items, loose, stray]) == []
+
+
+def test_mixed_reasons_before_279_ignores_loose_copies_but_not_top_ups() -> None:
+    """A pre-#279 album still counts spotdl's top-ups (a reimport retires them),
+    not a copy another playlist lists, and keeps its history's reasons."""
+    record = {"status": "imported", "playlists": {"keep": []}}
+    legacy = FakeItem(1, via="usenet", spotify_album_id="RTD")
+    loose = FakeItem(2, via="spotdl", spotify_album_id="RTD", sources="keep,aaaaaah")
+    topup = FakeItem(3, via="spotdl", spotify_album_id="RTD", sources="keep")
+    assert release.mixed_reasons("RTD", record, [legacy, loose]) == []
+    assert release.mixed_reasons("RTD", record, [legacy, loose, topup]) == ["1 spotdl track(s) on the album"]
+    assert release.mixed_reasons("RTD", {**record, "gaps": ["s3"], "blocklist": ["r0"]}, [legacy, loose]) == [
+        "imported short of Spotify's tracklist ([PART]/[GAP])",
+        "1 release(s) blocklisted before (their unmatched tracks rolled back)",
+    ]
