@@ -41,7 +41,8 @@ from pathlib import Path
 from typing import NamedTuple
 
 from music_scan.identity import (
-    BY_ID, BY_ISRC, BY_WORDS, ItemIndex, PlaylistTrack, item_isrcs, item_spotify_ids, name_words, spotify_id,
+    BY_ID, BY_ISRC, BY_WORDS, ItemIndex, PlaylistTrack, item_isrcs, item_spotify_ids, name_words, recording_ids,
+    spotify_id,
 )
 
 logger = logging.getLogger(__name__)
@@ -262,6 +263,11 @@ class ReplacedFile(NamedTuple):
     @property
     def words(self) -> frozenset[str]:
         return name_words(f"{self.title} {self.artist}")
+
+    @property
+    def recording_ids(self) -> frozenset[str]:
+        """Its recording's identity keys, for :class:`music_scan.identity.Recordings` (#287)."""
+        return recording_ids(self.spotify_ids, self.isrcs, self.mb_trackid)
 
 
 def _file_tags(path: Path) -> ReplacedFile | None:

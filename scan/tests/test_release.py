@@ -194,3 +194,96 @@ def test_album_query_falls_back_to_the_key_for_twins() -> None:
         "Los Campesinos! — Hold on Now, Youngster..."
     assert release.album_query(records, "tw2", "Braids — Euphoric Recall") == "tw2"
     assert release.album_query(records, "q", "Vince Staples — Summertime '06") == "Vince Staples — Summertime '\\''06"
+
+
+class FakeLib:
+    def __init__(self, items):
+        self.items = items
+
+    def all_items(self):
+        return list(self.items)
+
+
+@pytest.fixture
+def quarantined(monkeypatch):
+    from music_scan import rollback
+
+    gone: list = []
+    monkeypatch.setattr(rollback, "quarantine", lambda items: gone.extend(items) or [])
+    return gone
+
+
+BOYS = {"name": "Boys and Girls in America", "artist": "The Hold Steady", "playlists": {"keep": []}}
+
+
+def _cd(release_id, n, **f):
+    """Track *n* of a release import: ISRC USHS0600n, as MusicBrainz tags it."""
+    return FakeItem(100 + n if release_id == "cd@2" else n, via="usenet", album_record="BOYS", release=release_id,
+                    isrc=f"USHS0600{n:02d}", title=f"Track {n}", **f)
+
+
+def test_retire_keeps_the_recordings_a_smaller_edition_lacks_as_extras(quarantined) -> None:
+    """Boys and Girls in America (#287): a reimport of the 11-track CD over the
+    deluxe retires the 11 tracks the CD holds; the deluxe's bonus tracks and
+    demos, and a spotdl top-up the CD doesn't have, stay on the album."""
+    deluxe = [_cd("deluxe@1", n) for n in range(1, 18)]
+    cd = [_cd("cd@2", n) for n in range(1, 12)]
+    # A legacy copy matched by MusicBrainz recording only, and one with no identity at all.
+    legacy = {"via": "usenet", "album": "Boys and Girls in America", "albumartist": "The Hold Steady"}
+    cd[0]["mb_trackid"] = "rec-1"
+    legacy_held = FakeItem(50, title="Track 1", mb_trackid="rec-1", **legacy)
+    legacy_unknown = FakeItem(51, title="Track 3", **legacy)  # the same title: not the same recording
+    topup = FakeItem(52, via="spotdl", spotify_album_id="BOYS", sources="keep", spotify_ids="SPX",
+                     title="Stevie Nix (Live)")
+    lib = FakeLib([*deluxe, *cd, legacy_held, legacy_unknown, topup])
+    assert release.retire(lib, "BOYS", BOYS, "cd@2", None) == 12
+    assert quarantined == [*deluxe[:11], legacy_held]
+    extras = [*deluxe[11:], legacy_unknown, topup]
+    for item in extras:
+        assert item["album_record"] == "BOYS" and item[release.EXTRA] == "1" and item["canon_wait"] == "1"
+        assert item.stored == 1
+    assert all(not i.get(release.EXTRA) for i in cd)
+    # Canon keeps them on the album, and the album is no longer mixed.
+    for item in [*cd, *extras]:
+        item["spotify_album_id"] = "BOYS"
+    assert release.mixed_reasons("BOYS", {"status": "imported", "blocklist": ["x"]}, [*cd, *extras]) == []
+
+
+def test_retire_takes_every_copy_a_same_edition_reimport_holds(quarantined) -> None:
+    old = [_cd("deluxe@1", n) for n in range(1, 12)]
+    new = [_cd("cd@2", n) for n in range(1, 12)]
+    topup = FakeItem(52, via="spotdl", spotify_album_id="BOYS", sources="keep", isrc="USHS060005")
+    assert release.retire(FakeLib([*old, *new, topup]), "BOYS", BOYS, "cd@2", None) == 12
+    assert quarantined == [*old, topup]
+    assert not any(i.get(release.EXTRA) for i in [*old, *new])
+
+
+def test_retire_extras_go_once_a_later_release_holds_them(quarantined) -> None:
+    extra = _cd("deluxe@1", 12, album_extra="1")
+    again = [_cd("cd@2", n) for n in range(1, 12)] + [FakeItem(200, album_record="BOYS", release="cd@2",
+                                                              isrc="USHS060012")]
+    assert release.retire(FakeLib([extra, *again]), "BOYS", BOYS, "cd@2", None) == 1
+    assert quarantined == [extra]
+
+
+def test_retire_with_drop_takes_the_whole_release(quarantined) -> None:
+    """A rolled-back release (another album) goes whole: its files are the wrong ones."""
+    kept = [_cd("deluxe@1", n) for n in range(1, 3)]
+    wrong = [FakeItem(9, album_record="BOYS", release="wrong@3", isrc="XX0000000001")]
+    assert release.retire(FakeLib([*kept, *wrong]), "BOYS", BOYS, None, "wrong@3") == 1
+    assert quarantined == wrong and not wrong[0].get(release.EXTRA)
+
+
+def test_split_replaced_deletes_only_what_the_library_holds(tmp_path, ffmpeg) -> None:
+    """--replaced (#287): a mix of superseded files and only copies."""
+    from music_scan.identity import Recordings
+
+    by_isrc = _m4a(tmp_path / "1-01 - Stuck Between Stations.m4a", isrc="USHS06000001")
+    by_mbid = _m4a(tmp_path / "2-02 - Chips Ahoy!.m4a", mb_trackid="rec-2")
+    bonus = _m4a(tmp_path / "3-12 - Girls Like Status.m4a", isrc="USHS06000012", mb_trackid="rec-12")
+    bare = _m4a(tmp_path / "4-03 - Hot Soft Light.m4a", title="Hot Soft Light")  # the title alone is no identity
+    library = Recordings([FakeItem(1, isrc="USHS06000001"), FakeItem(2, mb_trackid="rec-2"),
+                          FakeItem(3, title="Hot Soft Light")])
+    held, only = release.split_replaced([by_isrc, by_mbid, bonus, bare, tmp_path / "gone.m4a"], library)
+    assert held == [by_isrc, by_mbid]
+    assert only == [bonus, bare, tmp_path / "gone.m4a"]
