@@ -1055,9 +1055,22 @@ def lost_completions(state: State, sabnzbd, now: datetime | None = None) -> list
 # ---------------------------------------------------------------------------
 
 
+def find_albums(albums: dict[str, dict], query: str) -> list[tuple[str, dict]]:
+    """The records *query* names, from the most exact tier that has any (#289): the record whose key
+    (Spotify album ID) it is; else those whose ``artist — name`` it equals
+    (case-insensitive); else those whose ``artist — name`` contains it.  An
+    exact name wins over the longer names that contain it (an album and its
+    ``(2018 Deluxe Remaster)``)."""
+    if query in albums:
+        return [(query, albums[query])]
+    q = query.lower()
+    named = [(k, r, f"{r.get('artist', '')} — {r.get('name', '')}".lower()) for k, r in albums.items()]
+    return [(k, r) for k, r, n in named if n == q] or [(k, r) for k, r, n in named if q in n]
+
+
 def reset_album(state: State, query: str, reimport: bool = False) -> tuple[str, dict, dict] | None:
-    """Undo the last release attempt of the one album whose ``artist — name``
-    contains *query* (case-insensitive): status ``wanted``, the last candidate
+    """Undo the last release attempt of the one album *query* names
+    (:func:`find_albums`): status ``wanted``, the last candidate
     off the blocklist, one attempt fewer, and its fallback cleared, so the next
     tick searches it again.
 
@@ -1067,8 +1080,7 @@ def reset_album(state: State, query: str, reimport: bool = False) -> tuple[str, 
     already there (an album mixed from several releases, spotdl's top-ups
     aside).  Returns ``(key, before, after)``; None when no album or more than
     one matches (logged)."""
-    q = query.lower()
-    hits = [(k, r) for k, r in state.albums.items() if q in f"{r.get('artist', '')} — {r.get('name', '')}".lower()]
+    hits = find_albums(state.albums, query)
     if len(hits) != 1:
         logger.error("%d album(s) match %r%s", len(hits), query,
                      "".join(f"\n  {k}: {r.get('artist')} — {r.get('name')} ({r.get('status')})" for k, r in hits))
@@ -1105,7 +1117,8 @@ def reset_main() -> None:
 
     parser = argparse.ArgumentParser(prog="music-album-reset",
                                      description="Undo an album's last release attempt (#261); dry run unless --apply")
-    parser.add_argument("query", help="part of 'artist — album' that matches exactly one album")
+    parser.add_argument("query", help="the album's Spotify ID, its 'artist — album', or a part of it that "
+                                      "matches exactly one album")
     parser.add_argument("--reimport", action="store_true",
                         help="start over from one release: clear the blocklist and attempts, grab it although the "
                              "library has its tracks, and retire the copies there on import (#279)")
