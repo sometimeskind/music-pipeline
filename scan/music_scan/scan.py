@@ -425,9 +425,15 @@ def tag_album_ids(lib: MusicLibrary, source: str, tracks: list[list], since: flo
     Title words never give an ID (#279): the IDs are a best effort, and an
     album record's membership never depends on them (``album_record``,
     :mod:`music_scan.release`).  The words rung of #240 is gone.
+    Local-only extras (``album_extra``) are left out (#294): an older copy
+    that already holds a track's ID or ISRC would take the match, and the
+    release would never get the ID that retires the extra
+    (``release.retire_held``).
     Returns the count of items tagged.
     """
-    index = ItemIndex(lib.items_by_source(source))
+    from music_scan.release import EXTRA  # noqa: PLC0415
+
+    index = ItemIndex(i for i in lib.items_by_source(source) if not i.get(EXTRA))
     imported = [i for i in index.items if i.get("via") == "usenet" and (i.added or 0) >= since]
     fresh = [i for i in imported if tracks_count and i.tracktotal == tracks_count]
     count = 0

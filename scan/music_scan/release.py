@@ -41,10 +41,21 @@ record is that album, imported whole.  This module holds the library side of
   the album's tags.  A later import that holds its recording retires it.
   Rolling a release back (*drop*) takes all of its items: they are the wrong
   files, not copies.
+- :func:`retire_held` retires an extra once the record's kept release holds
+  its recording after all (#294), logged ``[RETIRE] … (extra, now held)``.
+  :func:`retire` runs before ``tag_album_ids`` (#283), so a release beets
+  matched to nothing in MusicBrainz (``[NOMB]``) has no ISRC or recording ID
+  yet, holds nothing, and keeps every copy as an extra; ``tag_album_ids`` then
+  gives it Spotify IDs by ISRC or disc/track.  The album completion runs it
+  after ``tag_album_ids`` and before canon, and every scan before its canon,
+  so IDs that arrive later count too.  Either way the extras leave before
+  canon moves the release's items onto paths they may hold.
 
 ``music-album-audit-releases`` (:func:`audit_main`) lists the albums still
-mixed from several releases, each with its reset command.  ``--replaced``
-lists one album's files in ``quarantine/replaced/`` (:func:`replaced_copies`)
+mixed from several releases (:func:`mixed_reasons`), each with its reset
+command.  An album imported whole since #279 is never mixed, and neither
+extras nor a loose spotdl copy count (#295): a reimport retires neither.
+``--replaced`` lists one album's files in ``quarantine/replaced/`` (:func:`replaced_copies`)
 and with ``--apply`` deletes those whose recording the library holds
 (``[REPLACED]``, superseded).  A file whose recording no library item holds
 is the only copy (``[ONLYCOPY]``) and stays, unless ``--only-copies`` is given
@@ -195,21 +206,24 @@ def copies(items, key: str, record: dict, keep: str | None, drop: str | None) ->
     """The record's copies :func:`retire` weighs: with *drop*, that release's;
     else every copy but release *keep*'s, legacy items, spotdl top-ups and
     earlier extras included."""
-    from music_scan.identity import split_list  # noqa: PLC0415
     from music_scan.rollback import _claims  # noqa: PLC0415
 
     if drop is not None:
         return [i for i in items if i.get("album_record") == key and i.get("release") == drop]
-    own = set(record.get("playlists") or {})
-
-    def topup(i) -> bool:
-        return (i.get("via") == "spotdl" and i.get("spotify_album_id") == key
-                and set(split_list(i.get("sources"))) <= own)
-
     return [i for i in items if (i.get("album_record") == key and i.get("release") != keep)
             or (not i.get("album_record") and i.get("via") == "usenet" and _claims(record, i)
                 and i.get("spotify_album_id") in (None, "", key))
-            or (not i.get("album_record") and topup(i))]
+            or (not i.get("album_record") and _topup(i, key, record))]
+
+
+def _topup(item, key: str, record: dict) -> bool:
+    """A spotdl copy on the album's Spotify album that no playlist but the
+    record's own lists: spotdl's top-up, which a reimport retires.  A spotdl
+    copy another playlist also lists is a loose copy, left to supersede."""
+    from music_scan.identity import split_list  # noqa: PLC0415
+
+    return (item.get("via") == "spotdl" and item.get("spotify_album_id") == key
+            and set(split_list(item.get("sources"))) <= set(record.get("playlists") or {}))
 
 
 def superseded(items, key: str, keep: str, others: list) -> tuple[list, list]:
@@ -254,6 +268,34 @@ def retire(lib, key: str, record: dict, keep: str | None, drop: str | None) -> i
     return len(gone)
 
 
+def retire_held(lib) -> int:
+    """Quarantine every local-only extra (``album_extra``) whose recording its
+    album record's kept release now holds (#294): the release's items without
+    ``album_extra``.  :func:`retire` weighs the copies before ``tag_album_ids``
+    gives the release Spotify IDs, so a release beets matched to nothing in
+    MusicBrainz holds no recording yet and keeps every copy as an extra.  The
+    album completion runs this after ``tag_album_ids`` and before canon, and
+    every scan runs it before its canon, so IDs that arrive later count too.
+    Only an extra leaves, and only for a recording another item of its record
+    holds: the library keeps one copy of it.  Returns the count quarantined."""
+    from music_scan.identity import Recordings  # noqa: PLC0415
+    from music_scan.rollback import quarantine  # noqa: PLC0415
+
+    items = list(lib.all_items())
+    kept: dict[str, list] = {}
+    for item in items:
+        if item.get("album_record") and not item.get(EXTRA):
+            kept.setdefault(item.get("album_record"), []).append(item)
+    held = {key: Recordings(release) for key, release in kept.items()}
+    gone = [i for i in items if i.get(EXTRA) and i.get("album_record") in held
+            and held[i.get("album_record")].holds_item(i)]
+    for item in gone:
+        logger.info("  [RETIRE] %s %s — %s [%s] (extra, now held)", item.id, item.get("artist"), item.get("title"),
+                    item.get("album"))
+    quarantine(gone)
+    return len(gone)
+
+
 # ---------------------------------------------------------------------------
 # music-album-audit-releases: albums mixed from several releases before #279
 # ---------------------------------------------------------------------------
@@ -261,13 +303,21 @@ def retire(lib, key: str, record: dict, keep: str | None, drop: str | None) -> i
 
 def mixed_reasons(key: str, record: dict, items: list) -> list[str]:
     """Why an imported album record's album is not one release: what the
-    track-level rules before #279 did to it.  Empty for one release."""
+    track-level rules before #279 did to it, and a reimport would undo.
+    Empty for one release.
+
+    An album imported whole since #279 (an item of the record's own release
+    on it) is one release: its import retired every copy :func:`copies`
+    takes, so a reimport would only grab the same album again (#295).  Nor
+    do local-only extras count, or a spotdl copy another playlist also lists:
+    :func:`retire` leaves both on purpose."""
     from music_fetch.albums import GAP, IMPORTED, PARTIAL  # noqa: PLC0415
 
     if record.get("status") != IMPORTED and record.get("fallback_from") not in (PARTIAL, GAP):
         return []
-    mine = [i for i in items if i.get("spotify_album_id") == key]
-    if mine and all(i.get("album_record") == key for i in mine):
+    mine = [i for i in items if i.get("spotify_album_id") == key and not i.get(EXTRA)
+            and not (i.get("via") == "spotdl" and not _topup(i, key, record))]
+    if any(i.get("album_record") == key for i in mine):
         return []  # imported whole since #279
     reasons = []
     if record.get("gaps") or record.get("settled_from") or record.get("fallback_from") in (PARTIAL, GAP):
