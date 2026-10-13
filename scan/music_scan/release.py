@@ -41,6 +41,15 @@ record is that album, imported whole.  This module holds the library side of
   the album's tags.  A later import that holds its recording retires it.
   Rolling a release back (*drop*) takes all of its items: they are the wrong
   files, not copies.
+- :func:`retire_held` retires an extra once the record's kept release holds
+  its recording after all (#294), logged ``[RETIRE] … (extra, now held)``.
+  :func:`retire` runs before ``tag_album_ids`` (#283), so a release beets
+  matched to nothing in MusicBrainz (``[NOMB]``) has no ISRC or recording ID
+  yet, holds nothing, and keeps every copy as an extra; ``tag_album_ids`` then
+  gives it Spotify IDs by ISRC or disc/track.  The album completion runs it
+  after ``tag_album_ids`` and before canon, and every scan before its canon,
+  so IDs that arrive later count too.  Either way the extras leave before
+  canon moves the release's items onto paths they may hold.
 
 ``music-album-audit-releases`` (:func:`audit_main`) lists the albums still
 mixed from several releases, each with its reset command.  ``--replaced``
@@ -250,6 +259,34 @@ def retire(lib, key: str, record: dict, keep: str | None, drop: str | None) -> i
             item[EXTRA] = "1"
             item[WAIT] = "1"  # the next scan's canon files it under the record's album
             item.store()
+    quarantine(gone)
+    return len(gone)
+
+
+def retire_held(lib) -> int:
+    """Quarantine every local-only extra (``album_extra``) whose recording its
+    album record's kept release now holds (#294): the release's items without
+    ``album_extra``.  :func:`retire` weighs the copies before ``tag_album_ids``
+    gives the release Spotify IDs, so a release beets matched to nothing in
+    MusicBrainz holds no recording yet and keeps every copy as an extra.  The
+    album completion runs this after ``tag_album_ids`` and before canon, and
+    every scan runs it before its canon, so IDs that arrive later count too.
+    Only an extra leaves, and only for a recording another item of its record
+    holds: the library keeps one copy of it.  Returns the count quarantined."""
+    from music_scan.identity import Recordings  # noqa: PLC0415
+    from music_scan.rollback import quarantine  # noqa: PLC0415
+
+    items = list(lib.all_items())
+    kept: dict[str, list] = {}
+    for item in items:
+        if item.get("album_record") and not item.get(EXTRA):
+            kept.setdefault(item.get("album_record"), []).append(item)
+    held = {key: Recordings(release) for key, release in kept.items()}
+    gone = [i for i in items if i.get(EXTRA) and i.get("album_record") in held
+            and held[i.get("album_record")].holds_item(i)]
+    for item in gone:
+        logger.info("  [RETIRE] %s %s — %s [%s] (extra, now held)", item.id, item.get("artist"), item.get("title"),
+                    item.get("album"))
     quarantine(gone)
     return len(gone)
 

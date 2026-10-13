@@ -227,6 +227,24 @@ def canon_task(since: float) -> None:
         logger.exception("Canonical albums failed; the next scan or music-canon-albums retries it")
 
 
+@task(name="retire-held-extras", log_prints=True)
+def retire_held_task() -> None:
+    """Retire the local-only extras whose recording their album's release now
+    holds (#294).  Before canon, so no extra still holds a path canon moves a
+    release item onto (#283); the scan's playlist regeneration follows."""
+    logger = get_run_logger()
+    from music_scan import release  # noqa: PLC0415
+    from music_scan.library import MusicLibrary  # noqa: PLC0415
+    try:
+        with MusicLibrary(scan.LIBRARY_DB) as lib:
+            n = release.retire_held(lib)
+    except Exception:
+        logger.exception("Retiring held extras failed; the next scan retries it")
+        return
+    if n:
+        logger.info("Retired %d extra(s) their album's release now holds → quarantine/replaced/", n)
+
+
 @task(name="purge-replaced", log_prints=True)
 def purge_replaced_task(metrics: ScanMetrics) -> None:
     """Delete superseded files from quarantine/replaced/ after their retention
@@ -314,6 +332,7 @@ def _run_scan_tasks() -> None:
         if outage is None:
             metrics.quarantined_tracks = quarantine_task()
         metrics.tracks_imported = len(imported) + asis_import_task()
+        retire_held_task()
         canon_task(since)
         beet_update_task()
         regen_playlists_task(metrics)
@@ -463,9 +482,23 @@ def _album_library_hooks(lib):
 
     def tag_ids(playlist: str, tracks: list[list], since: float, tracks_count: int) -> None:
         scan.tag_album_ids(lib, playlist, tracks, since, tracks_count)
+        retire_held()
         canon_albums(playlist, since)
         supersede(playlist, since, tracks_count, tracks)
         embed_covers(playlist, since)
+
+    def retire_held() -> None:
+        # After tag_album_ids (#294): the release's new Spotify IDs may show it
+        # holds an extra's recording.  Before canon, so the extra no longer
+        # holds a path canon moves a release item onto (#283).
+        from music_scan import release  # noqa: PLC0415
+
+        try:
+            with concurrency("pipeline", occupy=1):
+                if release.retire_held(lib):
+                    scan.regen_playlists()
+        except Exception:
+            release.logger.exception("Retiring held extras failed; the next scan retries it")
 
     def canon_albums(playlist: str, since: float) -> None:
         # Needs the Spotify IDs tag_album_ids just set (#209); before embed_covers,

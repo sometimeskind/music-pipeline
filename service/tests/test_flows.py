@@ -306,6 +306,7 @@ def test_scan_flow_runs_all_scan_steps_in_order():
         with patch("music_scan.process.run_beet_update") as mock_update, \
              patch("music_scan.navidrome.trigger_scan") as mock_navidrome, \
              patch("music_scan.library.MusicLibrary"), \
+             patch("music_scan.release.retire_held", side_effect=lambda lib: call_order.append("retire-held") or 0), \
              patch("music_scan.canon.after_scan") as mock_canon:
             mock_update.side_effect = lambda: call_order.append("beet-update")
             mock_navidrome.side_effect = lambda: call_order.append("navidrome")
@@ -316,6 +317,7 @@ def test_scan_flow_runs_all_scan_steps_in_order():
         "beet-import",
         "quarantine",
         "asis-import",
+        "retire-held",
         "canon-albums",
         "beet-update",
         "regen-playlists",
@@ -543,7 +545,7 @@ def test_album_completion_wires_the_release_hooks():
 def test_album_completion_supersedes_loose_copies_after_canon():
     """The album copy supersedes loose items after the IDs and canon (#266); the .m3u files follow."""
     import music_fetch.albums as albums
-    from music_scan import canon, supersede
+    from music_scan import canon, release, supersede
     from music_service import flows
 
     events = []
@@ -553,6 +555,7 @@ def test_album_completion_supersedes_loose_copies_after_canon():
         item.get.side_effect = lambda k, d=None, via=via: via if k == "via" else d
     lib.items_by_source.return_value = [fresh, old]
     with patch.object(flows.scan, "tag_album_ids", side_effect=lambda *a: events.append("ids")), \
+         patch.object(release, "retire_held", side_effect=lambda lib: events.append("held") or 1), \
          patch.object(canon, "canonicalize_items", side_effect=lambda items: events.append("canon")), \
          patch.object(supersede, "after_import", side_effect=lambda lib, items, n, tracks: events.append(("sup", items, n)) or 1), \
          patch("music_scan.cover.embed_covers", return_value=0), \
@@ -565,7 +568,8 @@ def test_album_completion_supersedes_loose_copies_after_canon():
                           side_effect=lambda state, c, imp, claim, add, tag, retire, **kw: tag("keep", [], 100.0, 10)):
             hooks[2](albums.State(), albums.Completion(nzo_id="n", ok=True, path="x"))
 
-    assert events == ["ids", "canon", ("sup", [fresh], 10), "m3u", "rescan"]
+    # The extras the new IDs show the release holds go before canon moves files (#294).
+    assert events == ["ids", "held", "m3u", "canon", ("sup", [fresh], 10), "m3u", "rescan"]
 
 
 def test_skip_if_busy_acquires_a_free_limit():

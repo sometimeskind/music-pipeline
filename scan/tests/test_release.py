@@ -314,3 +314,64 @@ def test_retention_days_setting(monkeypatch) -> None:
     assert release.retention_days() == 0
     monkeypatch.setenv("REPLACED_RETENTION_DAYS", "soon")
     assert release.retention_days() == 14
+
+
+class _Track(FakeItem):
+    """A FakeItem with the attributes tag_album_ids reads."""
+
+    def __init__(self, id_, title, track, added=100.0, **fields):
+        super().__init__(id_, added, title=title, **fields)
+        self.title, self.artist, self.albumartist = title, "Bob Dylan", "Bob Dylan"
+        self.disc, self.track, self.tracktotal = 1, track, 10
+
+
+class _SourceLib(FakeLib):
+    def items_by_source(self, source):
+        return [i for i in self.items if source in (i.get("sources") or "").split(",")]
+
+
+BOTT = {"name": "Blood On The Tracks", "artist": "Bob Dylan", "playlists": {"keep": []}}
+BOTT_TITLES = ["Tangled Up in Blue", "Simple Twist of Fate", "You're a Big Girl Now", "Idiot Wind",
+               "You're Gonna Make Me Lonesome When You Go", "Meet Me in the Morning", "Lily, Rosemary and the Jack of Hearts",
+               "If You See Her, Say Hello", "Shelter from the Storm", "Buckets of Rain"]
+
+
+def test_retire_held_retires_the_extras_tag_album_ids_shows_the_release_holds(quarantined) -> None:
+    """Blood On The Tracks (#294): beets matched the release to nothing in
+    MusicBrainz, so at retire it held no recording and every legacy copy became
+    an extra.  Once tag_album_ids gives it Spotify IDs by disc/track, the
+    extras it holds go; the one whose recording it still lacks stays."""
+    from music_scan.scan import tag_album_ids
+
+    legacy = {"via": "usenet", "album": "Blood On The Tracks", "albumartist": "Bob Dylan", "sources": "keep"}
+    held = [_Track(2931, "Tangled Up in Blue", 1, added=10.0, spotify_ids="sp1", isrc="USSM10000001", **legacy),
+            _Track(2934, "Idiot Wind", 4, added=10.0, spotify_ids="sp4", **legacy)]
+    # Same title as the release's track 9, another recording: titles never count.
+    lacking = _Track(2938, "Shelter from the Storm", 9, added=10.0, spotify_ids="sp-live", **legacy)
+    new = [_Track(n, t, n, added=200.0, album_record="BOTT", release="r@200", via="usenet", sources="keep")
+           for n, t in enumerate(BOTT_TITLES, 1)]
+    lib = _SourceLib([*held, lacking, *new])
+
+    assert release.retire(lib, "BOTT", BOTT, "r@200", None) == 0
+    assert all(i.get(release.EXTRA) for i in [*held, lacking])
+    assert release.retire_held(lib) == 0  # nothing to go on yet
+
+    tracks = [[t, "Bob Dylan", f"sp{n}", "USSM10000001" if n == 1 else None, 1, n]
+              for n, t in enumerate(BOTT_TITLES, 1)]
+    assert tag_album_ids(lib, "keep", tracks, 150.0, 10) == 10
+    assert new[0]["spotify_ids"] == "sp1" and new[3]["spotify_ids"] == "sp4"
+    assert release.retire_held(lib) == 2
+    assert quarantined == held
+    assert lacking.get("spotify_ids") == "sp-live" and new[8]["spotify_ids"] == "sp9"
+
+
+def test_retire_held_leaves_extras_the_release_lacks_and_other_records_alone(quarantined) -> None:
+    bonus = _cd("deluxe@1", 12, album_extra="1")
+    cd = [_cd("cd@2", n) for n in range(1, 12)]
+    # Another record's release holds the bonus track's recording: not this album's.
+    other = FakeItem(300, album_record="OTHER", release="x@1", isrc="USHS060012")
+    # An extra of a record whose release is gone (rolled back): nothing holds it.
+    orphan = FakeItem(301, album_record="GONE", album_extra="1", isrc="USHS060012")
+    assert release.retire_held(FakeLib([bonus, *cd, other, orphan])) == 0
+    assert quarantined == []
+

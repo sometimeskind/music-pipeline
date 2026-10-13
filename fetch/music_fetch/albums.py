@@ -957,9 +957,10 @@ def complete(
     releases, legacy items) whose recording it holds to
     ``quarantine/replaced/``; a copy of a recording it lacks stays on the album
     as a local-only extra (#287).  Then *tag_ids* gives
-    the kept copy Spotify track IDs as a best effort and canonicalises the
-    album, onto paths the retired copies no longer hold (#283); album
-    membership never depends on them.
+    the kept copy Spotify track IDs as a best effort, retires the extras
+    whose recording those IDs show the kept copy holds (#294), and
+    canonicalises the album, onto paths the retired copies no longer hold
+    (#283); album membership never depends on the IDs.
 
     An exception from *import_inbox* is not the release's fault (#261): the job
     dir goes back to the completed dir and the record stays ``grabbed``, so the
