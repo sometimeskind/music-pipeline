@@ -405,3 +405,53 @@ def test_mixed_reasons_before_279_ignores_loose_copies_but_not_top_ups() -> None
         "imported short of Spotify's tracklist ([PART]/[GAP])",
         "1 release(s) blocklisted before (their unmatched tracks rolled back)",
     ]
+
+
+ALPHA = {"name": "Alpha", "artist": "Test Artist"}
+ALPHA_PLUS = {"name": "Alpha Plus", "artist": "Test Artist"}
+
+
+def test_group_replaced_by_claiming_record_and_unclaimed(tmp_path, ffmpeg) -> None:
+    """#298: a file under every record that claims it, the rest unclaimed."""
+    alpha = _m4a(tmp_path / "11-01 - One.m4a", album="Alpha", albumartist="Test Artist")
+    both = _m4a(tmp_path / "12-02 - Two.m4a", album="Alpha Plus", albumartist="Test Artist")
+    other = _m4a(tmp_path / "13-01 - Three.m4a", album="Gamma", albumartist="Test Artist")
+    claimed, unclaimed = release.group_replaced({"A": ALPHA, "AP": ALPHA_PLUS},
+                                                [alpha, both, other, tmp_path / "gone.m4a"])
+    assert claimed == {"A": [alpha, both], "AP": [both]}
+    assert unclaimed == [other, tmp_path / "gone.m4a"]
+
+
+def test_list_replaced_counts_what_the_scan_pushes(tmp_path, ffmpeg, caplog) -> None:
+    """#298: every only copy, by album with its --replaced command, then the
+    unclaimed ones with their item ID and tags; the totals are the metric's."""
+    import logging
+
+    from music_scan.identity import Recordings
+
+    _m4a(tmp_path / "21-01 - One.m4a", album="Alpha", albumartist="Test Artist", isrc="XX0000000001")
+    only = _m4a(tmp_path / "22-02 - Two.m4a", album="Alpha", albumartist="Test Artist", isrc="XX0000000002")
+    loser = _m4a(tmp_path / "23-07 - Seven.m4a", album="Gamma", albumartist="Test Artist", title="Seven",
+                 isrc="XX0000000007")
+    bare = _m4a(tmp_path / "loose.m4a")
+    library = Recordings([FakeItem(1, isrc="XX0000000001")])
+    records = {"A": ALPHA, "AP": ALPHA_PLUS}
+    with caplog.at_level(logging.INFO, logger="music_scan.release"):
+        counts = release.list_replaced(records, tmp_path, library)
+    assert counts == {k: n for k, n in release.purge_replaced(tmp_path, library, 0).items() if k != "purged"}
+    assert counts == {"superseded": 1, "only_copy": 3}
+    out = caplog.text
+    assert "[ALBUM] Test Artist — Alpha (A): 1 only copies" in out
+    assert "music-album-audit-releases --replaced 'Test Artist — Alpha'" in out
+    assert f"[ONLYCOPY] {only}\n" in out
+    assert "Alpha Plus" not in out  # claims none of them
+    assert f"[ONLYCOPY] {loser}: item 23; Test Artist — Seven [Gamma]; isrc XX0000000007" in out
+    assert f"[ONLYCOPY] {bare}: no item ID; ? — ? [?]; no identity tags" in out
+    assert "3 only copies in" in out and "1 on 1 album(s), 2 unclaimed; 1 superseded" in out
+
+
+def test_audit_replaced_without_a_query_only_lists(monkeypatch) -> None:
+    monkeypatch.setattr("sys.argv", ["music-album-audit-releases", "--replaced", "--apply", "--only-copies"])
+    with pytest.raises(SystemExit) as exc:
+        release.audit_main()
+    assert exc.value.code == 2
