@@ -973,6 +973,19 @@ def test_reset_album_needs_exactly_one_match() -> None:
     assert albums.reset_album(state, "no such album") is None
 
 
+def test_find_albums_prefers_the_exact_name_and_the_key() -> None:
+    """Los Campesinos!: the album's name starts its deluxe remaster's, so a
+    substring match found both and the album couldn't be reset (#289)."""
+    records = {
+        "std": {"artist": "Los Campesinos!", "name": "Hold on Now, Youngster..."},
+        "dlx": {"artist": "Los Campesinos!", "name": "Hold On Now, Youngster... (2018 Deluxe Remaster)"},
+    }
+    assert [k for k, _ in albums.find_albums(records, "los campesinos! — hold on now, youngster...")] == ["std"]
+    assert [k for k, _ in albums.find_albums(records, "dlx")] == ["dlx"]
+    assert [k for k, _ in albums.find_albums(records, "Youngster")] == ["std", "dlx"]
+    assert [k for k, _ in albums.find_albums(records, "Deluxe")] == ["dlx"]
+
+
 
 def test_complete_an_import_that_always_crashes_counts_against_the_release(roots) -> None:
     """The retry is bounded: the third crash blocklists like a failed import (#261)."""

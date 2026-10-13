@@ -179,3 +179,18 @@ def test_copies_takes_spotdls_top_ups_but_not_a_loose_copy_another_playlist_list
     elsewhere = FakeItem(4, via="spotdl", spotify_album_id="OTHER", sources="keep")
     assert release.copies([topup, unlinked, loose, elsewhere], "RTD", record, "r1@1", None) == [topup, unlinked]
     assert release.copies([topup], "RTD", record, None, "r1@1") == []
+
+
+def test_album_query_falls_back_to_the_key_for_twins() -> None:
+    """The audit prints a reset command that selects one album (#289)."""
+    records = {
+        "std": {"artist": "Los Campesinos!", "name": "Hold on Now, Youngster..."},
+        "dlx": {"artist": "Los Campesinos!", "name": "Hold On Now, Youngster... (2018 Deluxe Remaster)"},
+        "tw1": {"artist": "Braids", "name": "Euphoric Recall"},
+        "tw2": {"artist": "Braids", "name": "Euphoric Recall"},
+        "q": {"artist": "Vince Staples", "name": "Summertime '06"},
+    }
+    assert release.album_query(records, "std", "Los Campesinos! — Hold on Now, Youngster...") == \
+        "Los Campesinos! — Hold on Now, Youngster..."
+    assert release.album_query(records, "tw2", "Braids — Euphoric Recall") == "tw2"
+    assert release.album_query(records, "q", "Vince Staples — Summertime '06") == "Vince Staples — Summertime '\\''06"

@@ -217,6 +217,16 @@ def mixed_reasons(key: str, record: dict, items: list) -> list[str]:
     return reasons
 
 
+def album_query(records: dict[str, dict], key: str, name: str) -> str:
+    """The shell-quoted query that selects record *key*: its ``artist — name``
+    when that names it alone, else its key (twins share a name, #289)."""
+    from music_fetch.albums import find_albums  # noqa: PLC0415
+
+    if [k for k, _ in find_albums(records, name)] == [key]:
+        return name.replace("'", "'\\''")
+    return key
+
+
 class _Tags(dict):
     def get(self, key, default=None):
         return super().get(key, default)
@@ -244,7 +254,7 @@ def replaced_copies(record: dict, replaced_dir: Path) -> list[Path]:
 def audit_main() -> None:
     import argparse  # noqa: PLC0415
 
-    from music_fetch.albums import STATE_FILE, State  # noqa: PLC0415
+    from music_fetch.albums import STATE_FILE, State, find_albums  # noqa: PLC0415
     from music_scan.audit import REPLACED  # noqa: PLC0415
     from music_scan.library import LIBRARY_DB, MusicLibrary  # noqa: PLC0415
 
@@ -252,18 +262,18 @@ def audit_main() -> None:
         prog="music-album-audit-releases",
         description="List imported albums mixed from several releases before #279, each with its reset command; "
                     "with --replaced, list (and with --apply delete) one album's copies in quarantine/replaced/")
-    parser.add_argument("--replaced", metavar="QUERY", help="part of 'artist — album' that matches one album")
+    parser.add_argument("--replaced", metavar="QUERY",
+                        help="the album's Spotify ID, its 'artist — album', or a part of it that matches one album")
     parser.add_argument("--apply", action="store_true", help="with --replaced: delete the listed files")
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO, format="[%(asctime)s] %(message)s", datefmt="%Y-%m-%dT%H:%M:%S%z")
     records = State.load(STATE_FILE).albums
     if args.replaced:
-        q = args.replaced.lower()
-        hits = [r for r in records.values() if q in f"{r.get('artist', '')} — {r.get('name', '')}".lower()]
+        hits = find_albums(records, args.replaced)
         if len(hits) != 1:
             logger.error("%d album(s) match %r", len(hits), args.replaced)
             raise SystemExit(1)
-        files = replaced_copies(hits[0], REPLACED)
+        files = replaced_copies(hits[0][1], REPLACED)
         for f in files:
             logger.info("  [REPLACED] %s", f)
         if not args.apply:
@@ -283,7 +293,7 @@ def audit_main() -> None:
         n += 1
         name = f"{record.get('artist')} — {record.get('name')}"
         logger.info("[MIXED] %s (%s): %s", name, key, "; ".join(reasons))
-        logger.info("    music-album-reset '%s' --reimport", name.replace("'", "'\\''"))
+        logger.info("    music-album-reset '%s' --reimport", album_query(records, key, name))
     logger.info("%d imported album(s) mixed from several releases; reset each with --reimport (dry run, then "
                 "--apply), then clear its old copies with --replaced", n)
 
