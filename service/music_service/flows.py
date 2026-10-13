@@ -227,6 +227,27 @@ def canon_task(since: float) -> None:
         logger.exception("Canonical albums failed; the next scan or music-canon-albums retries it")
 
 
+@task(name="purge-replaced", log_prints=True)
+def purge_replaced_task(metrics: ScanMetrics) -> None:
+    """Delete superseded files from quarantine/replaced/ after their retention
+    (#288); count what is left there by kind.  Runs under the scan's
+    ``pipeline`` lock, so no import or retire moves files meanwhile."""
+    logger = get_run_logger()
+    from music_scan import release  # noqa: PLC0415
+    from music_scan.audit import REPLACED  # noqa: PLC0415
+    from music_scan.identity import Recordings  # noqa: PLC0415
+    from music_scan.library import MusicLibrary  # noqa: PLC0415
+    try:
+        with MusicLibrary(scan.LIBRARY_DB) as lib:
+            library = Recordings(lib.all_items())
+        counts = release.purge_replaced(REPLACED, library, release.retention_days())
+    except Exception:
+        logger.exception("Purging quarantine/replaced/ failed; the next scan retries it")
+        return
+    metrics.replaced_purged = counts.pop("purged")
+    metrics.replaced = counts
+
+
 @task(name="beet-update", log_prints=True)
 def beet_update_task() -> None:
     """Refresh beets library metadata."""
@@ -296,6 +317,7 @@ def _run_scan_tasks() -> None:
         canon_task(since)
         beet_update_task()
         regen_playlists_task(metrics)
+        purge_replaced_task(metrics)
         try:
             navidrome_task()
         except Exception:
@@ -497,6 +519,23 @@ def _album_library_hooks(lib):
     return have, missing, complete
 
 
+def _album_mixed_hook(lib):
+    """``mixed(key, record)`` over one open beets library: why the record's
+    album is mixed from several releases (``release.mixed_reasons``, #288).
+    Reads the library once, when first called."""
+    from music_scan import release  # noqa: PLC0415
+    from music_scan.playlists import by_album_id  # noqa: PLC0415
+
+    on_album: dict[str, list] = {}
+
+    def mixed(key: str, record: dict) -> list[str]:
+        if not on_album:
+            on_album.update(by_album_id(lib.all_items()) or {"": []})
+        return release.mixed_reasons(key, record, on_album.get(key, []))
+
+    return mixed
+
+
 @task(name="album-tick", log_prints=True)
 def album_tick_task(settings) -> None:
     """Refresh album playlists, recover lost import triggers and top the Usenet queue up."""
@@ -523,6 +562,7 @@ def album_tick_task(settings) -> None:
             settings,
             on_completion=complete,
             missing=missing,
+            mixed=_album_mixed_hook(lib),
         )
 
     removed: list = []

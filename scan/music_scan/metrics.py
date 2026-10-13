@@ -44,6 +44,10 @@ class ScanMetrics:
     rejected: dict[str, int] = field(default_factory=lambda: {"duration": 0, "silence": 0})
     # Playlist entries with no library item, per playlist (#228).
     slots_empty: dict[str, int] = field(default_factory=dict)
+    # Files left in quarantine/replaced/ by kind (superseded, only_copy) and
+    # those the purge deleted this scan (#288); empty when the purge didn't run.
+    replaced: dict[str, int] = field(default_factory=dict)
+    replaced_purged: int = 0
 
     def push(self) -> None:
         lines = [
@@ -60,6 +64,10 @@ class ScanMetrics:
         if self.slots_empty:
             lines.append("# TYPE music_playlist_slots_empty gauge")
             lines += [f'music_playlist_slots_empty{{playlist="{p}"}} {n}' for p, n in sorted(self.slots_empty.items())]
+        if self.replaced:
+            lines.append("# TYPE music_scan_replaced_files gauge")
+            lines += [f'music_scan_replaced_files{{kind="{k}"}} {n}' for k, n in sorted(self.replaced.items())]
+            lines.append(_gauge("music_scan_replaced_purged_total", self.replaced_purged))
         if not self.success and self.failure_reason:
             lines.append(
                 _gauge("music_scan_last_failure_reason", 1, {"reason": self.failure_reason})

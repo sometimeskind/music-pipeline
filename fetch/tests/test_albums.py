@@ -1292,3 +1292,113 @@ def test_reset_reimport_starts_over_from_one_release() -> None:
     prowlarr, sab = fakes()
     top_up(state, Settings(mode="on"), prowlarr, sab, lambda key, r: True, albums.TickResult(), now=lambda: NOW)
     assert record["status"] == albums.GRABBED  # grabbed although the library "has" it
+
+
+# ---------------------------------------------------------------------------
+# Automatic reimport of mixed albums (#288)
+# ---------------------------------------------------------------------------
+
+
+def test_hold_lines_are_holds_not_search_overrides(tmp_path: Path) -> None:
+    conf = tmp_path / "album-overrides.conf"
+    conf.write_text("5glyphAlbumId  webdings four tet\nhold 3SpeakingInTongues  # Speaking in Tongues\n"
+                    "hold 4Other  Other album\n", encoding="utf-8")
+    assert albums.load_overrides(conf) == {"5glyphAlbumId": "webdings four tet"}
+    assert albums.load_holds(conf) == {"3SpeakingInTongues", "4Other"}
+    assert albums.load_holds(tmp_path / "absent.conf") == set()
+
+
+def _mixed_state(n: int) -> State:
+    state = State()
+    for i in range(n):
+        state.albums[f"K{i}"] = {"artist": "Artist", "name": f"Album {i}", "status": albums.IMPORTED,
+                                 "blocklist": ["old"], "attempts": 2, "playlists": {"keep": []},
+                                 "candidate": {"guid": "old"}}
+    return state
+
+
+def _all_mixed(key, record):
+    return ["1 spotdl track(s) on the album"] if record.get("status") == albums.IMPORTED else []
+
+
+def test_auto_reimport_resets_a_few_mixed_albums_a_day(caplog) -> None:
+    state = _mixed_state(5)
+    result = albums.TickResult()
+    with caplog.at_level("INFO"):
+        albums.auto_reimport(state, Settings(mode="on"), _all_mixed, set(), result, now=lambda: NOW)
+    assert result.reimported == 3 and state.used("reimport", NOW) == 3
+    assert state.mixed == ["K0", "K1", "K2", "K3", "K4"]
+    for key in ("K0", "K1", "K2"):
+        record = state.albums[key]
+        assert record["status"] == albums.WANTED and record["reimport"] and record["blocklist"] == []
+        assert record["attempts"] == 0 and record["auto_reimported_at"]
+    assert state.albums["K3"]["status"] == albums.IMPORTED
+    assert caplog.text.count("[AUTORESET]") == 3
+    assert "[AUTORESET] Artist — Album 0 (K0): 1 spotdl track(s) on the album; reimporting" in caplog.text
+    # The next day's budget takes the rest; the reset ones aren't mixed while they reimport.
+    later = NOW + timedelta(days=1, minutes=1)
+    albums.auto_reimport(state, Settings(mode="on"), _all_mixed, set(), result, now=lambda: later)
+    assert state.mixed == ["K3", "K4"] and state.albums["K4"]["status"] == albums.WANTED
+
+
+def test_auto_reimport_skips_held_and_already_reimported_albums() -> None:
+    state = _mixed_state(3)
+    state.albums["K1"]["auto_reimported_at"] = "2026-10-01T00:00:00+00:00"  # its reimport left it mixed
+    result = albums.TickResult()
+    albums.auto_reimport(state, Settings(mode="on"), _all_mixed, {"K0"}, result, now=lambda: NOW)
+    assert result.reimported == 1 and state.albums["K2"]["status"] == albums.WANTED
+    assert state.albums["K0"]["status"] == state.albums["K1"]["status"] == albums.IMPORTED
+    assert state.mixed == ["K0", "K1", "K2"]  # counted before the resets
+
+
+def test_auto_reimport_off_or_dry_run_only_counts() -> None:
+    for settings in (Settings(mode="on", auto_reimports_per_day=0), Settings(mode="dry-run")):
+        state = _mixed_state(2)
+        albums.auto_reimport(state, settings, _all_mixed, set(), albums.TickResult(), now=lambda: NOW)
+        assert state.mixed == ["K0", "K1"]
+        assert all(r["status"] == albums.IMPORTED for r in state.albums.values())
+
+
+def test_auto_reimport_stays_within_the_grab_budget() -> None:
+    state = _mixed_state(3)
+    for _ in range(16):
+        state.record("grab", NOW)
+    result = albums.TickResult()
+    albums.auto_reimport(state, Settings(mode="on", grabs_per_day=18), _all_mixed, set(), result, now=lambda: NOW)
+    assert result.reimported == 2  # 16 grabs + 2 resets waiting for theirs fill the 18
+
+
+def test_auto_reimport_env_setting(monkeypatch) -> None:
+    monkeypatch.setenv("ALBUM_AUTO_REIMPORTS_PER_DAY", "0")
+    assert Settings.from_env().auto_reimports_per_day == 0
+    monkeypatch.delenv("ALBUM_AUTO_REIMPORTS_PER_DAY")
+    assert Settings.from_env().auto_reimports_per_day == 3
+
+
+def test_tick_resets_mixed_albums_before_the_top_up_and_pushes_the_counts(tmp_path: Path) -> None:
+    state_file = tmp_path / ".albums.json"
+    _mixed_state(1).save(state_file)
+    prowlarr, sab = fakes([])
+    with patch.object(albums, "_push") as push, patch.object(albums, "refresh_playlists"), \
+            patch.object(albums, "lost_completions", return_value=[]), \
+            patch.object(albums, "top_up") as top:
+        tick([], FakeSpotify("s", []), prowlarr, sab, never_have, tmp_path, Settings(mode="on"),
+             state_file=state_file, mixed=_all_mixed)
+    assert top.call_args.args[0].albums["K0"]["reimport"]
+    body = push.call_args.args[0]
+    assert "music_albums_mixed 1" in body and "music_albums_auto_reimports_24h 1" in body
+    assert State.load(state_file).mixed == ["K0"]
+
+
+def test_tick_grabs_even_when_the_mixed_hook_fails(tmp_path: Path) -> None:
+    prowlarr, sab = fakes([])
+
+    def broken(key, record):
+        raise RuntimeError("library locked")
+
+    state_file = tmp_path / ".albums.json"
+    _mixed_state(1).save(state_file)
+    with patch.object(albums, "refresh_playlists"), patch.object(albums, "top_up") as top:
+        tick([], FakeSpotify("s", []), prowlarr, sab, never_have, tmp_path, Settings(mode="on"),
+             state_file=state_file, mixed=broken)
+    top.assert_called_once()
