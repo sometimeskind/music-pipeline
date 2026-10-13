@@ -584,3 +584,39 @@ def test_skip_if_busy_times_out_on_a_held_limit():
         with pytest.raises(TimeoutError):
             with concurrency("skip-if-busy-held", occupy=1, timeout_seconds=SKIP_IF_BUSY_SECONDS):
                 pass
+
+
+def test_scan_purges_quarantine_replaced_and_pushes_the_counts():
+    """#288: every scan purges quarantine/replaced/ under its pipeline lock."""
+    from music_service.flows import _run_scan_tasks
+    pushed: list = []
+
+    with patch("music_service.flows.ingest") as mock_ingest, \
+         patch("music_service.flows.scan") as mock_scan, \
+         patch("music_service.flows.reconcile") as mock_reconcile, \
+         patch("music_service.flows.concurrency"), \
+         patch("music_scan.process.run_beet_update"), \
+         patch("music_scan.navidrome.trigger_scan"), \
+         patch("music_scan.library.MusicLibrary"), \
+         patch("music_scan.release.purge_replaced",
+               return_value={"superseded": 3, "only_copy": 17, "purged": 5}) as purge, \
+         patch("music_scan.metrics.ScanMetrics.push", autospec=True, side_effect=pushed.append):
+        _scan_mocks(mock_scan, mock_ingest)
+        mock_reconcile.reconcile_all.return_value = 0
+        _run_scan_tasks()
+
+    assert purge.call_args.args[2] == 14
+    (m,) = pushed
+    assert m.replaced == {"superseded": 3, "only_copy": 17} and m.replaced_purged == 5
+
+
+def test_album_mixed_hook_reads_the_library_once():
+    from music_service import flows
+
+    lib = MagicMock()
+    item = {"spotify_album_id": "K", "via": "spotdl"}
+    lib.all_items.return_value = [MagicMock(get=item.get)]
+    mixed = flows._album_mixed_hook(lib)
+    assert mixed("K", {"status": "imported"}) == ["1 spotdl track(s) on the album"]
+    assert mixed("OTHER", {"status": "imported"}) == []
+    lib.all_items.assert_called_once()

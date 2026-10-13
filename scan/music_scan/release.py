@@ -49,16 +49,24 @@ and with ``--apply`` deletes those whose recording the library holds
 (``[REPLACED]``, superseded).  A file whose recording no library item holds
 is the only copy (``[ONLYCOPY]``) and stays, unless ``--only-copies`` is given
 too (#287).
+
+:func:`purge_replaced` deletes, after every scan (#288), the files in
+``quarantine/replaced/`` whose recording the library holds once they have sat
+there ``REPLACED_RETENTION_DAYS`` (default 14; ``0`` turns it off), counted
+from the move (the file's ctime: a rename keeps the mtime).  It never deletes
+an only copy.  The scan pushes what is left there by kind.
 """
 
 from __future__ import annotations
 
 import json
 import logging
+import os
 import shutil
 import subprocess
 import sys
 import tempfile
+import time
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
@@ -321,6 +329,46 @@ def split_replaced(files: list[Path], library) -> tuple[list[Path], list[Path]]:
         rf = _file_tags(f)
         (held if rf is not None and library.holds(rf.recording_ids) else only).append(f)
     return held, only
+
+
+def _moved_at(f: Path) -> float:
+    """When *f* moved to ``quarantine/replaced/``: a rename sets the ctime, never the mtime."""
+    st = f.stat()
+    return max(st.st_ctime, st.st_mtime)
+
+
+def retention_days() -> int:
+    try:
+        return int(os.environ.get("REPLACED_RETENTION_DAYS", "") or 14)
+    except ValueError:
+        logger.error("REPLACED_RETENTION_DAYS must be an integer — using 14")
+        return 14
+
+
+def purge_replaced(replaced_dir: Path, library, days: int, now: float | None = None) -> dict[str, int]:
+    """Delete the files in *replaced_dir* whose recording *library* (a
+    :class:`music_scan.identity.Recordings`) holds and that moved there more
+    than *days* days ago (#288).  An only copy is never deleted.  *days* 0
+    deletes nothing.  Returns the files left by kind (``superseded``,
+    ``only_copy``) and the count ``purged``."""
+    now = time.time() if now is None else now
+    held, only = split_replaced(audio_files(replaced_dir) if replaced_dir.is_dir() else [], library)
+    purged = 0
+    for f in held:
+        try:
+            due = days > 0 and now - _moved_at(f) > days * 86400
+            if due:
+                f.unlink()
+        except OSError as exc:
+            logger.warning("  [PURGE] %s: %s", f, exc)
+            continue
+        if due:
+            purged += 1
+            logger.info("  [PURGE] %s: superseded %d+ days ago, the library holds its recording", f, days)
+    if purged or only:
+        logger.info("quarantine/replaced: deleted %d superseded file(s); %d left, %d only copies kept", purged,
+                    len(held) - purged, len(only))
+    return {"superseded": len(held) - purged, "only_copy": len(only), "purged": purged}
 
 
 def audit_main() -> None:

@@ -133,3 +133,17 @@ def test_scan_metrics_omits_slots_when_regen_did_not_run(monkeypatch: pytest.Mon
     monkeypatch.setattr("music_scan.metrics._push", lambda body, job: pushed.append(body))
     ScanMetrics().push()
     assert "music_playlist_slots_empty" not in pushed[0]
+
+
+def test_scan_metrics_replaced_files_by_kind(monkeypatch: pytest.MonkeyPatch) -> None:
+    """#288: what is left in quarantine/replaced/, by kind, and what the purge deleted."""
+    pushed: list[str] = []
+    monkeypatch.setattr("music_scan.metrics._push", lambda body, job: pushed.append(body))
+    ScanMetrics().push()
+    assert "music_scan_replaced_files" not in pushed[0]
+    ScanMetrics(replaced={"superseded": 4, "only_copy": 17}, replaced_purged=2).push()
+    body = pushed[1]
+    assert body.count("# TYPE music_scan_replaced_files gauge") == 1
+    assert 'music_scan_replaced_files{kind="only_copy"} 17' in body
+    assert 'music_scan_replaced_files{kind="superseded"} 4' in body
+    assert "music_scan_replaced_purged_total 2" in body

@@ -287,3 +287,30 @@ def test_split_replaced_deletes_only_what_the_library_holds(tmp_path, ffmpeg) ->
     held, only = release.split_replaced([by_isrc, by_mbid, bonus, bare, tmp_path / "gone.m4a"], library)
     assert held == [by_isrc, by_mbid]
     assert only == [bonus, bare, tmp_path / "gone.m4a"]
+
+
+def test_purge_replaced_deletes_superseded_files_after_the_retention_only(tmp_path, ffmpeg) -> None:
+    """#288: a superseded file goes once it has sat 14 days in quarantine/replaced/; an only copy never."""
+    import time
+
+    from music_scan.identity import Recordings
+
+    superseded = _m4a(tmp_path / "1-01 - Stuck Between Stations.m4a", isrc="USHS06000001")
+    only = _m4a(tmp_path / "3-12 - Girls Like Status.m4a", isrc="USHS06000012")
+    library = Recordings([FakeItem(1, isrc="USHS06000001")])
+    assert release.purge_replaced(tmp_path, library, 14) == {"superseded": 1, "only_copy": 1, "purged": 0}
+    assert superseded.exists()
+    assert release.purge_replaced(tmp_path, library, 0, now=time.time() + 30 * 86400)["purged"] == 0
+    later = time.time() + 15 * 86400
+    assert release.purge_replaced(tmp_path, library, 14, now=later) == {"superseded": 0, "only_copy": 1, "purged": 1}
+    assert not superseded.exists() and only.exists()
+    assert release.purge_replaced(tmp_path / "absent", library, 14) == {"superseded": 0, "only_copy": 0,
+                                                                         "purged": 0}
+
+
+def test_retention_days_setting(monkeypatch) -> None:
+    assert release.retention_days() == 14
+    monkeypatch.setenv("REPLACED_RETENTION_DAYS", "0")
+    assert release.retention_days() == 0
+    monkeypatch.setenv("REPLACED_RETENTION_DAYS", "soon")
+    assert release.retention_days() == 14

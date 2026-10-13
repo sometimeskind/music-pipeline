@@ -13,6 +13,13 @@ A playlist flagged ``album`` in playlists.conf is never synced by spotdl.  Inste
    ``fallback`` tracks the nightly sync downloads into the playlist's inbox.
    Once the library holds them all the album is ``filled``.
 
+Before the top-up, :func:`auto_reimport` resets a few albums mixed from
+several releases (#288), as ``music-album-reset --reimport`` does, so the
+top-up grabs them again whole: ``ALBUM_AUTO_REIMPORTS_PER_DAY`` (default 3,
+``0`` turns it off) in a rolling 24 hours, while the grab budget has room.  An
+album the operator holds (a ``hold <album id>`` line in album-overrides.conf)
+is never reset, and an album is reset automatically only once.
+
 On album playlists the album is the unit, not its tracks (#279, operator
 2026-10-12).  The release grabbed for an album is imported whole as that
 album, whatever its tracklist: an edition other than Spotify's, a missing or
@@ -119,6 +126,8 @@ class Settings:
     # so dry-run only samples: a few per tick, dry_run_limit in total.
     dry_run_per_tick: int = 3
     dry_run_limit: int = 25
+    # Mixed albums reset for a reimport per rolling 24h (#288); 0 turns it off.
+    auto_reimports_per_day: int = 3
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -132,6 +141,7 @@ class Settings:
             grabs_per_day=_env_int("ALBUM_GRABS_PER_DAY", 18),
             hits_per_day=_env_int("ALBUM_HITS_PER_DAY", 90),
             dry_run_limit=_env_int("ALBUM_DRY_RUN_LIMIT", 25),
+            auto_reimports_per_day=_env_int("ALBUM_AUTO_REIMPORTS_PER_DAY", 3),
         )
 
 
@@ -196,21 +206,33 @@ def album_tracks(record: dict) -> list[list]:
     return tracks
 
 
+# An album-overrides.conf line ``hold <album id>`` holds an album (#288).
+HOLD = "hold"
+
+
+def _override_lines(path: Path | None) -> list[list[str]]:
+    path = path or OVERRIDES_FILE
+    if not path.is_file():
+        return []
+    return [parts for raw in path.read_text(encoding="utf-8").splitlines()
+            if (parts := raw.split("#")[0].split(maxsplit=1))]
+
+
 def load_overrides(path: Path | None = None) -> dict[str, str]:
     """Search text by Spotify album ID, for names no normalisation can reach.
 
     Format: one ``<album id>  <search words…>`` per line; ``#`` comments and
-    blank lines are ignored.  A missing file means no overrides.
+    blank lines are ignored.  A missing file means no overrides.  ``hold``
+    lines are :func:`load_holds`'.
     """
-    path = path or OVERRIDES_FILE
-    if not path.exists():
-        return {}
-    overrides: dict[str, str] = {}
-    for raw in path.read_text(encoding="utf-8").splitlines():
-        parts = raw.split("#")[0].split(maxsplit=1)
-        if len(parts) == 2 and normalise(parts[1]):
-            overrides[parts[0]] = normalise(parts[1])
-    return overrides
+    return {parts[0]: normalise(parts[1]) for parts in _override_lines(path)
+            if len(parts) == 2 and parts[0] != HOLD and normalise(parts[1])}
+
+
+def load_holds(path: Path | None = None) -> set[str]:
+    """The album IDs the operator holds (#288): ``hold <album id>`` lines in
+    album-overrides.conf.  A held album is never reset automatically."""
+    return {parts[1].split()[0] for parts in _override_lines(path) if len(parts) == 2 and parts[0] == HOLD}
 
 
 @dataclasses.dataclass
@@ -259,8 +281,11 @@ def _iso(t: datetime) -> str:
 class State:
     playlists: dict[str, dict] = dataclasses.field(default_factory=dict)
     albums: dict[str, dict] = dataclasses.field(default_factory=dict)
-    # [{"t": iso, "kind": "hit" | "grab"}], pruned to the last WINDOW.
+    # [{"t": iso, "kind": "hit" | "grab" | "reimport"}], pruned to the last WINDOW.
+    # "reimport" counts automatic reimports (#288), not indexer use.
     indexer: list[dict] = dataclasses.field(default_factory=list)
+    # Keys of the imported albums mixed from several releases at the last tick (#288).
+    mixed: list[str] = dataclasses.field(default_factory=list)
 
     @classmethod
     def load(cls, path: Path = STATE_FILE) -> "State":
@@ -271,6 +296,7 @@ class State:
             playlists=data.get("playlists", {}),
             albums=data.get("albums", {}),
             indexer=data.get("indexer", []),
+            mixed=data.get("mixed", []),
         )
 
     def save(self, path: Path = STATE_FILE) -> None:
@@ -304,6 +330,9 @@ class SpotifySource(Protocol):
 
 # have(key, record): the library holds the album whole (#268), so it needs no download.
 Have = Callable[[str, dict], bool]
+# mixed(key, record): why the record's album is mixed from several releases
+# (music_scan.release.mixed_reasons), empty when it is one release (#288).
+Mixed = Callable[[str, dict], list[str]]
 
 
 @dataclasses.dataclass
@@ -311,6 +340,7 @@ class TickResult:
     refreshed: list[str] = dataclasses.field(default_factory=list)
     searched: int = 0
     grabbed: int = 0
+    reimported: int = 0
     # Per playlist, the former songs of the albums that left it (#268).
     removed_songs: dict[str, list[dict]] = dataclasses.field(default_factory=dict)
 
@@ -558,6 +588,58 @@ def top_up(
 
 
 # ---------------------------------------------------------------------------
+# Automatic reimport of albums mixed from several releases (#288)
+# ---------------------------------------------------------------------------
+
+
+def auto_reimport(
+    state: State,
+    settings: Settings,
+    mixed: Mixed,
+    holds: set[str],
+    result: TickResult,
+    now: Callable[[], datetime] = _now,
+) -> None:
+    """Record the imported albums *mixed* names in ``state.mixed``, and reset
+    a few for a reimport, as ``music-album-reset --reimport`` does
+    (:func:`reset_record`): the top-up then grabs each again and the import
+    retires the copies the new release holds (#287).
+
+    Only in ``on``, at most ``auto_reimports_per_day`` in a rolling 24 hours,
+    and only while the grab budget has room for the resets not yet grabbed.
+    An album in *holds* is never reset, nor one reset automatically before
+    (``auto_reimported_at``): if its reimport left it mixed, the operator
+    decides (``music-album-audit-releases`` lists it).  One ``[AUTORESET]``
+    line per reset."""
+    state.mixed = []
+    reasons: dict[str, list[str]] = {}
+    for key, record in state.albums.items():
+        if why := mixed(key, record):
+            state.mixed.append(key)
+            reasons[key] = why
+    if settings.mode != "on" or settings.auto_reimports_per_day <= 0:
+        return
+    for key in state.mixed:
+        record = state.albums[key]
+        if key in holds or record.get("auto_reimported_at"):
+            continue
+        if state.used("reimport", now()) >= settings.auto_reimports_per_day:
+            logger.info("Automatic reimports spent (%d/24h, ALBUM_AUTO_REIMPORTS_PER_DAY)",
+                        settings.auto_reimports_per_day)
+            return
+        waiting = sum(1 for r in state.albums.values() if r.get("reimport") and r.get("status") == WANTED)
+        if state.used("grab", now()) + waiting >= settings.grabs_per_day:
+            logger.info("Grab budget has no room for another reimport (%d/24h)", settings.grabs_per_day)
+            return
+        reset_record(record, reimport=True)
+        record["auto_reimported_at"] = _iso(now())
+        state.record("reimport", now())
+        result.reimported += 1
+        logger.info("[AUTORESET] %s — %s (%s): %s; reimporting", record.get("artist"), record.get("name"), key,
+                    "; ".join(reasons[key]))
+
+
+# ---------------------------------------------------------------------------
 # Fallback: what Usenet can't supply goes to spotdl (#205)
 # ---------------------------------------------------------------------------
 
@@ -693,6 +775,8 @@ def push_metrics(state: State, success: bool) -> None:
         "# TYPE music_albums_indexer_used_24h gauge",
         f'music_albums_indexer_used_24h{{kind="hit"}} {state.used("hit", now)}',
         f'music_albums_indexer_used_24h{{kind="grab"}} {state.used("grab", now)}',
+        _gauge("music_albums_mixed", len(state.mixed)),
+        _gauge("music_albums_auto_reimports_24h", state.used("reimport", now)),
         _gauge("music_albums_last_tick_success", int(success)),
         _gauge("music_albums_last_tick_timestamp_seconds", int(now.timestamp())),
     ]
@@ -711,10 +795,12 @@ def tick(
     on_completion: Callable[[State, "Completion"], object] | None = None,
     overrides_file: Path | None = None,
     missing: Missing | None = None,
+    mixed: Mixed | None = None,
 ) -> TickResult:
     """One album-mode pass: refresh changed playlists, recover lost import
-    triggers (*on_completion*, ``on`` only), top the queue up, then hand what
-    Usenet can't supply to spotdl (*missing*, ``on`` only)."""
+    triggers (*on_completion*, ``on`` only), reset a few mixed albums for a
+    reimport (*mixed*, :func:`auto_reimport`), top the queue up, then hand
+    what Usenet can't supply to spotdl (*missing*, ``on`` only)."""
     settings = settings or Settings.from_env()
     result = TickResult()
     if settings.mode == "off":
@@ -728,6 +814,12 @@ def tick(
             for completion in lost_completions(state, sabnzbd):
                 logger.info("Recovering lost import trigger for %s", completion.nzo_id)
                 on_completion(state, completion)
+        if mixed is not None:
+            try:
+                auto_reimport(state, settings, mixed, load_holds(overrides_file), result)
+            except Exception:
+                # The library's side failed: grabbing what is wanted needn't wait for it.
+                logger.exception("Automatic reimports failed; the next tick tries again")
         top_up(state, settings, prowlarr, sabnzbd, have, result, overrides=load_overrides(overrides_file))
         if settings.mode == "on" and missing is not None:
             fallbacks(state, missing, spotify.album_songs)
@@ -737,8 +829,9 @@ def tick(
         push_metrics(state, success)
     counts = status_counts(state)
     logger.info(
-        "Album tick (%s) in %.0fs: %d searched, %d grabbed; albums %s; indexer 24h: %d hit(s), %d grab(s)",
-        settings.mode, time.monotonic() - start, result.searched, result.grabbed,
+        "Album tick (%s) in %.0fs: %d searched, %d grabbed, %d reset for a reimport; albums %s; "
+        "indexer 24h: %d hit(s), %d grab(s)",
+        settings.mode, time.monotonic() - start, result.searched, result.grabbed, result.reimported,
         ", ".join(f"{k}={v}" for k, v in sorted(counts.items())) or "none",
         state.used("hit", _now()), state.used("grab", _now()),
     )
@@ -1090,6 +1183,13 @@ def reset_album(state: State, query: str, reimport: bool = False) -> tuple[str, 
         return None
     key, record = hits[0]
     before = json.loads(json.dumps(record))
+    reset_record(record, reimport)
+    return key, before, record
+
+
+def reset_record(record: dict, reimport: bool = False) -> None:
+    """:func:`reset_album` on one *record*: also the album tick's automatic
+    reimport of a mixed album (:func:`auto_reimport`, #288)."""
     guid = (record.get("candidate") or {}).get("guid")
     if guid in record.get("blocklist", []):
         record["blocklist"].remove(guid)
@@ -1102,7 +1202,6 @@ def reset_album(state: State, query: str, reimport: bool = False) -> tuple[str, 
         record.update(blocklist=[], attempts=0, reimport=True)
         for field in ("gaps", "settled_from", "filled_at", "release_files"):
             record.pop(field, None)
-    return key, before, record
 
 
 def _state_lock(apply: bool):
