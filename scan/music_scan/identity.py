@@ -10,6 +10,10 @@ Identity ladder, first hit wins: Spotify track ID, ISRC, MusicBrainz recording
 ID, then title+artist words as a last resort that callers log.  The words rung
 only reaches items with no Spotify ID (#257): an item that has one is that
 track, so a same-title entry with another ID is another recording.
+
+Whether the library holds a recording (:class:`Recordings`, #287) takes the
+ID rungs only: a copy leaves the library, or is deleted from
+``quarantine/replaced/``, only when one of them agrees.
 """
 
 from __future__ import annotations
@@ -190,3 +194,40 @@ def same_base_title(name: str, title: str) -> bool:
     (#278): it never matches two recordings by itself."""
     base = release_words(clean_album(name))
     return bool(base) and base == release_words(clean_album(title))
+
+
+def recording_ids(spotify_ids=(), isrcs=(), mb_trackid: str | None = None) -> frozenset[str]:
+    """The identity keys of one recording (#287): ``spotify:<track ID>``,
+    ``isrc:<code>`` and ``mb:<MusicBrainz recording ID>``.  Two recordings are
+    one track only when a key agrees; titles never count (homelab#1889)."""
+    keys = {f"spotify:{s.strip()}" for s in spotify_ids if s and s.strip()}
+    keys |= {f"isrc:{c.strip().upper()}" for c in isrcs if c and c.strip()}
+    if mb_trackid and mb_trackid.strip():
+        keys.add(f"mb:{mb_trackid.strip().lower()}")
+    return frozenset(keys)
+
+
+def item_recording_ids(item) -> frozenset[str]:
+    """:func:`recording_ids` of a beets item."""
+    return recording_ids(item_spotify_ids(item), item_isrcs(item), item.get("mb_trackid"))
+
+
+class Recordings:
+    """The recordings some items hold, by :func:`recording_ids` (#287).
+
+    The one place that says whether "the library holds this recording": a
+    copy leaves the library (:func:`music_scan.release.retire`) or is deleted
+    from ``quarantine/replaced/`` (``music-album-audit-releases --replaced``,
+    the automatic purge) only when it does."""
+
+    def __init__(self, items=()) -> None:
+        self.ids: set[str] = set()
+        for item in items:
+            self.ids |= item_recording_ids(item)
+
+    def holds(self, ids: frozenset[str]) -> bool:
+        """True when a key of *ids* (one recording's :func:`recording_ids`) is held."""
+        return not self.ids.isdisjoint(ids)
+
+    def holds_item(self, item) -> bool:
+        return self.holds(item_recording_ids(item))

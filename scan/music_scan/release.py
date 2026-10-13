@@ -21,12 +21,34 @@ record is that album, imported whole.  This module holds the library side of
   Canon, playlists and :func:`retire` read the album from them, never from
   track IDs.
 - :func:`retire` sends a record's other copies to ``quarantine/replaced/``
-  (never deleted, #202): items of an earlier or worse release, the record's
-  legacy items from before #279 (claimed by album name and artist, as
+  (never deleted, #202) when the kept release holds the same recording
+  (#287).  The other copies are items of an earlier or worse release, the
+  record's legacy items from before #279 (claimed by album name and artist, as
   ``music-rollback-releases`` attributes them, and on no other Spotify album),
   and spotdl's top-ups of the album (on its Spotify album and on no playlist
-  but the record's own): the album stays one source.  A spotdl copy another
-  playlist also lists is a loose copy, left to supersede.
+  but the record's own).  A spotdl copy another playlist also lists is a loose
+  copy, left to supersede.
+
+  One recording is one track only when a Spotify track ID, an ISRC or a
+  MusicBrainz recording ID agrees, never by title
+  (:class:`music_scan.identity.Recordings`, homelab#1889).  A copy whose
+  recording the kept release lacks (a deluxe edition's bonus tracks when the
+  release is the standard edition) is the library's only copy of it: it stays
+  on the album as a local-only extra, logged ``[LOCAL]``.  It is stamped
+  ``album_record`` (so canon keeps it on the record's album, playlists list
+  it with the album, and :func:`mixed_reasons` doesn't count it) and
+  ``album_extra``, and marked ``canon_wait`` so the next scan files it under
+  the album's tags.  A later import that holds its recording retires it.
+  Rolling a release back (*drop*) takes all of its items: they are the wrong
+  files, not copies.
+
+``music-album-audit-releases`` (:func:`audit_main`) lists the albums still
+mixed from several releases, each with its reset command.  ``--replaced``
+lists one album's files in ``quarantine/replaced/`` (:func:`replaced_copies`)
+and with ``--apply`` deletes those whose recording the library holds
+(``[REPLACED]``, superseded).  A file whose recording no library item holds
+is the only copy (``[ONLYCOPY]``) and stays, unless ``--only-copies`` is given
+too (#287).
 """
 
 from __future__ import annotations
@@ -157,9 +179,14 @@ def claim(items, playlist: str, since: float, key: str, guid: str, job: str) -> 
     return mine
 
 
+# The flex attr that marks an album record's local-only extra (#287).
+EXTRA = "album_extra"
+
+
 def copies(items, key: str, record: dict, keep: str | None, drop: str | None) -> list:
-    """The record's items :func:`retire` takes: with *drop*, that release's;
-    else every copy but release *keep*'s, legacy items and spotdl top-ups included."""
+    """The record's copies :func:`retire` weighs: with *drop*, that release's;
+    else every copy but release *keep*'s, legacy items, spotdl top-ups and
+    earlier extras included."""
     from music_scan.identity import split_list  # noqa: PLC0415
     from music_scan.rollback import _claims  # noqa: PLC0415
 
@@ -177,14 +204,44 @@ def copies(items, key: str, record: dict, keep: str | None, drop: str | None) ->
             or (not i.get("album_record") and topup(i))]
 
 
+def superseded(items, key: str, keep: str, others: list) -> tuple[list, list]:
+    """``(superseded, extras)``: which of *others* (:func:`copies`) release
+    *keep*'s items hold the recording of, and which they don't (#287)."""
+    from music_scan.identity import Recordings  # noqa: PLC0415
+
+    kept = Recordings(i for i in items if i.get("album_record") == key and i.get("release") == keep)
+    held = [i for i in others if kept.holds_item(i)]
+    return held, [i for i in others if not kept.holds_item(i)]
+
+
+def _origin(item) -> str:
+    if item.get("release"):
+        return "release " + str(item.get("release"))
+    return "spotdl" if item.get("via") == "spotdl" else "legacy"
+
+
 def retire(lib, key: str, record: dict, keep: str | None, drop: str | None) -> int:
-    """Quarantine :func:`copies` to ``quarantine/replaced/``.  Returns the count."""
+    """Quarantine the :func:`copies` whose recording release *keep* holds to
+    ``quarantine/replaced/``, and keep the others on the album as local-only
+    extras (#287); with *drop*, quarantine that release's items.  Returns the
+    count quarantined."""
+    from music_scan.canon import WAIT  # noqa: PLC0415
     from music_scan.rollback import quarantine  # noqa: PLC0415
 
-    gone = copies(lib.all_items(), key, record, keep, drop)
+    items = list(lib.all_items())
+    others = copies(items, key, record, keep, drop)
+    gone, extras = (others, []) if drop is not None else superseded(items, key, keep, others)
     for item in gone:
         logger.info("  [RETIRE] %s %s — %s [%s] (%s)", item.id, item.get("artist"), item.get("title"),
-                    item.get("album"), "release " + str(item.get("release")) if item.get("release") else "legacy")
+                    item.get("album"), _origin(item))
+    for item in extras:
+        logger.info("  [LOCAL] %s %s — %s [%s] (%s): the kept release lacks its recording; stays on the album",
+                    item.id, item.get("artist"), item.get("title"), item.get("album"), _origin(item))
+        if item.get("album_record") != key or not item.get(EXTRA):
+            item["album_record"] = key
+            item[EXTRA] = "1"
+            item[WAIT] = "1"  # the next scan's canon files it under the record's album
+            item.store()
     quarantine(gone)
     return len(gone)
 
@@ -251,11 +308,27 @@ def replaced_copies(record: dict, replaced_dir: Path) -> list[Path]:
     return found
 
 
+def split_replaced(files: list[Path], library) -> tuple[list[Path], list[Path]]:
+    """``(superseded, only_copies)``: which replaced *files* hold a recording
+    *library* (a :class:`music_scan.identity.Recordings` of the library's
+    items) holds by their identity tags (Spotify ID, ISRC, ``mb_trackid``),
+    and which hold one it doesn't (#287).  An unreadable file, or one with no
+    identity tags, is an only copy: nothing says the library has it."""
+    from music_scan.playlists import _file_tags  # noqa: PLC0415
+
+    held, only = [], []
+    for f in files:
+        rf = _file_tags(f)
+        (held if rf is not None and library.holds(rf.recording_ids) else only).append(f)
+    return held, only
+
+
 def audit_main() -> None:
     import argparse  # noqa: PLC0415
 
     from music_fetch.albums import STATE_FILE, State, find_albums  # noqa: PLC0415
     from music_scan.audit import REPLACED  # noqa: PLC0415
+    from music_scan.identity import Recordings  # noqa: PLC0415
     from music_scan.library import LIBRARY_DB, MusicLibrary  # noqa: PLC0415
 
     parser = argparse.ArgumentParser(
@@ -264,7 +337,10 @@ def audit_main() -> None:
                     "with --replaced, list (and with --apply delete) one album's copies in quarantine/replaced/")
     parser.add_argument("--replaced", metavar="QUERY",
                         help="the album's Spotify ID, its 'artist — album', or a part of it that matches one album")
-    parser.add_argument("--apply", action="store_true", help="with --replaced: delete the listed files")
+    parser.add_argument("--apply", action="store_true",
+                        help="with --replaced: delete the files whose recording the library holds")
+    parser.add_argument("--only-copies", action="store_true",
+                        help="with --replaced --apply: delete the only copies too (#287)")
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO, format="[%(asctime)s] %(message)s", datefmt="%Y-%m-%dT%H:%M:%S%z")
     records = State.load(STATE_FILE).albums
@@ -273,15 +349,24 @@ def audit_main() -> None:
         if len(hits) != 1:
             logger.error("%d album(s) match %r", len(hits), args.replaced)
             raise SystemExit(1)
-        files = replaced_copies(hits[0][1], REPLACED)
-        for f in files:
+        with MusicLibrary(LIBRARY_DB) as lib:
+            library = Recordings(lib.all_items())
+        held, only = split_replaced(replaced_copies(hits[0][1], REPLACED), library)
+        for f in held:
             logger.info("  [REPLACED] %s", f)
+        for f in only:
+            logger.info("  [ONLYCOPY] %s: no library item holds its recording", f)
+        doomed = held + only if args.only_copies else held
         if not args.apply:
-            logger.info("%d file(s) in %s; dry run, --apply deletes them", len(files), REPLACED)
+            logger.info("%d file(s) in %s: %d superseded, %d only copies; dry run, --apply deletes the superseded "
+                        "ones (with --only-copies, the only copies too)", len(held) + len(only), REPLACED,
+                        len(held), len(only))
             return
-        for f in files:
+        for f in doomed:
             f.unlink(missing_ok=True)
-        logger.info("Deleted %d file(s)", len(files))
+        logger.info("Deleted %d file(s)%s", len(doomed),
+                    f"; kept {len(only)} only copies (--only-copies deletes them)" if only and not args.only_copies
+                    else "")
         return
     with MusicLibrary(LIBRARY_DB) as lib:
         items = list(lib.all_items())

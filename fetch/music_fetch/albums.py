@@ -790,8 +790,9 @@ Identify = Callable[[Path], "dict | None"]
 # the release (``<guid>@<start>``: a release grabbed again after a reset is another
 # copy); returns their titles.
 Claim = Callable[[str, float, str, str, str], list[str]]
-# retire(key, record, keep, drop): quarantine the record's other copies: every
-# item of the record but release *keep*'s, or release *drop*'s items.  Returns the count.
+# retire(key, record, keep, drop): quarantine the record's other copies whose
+# recording release *keep* holds, keeping the rest on the album as local-only
+# extras (#287), or release *drop*'s items.  Returns the count quarantined.
 Retire = Callable[[str, dict, "str | None", "str | None"], int]
 
 
@@ -860,7 +861,9 @@ def complete(
       Spotify's.  Nothing is quarantined, nothing goes to spotdl.
 
     Whichever copy is kept, *retire* sends the record's other copies (earlier
-    releases, legacy items) to ``quarantine/replaced/``.  Then *tag_ids* gives
+    releases, legacy items) whose recording it holds to
+    ``quarantine/replaced/``; a copy of a recording it lacks stays on the album
+    as a local-only extra (#287).  Then *tag_ids* gives
     the kept copy Spotify track IDs as a best effort and canonicalises the
     album, onto paths the retired copies no longer hold (#283); album
     membership never depends on them.

@@ -10,9 +10,11 @@ from music_scan.identity import (
     BY_ISRC,
     BY_WORDS,
     ItemIndex,
+    Recordings,
     add_isrcs,
     add_to_list,
     item_spotify_ids,
+    recording_ids,
     release_match,
     spotify_id,
     split_list,
@@ -232,3 +234,15 @@ def test_a_remaster_is_another_track() -> None:
     assert index.match("NOPE", "NOPE", "Miserabilia (2018 Remaster)", "Artist") == (None, None)
     remaster = _item("Miserabilia (2018 Remaster)", isrc="GBREM1800001")
     assert ItemIndex([remaster]).match(None, "GBREM1800001", "Miserabilia (Best Of)", "Artist") == (remaster, BY_ISRC)
+
+
+def test_recordings_hold_a_recording_by_spotify_id_isrc_or_mb_recording_id_never_by_title() -> None:
+    """The identity rule of homelab#1889 (#287)."""
+    library = Recordings([_item(spotify_ids="SP1"), _item(isrc="usx1;GBX2"), _item(mb_trackid="ABC-REC")])
+    assert library.holds(recording_ids(["SP1"]))
+    assert library.holds(recording_ids(isrcs=[" usx1 "]))
+    assert library.holds(recording_ids(mb_trackid="abc-rec"))
+    assert library.holds_item(_item(title="Other", isrc="GBX2"))
+    assert not library.holds_item(_item(title="Song"))  # the same title is not the same recording
+    assert not library.holds(recording_ids(["SP2"], ["USX9"], "other-rec"))
+    assert not Recordings().holds(recording_ids(["SP1"]))
