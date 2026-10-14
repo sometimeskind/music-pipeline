@@ -59,7 +59,12 @@ extras nor a loose spotdl copy count (#295): a reimport retires neither.
 and with ``--apply`` deletes those whose recording the library holds
 (``[REPLACED]``, superseded).  A file whose recording no library item holds
 is the only copy (``[ONLYCOPY]``) and stays, unless ``--only-copies`` is given
-too (#287).
+too (#287).  ``--replaced`` without a query (:func:`list_replaced`) lists every
+only copy there, by the album records that claim it (:func:`group_replaced`)
+with each one's ``--replaced`` command, and the files no record claims (a
+merge's loser, ``music-audit-lengths --replace``'s old audio) by file, with
+the item ID their name starts with (#298).  It only lists: its totals are the
+scan's ``music_scan_replaced_files``.
 
 :func:`purge_replaced` deletes, after every scan (#288), the files in
 ``quarantine/replaced/`` whose recording the library holds once they have sat
@@ -78,6 +83,7 @@ import subprocess
 import sys
 import tempfile
 import time
+from collections import Counter
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
@@ -347,23 +353,71 @@ class _Tags(dict):
         return super().get(key, default)
 
 
+def _album_tags(f: Path) -> _Tags | None:
+    """*f*'s album and artist tags, as :func:`music_scan.rollback._claims`
+    reads an item's; ``None`` when unreadable."""
+    from mediafile import MediaFile  # noqa: PLC0415
+
+    try:
+        mf = MediaFile(str(f))
+    except Exception:
+        return None
+    return _Tags(album=mf.album, albumartist=mf.albumartist, artist=mf.artist, title=mf.title)
+
+
 def replaced_copies(record: dict, replaced_dir: Path) -> list[Path]:
     """The files in *replaced_dir* whose album and artist tags *record* claims
     (as ``music-rollback-releases`` attributes items): its rolled-back,
     superseded and merged-away copies."""
-    from mediafile import MediaFile  # noqa: PLC0415
-
     from music_scan.rollback import _claims  # noqa: PLC0415
 
     found = []
     for f in audio_files(replaced_dir) if replaced_dir.is_dir() else []:
-        try:
-            mf = MediaFile(str(f))
-        except Exception:
-            continue
-        if _claims(record, _Tags(album=mf.album, albumartist=mf.albumartist, artist=mf.artist)):
+        tags = _album_tags(f)
+        if tags is not None and _claims(record, tags):
             found.append(f)
     return found
+
+
+def group_replaced(records: dict[str, dict], files: list[Path]) -> tuple[dict[str, list[Path]], list[Path]]:
+    """``(claimed, unclaimed)``: *files* by the keys of the album *records*
+    whose :func:`replaced_copies` takes them, and the files no record claims
+    (#298).  A file two records claim is under both, as each one's
+    ``--replaced`` lists it."""
+    from music_scan.rollback import _claims  # noqa: PLC0415
+
+    claimed: dict[str, list[Path]] = {}
+    unclaimed = []
+    for f in files:
+        tags = _album_tags(f)
+        keys = [k for k, r in records.items() if tags is not None and _claims(r, tags)]
+        for k in keys:
+            claimed.setdefault(k, []).append(f)
+        if not keys:
+            unclaimed.append(f)
+    return claimed, unclaimed
+
+
+def _file_origin(f: Path) -> str:
+    """What identifies an unclaimed replaced file: the library item it was
+    (every move to ``quarantine/replaced/`` prefixes the item ID), its tags
+    and its identity tags."""
+    from music_scan.playlists import _file_tags  # noqa: PLC0415
+
+    head, sep, _ = f.name.partition("-")
+    parts = [f"item {head}" if sep and head.isdigit() else "no item ID"]
+    tags = _album_tags(f)
+    if tags is None:
+        return "; ".join(parts + ["unreadable"])
+    parts.append(f"{tags.get('albumartist') or tags.get('artist') or '?'} — {tags.get('title') or '?'} "
+                 f"[{tags.get('album') or '?'}]")
+    rf = _file_tags(f)
+    ids = []
+    if rf is not None:
+        ids = [f"spotify {sid}" for sid in sorted(rf.spotify_ids)] + [f"isrc {c}" for c in sorted(rf.isrcs)]
+        ids += [f"mb_trackid {rf.mb_trackid}"] if rf.mb_trackid else []
+    parts.append(", ".join(ids) or "no identity tags")
+    return "; ".join(parts)
 
 
 def split_replaced(files: list[Path], library) -> tuple[list[Path], list[Path]]:
@@ -421,6 +475,31 @@ def purge_replaced(replaced_dir: Path, library, days: int, now: float | None = N
     return {"superseded": len(held) - purged, "only_copy": len(only), "purged": purged}
 
 
+def list_replaced(records: dict[str, dict], replaced_dir: Path, library) -> dict[str, int]:
+    """Log every only copy in *replaced_dir* (:func:`split_replaced`'s rule,
+    as the scan counts them), by the album records that claim it, each with
+    its ``--replaced`` command, then the unclaimed ones by file (#298).
+    Deletes nothing.  Returns the counts by kind, as :func:`purge_replaced`
+    leaves them with nothing due."""
+    held, only = split_replaced(audio_files(replaced_dir) if replaced_dir.is_dir() else [], library)
+    claimed, unclaimed = group_replaced(records, only)
+    names = {k: f"{records[k].get('artist')} — {records[k].get('name')}" for k in claimed}
+    claims = Counter(f for files in claimed.values() for f in files)
+    for key in sorted(claimed, key=lambda k: (names[k].casefold(), k)):
+        logger.info("[ALBUM] %s (%s): %d only copies", names[key], key, len(claimed[key]))
+        logger.info("    music-album-audit-releases --replaced '%s'", album_query(records, key, names[key]))
+        for f in claimed[key]:
+            logger.info("  [ONLYCOPY] %s%s", f, " (another album claims it too)" if claims[f] > 1 else "")
+    if unclaimed:
+        logger.info("[UNCLAIMED] no album record claims these; decide on each by its file")
+    for f in unclaimed:
+        logger.info("  [ONLYCOPY] %s: %s", f, _file_origin(f))
+    logger.info("%d only copies in %s: %d on %d album(s), %d unclaimed; %d superseded (the scan deletes those "
+                "after REPLACED_RETENTION_DAYS)", len(only), replaced_dir, len(only) - len(unclaimed), len(claimed),
+                len(unclaimed), len(held))
+    return {"superseded": len(held), "only_copy": len(only)}
+
+
 def audit_main() -> None:
     import argparse  # noqa: PLC0415
 
@@ -432,16 +511,25 @@ def audit_main() -> None:
     parser = argparse.ArgumentParser(
         prog="music-album-audit-releases",
         description="List imported albums mixed from several releases before #279, each with its reset command; "
-                    "with --replaced, list (and with --apply delete) one album's copies in quarantine/replaced/")
-    parser.add_argument("--replaced", metavar="QUERY",
-                        help="the album's Spotify ID, its 'artist — album', or a part of it that matches one album")
+                    "with --replaced, list (and with --apply delete) one album's copies in quarantine/replaced/; "
+                    "with --replaced and no query, list every only copy there by album")
+    parser.add_argument("--replaced", metavar="QUERY", nargs="?", const="",
+                        help="the album's Spotify ID, its 'artist — album', or a part of it that matches one album; "
+                             "without one, list every only copy in quarantine/replaced/ (read-only)")
     parser.add_argument("--apply", action="store_true",
                         help="with --replaced: delete the files whose recording the library holds")
     parser.add_argument("--only-copies", action="store_true",
                         help="with --replaced --apply: delete the only copies too (#287)")
     args = parser.parse_args()
+    if args.replaced == "" and (args.apply or args.only_copies):
+        parser.error("--replaced without a query only lists; give it an album to delete that album's copies")
     logging.basicConfig(level=logging.INFO, format="[%(asctime)s] %(message)s", datefmt="%Y-%m-%dT%H:%M:%S%z")
     records = State.load(STATE_FILE).albums
+    if args.replaced == "":
+        with MusicLibrary(LIBRARY_DB) as lib:
+            library = Recordings(lib.all_items())
+        list_replaced(records, REPLACED, library)
+        return
     if args.replaced:
         hits = find_albums(records, args.replaced)
         if len(hits) != 1:
