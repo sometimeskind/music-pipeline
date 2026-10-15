@@ -55,6 +55,22 @@ def split_list(value: str | None, sep: str = ",") -> list[str]:
     return [p.strip() for p in (value or "").split(sep) if p.strip()]
 
 
+MERGED_FILES = "merged_files"
+"""Flex attr: the names of the files merges moved from this item's losers to
+``quarantine/replaced/``, ``/``-separated (no file name holds one, #303)."""
+
+
+def merged_files(item) -> list[str]:
+    """:data:`MERGED_FILES` of *item*."""
+    return split_list(item.get(MERGED_FILES), "/")
+
+
+def add_merged_file(item, name: str) -> None:
+    """Record *name* in *item*'s :data:`MERGED_FILES`."""
+    if name and name not in (names := merged_files(item)):
+        item[MERGED_FILES] = "/".join([*names, name])
+
+
 def add_to_list(item, field: str, value: str | None) -> bool:
     """Append *value* to the comma list in *item*[*field*]. True when it changed."""
     if not value:
@@ -218,16 +234,26 @@ class Recordings:
     The one place that says whether "the library holds this recording": a
     copy leaves the library (:func:`music_scan.release.retire`) or is deleted
     from ``quarantine/replaced/`` (``music-album-audit-releases --replaced``,
-    the automatic purge) only when it does."""
+    the automatic purge) only when it does.
+
+    It also knows the files merges moved to ``quarantine/replaced/`` onto these
+    items (:data:`MERGED_FILES`): the merge decided the keeper holds their
+    recording, whatever their own tags say (#303)."""
 
     def __init__(self, items=()) -> None:
         self.ids: set[str] = set()
+        self.merged: set[str] = set()
         for item in items:
             self.ids |= item_recording_ids(item)
+            self.merged.update(merged_files(item))
 
     def holds(self, ids: frozenset[str]) -> bool:
         """True when a key of *ids* (one recording's :func:`recording_ids`) is held."""
         return not self.ids.isdisjoint(ids)
+
+    def holds_merged(self, name: str) -> bool:
+        """True when a merge moved the replaced file *name* onto one of these items."""
+        return name in self.merged
 
     def holds_item(self, item) -> bool:
         return self.holds(item_recording_ids(item))

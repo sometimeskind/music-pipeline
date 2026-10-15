@@ -72,8 +72,9 @@ scan's ``music_scan_replaced_files``.
 :func:`purge_replaced` deletes, after every scan (#288), the files in
 ``quarantine/replaced/`` whose recording the library holds once they have sat
 there ``REPLACED_RETENTION_DAYS`` (default 14; ``0`` turns it off), counted
-from the move (the file's ctime: a rename keeps the mtime).  It never deletes
-an only copy.  The scan pushes what is left there by kind.
+from the move (the file's ctime: a rename keeps the mtime).  A merge's loser
+counts as held while its keeper is in the library, by the file name the keeper
+records (#303).  It never deletes an only copy.  The scan pushes what is left there by kind.
 """
 
 from __future__ import annotations
@@ -479,12 +480,17 @@ def split_replaced(files: list[Path], library) -> tuple[list[Path], list[Path]]:
     """``(superseded, only_copies)``: which replaced *files* hold a recording
     *library* (a :class:`music_scan.identity.Recordings` of the library's
     items) holds by their identity tags (Spotify ID, ISRC, ``mb_trackid``),
-    and which hold one it doesn't (#287).  An unreadable file, or one with no
+    and which hold one it doesn't (#287).  A merge's loser is superseded while
+    its keeper is in the library, whatever its tags
+    (:meth:`~music_scan.identity.Recordings.holds_merged`, #303).  Any other unreadable file, or one with no
     identity tags, is an only copy: nothing says the library has it."""
     from music_scan.playlists import _file_tags  # noqa: PLC0415
 
     held, only = [], []
     for f in files:
+        if library.holds_merged(f.name):
+            held.append(f)
+            continue
         rf = _file_tags(f)
         (held if rf is not None and library.holds(rf.recording_ids) else only).append(f)
     return held, only
