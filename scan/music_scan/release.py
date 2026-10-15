@@ -42,7 +42,10 @@ record is that album, imported whole.  This module holds the library side of
   Rolling a release back (*drop*) takes all of its items: they are the wrong
   files, not copies.
 - :func:`retire_held` retires an extra once the record's kept release holds
-  its recording after all (#294), logged ``[RETIRE] … (extra, now held)``.
+  its recording after all (#294), logged ``[RETIRE] … (extra, now held)``,
+  and merges one into the release item that is a certain-tier duplicate of
+  it by ``music-audit-dupes``'s rule, the same audio under none of its IDs
+  (#301), logged ``[RETIRE] … (extra, same audio)``.
   :func:`retire` runs before ``tag_album_ids`` (#283), so a release beets
   matched to nothing in MusicBrainz (``[NOMB]``) has no ISRC or recording ID
   yet, holds nothing, and keeps every copy as an extra; ``tag_album_ids`` then
@@ -274,16 +277,39 @@ def retire(lib, key: str, record: dict, keep: str | None, drop: str | None) -> i
     return len(gone)
 
 
-def retire_held(lib) -> int:
-    """Quarantine every local-only extra (``album_extra``) whose recording its
-    album record's kept release now holds (#294): the release's items without
-    ``album_extra``.  :func:`retire` weighs the copies before ``tag_album_ids``
-    gives the release Spotify IDs, so a release beets matched to nothing in
-    MusicBrainz holds no recording yet and keeps every copy as an extra.  The
-    album completion runs this after ``tag_album_ids`` and before canon, and
-    every scan runs it before its canon, so IDs that arrive later count too.
-    Only an extra leaves, and only for a recording another item of its record
-    holds: the library keeps one copy of it.  Returns the count quarantined."""
+def retire_held(lib, decoder=None) -> int:
+    """Retire every local-only extra (``album_extra``) its album record's kept
+    release (the record's items without ``album_extra``) now holds.
+
+    * **Held by ID** (#294): the release holds the extra's recording, a shared
+      Spotify ID, ISRC or MusicBrainz recording ID.  The extra goes to
+      ``quarantine/replaced/``, logged ``[RETIRE] … (extra, now held)``.
+      :func:`retire` weighs the copies before ``tag_album_ids`` gives the
+      release Spotify IDs, so a release beets matched to nothing in
+      MusicBrainz holds no recording yet and keeps every copy as an extra.
+    * **Same audio** (#301): no ID agrees, but one release item is a
+      *certain*-tier duplicate of the extra by :func:`music_scan.dupes.find_dupes`'s
+      own rule (an AcoustID match with lengths within ``LENGTH_SLACK`` and the
+      same title once edition suffixes are dropped): a legacy copy with no IDs,
+      or a release beets matched to another MusicBrainz recording.  The extra
+      is merged onto that release item through :func:`music_scan.dupes.merge`,
+      as ``music-audit-dupes --apply`` would, so the release item takes its
+      ``spotify_ids``, ``isrc``, ``sources`` and a missing ``mb_trackid``; it
+      is logged ``[RETIRE] … (extra, same audio)`` and its file goes to
+      ``quarantine/replaced/``.  The release item is marked ``canon_wait``, so
+      the next canon files it on the path the extra held.  The uncertain tier
+      never merges here, nor does a group with several release items in it
+      (two of the release's tracks one recording by an ID): those stay
+      ``music-audit-dupes``'s, for the operator.
+
+    The album completion runs this after ``tag_album_ids`` and before canon,
+    and every scan runs it before its canon, so IDs that arrive later count
+    too.  Only an extra leaves, and only for a recording another item of its
+    record holds: the library keeps one copy of it.  *decoder* decodes
+    fingerprints (:func:`music_scan.dupes.decode` by default).  Returns the
+    count retired, quarantined and merged."""
+    from music_scan import dupes  # noqa: PLC0415
+    from music_scan.canon import WAIT  # noqa: PLC0415
     from music_scan.identity import Recordings  # noqa: PLC0415
     from music_scan.rollback import quarantine  # noqa: PLC0415
 
@@ -299,7 +325,36 @@ def retire_held(lib) -> int:
         logger.info("  [RETIRE] %s %s — %s [%s] (extra, now held)", item.id, item.get("artist"), item.get("title"),
                     item.get("album"))
     quarantine(gone)
-    return len(gone)
+
+    gone_ids = {i.id for i in gone}
+    left: dict[str, list] = {}
+    for item in items:
+        if item.get(EXTRA) and item.get("album_record") in kept and item.id not in gone_ids:
+            left.setdefault(item.get("album_record"), []).append(item)
+    merged = 0
+    for key, extras in left.items():
+        release_ids = {i.id for i in kept[key]}
+        certain, _, _ = dupes.find_dupes([*kept[key], *extras], decoder or dupes.decode)
+        for group in certain:
+            mine = [i for i in group.items if i.id in release_ids]
+            losers = [i for i in group.items if i.id not in release_ids]
+            if not losers:
+                continue
+            if len(mine) != 1:
+                for item in losers:
+                    logger.info("  [LOCAL] %s %s — %s [%s]: the same audio as %d of the release's items; "
+                                "left to music-audit-dupes", item.id, item.get("artist"), item.get("title"),
+                                item.get("album"), len(mine))
+                continue
+            keeper = mine[0]
+            evidence = "; ".join(f"{a}~{b} {why}" for a, b, why in group.evidence)
+            for item in losers:
+                logger.info("  [RETIRE] %s %s — %s [%s] (extra, same audio): merged into %s: %s", item.id,
+                            item.get("artist"), item.get("title"), item.get("album"), keeper.id, evidence)
+            keeper[WAIT] = "1"  # the next canon files it on the path the extra held
+            dupes.merge(keeper, losers)
+            merged += len(losers)
+    return len(gone) + merged
 
 
 # ---------------------------------------------------------------------------

@@ -19,6 +19,12 @@ class FakeItem(dict):
     def get(self, key, default=None):
         return super().get(key, default)
 
+    def __getattr__(self, name):
+        # A beets Item reads its fields as attributes too (music_scan.dupes does).
+        if name.startswith("__"):
+            raise AttributeError(name)
+        return self.get(name)
+
     def store(self):
         self.stored += 1
 
@@ -375,6 +381,75 @@ def test_retire_held_leaves_extras_the_release_lacks_and_other_records_alone(qua
     assert release.retire_held(FakeLib([bonus, *cd, other, orphan])) == 0
     assert quarantined == []
 
+
+class _Audio(FakeItem):
+    """A FakeItem with what music_scan.dupes reads and a merge writes."""
+
+    def __init__(self, id_, title, length=200.0, **fields):
+        super().__init__(id_, title=title, artist="The Hold Steady", **fields)
+        self.title, self.artist, self.albumartist = title, "The Hold Steady", "The Hold Steady"
+        self.length, self.bitrate, self.path = length, 256000, f"/nonexistent/{id_}.m4a".encode()
+        self.removed = self.written = False
+
+    def try_write(self):
+        self.written = True
+
+    def remove(self, delete=False):
+        assert delete is False
+        self.removed = True
+
+
+def _stay_positive(extra_title="Lord, I'm Discouraged", extra_length=230.0, extra_acoustid="aid-6",
+                   **extra_fields):
+    """Stay Positive (#301): the reimport's track 6 and a legacy extra of it
+    with none of its IDs (beets matched the release to another MB recording)."""
+    track = _Audio(3786, "Lord, I'm Discouraged", length=231.0, album_record="SP", release="r@2", via="usenet",
+                   sources="keep", spotify_ids="sp6", isrc="USVR10800006", mb_trackid="rec-new",
+                   acoustid_id="aid-6")
+    extra = _Audio(2721, extra_title, length=extra_length, album_record="SP", album_extra="1", via="usenet",
+                   sources="keep,road", isrc="USVR10899999", acoustid_id=extra_acoustid, **extra_fields)
+    return track, extra
+
+
+def test_retire_held_merges_an_extra_the_release_holds_the_audio_of(quarantined, caplog) -> None:
+    track, extra = _stay_positive(spotify_ids="sp-old")
+    other = _Audio(3790, "Navy Sheets", album_record="SP", release="r@2", acoustid_id="aid-8")
+    caplog.set_level("INFO")
+    assert release.retire_held(FakeLib([track, other, extra]), decoder=lambda fp: []) == 1
+    assert quarantined == []  # merged, not quarantined
+    assert extra.removed and not track.removed and not other.removed
+    assert track["spotify_ids"].split(",") == ["sp6", "sp-old"]
+    assert track["sources"].split(",") == ["keep", "road"]
+    assert "USVR10899999" in track["isrc"] and track["mb_trackid"] == "rec-new"
+    assert track["canon_wait"] == "1"  # the next canon moves it off its ".1" path
+    assert "2721" in caplog.text and "(extra, same audio): merged into 3786" in caplog.text
+
+
+def test_retire_held_leaves_an_extra_whose_audio_the_release_lacks(quarantined) -> None:
+    """A deluxe bonus track under the standard edition: another fingerprint, another title."""
+    track, extra = _stay_positive(extra_title="Two Handed Handshake", extra_acoustid="aid-bonus")
+    assert release.retire_held(FakeLib([track, extra]), decoder=lambda fp: []) == 0
+    assert not extra.removed and quarantined == [] and not track.get("canon_wait")
+
+
+@pytest.mark.parametrize("fields", [
+    {"extra_length": 260.0},  # AcoustID match, lengths 30 s apart
+    {"extra_title": "Constructive Summer"},  # AcoustID match, another title: wrong audio
+    {"extra_acoustid": None},  # title and artist only
+], ids=["lengths-apart", "titles-differ", "title-artist"])
+def test_retire_held_never_merges_an_uncertain_pair(quarantined, fields) -> None:
+    track, extra = _stay_positive(**fields)
+    assert release.retire_held(FakeLib([track, extra]), decoder=lambda fp: []) == 0
+    assert not extra.removed and track["spotify_ids"] == "sp6" and track["sources"] == "keep"
+
+
+def test_retire_held_leaves_an_extra_two_release_items_hold_the_audio_of(quarantined) -> None:
+    """Two release items one recording by ISRC (40 Bucks): no keeper to choose, left to the operator."""
+    track, extra = _stay_positive()
+    twin = _Audio(3806, "Lord, I'm Discouraged", length=231.0, album_record="SP", release="r@2",
+                  isrc="USVR10800006")
+    assert release.retire_held(FakeLib([track, twin, extra]), decoder=lambda fp: []) == 0
+    assert not extra.removed
 
 def test_mixed_reasons_a_whole_import_with_a_loose_spotdl_copy_is_not_mixed() -> None:
     """Zero 7 Simple Things (#295): imported whole since #279 after a reset by
