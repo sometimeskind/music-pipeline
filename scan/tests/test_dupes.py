@@ -255,6 +255,24 @@ def test_merge_never_overwrites_a_replaced_file(tmp_path) -> None:
     assert moved[0].read_bytes() == b"audio" and moved[0].name != f"2-{name}"
 
 
+def test_merge_records_the_losers_files_on_the_keeper_and_passes_them_on(tmp_path) -> None:
+    """#303: the keeper names the files it superseded, and a later keeper inherits them."""
+    from music_scan.identity import Recordings
+    from music_scan.release import split_replaced
+
+    keeper = _on_disk(tmp_path, FakeItem(1, "Song", isrc="GB1"))
+    bare = _on_disk(tmp_path, FakeItem(2, "Song"))  # no identity at all, as #302's legacy extras
+    moved = merge(keeper, [bare], tmp_path / "replaced")
+    assert keeper.get("merged_files") == moved[0].name and keeper.stored
+    assert split_replaced(moved, Recordings([keeper])) == (moved, [])
+    assert split_replaced(moved, Recordings([FakeItem(3, "Song", isrc="GB1")])) == ([], moved)
+
+    final = _on_disk(tmp_path, FakeItem(4, "Song", isrc="GB1"))
+    later = merge(final, [keeper], tmp_path / "replaced")
+    assert final.get("merged_files") == f"{moved[0].name}/{later[0].name}"
+    assert split_replaced(moved + later, Recordings([final])) == (moved + later, [])
+
+
 def test_merge_without_media_changes_does_not_rewrite_the_keeper(tmp_path) -> None:
     keeper = _on_disk(tmp_path, FakeItem(1, "Song", spotify_ids="A", sources="keep"))
     loser = _on_disk(tmp_path, FakeItem(2, "Song", spotify_ids="A", sources="later"))

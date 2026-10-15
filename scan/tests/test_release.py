@@ -314,6 +314,29 @@ def test_purge_replaced_deletes_superseded_files_after_the_retention_only(tmp_pa
                                                                          "purged": 0}
 
 
+def test_a_merge_loser_is_superseded_while_its_keeper_is_in_the_library(tmp_path, ffmpeg) -> None:
+    """#303: a loser with no identity tags, or only an mb_trackid its keeper lacks, is
+    superseded by the keeper's merge record; once the keeper leaves, it is an only copy."""
+    import time
+
+    from music_scan.identity import Recordings
+
+    bare = _m4a(tmp_path / "1870-04 - Love Cry (Joy Orbison remix).m4a", title="Love Cry")
+    by_mbid = _m4a(tmp_path / "3377-12 - Ava Adore.m4a", mb_trackid="rec-loser")
+    lookalike = _m4a(tmp_path / "99-12 - Ava Adore.m4a", title="Ava Adore")  # no record, same title
+    files = [bare, by_mbid, lookalike]
+    keepers = [FakeItem(3724, title="Love Cry", merged_files=bare.name),
+               FakeItem(3411, title="Ava Adore", mb_trackid="rec-keeper", merged_files=by_mbid.name)]
+    assert release.split_replaced(files, Recordings(keepers)) == ([bare, by_mbid], [lookalike])
+    later = time.time() + 15 * 86400
+    assert release.purge_replaced(tmp_path, Recordings(keepers), 14, now=later) == {
+        "superseded": 0, "only_copy": 1, "purged": 2}
+    assert not bare.exists() and not by_mbid.exists() and lookalike.exists()
+
+    gone = _m4a(tmp_path / "329-10 - Killer Parties.m4a")
+    assert release.split_replaced([gone], Recordings(keepers)) == ([], [gone])  # its keeper left the library
+
+
 def test_retention_days_setting(monkeypatch) -> None:
     assert release.retention_days() == 14
     monkeypatch.setenv("REPLACED_RETENTION_DAYS", "0")

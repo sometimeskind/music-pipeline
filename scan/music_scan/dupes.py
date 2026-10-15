@@ -28,7 +28,9 @@ to Spotify's duration for any of the group's Spotify IDs (from the ``.spotdl``
 snapshots, no Spotify calls), then bitrate, then playlists, then the older
 item.  The keeper takes the others' ``spotify_ids``, ``isrc``, ``sources`` and
 a missing ``mb_trackid``; their files move to ``quarantine/replaced/`` (never
-deleted) and their rows leave the database.  The ``.m3u`` files are then
+deleted) and their rows leave the database.  The keeper records the moved files'
+names in :data:`MERGED_FILES` (with any its losers had recorded), so the purge
+counts them superseded while it is in the library, whatever their tags say (#303).  The ``.m3u`` files are then
 regenerated, so every entry resolves to the keeper.  The keeper is not moved:
 ``music-canon-albums --apply`` files it under its canonical album afterwards.
 
@@ -65,7 +67,8 @@ from pathlib import Path
 from music_fetch.usenet import clean_album, normalise, words
 from music_scan.audit import LIBRARY, REPLACED, item_path, pipeline_lock
 from music_scan.identity import (
-    add_isrcs, add_to_list, fingerprint, item_isrcs, item_spotify_ids, spotify_id, split_list,
+    MERGED_FILES, add_isrcs, add_merged_file, add_to_list, fingerprint, item_isrcs, item_spotify_ids,
+    merged_files, spotify_id, split_list,
 )
 from music_scan.metrics import _gauge, _push
 from music_scan.supersede import MANAGED_VIA
@@ -335,9 +338,15 @@ def _free(path: Path) -> Path:
 
 
 def merge(keeper, losers: list, replaced_dir: Path = REPLACED) -> list[Path]:
-    """Merge *losers* onto *keeper*; their files go to *replaced_dir*.  Returns where they went."""
+    """Merge *losers* onto *keeper*; their files go to *replaced_dir*.  Returns where they went.
+
+    The keeper records their names in :data:`MERGED_FILES`: the merge is the
+    decision that it holds their recording, which their own tags may not say
+    (no IDs, or an ``mb_trackid`` the keeper lacks, #303)."""
     write = False
     for loser in losers:
+        for name in merged_files(loser):
+            add_merged_file(keeper, name)
         for sid in sorted(item_spotify_ids(loser) - item_spotify_ids(keeper)):
             add_to_list(keeper, "spotify_ids", sid)
         for source in split_list(loser.get("sources")):
@@ -357,10 +366,13 @@ def merge(keeper, losers: list, replaced_dir: Path = REPLACED) -> list[Path]:
             backup.parent.mkdir(parents=True, exist_ok=True)
             shutil.move(str(old), backup)
             moved.append(backup)
+            add_merged_file(keeper, backup.name)
             logger.info("[MERGE] keep %s ← %s; old file → %s", keeper.id, loser.id, backup)
         else:
             logger.warning("[MERGE] keep %s ← %s; its file %s was already gone", keeper.id, loser.id, old)
         loser.remove(delete=False)
+    if moved:
+        keeper.store()
     return moved
 
 
