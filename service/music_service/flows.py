@@ -230,7 +230,8 @@ def canon_task(since: float) -> None:
 @task(name="retire-held-extras", log_prints=True)
 def retire_held_task() -> None:
     """Retire the local-only extras whose recording their album's release now
-    holds (#294).  Before canon, so no extra still holds a path canon moves a
+    holds (#294), or merge them into the release item with the same audio
+    (#301).  Before canon, so no extra still holds a path canon moves a
     release item onto (#283); the scan's playlist regeneration follows."""
     logger = get_run_logger()
     from music_scan import release  # noqa: PLC0415
