@@ -553,3 +553,53 @@ def test_audit_replaced_without_a_query_only_lists(monkeypatch) -> None:
     with pytest.raises(SystemExit) as exc:
         release.audit_main()
     assert exc.value.code == 2
+
+
+# ---------------------------------------------------------------------------
+# Extras sharing a title with the release (#306)
+# ---------------------------------------------------------------------------
+
+def _stop_making_sense():
+    """Stop Making Sense (#306): the 1984 LP's Psycho Killer, two legacy extras of it
+    from the 1999 and 2023 editions (other edits, no shared ID, no AcoustID), and a
+    legacy extra the LP lacks altogether."""
+    track = _Audio(3730, "Psycho Killer", length=258.0, album_record="SMS", release="lp@1", spotify_ids="sp-pk",
+                   isrc="USWB18400001")
+    se = _Audio(2555, "Psycho Killer - Live", length=268.0, album_record="SMS", album_extra="1", isrc="USWB19900001")
+    dx = _Audio(2588, "Psycho Killer (Live) [2023 Remaster]", length=288.0, album_record="SMS", album_extra="1",
+                spotify_ids="sp-pk-dx")
+    bonus = _Audio(2590, "Genius of Love", length=300.0, album_record="SMS", album_extra="1")
+    return track, se, dx, bonus
+
+
+def test_retire_held_flags_extras_sharing_a_title_with_the_release_once(quarantined, caplog) -> None:
+    track, se, dx, bonus = _stop_making_sense()
+    lib = FakeLib([track, se, dx, bonus])
+    with caplog.at_level("INFO"):
+        assert release.retire_held(lib, decoder=lambda fp: []) == 0
+    assert not se.removed and not dx.removed and quarantined == []  # reported, never merged
+    assert se[release.TWIN] == dx[release.TWIN] == "3730" and release.TWIN not in bonus
+    assert caplog.text.count("[SAMETITLE]") == 2
+    assert "[SAMETITLE] 2555 The Hold Steady — Psycho Killer - Live" in caplog.text
+    assert "the release's 3730 (258s) has its title, but no ID agrees" in caplog.text
+    caplog.clear()
+    stored = se.stored
+    with caplog.at_level("INFO"):
+        release.retire_held(lib, decoder=lambda fp: [])
+    assert "[SAMETITLE]" not in caplog.text and se.stored == stored  # once, not every scan
+    # The pair's release item went (the operator merged it the other way): the stamp goes too.
+    release.retire_held(FakeLib([se, dx, bonus]), decoder=lambda fp: [])
+    assert release.TWIN not in se and release.TWIN not in dx
+
+
+def test_list_twins_gives_each_pair_its_merge_command(caplog) -> None:
+    track, se, dx, bonus = _stop_making_sense()
+    twins = release.title_twins([track, se, dx, bonus])
+    assert {k: [(e.id, t.id) for e, t in v] for k, v in twins.items()} == {"SMS": [(2555, 3730), (2588, 3730)]}
+    records = {"SMS": {"artist": "Talking Heads", "name": "Stop Making Sense"}}
+    with caplog.at_level("INFO"):
+        assert release.list_twins(records, twins, {"sp-pk": 268.0}) == 1
+    assert "[SAMETITLE] Talking Heads — Stop Making Sense (SMS): 2 local-only extra(s) share a title" in caplog.text
+    # The keeper is the Spotify-length copy: the extra here.
+    assert "2555 Psycho Killer - Live (268s, legacy) ~ 3730 (258s): music-audit-dupes --merge 2555 3730" in caplog.text
+    assert "1 album(s) with local-only extras sharing a title" in caplog.text
