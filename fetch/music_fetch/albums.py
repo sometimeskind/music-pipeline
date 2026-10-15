@@ -14,11 +14,13 @@ A playlist flagged ``album`` in playlists.conf is never synced by spotdl.  Inste
    Once the library holds them all the album is ``filled``.
 
 Before the top-up, :func:`auto_reimport` resets a few albums mixed from
-several releases (#288), as ``music-album-reset --reimport`` does, so the
-top-up grabs them again whole: ``ALBUM_AUTO_REIMPORTS_PER_DAY`` (default 3,
-``0`` turns it off) in a rolling 24 hours, while the grab budget has room.  An
-album the operator holds (a ``hold <album id>`` line in album-overrides.conf)
-is never reset, and an album is reset automatically only once.  An album
+several releases (#288), as ``music-album-reset --reimport`` does but
+keeping the blocklist (#305), so the top-up grabs them again whole, never a
+release that failed for them before: ``ALBUM_AUTO_REIMPORTS_PER_DAY``
+(default 3, ``0`` turns it off) in a rolling 24 hours, while the grab budget
+has room.  An album the operator holds (a ``hold <album id>`` line in
+album-overrides.conf) is never reset, and an album is reset automatically only
+once.  A reimport that finds no release left keeps the album it has.  An album
 imported whole since #279 is never mixed (#295): a loose spotdl copy or a
 local-only extra left on it is not something a reimport would retire.
 
@@ -546,6 +548,13 @@ def top_up(
                 _done(record, label, f": no other copy of {best_copy['title']}'s edition; it is the album, "
                                      f"lacking {best_copy['missing']} track(s) of its own release")
                 continue
+        if not ranked and record.get("reimport"):
+            # The library holds the album; a reimport finding nothing better leaves it (#305).
+            record["status"] = IMPORTED
+            record.pop("reimport", None)
+            logger.info("[STAYS] %s%s: %d result(s), no release left to reimport (%d blocklisted); the album stays "
+                        "as it is", label, search.note, len(releases), len(record["blocklist"]))
+            continue
         if not ranked:
             record["status"] = MISSING
             logger.info("[MISS] %s%s: %d result(s), none match; queries: %s",
@@ -605,7 +614,11 @@ def auto_reimport(
     """Record the imported albums *mixed* names in ``state.mixed``, and reset
     a few for a reimport, as ``music-album-reset --reimport`` does
     (:func:`reset_record`): the top-up then grabs each again and the import
-    retires the copies the new release holds (#287).
+    retires the copies the new release holds (#287).  Unlike the operator's
+    reset it keeps the blocklist (#305): a release that failed for the album
+    before (another album, an incomplete copy, a broken download, or the
+    track-level rules' ``[FAIL]``) is not grabbed again.  The last release
+    leaves it, as any reset's does: it is the one the album was imported from.
 
     Only in ``on``, at most ``auto_reimports_per_day`` in a rolling 24 hours,
     and only while the grab budget has room for the resets not yet grabbed.
@@ -633,7 +646,7 @@ def auto_reimport(
         if state.used("grab", now()) + waiting >= settings.grabs_per_day:
             logger.info("Grab budget has no room for another reimport (%d/24h)", settings.grabs_per_day)
             return
-        reset_record(record, reimport=True)
+        reset_record(record, reimport=True, keep_blocklist=True)
         record["auto_reimported_at"] = _iso(now())
         state.record("reimport", now())
         result.reimported += 1
@@ -1190,9 +1203,10 @@ def reset_album(state: State, query: str, reimport: bool = False) -> tuple[str, 
     return key, before, record
 
 
-def reset_record(record: dict, reimport: bool = False) -> None:
+def reset_record(record: dict, reimport: bool = False, keep_blocklist: bool = False) -> None:
     """:func:`reset_album` on one *record*: also the album tick's automatic
-    reimport of a mixed album (:func:`auto_reimport`, #288)."""
+    reimport of a mixed album (:func:`auto_reimport`, #288), which passes
+    *keep_blocklist* so a reimport clears only the last release (#305)."""
     guid = (record.get("candidate") or {}).get("guid")
     if guid in record.get("blocklist", []):
         record["blocklist"].remove(guid)
@@ -1202,7 +1216,9 @@ def reset_record(record: dict, reimport: bool = False) -> None:
                   "fallback_tracks", "rejected_tracks", "best_copy", "edition"):
         record.pop(field, None)
     if reimport:
-        record.update(blocklist=[], attempts=0, reimport=True)
+        record.update(attempts=0, reimport=True)
+        if not keep_blocklist:
+            record["blocklist"] = []
         for field in ("gaps", "settled_from", "filled_at", "release_files"):
             record.pop(field, None)
 

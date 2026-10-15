@@ -1368,6 +1368,64 @@ def test_auto_reimport_stays_within_the_grab_budget() -> None:
     assert result.reimported == 2  # 16 grabs + 2 resets waiting for theirs fill the 18
 
 
+LP = release("lp", "Talking Heads - Stop Making Sense 1984")
+SPECIAL = release("se", "Talking Heads - Stop Making Sense Special Edition 1999")
+DELUXE = release("dx", "Talking Heads - Stop Making Sense Remastered Deluxe 2023")
+
+
+def _stop_making_sense() -> State:
+    """Stop Making Sense on 10-13 (#305): the 1984 LP and the 1999 Special Edition
+    failed for it on 10-08, the 2023 Deluxe imported short of Spotify's tracklist."""
+    state = State()
+    state.albums["4FR8Z6TvIsC56NLyNomNRE"] = {
+        "artist": "Talking Heads", "name": "Stop Making Sense", "status": albums.IMPORTED,
+        "tracks_count": 16, "playlists": {"albums": [[f"Song {i}", "Talking Heads"] for i in range(16)]},
+        "blocklist": ["lp", "se"], "attempts": 3, "candidate": {"guid": "dx"}, "gaps": ["s1", "s2"],
+    }
+    return state
+
+
+def test_auto_reimport_never_grabs_a_release_that_failed_for_the_album(caplog) -> None:
+    """#305: the 10-13 [AUTORESET] cleared the whole blocklist and grabbed the
+    1984 LP, which had [FAIL]ed for the album on 10-08."""
+    state = _stop_making_sense()
+    record = state.albums["4FR8Z6TvIsC56NLyNomNRE"]
+    albums.auto_reimport(state, Settings(mode="on"), _all_mixed, set(), albums.TickResult(), now=lambda: NOW)
+    assert record["reimport"] and record["attempts"] == 0
+    assert record["blocklist"] == ["lp", "se"]  # only the last release, the one imported, left it
+    prowlarr, sab = fakes([LP, SPECIAL, DELUXE])
+    top_up(state, Settings(mode="on"), prowlarr, sab, lambda key, r: True, albums.TickResult(), now=lambda: NOW)
+    assert record["status"] == albums.GRABBED and record["candidate"]["guid"] == "dx"
+
+
+def test_operator_reimport_still_clears_the_whole_blocklist() -> None:
+    state = _stop_making_sense()
+    _, _, after = albums.reset_album(state, "Stop Making Sense", reimport=True)
+    assert after["blocklist"] == []
+
+
+def test_auto_reimport_with_no_release_left_keeps_the_album(caplog) -> None:
+    """#305: every release failed for it before; the album it has stays, rather
+    than going missing and to spotdl."""
+    state = _stop_making_sense()
+    record = state.albums["4FR8Z6TvIsC56NLyNomNRE"]
+    record["candidate"] = {"guid": "lp"}  # the last release is blocklisted too
+    record["blocklist"] = ["lp", "se", "dx"]
+    albums.auto_reimport(state, Settings(mode="on"), _all_mixed, set(), albums.TickResult(), now=lambda: NOW)
+    prowlarr, sab = fakes([SPECIAL, DELUXE])
+    with caplog.at_level("INFO"):
+        top_up(state, Settings(mode="on"), prowlarr, sab, lambda key, r: True, albums.TickResult(), now=lambda: NOW)
+    assert record["status"] == albums.IMPORTED and "reimport" not in record
+    assert "[STAYS] Talking Heads — Stop Making Sense: 2 result(s), no release left to reimport" in caplog.text
+    sab.add_url.assert_not_called()
+    albums.fallbacks(state, lambda playlist, tracks: tracks)
+    assert record["status"] == albums.IMPORTED  # nothing goes to spotdl
+    # Still mixed, and not reset again: the operator decides.
+    albums.auto_reimport(state, Settings(mode="on"), _all_mixed, set(), albums.TickResult(),
+                         now=lambda: NOW + timedelta(days=2))
+    assert state.mixed == ["4FR8Z6TvIsC56NLyNomNRE"] and record["status"] == albums.IMPORTED
+
+
 def test_auto_reimport_env_setting(monkeypatch) -> None:
     monkeypatch.setenv("ALBUM_AUTO_REIMPORTS_PER_DAY", "0")
     assert Settings.from_env().auto_reimports_per_day == 0
