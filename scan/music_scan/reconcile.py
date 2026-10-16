@@ -46,7 +46,7 @@ def _read_spotify_url(path: Path) -> str | None:
     return None
 
 
-def _quarantine_urls(quarantine_dir: Path) -> frozenset[str]:
+def quarantine_urls(quarantine_dir: Path) -> frozenset[str]:
     """Return the set of Spotify URLs found in the quarantine directory."""
     urls: set[str] = set()
     for m4a in quarantine_dir.rglob("*.m4a"):
@@ -129,7 +129,7 @@ def reconcile_all(
     if not spotdl_files:
         return 0
 
-    q_urls = _quarantine_urls(quarantine_dir)
+    q_urls = quarantine_urls(quarantine_dir)
     if q_urls:
         logger.debug("Quarantine contains %d known Spotify URL(s)", len(q_urls))
 

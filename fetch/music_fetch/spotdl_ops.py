@@ -49,6 +49,11 @@ class SyncResult:
     - fail_reasons: Spotify track URL → reason string for every [FAIL] track, including
       the chained yt-dlp cause when spotdl exposed it (e.g. "HTTP Error 403: Forbidden")
     - linked: new tracks the library already had, tagged instead of downloaded (#187)
+    - wanted: the want list before the budget, in order (URLs), for the store's
+      dry run to compare with (homelab#1914)
+    - songs: the whole Spotify playlist in order, page records (sync_playlist only)
+    - records: the richest record known per URL: the snapshot's, a download's, a
+      linked track's (sync_playlist only)
     """
 
     removed_urls: set[str]
@@ -58,6 +63,9 @@ class SyncResult:
     failed: int
     fail_reasons: dict[str, str]
     linked: int = 0
+    wanted: list[str] = dataclasses.field(default_factory=list)
+    songs: list[dict] = dataclasses.field(default_factory=list)
+    records: dict[str, dict] = dataclasses.field(default_factory=dict)
 
 
 _MAX_CAUSE_DEPTH = 5
@@ -320,8 +328,10 @@ class _Batch:
     missed: int
     failed: int
     fail_reasons: dict[str, str]
+    wanted: list[str] = dataclasses.field(default_factory=list)
 
-    def result(self, removed_urls: set[str]) -> SyncResult:
+    def result(self, removed_urls: set[str], songs: list[dict] | None = None,
+               records: dict[str, dict] | None = None) -> SyncResult:
         return SyncResult(
             removed_urls=removed_urls,
             attempted=self.attempted,
@@ -330,6 +340,9 @@ class _Batch:
             failed=self.failed,
             fail_reasons=self.fail_reasons,
             linked=len(self.linked),
+            wanted=self.wanted,
+            songs=songs or [],
+            records=records or {},
         )
 
 
@@ -372,6 +385,7 @@ def _download_batch(
     *failures_file*.  A *track_limit* of 0 checks and defers everything."""
     failures: dict = _load_failures(failures_file) if failures_file is not None else {}
     truly_new, linked_songs, backed_off = want_list(truly_new, in_library, failures)
+    wanted = [song.url for song in truly_new]
     # Tracks the library already has under another playlist or from Usenet (#187).
     linked: dict[str, dict] = {song.url: song.json for song in linked_songs}
     for song in linked_songs:
@@ -453,7 +467,7 @@ def _download_batch(
     if failures_file is not None:
         _save_failures(failures_file, failures)
 
-    return _Batch(len(truly_new), list(results), linked, n_missed, n_failed, fail_reasons)
+    return _Batch(len(truly_new), list(results), linked, n_missed, n_failed, fail_reasons, wanted)
 
 
 def download_fallback(
@@ -574,7 +588,7 @@ def sync_playlist(
             ensure_ascii=False,
         )
 
-    return batch.result(removed_urls)
+    return batch.result(removed_urls, [s.json for s in new_songs], entries)
 
 
 def download_song(song: dict, output_dir: Path, cookie_file: Path) -> Path | None:

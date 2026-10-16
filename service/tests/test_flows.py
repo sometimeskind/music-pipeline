@@ -89,6 +89,39 @@ def test_spotdl_sync_task_links_tracks_the_library_has(tmp_path):
         assert lib._lib.get_item(item.id).get("sources") == "liked,later"
 
 
+def test_spotdl_sync_task_feeds_the_store_dry_run(tmp_path, monkeypatch):
+    """With PLAYLIST_STORE=dry-run the sync also gets a resolver that tags
+    nothing and the quarantined URLs (homelab#1914)."""
+    from beets.library import Item
+
+    from music_scan.library import MusicLibrary
+    from music_service.flows import spotdl_sync_task
+
+    db = tmp_path / "library.db"
+    with MusicLibrary(db, tmp_path) as lib:
+        item = Item(title="Song", artist="Artist", sources="liked", spotify_ids="A1")
+        lib._lib.add(item)
+
+    seen = {}
+
+    def fake_sync(_remove, _metrics, in_library=None, resolves=None, held=frozenset()):
+        seen["held"] = held
+        seen["answers"] = [resolves({"url": "https://open.spotify.com/track/A1"}),
+                           resolves({"url": "https://open.spotify.com/track/ZZ"})]
+        return MagicMock()
+
+    monkeypatch.setenv("PLAYLIST_STORE", "dry-run")
+    with patch("music_service.flows.ingest") as mock_ingest, \
+         patch("music_service.flows.reconcile.quarantine_urls", return_value=frozenset({"Q"})), \
+         patch("music_service.flows.scan.LIBRARY_DB", db):
+        mock_ingest.sync_playlists.side_effect = fake_sync
+        spotdl_sync_task([], MagicMock(tracks_linked=0))
+
+    assert seen == {"held": frozenset({"Q"}), "answers": [True, False]}
+    with MusicLibrary(db, tmp_path) as lib:
+        assert lib._lib.get_item(item.id).get("sources") == "liked"
+
+
 # ---------------------------------------------------------------------------
 # Scan tasks
 # ---------------------------------------------------------------------------
