@@ -71,7 +71,18 @@ album, whatever its Spotify track IDs say or whether it has any: the album,
 album artist, date and cover of the record's Spotify album, the MusicBrainz
 album tags of the release the files are (``mb_album_via`` ``files``), and its
 own disc/track.  Release items imported before #279 have no ``album_record``;
-they keep #278's rule above.  Spotify IDs come only from ISRC or disc/track
+they keep #278's rule above.  A local-only extra (``album_extra``) takes them
+too, the release's ``mb_albumid`` included, although its file is not from that
+release (#306): Navidrome groups by the MusicBrainz album ID, so an extra
+without it would show as an album of its own.  The album tags say which album
+an item is filed under; its recording IDs (``mb_trackid``, ISRC, Spotify IDs)
+stay its own, and ``album_extra`` marks it.
+
+When an album record's item would move onto a path another item holds (a
+legacy extra of the same track number and title), it takes the album's tags
+where it is, logged ``[CLASH] … tagged in place``, so it stays on the album
+rather than showing as a stray one, and is marked ``canon_clash``: every scan
+tries the move again until the path is free (#306).  Spotify IDs come only from ISRC or disc/track
 (``tag_album_ids``), never from a title.
 
 The album copy then supersedes loose items that predate it
@@ -119,6 +130,8 @@ EP_MIN_TRACKS = 4
 # Bumped when what the cache keeps changes, so older entries are searched again.
 ISRC_CACHE_VERSION = 2
 WAIT = "canon_wait"
+# An album record's item tagged where it is: its album path was another item's (#306).
+CLASH = "canon_clash"
 # Seconds between two items of one release's import, at most (#278): a track takes ~10 s to convert.
 IMPORT_GAP = 600
 SPOTIFY_FIELDS = ("album", "albumartist", "year", "month", "day", "track", "tracktotal", "disc", "disctotal")
@@ -685,18 +698,21 @@ def _plan_record_item(item, key: str, record: dict, releases: dict[str, Release]
             fields["mb_album_via"] = resolver.cache[key]["rung"]
     fields["spotify_album_id"] = key
     plan.records += 1
-    _plan_fields(item, p, fields, plan, dests)
+    _plan_fields(item, p, fields, plan, dests, in_place=True)
 
 
-def _plan_fields(item, p: Placement, fields: dict, plan: Plan, dests: dict) -> None:
+def _plan_fields(item, p: Placement, fields: dict, plan: Plan, dests: dict, in_place: bool = False) -> None:
     """Add the change *fields* make to *item* to *plan*, unless it changes
-    nothing or would move onto another file."""
+    nothing.  One that would move onto another file is left out, or with
+    *in_place* (an album record's item, #306) tagged where it is."""
     from beets.library import Item  # noqa: PLC0415
 
     from music_scan.cover import has_art  # noqa: PLC0415
 
     if item.get(WAIT):
         fields[WAIT] = None
+    if item.get(CLASH):
+        fields[CLASH] = None
     plan.names.setdefault(p.release.album_id, set()).add((str(item.get("albumartist") or ""),
                                                            str(item.get("album") or "")))
     diff = {k: (item.get(k), v) for k, v in fields.items() if item.get(k) != v}
@@ -712,11 +728,21 @@ def _plan_fields(item, p: Placement, fields: dict, plan: Plan, dests: dict) -> N
     for k, v in old.items():
         item[k] = v
     if dest != _path(item) and (dest in dests or os.path.exists(dest)):
-        # Moving would overwrite another file: leave this item as it is (a duplicate, #210).
         plan.clashes += 1
-        logger.warning("  [CLASH] %s → %s: another item already has that path; left as it is",
-                       _path(item), dest)
-        return
+        if not in_place:
+            # Moving would overwrite another file: leave this item as it is (a duplicate, #210).
+            logger.warning("  [CLASH] %s → %s: another item already has that path; left as it is",
+                           _path(item), dest)
+            return
+        # The release's track stays on its album, where it is; the next scan tries the move again.
+        logger.warning("  [CLASH] %s %s → %s: another item already has that path; tagged in place",
+                       item.id, _path(item), dest)
+        fields[CLASH] = "1"
+        diff = {k: (item.get(k), v) for k, v in fields.items() if item.get(k) != v}
+        if not diff and not art:
+            return
+        dest = _path(item)
+        write = art or any(k in Item._media_fields for k in diff)
     dests[dest] = item
     plan.changes.append(Change(item, p, diff, dest, art, write, _path(item)))
     plan.kinds[_kind(diff, write)] += 1
@@ -850,7 +876,7 @@ def after_scan(lib, since: float) -> int:
     search is still to do, or that got a Spotify ID after their import (#244)."""
     items = [
         i for i in lib.all_items()
-        if (i.added or 0) >= since or i.get("mb_album_via") in (PENDING, "none") or i.get(WAIT)
+        if (i.added or 0) >= since or i.get("mb_album_via") in (PENDING, "none") or i.get(WAIT) or i.get(CLASH)
         or (not i.get("spotify_album_id") and item_spotify_ids(i))
     ]
     return canonicalize_items(items)

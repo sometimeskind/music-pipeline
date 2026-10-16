@@ -959,3 +959,48 @@ def test_an_album_records_items_take_its_album_whatever_their_ids(tmp_path, ffmp
         assert (item.disc, item.track) == (disc, track)
         assert item.get("spotify_album_id") == "MC30" and item.mb_albumid == "MB2012"
         assert item.get("mb_album_via") == "files"
+
+
+def test_an_album_records_item_whose_path_is_taken_is_tagged_in_place(tmp_path, ffmpeg, lib, caplog, monkeypatch):
+    """#306: Stop Making Sense's release Psycho Killer (3730) would move onto the
+    path a legacy extra of it held.  It takes the album's tags where it is, so it
+    doesn't show as an album of its own, and moves once the path is free."""
+    from music_scan import canon
+
+    album_dir = tmp_path / "library" / PUMPKINS / MC
+    extra = _add(lib, _m4a(album_dir / "02 - Tonight, Tonight.m4a"), title="Tonight, Tonight", artist=PUMPKINS,
+                 albumartist=PUMPKINS, album=MC, track=2, via="usenet", album_record="MC30", album_extra="1",
+                 spotify_album_id="MC30", year=2025, month=11, day=21, mb_album_via="files")
+    stray = tmp_path / "library" / "Unknown" / "Mellon Collie" / "02 - Tonight, Tonight.m4a"
+    track = _add(lib, _m4a(stray), title="Tonight, Tonight", artist=PUMPKINS, albumartist="", album="Mellon Collie",
+                 track=2, via="usenet", album_record="MC30", release="r1")
+    spotdl = tmp_path / "spotdl"
+    spotdl.mkdir()
+    (spotdl / "keep.spotdl").write_text(json.dumps({"songs": _pumpkins_songs()}))
+    records = {"MC30": {**_pumpkins_records()["MC30"], "release_files": {"mb": {"mb_albumid": "MB2025"}}}}
+    from music_scan import cover
+
+    art = _jpeg(tmp_path / "c.jpg")
+    monkey_download = cover.download
+    cover.download = lambda url: art
+    try:
+        with caplog.at_level("INFO"):
+            canon.canonicalize_items([lib.get_item(track.id)], spotdl, budget=None, records=records)
+        item = lib.get_item(track.id)
+        assert (item.album, item.albumartist, item.mb_albumid) == (MC, PUMPKINS, "MB2025")
+        assert Path(os.fsdecode(item.path)) == stray and item.get("canon_clash") == "1"
+        assert f"[CLASH] {track.id} {stray} →" in caplog.text and "tagged in place" in caplog.text
+        assert Path(os.fsdecode(lib.get_item(extra.id).path)).exists()
+        # Still taken: nothing to change, nothing written again.
+        assert canon.canonicalize_items([lib.get_item(track.id)], spotdl, budget=None, records=records) == 0
+        # The operator merged the extra away: the next scan moves the release's track onto the path.
+        Path(os.fsdecode(lib.get_item(extra.id).path)).unlink()
+        lib.get_item(extra.id).remove(delete=False)
+        with monkeypatch.context() as m:
+            m.setattr(canon, "canonicalize_items", lambda items: [i.id for i in items])
+            assert canon.after_scan(lib, 1e12) == [track.id]  # every scan tries it again
+        assert canon.canonicalize_items([lib.get_item(track.id)], spotdl, budget=None, records=records) == 1
+    finally:
+        cover.download = monkey_download
+    item = lib.get_item(track.id)
+    assert Path(os.fsdecode(item.path)) == album_dir / "02 - Tonight, Tonight.m4a" and not item.get("canon_clash")

@@ -53,11 +53,20 @@ record is that album, imported whole.  This module holds the library side of
   after ``tag_album_ids`` and before canon, and every scan before its canon,
   so IDs that arrive later count too.  Either way the extras leave before
   canon moves the release's items onto paths they may hold.
+- :func:`title_twins` finds the extras left that share a title (edition
+  suffixes dropped) with a track of their record's kept release (#306): no ID
+  agrees, so by homelab#1889 they are other recordings, but often another
+  edit of the same song.  Titles only report: :func:`retire_held` logs each
+  such extra once, ``[SAMETITLE]``, and stamps it ``album_extra_twin`` (the
+  release items' IDs); nothing is merged, tagged or retired by title.
 
 ``music-album-audit-releases`` (:func:`audit_main`) lists the albums still
 mixed from several releases (:func:`mixed_reasons`), each with its reset
 command.  An album imported whole since #279 is never mixed, and neither
-extras nor a loose spotdl copy count (#295): a reimport retires neither.
+extras nor a loose spotdl copy count (#295): a reimport retires neither.  It
+then lists the albums whose extras share a title with the release
+(:func:`title_twins`, ``[SAMETITLE]``), each pair with its
+``music-audit-dupes --merge`` command, for the operator to check and merge.
 ``--replaced`` lists one album's files in ``quarantine/replaced/`` (:func:`replaced_copies`)
 and with ``--apply`` deletes those whose recording the library holds
 (``[REPLACED]``, superseded).  A file whose recording no library item holds
@@ -210,6 +219,8 @@ def claim(items, playlist: str, since: float, key: str, guid: str, job: str) -> 
 
 # The flex attr that marks an album record's local-only extra (#287).
 EXTRA = "album_extra"
+# The IDs of the kept release's items an extra shares a title with (#306).
+TWIN = "album_extra_twin"
 
 
 def copies(items, key: str, record: dict, keep: str | None, drop: str | None) -> list:
@@ -328,6 +339,7 @@ def retire_held(lib, decoder=None) -> int:
     quarantine(gone)
 
     gone_ids = {i.id for i in gone}
+    merged_ids: set[int] = set()
     left: dict[str, list] = {}
     for item in items:
         if item.get(EXTRA) and item.get("album_record") in kept and item.id not in gone_ids:
@@ -355,7 +367,58 @@ def retire_held(lib, decoder=None) -> int:
             keeper[WAIT] = "1"  # the next canon files it on the path the extra held
             dupes.merge(keeper, losers)
             merged += len(losers)
+            merged_ids.update(i.id for i in losers)
+    _flag_twins([i for i in items if i.id not in gone_ids | merged_ids])
     return len(gone) + merged
+
+
+def title_twins(items) -> dict[str, list[tuple]]:
+    """Album record → its ``(extra, release item)`` pairs: a local-only extra
+    whose title, edition suffixes dropped, is the title of a track of its
+    record's kept release (the record's items without ``album_extra``, #306).
+
+    No ID agrees (:func:`retire_held` retires those, and merges the same audio
+    of the certain tier), so they are two recordings (homelab#1889), but often
+    two edits of one song: Stop Making Sense's 1984 LP over the 1999 and 2023
+    editions' extras.  The operator decides each pair (``music-audit-dupes
+    --merge``).  This only reports; titles never merge, tag or retire."""
+    from music_scan.dupes import _base_title  # noqa: PLC0415
+
+    kept: dict[str, dict[str, list]] = {}
+    for item in items:
+        if item.get("album_record") and not item.get(EXTRA) and (title := _base_title(item)):
+            kept.setdefault(item.get("album_record"), {}).setdefault(title, []).append(item)
+    pairs: dict[str, list[tuple]] = {}
+    for item in items:
+        key = item.get("album_record")
+        if item.get(EXTRA) and key in kept:
+            for twin in kept[key].get(_base_title(item), []):
+                pairs.setdefault(key, []).append((item, twin))
+    return pairs
+
+
+def _flag_twins(items) -> None:
+    """Stamp each extra :func:`title_twins` pairs with ``album_extra_twin``,
+    the IDs of its release items, and log it ``[SAMETITLE]`` when that is new;
+    clear it from an extra that no longer has one."""
+    twins: dict[int, tuple] = {}
+    for pairs in title_twins(items).values():
+        for extra, twin in pairs:
+            twins.setdefault(extra.id, (extra, []))[1].append(twin)
+    for extra, release_items in twins.values():
+        ids = ",".join(str(i.id) for i in release_items)
+        if extra.get(TWIN) == ids:
+            continue
+        logger.warning("  [SAMETITLE] %s %s — %s [%s] (%.0fs): the release's %s has its title, but no ID agrees; "
+                       "stays an extra, music-album-audit-releases lists the pair", extra.id, extra.get("artist"),
+                       extra.get("title"), extra.get("album"), extra.length or 0,
+                       ", ".join(f"{i.id} ({i.length or 0:.0f}s)" for i in release_items))
+        extra[TWIN] = ids
+        extra.store()
+    for item in items:
+        if item.get(TWIN) and item.id not in twins:
+            del item[TWIN]
+            item.store()
 
 
 # ---------------------------------------------------------------------------
@@ -615,6 +678,9 @@ def audit_main() -> None:
                     f"; kept {len(only)} only copies (--only-copies deletes them)" if only and not args.only_copies
                     else "")
         return
+    from music_scan.dupes import spotify_durations  # noqa: PLC0415
+    from music_scan.scan import SPOTDL_DIR  # noqa: PLC0415
+
     with MusicLibrary(LIBRARY_DB) as lib:
         items = list(lib.all_items())
     n = 0
@@ -628,6 +694,27 @@ def audit_main() -> None:
         logger.info("    music-album-reset '%s' --reimport", album_query(records, key, name))
     logger.info("%d imported album(s) mixed from several releases; reset each with --reimport (dry run, then "
                 "--apply), then clear its old copies with --replaced", n)
+    twins = title_twins(items)
+    list_twins(records, twins, spotify_durations(SPOTDL_DIR) if twins else {})
+
+
+def list_twins(records: dict[str, dict], twins: dict[str, list[tuple]], durations: dict[str, float]) -> int:
+    """Log *twins* (:func:`title_twins`) album by album, each pair with its
+    ``music-audit-dupes --merge`` command (the keeper the Spotify length's,
+    by *durations*).  Returns the albums listed."""
+    from music_scan.dupes import merge_command  # noqa: PLC0415
+
+    for key, pairs in twins.items():
+        record = records.get(key) or {}
+        logger.info("[SAMETITLE] %s — %s (%s): %d local-only extra(s) share a title with the release, no ID agrees",
+                    record.get("artist"), record.get("name"), key, len({e.id for e, _ in pairs}))
+        for extra, twin in pairs:
+            logger.info("    %s %s (%.0fs, %s) ~ %s (%.0fs): %s", extra.id, extra.get("title"),
+                        extra.length or 0, _origin(extra), twin.id, twin.length or 0,
+                        merge_command(extra, twin, durations))
+    logger.info("%d album(s) with local-only extras sharing a title with the release; check each pair "
+                "(music-audit-dupes lists the evidence), then merge it with --apply", len(twins))
+    return len(twins)
 
 
 def main() -> None:
