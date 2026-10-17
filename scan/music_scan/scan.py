@@ -14,6 +14,7 @@ import tempfile
 import time
 from pathlib import Path
 
+from music_fetch import store
 from music_fetch.ingest import PendingRemovals, clear_pending_removals
 from music_scan import playlists
 from music_scan.guard import guard_inbox
@@ -262,6 +263,42 @@ def playlist_paths(slots: list[Slot], source_items: list, slot_fills: bool = Tru
     return ordered + unmatched
 
 
+def store_view(name: str, spotdl_file: Path, library: ItemIndex, by_album) -> list[Path] | None:
+    """The ``.m3u`` paths playlist *name* gets from the playlist store
+    (homelab#1914): its entries resolved by Spotify ID or ISRC only, against
+    the whole library, each file once and in store order, with no ``sources``
+    and no tail; an ``album`` playlist through :func:`playlists.album_paths`
+    on the same entries.  A spotdl playlist's store is the one the nightly's
+    dry run wrote; an ``album`` or ``nosync`` playlist's ``.spotdl`` is already
+    its whole Spotify list, so its store is seeded from it.  None when a spotdl
+    playlist has no store yet."""
+    is_album = (SPOTDL_DIR / f"{name}.album").exists()
+    path = store.DRYRUN_DIR / f"{name}.json"
+    if is_album or (SPOTDL_DIR / f"{name}.nosync").exists():
+        playlist = store.Store.from_songs(name, playlists.spotdl_songs(spotdl_file))
+        playlist.save(path)
+    else:
+        playlist = store.Store.load(path)
+        if playlist is None:
+            logger.info("  [STORE] %s: no store yet — the nightly's dry run writes it", name)
+            return None
+    none = ItemIndex([])
+    if is_album:
+        return playlists.album_paths(playlist.songs, none, library, by_album)[0]
+    return playlist_paths(playlists.resolve([Entry.from_song(s) for s in playlist.songs], none, library), [])
+
+
+def _store_dry_run(name: str, spotdl_file: Path, lines: list[str], library: ItemIndex, by_album) -> None:
+    """Write the store's ``.m3u`` for *name* to the side directory, diffed
+    against today's *lines*.  Never raises: the dry run must not fail a scan."""
+    try:
+        paths = store_view(name, spotdl_file, library, by_album)
+        if paths is not None:
+            store.write_view(name, "m3u", lines, [os.path.relpath(p, PLAYLISTS) for p in paths])
+    except Exception:
+        logger.error("Playlist store dry run failed for %s — today's playlist is unaffected", name, exc_info=True)
+
+
 def regen_playlists(metrics: ScanMetrics | None = None) -> dict[str, int]:
     """Regenerate .m3u files for every .spotdl playlist. Returns {name: track_count}.
 
@@ -270,6 +307,8 @@ def regen_playlists(metrics: ScanMetrics | None = None) -> dict[str, int]:
     by Spotify ID or ISRC (``[SLOT]``), so a track imported by any route reaches
     every playlist that lists it at the next scan, with no download and no tag
     write (#228).  *metrics*, when given, takes the empty-slot count per playlist.
+    With ``PLAYLIST_STORE=dry-run`` each playlist's store view is written to the
+    side directory too (:func:`store_view`, homelab#1914).
 
     An ``album`` playlist (``<name>.album`` next to its ``.spotdl``) lists every
     local track of every album on it instead (#268, :func:`playlists.album_paths`).
@@ -282,6 +321,7 @@ def regen_playlists(metrics: ScanMetrics | None = None) -> dict[str, int]:
 
     counts: dict[str, int] = {}
     empty: dict[str, int] = {}
+    store_dry_run = store.dry_run()
     with MusicLibrary(LIBRARY_DB) as lib:
         all_items = lib.all_items()
         library = ItemIndex(all_items)
@@ -305,6 +345,9 @@ def regen_playlists(metrics: ScanMetrics | None = None) -> dict[str, int]:
             m3u.write_text("\n".join(lines) + ("\n" if lines else ""), encoding="utf-8")
             counts[name] = len(lines)
             empty[name] = playlists.empty_slots(slots)
+            if store_dry_run:
+                by_album = playlists.by_album_id(all_items) if by_album is None else by_album
+                _store_dry_run(name, spotdl_file, lines, library, by_album)
 
     if metrics is not None:
         metrics.slots_empty = empty

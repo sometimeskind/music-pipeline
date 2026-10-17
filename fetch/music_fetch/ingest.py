@@ -30,7 +30,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable, Iterator
 
-from music_fetch import albums
+from music_fetch import albums, store
 from music_fetch.config import load_playlists
 from music_fetch.metrics import IngestMetrics
 from music_fetch.spotdl_ops import download_fallback, find_track_in_snapshot, save_playlist, sync_playlist
@@ -282,11 +282,47 @@ def _collect_removals(
         schedule_unlink(pending, entry, playlist_name)
 
 
+def _read_failures() -> dict:
+    """The backoff file, or ``{}`` when it is absent or unreadable."""
+    try:
+        return json.loads(FAILURES_FILE.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return {}
+    except Exception:
+        logger.warning("Could not read %s for the playlist store dry run", FAILURES_FILE)
+        return {}
+
+
+def _store_dry_run(
+    name: str,
+    result,
+    failures: dict,
+    resolves: Callable[[dict], bool],
+    held: frozenset[str],
+) -> None:
+    """``PLAYLIST_STORE=dry-run`` (homelab#1914): write *name*'s store, built
+    one-way from this sync's Spotify list, and its want list to the side
+    directory, the want list diffed against today's (*result*.wanted, before
+    the budget).  *failures* is the backoff as the sync read it.  Never raises:
+    the dry run must not fail the nightly."""
+    try:
+        path = store.DRYRUN_DIR / f"{name}.json"
+        previous = store.Store.load(path)
+        known = {} if previous is None else {s.get("url"): s for s in previous.songs}
+        playlist = store.Store.from_songs(name, store.merge_spotify(result.songs, {**known, **result.records}))
+        playlist.save(path)
+        store.write_view(name, "want", result.wanted, store.want_list(playlist.songs, resolves, held, failures))
+    except Exception:
+        logger.error("Playlist store dry run failed for %s — today's sync is unaffected", name, exc_info=True)
+
+
 def sync_playlists(
     remove_sources: list[str],
     metrics: IngestMetrics,
     start: float | None = None,
     in_library: Callable[[str, dict], bool] | None = None,
+    resolves: Callable[[dict], bool] | None = None,
+    held: frozenset[str] = frozenset(),
 ) -> PendingRemovals:
     """Run the spotdl download loop for all active playlists. Returns pending removals.
 
@@ -295,6 +331,10 @@ def sync_playlists(
 
     *in_library(playlist, song)* reports whether the library already holds a new
     track, tagging it with the playlist if so; those tracks are not downloaded (#187).
+
+    *resolves(song)* (no tagging) and *held* (URLs downloaded into quarantine)
+    feed the playlist store's dry run, which runs only when both
+    ``PLAYLIST_STORE=dry-run`` and *resolves* are given (homelab#1914).
     """
     if start is None:
         start = time.monotonic()
@@ -340,6 +380,9 @@ def sync_playlists(
         logger.info("No .spotdl files found in %s", SPOTDL_DIR)
 
     pending_removals: list[RemovedTrack] = []
+    store_dry_run = resolves is not None and store.dry_run()
+    if store_dry_run:
+        logger.info("Playlist store dry run: writing the store's view to %s", store.DRYRUN_DIR)
     # Read only: the album tick owns it (#205).
     album_state = albums.State.load(SPOTDL_DIR / albums.STATE_FILE.name)
 
@@ -416,6 +459,8 @@ def sync_playlists(
                     in_library=playlist_in_library,
                 )
             else:
+                # The backoff as the sync reads it, for the store's want list.
+                failures = _read_failures() if store_dry_run else {}
                 result = sync_playlist(
                     spotdl_file=spotdl_file,
                     output_dir=output_dir,
@@ -446,6 +491,8 @@ def sync_playlists(
 
         _flag_expired_cookies_from_failures(result.fail_reasons, name, metrics)
         _collect_removals(pending_removals, result.removed_urls, old_songs, name)
+        if store_dry_run and fallback is None:
+            _store_dry_run(name, result, failures, resolves, held)
 
         # Brief pause between playlists — avoid hammering Spotify/YouTube APIs.
         time.sleep(5)

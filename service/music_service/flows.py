@@ -105,10 +105,18 @@ def spotdl_sync_task(remove_sources: list[str], metrics):
             logger.warning("Could not read backoff state from %s", ingest.FAILURES_FILE)
     else:
         logger.info("Backoff state: empty")
+    from music_fetch import store  # noqa: PLC0415
+
+    # The playlist store's dry run (homelab#1914) resolves without tagging, and
+    # holds back what reconcile keeps: downloads sitting in quarantine.
     with MusicLibrary(scan.LIBRARY_DB) as lib:
         index = ItemIndex(lib.all_items())
+        dry_run = {} if not store.dry_run() else {
+            "resolves": lambda song: index.match_song(song, words=False)[0] is not None,
+            "held": reconcile.quarantine_urls(reconcile.QUARANTINE_DIR),
+        }
         result = ingest.sync_playlists(
-            remove_sources, metrics, in_library=lambda pl, song: scan.link_song(index, pl, song)
+            remove_sources, metrics, in_library=lambda pl, song: scan.link_song(index, pl, song), **dry_run
         )
     not_downloaded = metrics.tracks_attempted - metrics.tracks_downloaded
     suffix = ""
