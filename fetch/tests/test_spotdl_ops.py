@@ -11,6 +11,14 @@ import pytest
 from music_fetch.spotdl_ops import save_playlist, sync_playlist
 
 
+@pytest.fixture(autouse=True)
+def _no_pins(tmp_path: Path):
+    """Keep every download batch off the pod's track-pins.conf (#247): CI runs
+    as a user who can't even stat /root."""
+    with mock.patch("music_fetch.spotdl_ops.PINS_FILE", tmp_path / "track-pins.conf"):
+        yield
+
+
 # ---------------------------------------------------------------------------
 # save_playlist
 # ---------------------------------------------------------------------------
