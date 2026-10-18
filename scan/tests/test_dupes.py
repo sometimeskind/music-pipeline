@@ -486,3 +486,86 @@ def test_fingerprint_ids_replaces_a_stale_fingerprint_and_acoustid(monkeypatch) 
     assert dupes.fingerprint_missing([stale, other], apply=True, ids=[873, 999]) == 1
     assert stale.get("acoustid_fingerprint") == "NEW" and stale.get("acoustid_id") == ""
     assert not other.stored
+
+
+# --- album records: the album is the unit (#279, #311) ------------------------
+
+def _album_items(tmp_path, fields):
+    """One recording on two items, one ISRC: *fields* maps each item ID to its album fields."""
+    items = [FakeItem(id_, "Made Up Song", artist="Some Band", length=200.0 + n, isrc="XX0000000001",
+                      sources="pl", via="usenet", **extra)
+             for n, (id_, extra) in enumerate(fields.items())]
+    return [_on_disk(tmp_path, i) for i in items]
+
+
+@pytest.mark.parametrize("fields,why", [
+    ({1: {"album_record": "HITS", "release": "r1"}, 2: {"album_record": "STUDIO", "release": "r2"}},
+     "on 2 album records (HITS, STUDIO): each album keeps its track"),
+    ({1: {"album_record": "DELUXE", "release": "r1"}, 2: {"album_record": "DELUXE", "release": "r1"}},
+     "2 release items of album record DELUXE"),
+    ({1: {"album_record": "OLD", "album_extra": "1"}, 2: {"album_record": "OLD", "album_extra": "1"}},
+     "2 local-only extras of album record OLD"),
+    ({1: {"album_record": "HITS", "album_extra": "1"}, 2: {"album_record": "STUDIO", "release": "r2"}},
+     "on 2 album records"),
+])
+def test_apply_leaves_a_certain_group_that_would_take_a_track_off_an_album(monkeypatch, tmp_path, caplog,
+                                                                           fields, why) -> None:
+    items = _album_items(tmp_path, fields)
+    events = _patch_run(monkeypatch, items, tmp_path)
+    caplog.set_level("INFO")
+    certain, listed = dupes.run(apply=True)
+    assert certain == [] and not any(i.removed for i in items)
+    assert [(g.tier, sorted(i.id for i in g.items)) for g in listed] == [(dupes.ALBUM, [1, 2])]
+    assert why in listed[0].reason and why in caplog.text
+    assert "[ALBUM]" in caplog.text and "by hand, if the album may lose it: music-audit-dupes --merge" in caplog.text
+    assert PUSHED == [(0, 1)] and events == []
+
+
+def test_an_extra_merges_into_its_own_records_release_item(monkeypatch, tmp_path) -> None:
+    """The release item keeps, though the extra is nearer Spotify's length: the album keeps its track."""
+    items = _album_items(tmp_path, {1: {"album_record": "A", "album_extra": "1", "spotify_ids": "S"},
+                                   2: {"album_record": "A", "release": "r1"}})
+    extra, track = items
+    (tmp_path / "pl.spotdl").write_text('{"songs": [{"song_id": "S", "duration": 200}]}')
+    _patch_run(monkeypatch, items, tmp_path)
+    certain, listed = dupes.run(apply=True)
+    assert [sorted(i.id for i in g.items) for g in certain] == [[1, 2]] and listed == []
+    assert extra.removed and not track.removed
+
+
+def test_a_stray_merges_into_the_album_item_whatever_the_lengths(tmp_path) -> None:
+    stray, track = _album_items(tmp_path, {1: {}, 2: {"album_record": "A", "release": "r1"}})
+    assert sorted([stray, track], key=lambda i: keep_order(i, [200.0]))[0] is track
+
+
+def test_merge_by_hand_off_an_album_warns_and_still_merges(monkeypatch, tmp_path, caplog) -> None:
+    items = _album_items(tmp_path, {1: {"album_record": "HITS", "release": "r1", "album": "Made Up Hits"},
+                                   2: {"album_record": "STUDIO", "release": "r2"}})
+    _patch_run(monkeypatch, items, tmp_path)
+    caplog.set_level("INFO")
+    dupes.run(merge_ids=[2, 1])
+    assert "[ALBUM] 1 is a release item of album record HITS [Made Up Hits]: its album loses the track" in caplog.text
+    assert not items[0].removed
+    dupes.run(apply=True, merge_ids=[2, 1])
+    assert items[0].removed
+
+
+def test_merge_by_hand_of_an_extra_into_its_release_item_does_not_warn(monkeypatch, tmp_path, caplog) -> None:
+    items = _album_items(tmp_path, {1: {"album_record": "A", "album_extra": "1"},
+                                   2: {"album_record": "A", "release": "r1"}})
+    _patch_run(monkeypatch, items, tmp_path)
+    caplog.set_level("INFO")
+    dupes.run(merge_ids=[2, 1])
+    assert "[ALBUM]" not in caplog.text
+
+
+def test_an_uncertain_pair_two_rules_found_prints_its_merge_command_once(monkeypatch, tmp_path, caplog) -> None:
+    """An AcoustID match too far apart, and the same title and artist: one pair, one command."""
+    a = FakeItem(10, "Made Up Song", artist="Some Band", length=200.0, acoustid_id="aid")
+    b = FakeItem(11, "Made Up Song", artist="Some Band", length=230.0, acoustid_id="aid")
+    items = [_on_disk(tmp_path, i) for i in (a, b)]
+    _patch_run(monkeypatch, items, tmp_path)
+    caplog.set_level("INFO")
+    _, uncertain = dupes.run()
+    assert len(uncertain[0].evidence) == 2
+    assert caplog.text.count("if one recording: music-audit-dupes --merge") == 1

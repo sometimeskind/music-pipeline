@@ -600,6 +600,6 @@ def test_list_twins_gives_each_pair_its_merge_command(caplog) -> None:
     with caplog.at_level("INFO"):
         assert release.list_twins(records, twins, {"sp-pk": 268.0}) == 1
     assert "[SAMETITLE] Talking Heads — Stop Making Sense (SMS): 2 local-only extra(s) share a title" in caplog.text
-    # The keeper is the Spotify-length copy: the extra here.
-    assert "2555 Psycho Killer - Live (268s, legacy) ~ 3730 (258s): music-audit-dupes --merge 2555 3730" in caplog.text
+    # The keeper is the release item, though the extra is the Spotify-length copy: the album is the unit (#311).
+    assert "2555 Psycho Killer - Live (268s, legacy) ~ 3730 (258s): music-audit-dupes --merge 3730 2555" in caplog.text
     assert "1 album(s) with local-only extras sharing a title" in caplog.text
