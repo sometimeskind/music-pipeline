@@ -14,7 +14,8 @@ import logging
 import os
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Callable
+from typing import Callable, Mapping
+from urllib.parse import parse_qs, urlsplit
 
 from music_fetch import spotify_limit
 from music_fetch.names import SPOTDL_NAME_BYTES, truncate_utf8
@@ -34,6 +35,43 @@ _BACKOFF_SCHEDULES = {"miss": [7, 14, 28], "fail": [1, 2, 4]}
 def _backoff_days(attempts: int, kind: str = "miss") -> int:
     schedule = _BACKOFF_SCHEDULES[kind]
     return schedule[min(attempts, len(schedule)) - 1]
+
+
+# A source URL for a track spotdl's search can't find (#247), e.g. a glyph-only title.
+PINS_FILE = Path("/root/.config/music-pipeline/track-pins.conf")
+_TRACK_URL = "https://open.spotify.com/track/"
+
+
+def load_pins(path: Path | None = None) -> dict[str, str]:
+    """Source URLs by Spotify track URL (#247): one ``<spotify track id>  <url>``
+    per line of track-pins.conf (the ID may be the track's open.spotify.com URL;
+    anything after the source URL is a label).  Lines starting with ``#`` and
+    blank lines are ignored; a missing file means no pins."""
+    path = path or PINS_FILE
+    if not path.is_file():
+        return {}
+    pins: dict[str, str] = {}
+    for raw in path.read_text(encoding="utf-8").splitlines():
+        parts = raw.split()
+        if not parts or parts[0].startswith("#"):
+            continue
+        if len(parts) < 2 or not parts[1].startswith("https://"):
+            logger.warning("[PIN] ignoring %r in %s: want <spotify track id> <https source url>", raw.strip(), path.name)
+            continue
+        track = parts[0].split("?")[0].rstrip("/").rsplit("/", 1)[-1]
+        pins[_TRACK_URL + track] = _source_url(parts[1])
+    return pins
+
+
+def _source_url(url: str) -> str:
+    """A YouTube share link without its tracking parameters (``si`` and the
+    like): ``https://<host>/watch?v=<id>``, the form spotdl's own search
+    returns.  Any other URL is kept as it is."""
+    parsed = urlsplit(url)
+    video = parse_qs(parsed.query).get("v")
+    if parsed.netloc.endswith("youtube.com") and parsed.path == "/watch" and video:
+        return f"https://{parsed.netloc}/watch?v={video[0]}"
+    return url
 
 
 @dataclasses.dataclass(frozen=True)
@@ -351,11 +389,14 @@ def want_list(
     in_library: Callable[[dict], bool] | None,
     failures: dict,
     now: datetime | None = None,
+    pins: Mapping[str, str] | None = None,
 ) -> tuple[list, list, list]:
     """A playlist's want list (#228): *songs* in order, minus the entries the
     library already holds (*in_library*; returned second) and the ones still
-    backed off in *failures* (returned third).  The budget is spent on the
-    result, across playlists in ``playlists.conf`` order."""
+    backed off in *failures* (returned third).  A pinned track (*pins*, #247) is
+    never backed off, and comes first.  The budget is spent on the result,
+    across playlists in ``playlists.conf`` order."""
+    pins = pins or {}
     linked = [] if in_library is None else [song for song in songs if in_library(song.json)]
     linked_urls = {song.url for song in linked}
     now = now or datetime.now(timezone.utc)
@@ -364,10 +405,11 @@ def want_list(
         if song.url in linked_urls:
             continue
         entry = failures.get(song.url)
-        if entry and datetime.fromisoformat(entry["retry_after"]) > now:
+        if song.url not in pins and entry and datetime.fromisoformat(entry["retry_after"]) > now:
             backed_off.append(song)
         else:
             wanted.append(song)
+    wanted.sort(key=lambda song: song.url not in pins)
     return wanted, linked, backed_off
 
 
@@ -378,18 +420,24 @@ def _download_batch(
     failures_file: Path | None,
     in_library: Callable[[dict], bool] | None,
     removed_urls: set[str] = frozenset(),
+    pins: Mapping[str, str] | None = None,
 ) -> _Batch:
     """Download the want list of *truly_new* in order: skip those the library has
     ([HAVE]) or that are backed off ([BACK]), defer those over *track_limit*
     ([DEFER]), then log each outcome and record [MISS]/[FAIL] backoff in
-    *failures_file*.  A *track_limit* of 0 checks and defers everything."""
+    *failures_file*.  A *track_limit* of 0 checks and defers everything.
+    A pinned track (*pins*, default track-pins.conf, #247) downloads from its
+    source URL instead of spotdl's search ([PIN])."""
+    pins = load_pins() if pins is None else pins
     failures: dict = _load_failures(failures_file) if failures_file is not None else {}
-    truly_new, linked_songs, backed_off = want_list(truly_new, in_library, failures)
+    truly_new, linked_songs, backed_off = want_list(truly_new, in_library, failures, pins=pins)
     wanted = [song.url for song in truly_new]
     # Tracks the library already has under another playlist or from Usenet (#187).
     linked: dict[str, dict] = {song.url: song.json for song in linked_songs}
     for song in linked_songs:
         logger.info("[HAVE] %s → already in the library", _song_label(song))
+        if song.url in pins:
+            logger.info("[PIN] %s → already in the library; its pin is unused", _song_label(song))
     for url in removed_urls | linked.keys():
         failures.pop(url, None)
     for song in backed_off:
@@ -414,6 +462,12 @@ def _download_batch(
         )
         for song in deferred:
             logger.info("[DEFER] %s", _song_label(song))
+
+    # spotdl downloads from a song's download_url when it is set, skipping its search.
+    for song in truly_new:
+        if source := pins.get(song.url):
+            song.download_url = source
+            logger.info("[PIN] %s → downloading from %s", _song_label(song), source)
 
     # Download only the new batch; existing tracks are already on disk (overwrite=skip).
     # spotdl records why each download failed in Downloader.errors and never clears the
