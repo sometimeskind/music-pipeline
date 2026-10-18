@@ -1276,3 +1276,102 @@ def test_zero_budget_checks_the_playlist_and_defers_every_download(tmp_path: Pat
     assert "[HAVE] Artist - Elsewhere" in caplog.text
     assert "[DEFER] Artist - New" in caplog.text
     assert json.loads(spotdl_file.read_text(encoding="utf-8"))["songs"] == [have.json]
+
+
+# ---------------------------------------------------------------------------
+# Pinned source URLs (#247)
+# ---------------------------------------------------------------------------
+
+
+def test_load_pins_reads_ids_urls_and_labels(tmp_path: Path) -> None:
+    from music_fetch.spotdl_ops import load_pins
+
+    conf = tmp_path / "track-pins.conf"
+    conf.write_text(
+        "# a comment\n"
+        "\n"
+        "68ozhSrI4eLbnUgih1SlOT  https://music.youtube.com/watch?v=29Sh3yEaBP8&si=BQmU0Qvnv0Z64Jwc  track 1\n"
+        "https://open.spotify.com/track/5sKY9vib0WClIKDr0qkaWH?si=x  https://www.youtube.com/watch?v=abc\n"
+        "noUrlHere\n"
+        "7rgHXYuIpmxO3bpXZ7ZNLR  ftp://example.com/x\n"
+        "1XFW64AA5LnzFT510fKZSF  https://example.com/song.m4a\n",
+        encoding="utf-8",
+    )
+
+    assert load_pins(conf) == {
+        "https://open.spotify.com/track/68ozhSrI4eLbnUgih1SlOT": "https://music.youtube.com/watch?v=29Sh3yEaBP8",
+        "https://open.spotify.com/track/5sKY9vib0WClIKDr0qkaWH": "https://www.youtube.com/watch?v=abc",
+        "https://open.spotify.com/track/1XFW64AA5LnzFT510fKZSF": "https://example.com/song.m4a",
+    }
+    assert load_pins(tmp_path / "absent.conf") == {}
+
+
+def test_want_list_puts_pinned_tracks_first_and_ignores_their_backoff() -> None:
+    from datetime import datetime, timezone
+
+    from music_fetch.spotdl_ops import want_list
+
+    songs = [_make_mock_song(f"https://open.spotify.com/track/{i}", title=f"T{i}") for i in range(3)]
+    failures = {songs[2].url: {"kind": "miss", "retry_after": "2999-01-01T00:00:00+00:00"}}
+    now = datetime(2026, 1, 1, tzinfo=timezone.utc)
+
+    wanted, _, backed_off = want_list(songs, None, failures, now, pins={songs[2].url: "https://music.youtube.com/watch?v=x"})
+
+    assert [s.url for s in wanted] == [songs[2].url, songs[0].url, songs[1].url]
+    assert backed_off == []
+
+
+def test_pinned_track_downloads_from_its_source_url(tmp_path: Path, caplog) -> None:
+    """A pinned track skips spotdl's search (download_url set), ignores its
+    backoff and gets the budget before the playlist's other tracks (#247)."""
+    import logging
+
+    from music_fetch.spotdl_ops import download_fallback
+
+    songs = [{"url": f"https://open.spotify.com/track/{i}", "name": f"T{i}", "artists": ["A"]} for i in range(3)]
+    failures_file = tmp_path / "failures.json"
+    failures_file.write_text(json.dumps({songs[2]["url"]: {"kind": "miss", "attempts": 2, "retry_after": "2999-01-01T00:00:00+00:00"}}))
+    pins_file = tmp_path / "track-pins.conf"
+    pins_file.write_text("2  https://music.youtube.com/watch?v=pinned&si=share\n", encoding="utf-8")
+    sent: list = []
+
+    def fake_download(batch):
+        sent.extend(batch)
+        return [(s, tmp_path / "x.m4a") for s in batch]
+
+    spotdl = mock.Mock()
+    spotdl.downloader.errors = []
+    spotdl.download_songs.side_effect = fake_download
+    with caplog.at_level(logging.INFO, logger="music_fetch.spotdl_ops"), \
+         mock.patch("music_fetch.spotdl_ops.PINS_FILE", pins_file), \
+         mock.patch("music_fetch.spotdl_ops._make_spotdl", return_value=spotdl), \
+         mock.patch("spotdl.types.song.Song.from_dict", side_effect=lambda d: _make_mock_song(d["url"], d["name"])):
+        result = download_fallback(
+            songs, output_dir=tmp_path / "later", cookie_file=tmp_path / "c.txt", track_limit=1,
+            failures_file=failures_file,
+        )
+
+    assert [s.url for s in sent] == [songs[2]["url"]]
+    assert sent[0].download_url == "https://music.youtube.com/watch?v=pinned"
+    assert "[PIN] Artist - T2 → downloading from https://music.youtube.com/watch?v=pinned" in caplog.text
+    assert result.downloaded == 1
+    assert songs[2]["url"] not in json.loads(failures_file.read_text())
+
+
+def test_pin_for_a_track_in_the_library_is_skipped(tmp_path: Path, caplog) -> None:
+    import logging
+
+    from music_fetch.spotdl_ops import _download_batch
+
+    song = _make_mock_song("https://open.spotify.com/track/0", "T0")
+    spotdl = mock.Mock()
+    spotdl.downloader.errors = []
+    with caplog.at_level(logging.INFO, logger="music_fetch.spotdl_ops"):
+        batch = _download_batch(
+            spotdl, [song], None, None, lambda song: True,
+            pins={song.url: "https://music.youtube.com/watch?v=x"},
+        )
+
+    spotdl.download_songs.assert_not_called()
+    assert (batch.attempted, len(batch.linked)) == (0, 1)
+    assert "[PIN] Artist - T0 → already in the library; its pin is unused" in caplog.text
