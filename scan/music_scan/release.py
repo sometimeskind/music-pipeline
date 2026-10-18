@@ -700,8 +700,8 @@ def audit_main() -> None:
 
 def list_twins(records: dict[str, dict], twins: dict[str, list[tuple]], durations: dict[str, float]) -> int:
     """Log *twins* (:func:`title_twins`) album by album, each pair with its
-    ``music-audit-dupes --merge`` command (the keeper the Spotify length's,
-    by *durations*).  Returns the albums listed."""
+    ``music-audit-dupes --merge`` command (the keeper the release item, then
+    the Spotify length's by *durations*, as ``music-audit-dupes`` keeps).  Returns the albums listed."""
     from music_scan.dupes import merge_command  # noqa: PLC0415
 
     for key, pairs in twins.items():

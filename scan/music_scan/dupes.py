@@ -23,10 +23,20 @@ Two tiers, grouped transitively:
 Fingerprints are compared only between items that share an artist word, so the
 run stays a few thousand comparisons rather than every pair.
 
-``--apply`` merges each certain group onto one item, chosen by: length closest
-to Spotify's duration for any of the group's Spotify IDs (from the ``.spotdl``
-snapshots, no Spotify calls), then bitrate, then playlists, then the older
-item.  The keeper takes the others' ``spotify_ids``, ``isrc``, ``sources`` and
+On album playlists the album is the unit (#279): one recording legitimately
+sits on two whole albums (a greatest-hits and the studio album), or twice on
+one release (a deluxe listing it twice).  A certain group whose items belong to
+different album records (``album_record``), or that holds two tracks of one
+album record (two of its release's items, or two local-only extras and no
+release item), is held back (:func:`album_reason`): listed ``[ALBUM]`` with
+the reason, never merged by ``--apply`` (#311).  An extra and its own record's
+release item are one album's copies, so they merge, as :func:`music_scan.release.retire_held` does.
+
+``--apply`` merges each other certain group onto one item, chosen by: an album
+record's release item, then one of its local-only extras, so the album keeps
+its track; then length closest to Spotify's duration for any of the group's
+Spotify IDs (from the ``.spotdl`` snapshots, no Spotify calls), then bitrate,
+then playlists, then the older item.  The keeper takes the others' ``spotify_ids``, ``isrc``, ``sources`` and
 a missing ``mb_trackid``; their files move to ``quarantine/replaced/`` (never
 deleted) and their rows leave the database.  The keeper records the moved files'
 names in :data:`MERGED_FILES` (with any its losers had recorded), so the purge
@@ -39,7 +49,9 @@ uncertain pair, onto KEEP through the same merge as ``--apply``; the audit print
 the command for each uncertain pair, keeper by the rule above.  It is a dry run
 without ``--apply`` and refuses unknown IDs, KEEP among the drops, and a manually
 imported drop (any ``via`` but spotdl/usenet, as supersede's ``[MANUAL]``) unless
-``--allow-manual``.
+``--allow-manual``.  A drop that is a track of an album record (other than an
+extra merged into its own record's release item) is merged too, with an
+``[ALBUM]`` warning that its album loses the track (:func:`album_loss`).
 
 ``--fingerprint`` fingerprints items that have no ``acoustid_fingerprint`` (dry
 run counts them; with ``--apply`` it computes and stores them in the database
@@ -75,7 +87,7 @@ from music_scan.supersede import MANAGED_VIA
 
 logger = logging.getLogger(__name__)
 
-CERTAIN, UNCERTAIN = "certain", "uncertain"
+CERTAIN, UNCERTAIN, ALBUM = "certain", "uncertain", "album"
 # An AcoustID match is certain only with lengths this close (seconds).
 LENGTH_SLACK = 2.0
 # Fingerprint comparison: a window of WINDOW sub-fingerprints (about 8 a second)
@@ -96,6 +108,8 @@ class Group:
     items: list
     # (item id, item id, evidence), one per pair that joined the group.
     evidence: list[tuple[int, int, str]]
+    # Why --apply leaves an ALBUM group alone (:func:`album_reason`).
+    reason: str = ""
 
 
 class _Union:
@@ -263,6 +277,55 @@ def find_dupes(items: list, decoder: Callable[[str], list[int]] = decode) -> tup
     return list(groups.values()), list(uncertain_groups.values()), distinct
 
 
+def _is_extra(item) -> bool:
+    from music_scan.release import EXTRA  # noqa: PLC0415
+
+    return bool(item.get(EXTRA))
+
+
+def album_reason(group: Group) -> str:
+    """Why merging *group* would take a track off a whole album (#311), or ``""``:
+    its items belong to different album records, or two of them are tracks of
+    one album record (two release items, or two extras with no release item)."""
+    by_record: dict[str, list] = defaultdict(list)
+    for item in group.items:
+        if key := item.get("album_record"):
+            by_record[key].append(item)
+    if len(by_record) > 1:
+        return (f"on {len(by_record)} album records ({', '.join(sorted(by_record))}): "
+                "each album keeps its track")
+    for key, mine in by_record.items():
+        release = [i for i in mine if not _is_extra(i)]
+        if len(release) > 1 or (not release and len(mine) > 1):
+            kind = "release items" if release else "local-only extras"
+            return f"{len(release) or len(mine)} {kind} of album record {key}: the album keeps both tracks"
+    return ""
+
+
+def hold_albums(certain: list[Group]) -> tuple[list[Group], list[Group]]:
+    """*certain* split into the groups ``--apply`` merges and the ``ALBUM`` groups it leaves."""
+    merged, held = [], []
+    for group in certain:
+        if reason := album_reason(group):
+            held.append(Group(ALBUM, group.items, group.evidence, reason))
+        else:
+            merged.append(group)
+    return merged, held
+
+
+def album_loss(keeper, drop) -> str:
+    """Why dropping *drop* onto *keeper* takes a track off an album, or ``""``: *drop*
+    is a track of an album record, unless it is an extra merged into its own
+    record's release item."""
+    key = drop.get("album_record")
+    if not key:
+        return ""
+    if _is_extra(drop) and keeper.get("album_record") == key and not _is_extra(keeper):
+        return ""
+    kind = "local-only extra" if _is_extra(drop) else "release item"
+    return f"{drop.id} is a {kind} of album record {key} [{drop.get('album') or '?'}]: its album loses the track"
+
+
 def spotify_durations(spotdl_dir: Path) -> dict[str, float]:
     """Spotify track ID → duration (seconds), from the ``.spotdl`` snapshots."""
     from music_scan.scan import _spotdl_songs  # noqa: PLC0415
@@ -282,9 +345,11 @@ def expected_lengths(group: Group, durations: dict[str, float]) -> list[float]:
 
 
 def keep_order(item, expected: list[float]) -> tuple:
-    """Sort key: the item to keep sorts first."""
+    """Sort key: the item to keep sorts first.  An album record's release item, then
+    its extra, before any length: the album is the unit (#279)."""
+    album = 2 if not item.get("album_record") else 1 if _is_extra(item) else 0
     off = min((abs(float(item.length or 0) - d) for d in expected), default=0.0)
-    return (round(off), -int(item.bitrate or 0), -len(split_list(item.get("sources"))), item.id)
+    return (album, round(off), -int(item.bitrate or 0), -len(split_list(item.get("sources"))), item.id)
 
 
 def _rel(item) -> str:
@@ -292,20 +357,31 @@ def _rel(item) -> str:
     return str(path.relative_to(LIBRARY)) if path.is_relative_to(LIBRARY) else str(path)
 
 
-def report(certain: list[Group], uncertain: list[Group], distinct: int, durations: dict[str, float]) -> None:
+def report(certain: list[Group], uncertain: list[Group], distinct: int, durations: dict[str, float],
+           held: list[Group] = ()) -> None:
     for group in certain:
         expected = expected_lengths(group, durations)
         keeper, *_ = sorted(group.items, key=lambda i: keep_order(i, expected))
         _log_group(group, keeper, expected)
+    for group in held:
+        _log_group(group, None, expected_lengths(group, durations))
+        logger.info("    not merged by --apply: %s", group.reason)
+        _log_merge_commands(group, durations, "by hand, if the album may lose it")
     for group in uncertain:
         _log_group(group, None, expected_lengths(group, durations))
-        by_id = {item.id: item for item in group.items}
-        for a, b, _ in group.evidence:
-            logger.info("    if one recording: %s", merge_command(by_id[a], by_id[b], durations))
+        _log_merge_commands(group, durations, "if one recording")
     logger.info(
-        "Dupes: %d certain group(s) (%d surplus item(s)), %d uncertain group(s), %d distinct pair(s) (disjoint ISRCs)",
-        len(certain), sum(len(g.items) - 1 for g in certain), len(uncertain), distinct,
+        "Dupes: %d certain group(s) (%d surplus item(s)), %d album group(s) not merged, %d uncertain group(s), "
+        "%d distinct pair(s) (disjoint ISRCs)",
+        len(certain), sum(len(g.items) - 1 for g in certain), len(held), len(uncertain), distinct,
     )
+
+
+def _log_merge_commands(group: Group, durations: dict[str, float], label: str) -> None:
+    """One ``--merge`` command per pair of *group*, once though several rules matched it."""
+    by_id = {item.id: item for item in group.items}
+    for command in dict.fromkeys(merge_command(by_id[a], by_id[b], durations) for a, b, _ in group.evidence):
+        logger.info("    %s: %s", label, command)
 
 
 def merge_command(a, b, durations: dict[str, float]) -> str:
@@ -396,6 +472,9 @@ def merge_chosen(items: list, ids: list[int], apply: bool, allow_manual: bool,
 
     group = Group("merge", [keeper, *drops], [])
     _log_group(group, keeper, expected_lengths(group, durations))
+    for drop in drops:
+        if loss := album_loss(keeper, drop):
+            logger.warning("    [ALBUM] %s", loss)
     gained = [s for d in drops for s in split_list(d.get("sources")) if s not in split_list(keeper.get("sources"))]
     logger.info("    %s keeps its file and takes the IDs and playlists of %s (new playlists: %s); "
                 "their file(s) → %s", keeper.id, ", ".join(str(d.id) for d in drops),
@@ -474,7 +553,8 @@ def run(apply: bool = False, fingerprints: list[int] | None = None, merge_ids: l
             trigger_scan()
             return [], []
         certain, uncertain, distinct = find_dupes(items, decode)
-        report(certain, uncertain, distinct, durations)
+        certain, held = hold_albums(certain)
+        report(certain, uncertain, distinct, durations, held)
         left = len(certain)
         if apply and certain:
             with pipeline_lock():
@@ -487,10 +567,10 @@ def run(apply: bool = False, fingerprints: list[int] | None = None, merge_ids: l
                         ", ".join(f"{k} {v}" for k, v in sorted(counts.items())))
         elif certain:
             logger.info("Dry run — nothing merged. Re-run with --apply to merge the certain tier.")
-    push_metrics(left, len(uncertain))
+    push_metrics(left, len(uncertain) + len(held))
     if apply and certain:
         trigger_scan()
-    return certain, uncertain
+    return certain, [*held, *uncertain]
 
 
 def main() -> None:
