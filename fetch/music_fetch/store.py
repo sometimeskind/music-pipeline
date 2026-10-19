@@ -41,6 +41,10 @@ SPOTDL_DIR = Path("/root/Music/inbox/spotdl")
 # import ignores it, and it holds no audio for the inbox sweep to move.
 DRYRUN_DIR = SPOTDL_DIR / ".store-dryrun"
 VERSION = 1
+# Store.source of a store built from a Spotify fetch.  A ``nosync`` playlist's
+# .spotdl is not its whole Spotify list when it ran as a spotdl playlist before
+# it was frozen (homelab#1914: wedding), so its store is fetched once instead.
+SPOTIFY = "spotify"
 
 
 def mode() -> str:
@@ -71,11 +75,13 @@ def _write(path: Path, text: str) -> None:
 
 @dataclasses.dataclass
 class Store:
-    """One playlist's store: its entries in order, each ``{"song": <record>}``."""
+    """One playlist's store: its entries in order, each ``{"song": <record>}``.
+    *source* is :data:`SPOTIFY` when the entries came from a Spotify fetch."""
 
     name: str
     entries: list[dict]
     updated: str = ""
+    source: str = ""
 
     @property
     def songs(self) -> list[dict]:
@@ -95,12 +101,14 @@ class Store:
         except Exception:
             logger.warning("Could not read the playlist store %s", path, exc_info=True)
             return None
-        return cls(data.get("playlist") or path.stem, data.get("entries") or [], data.get("updated") or "")
+        return cls(data.get("playlist") or path.stem, data.get("entries") or [], data.get("updated") or "",
+                   data.get("source") or "")
 
     def save(self, path: Path) -> None:
         self.updated = _now()
         _write(path, json.dumps(
-            {"version": VERSION, "playlist": self.name, "updated": self.updated, "entries": self.entries},
+            {"version": VERSION, "playlist": self.name, "updated": self.updated, "source": self.source,
+             "entries": self.entries},
             indent=2, ensure_ascii=False,
         ))
 

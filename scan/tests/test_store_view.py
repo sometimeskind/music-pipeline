@@ -104,6 +104,22 @@ def test_dry_run_seeds_a_nosync_store_from_its_spotdl(env, monkeypatch) -> None:
     assert (side / "pl.m3u").read_text(encoding="utf-8").splitlines() == ["../library/tagged.m4a"]
 
 
+def test_dry_run_keeps_a_nosync_store_built_from_spotify(env, monkeypatch) -> None:
+    from music_scan.scan import regen_playlists
+
+    spotdl_dir, _, side = env
+    (spotdl_dir / "pl.nosync").touch()
+    monkeypatch.setenv(store.STORE_ENV, store.DRY_RUN)
+    # The nightly built it from Spotify: E1 is on the playlist but not in the .spotdl.
+    built = store.Store.from_songs("pl", [_song("Tagged", "T1"), _song("Elsewhere", "E1")])
+    built.source = store.SPOTIFY
+    built.save(side / "pl.json")
+    regen_playlists()
+    assert [s["song_id"] for s in store.Store.load(side / "pl.json").songs] == ["T1", "E1"]
+    assert (side / "pl.m3u").read_text(encoding="utf-8").splitlines() == ["../library/tagged.m4a",
+                                                                          "../library/elsewhere.m4a"]
+
+
 def test_a_failing_dry_run_leaves_the_playlist_alone(env, monkeypatch, caplog) -> None:
     from music_scan.scan import regen_playlists
 
