@@ -85,7 +85,8 @@ def test_write_view(tmp_path) -> None:
 # ---------------------------------------------------------------------------
 
 
-def _sync(tmp_path, monkeypatch, result, mode: str | None = store.DRY_RUN, **kwargs):
+def _sync(tmp_path, monkeypatch, result, mode: str | None = store.DRY_RUN, snapshot=(), nosync=False,
+          fetched=None, **kwargs):
     import json
     from unittest import mock
 
@@ -93,8 +94,11 @@ def _sync(tmp_path, monkeypatch, result, mode: str | None = store.DRY_RUN, **kwa
     from music_fetch.metrics import IngestMetrics
 
     spotdl_dir = tmp_path / "spotdl"
-    spotdl_dir.mkdir()
-    (spotdl_dir / "pl.spotdl").write_text(json.dumps({"type": "sync", "query": ["q"], "songs": []}), encoding="utf-8")
+    spotdl_dir.mkdir(exist_ok=True)
+    (spotdl_dir / "pl.spotdl").write_text(json.dumps({"type": "sync", "query": ["q"], "songs": list(snapshot)}),
+                                          encoding="utf-8")
+    if nosync:
+        (spotdl_dir / "pl.nosync").touch()
     if mode is None:
         monkeypatch.delenv(store.STORE_ENV, raising=False)
     else:
@@ -105,6 +109,7 @@ def _sync(tmp_path, monkeypatch, result, mode: str | None = store.DRY_RUN, **kwa
          mock.patch.object(ingest, "COOKIE_FILE", tmp_path / "cookies.txt"), \
          mock.patch.object(ingest, "FAILURES_FILE", tmp_path / ".failures.json"), \
          mock.patch("music_fetch.ingest.sync_playlist", return_value=result), \
+         mock.patch("music_fetch.ingest.fetch_songs", side_effect=fetched), \
          mock.patch("music_fetch.ingest.time.sleep"):
         ingest.sync_playlists([], IngestMetrics(), **kwargs)
     return tmp_path / "side"
@@ -138,6 +143,39 @@ def test_nightly_dry_run_keeps_an_earlier_stores_records(tmp_path, monkeypatch) 
 @pytest.mark.parametrize("mode, kwargs", [(None, {"resolves": lambda s: False}), (store.DRY_RUN, {})])
 def test_nightly_writes_nothing_unless_dry_run_and_a_resolver(tmp_path, monkeypatch, mode, kwargs) -> None:
     side = _sync(tmp_path, monkeypatch, _result(songs=[song("A")]), mode=mode, **kwargs)
+    assert not side.exists()
+
+
+def test_nightly_dry_run_builds_a_nosync_store_from_spotify_once(tmp_path, monkeypatch, caplog) -> None:
+    caplog.set_level("INFO")
+    # The .spotdl lists only what was downloaded before the freeze: B is on Spotify but not in it.
+    full_a = song("A", album_name="Full record")
+    (tmp_path / "side").mkdir()
+    store.Store.from_songs("pl", [full_a]).save(tmp_path / "side" / "pl.json")  # a scan seeded it from .spotdl
+    side = _sync(tmp_path, monkeypatch, None, snapshot=[full_a], nosync=True, resolves=lambda s: True,
+                 fetched=lambda f, c: [song("A"), song("B")])
+    built = store.Store.load(side / "pl.json")
+    assert built.source == store.SPOTIFY
+    assert built.songs == [full_a, song("B")]
+    assert "[STORE] pl: built from Spotify, 2 entries (.spotdl has 1)" in caplog.text
+
+    # Kept from then on: no second fetch.
+    _sync(tmp_path, monkeypatch, None, snapshot=[full_a], nosync=True, resolves=lambda s: True,
+          fetched=AssertionError("fetched again"))
+    assert "fetched again" not in caplog.text
+    assert store.Store.load(side / "pl.json").songs == [full_a, song("B")]
+
+
+def test_nightly_dry_run_nosync_fetch_failure_never_fails_the_sync(tmp_path, monkeypatch, caplog) -> None:
+    side = _sync(tmp_path, monkeypatch, None, nosync=True, resolves=lambda s: True,
+                 fetched=RuntimeError("spotify down"))
+    assert "Playlist store dry run failed for pl" in caplog.text
+    assert not (side / "pl.json").exists()
+
+
+def test_nightly_fetches_no_nosync_playlist_unless_dry_run(tmp_path, monkeypatch) -> None:
+    side = _sync(tmp_path, monkeypatch, None, mode=None, nosync=True, resolves=lambda s: True,
+                 fetched=AssertionError("fetched"))
     assert not side.exists()
 
 

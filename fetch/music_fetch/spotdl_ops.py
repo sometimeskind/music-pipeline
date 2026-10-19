@@ -546,6 +546,18 @@ def download_fallback(
     return batch.result(set())
 
 
+def fetch_songs(spotdl_file: Path, cookie_file: Path) -> list[dict]:
+    """The Spotify playlist behind *spotdl_file*, in order, as page records,
+    read the way :func:`sync_playlist` reads it.  Downloads nothing and leaves
+    the file alone."""
+    from spotdl.utils.search import get_simple_songs  # noqa: PLC0415
+
+    with open(spotdl_file, encoding="utf-8") as fh:
+        query: list[str] = json.load(fh)["query"]
+    _make_spotdl(_make_downloader_settings(cookie_file=cookie_file))
+    return [song.json for song in get_simple_songs(query)]
+
+
 def sync_playlist(
     spotdl_file: Path,
     output_dir: Path,

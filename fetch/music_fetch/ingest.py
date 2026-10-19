@@ -33,7 +33,7 @@ from typing import Callable, Iterator
 from music_fetch import albums, store
 from music_fetch.config import load_playlists
 from music_fetch.metrics import IngestMetrics
-from music_fetch.spotdl_ops import download_fallback, find_track_in_snapshot, save_playlist, sync_playlist
+from music_fetch.spotdl_ops import download_fallback, fetch_songs, find_track_in_snapshot, save_playlist, sync_playlist
 
 logger = logging.getLogger(__name__)
 
@@ -316,6 +316,26 @@ def _store_dry_run(
         logger.error("Playlist store dry run failed for %s — today's sync is unaffected", name, exc_info=True)
 
 
+def _store_dry_run_frozen(name: str, spotdl_file: Path) -> None:
+    """``PLAYLIST_STORE=dry-run`` for a ``nosync`` playlist (homelab#1914): build
+    its store once from a Spotify fetch, each entry the ``.spotdl`` record when
+    it has one, and keep it from then on.  Its ``.spotdl`` lists only what was
+    downloaded before it was frozen, not the whole Spotify list.  Never raises:
+    the dry run must not fail the nightly."""
+    try:
+        path = store.DRYRUN_DIR / f"{name}.json"
+        previous = store.Store.load(path)
+        if previous is not None and previous.source == store.SPOTIFY:
+            return
+        known = {s.get("url"): s for s in _snapshot_songs(json.loads(spotdl_file.read_text(encoding="utf-8")))}
+        playlist = store.Store.from_songs(name, store.merge_spotify(fetch_songs(spotdl_file, COOKIE_FILE), known))
+        playlist.source = store.SPOTIFY
+        playlist.save(path)
+        logger.info("[STORE] %s: built from Spotify, %d entries (.spotdl has %d)", name, len(playlist.entries), len(known))
+    except Exception:
+        logger.error("Playlist store dry run failed for %s — today's sync is unaffected", name, exc_info=True)
+
+
 def sync_playlists(
     remove_sources: list[str],
     metrics: IngestMetrics,
@@ -392,6 +412,8 @@ def sync_playlists(
         # .nosync: skip spotdl sync for frozen playlists
         if (SPOTDL_DIR / f"{name}.nosync").exists():
             logger.info("==> Skipping sync for static playlist: %s (.nosync present)", name)
+            if store_dry_run:
+                _store_dry_run_frozen(name, spotdl_file)
             metrics.playlists_skipped += 1
             metrics.playlists_total += 1
             continue

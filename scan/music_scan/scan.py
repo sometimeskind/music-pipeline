@@ -269,14 +269,18 @@ def store_view(name: str, spotdl_file: Path, library: ItemIndex, by_album) -> li
     the whole library, each file once and in store order, with no ``sources``
     and no tail; an ``album`` playlist through :func:`playlists.album_paths`
     on the same entries.  A spotdl playlist's store is the one the nightly's
-    dry run wrote; an ``album`` or ``nosync`` playlist's ``.spotdl`` is already
-    its whole Spotify list, so its store is seeded from it.  None when a spotdl
-    playlist has no store yet."""
+    dry run wrote.  An ``album`` playlist's ``.spotdl`` is already its whole
+    Spotify list, so its store is seeded from it.  A ``nosync`` playlist's is
+    the one the nightly built from Spotify once, seeded from its ``.spotdl``
+    until then.  None when a spotdl playlist has no store yet."""
     is_album = (SPOTDL_DIR / f"{name}.album").exists()
+    nosync = (SPOTDL_DIR / f"{name}.nosync").exists()
     path = store.DRYRUN_DIR / f"{name}.json"
-    if is_album or (SPOTDL_DIR / f"{name}.nosync").exists():
-        playlist = store.Store.from_songs(name, playlists.spotdl_songs(spotdl_file))
-        playlist.save(path)
+    if is_album or nosync:
+        playlist = store.Store.load(path) if nosync else None
+        if playlist is None or playlist.source != store.SPOTIFY:
+            playlist = store.Store.from_songs(name, playlists.spotdl_songs(spotdl_file))
+            playlist.save(path)
     else:
         playlist = store.Store.load(path)
         if playlist is None:
