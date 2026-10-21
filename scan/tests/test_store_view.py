@@ -1,5 +1,6 @@
-"""The playlist store's dry run at regen (homelab#1914 step 1): the store's
-``.m3u`` goes to the side directory, diffed against today's, and nothing else changes."""
+"""The playlist store at regen (homelab#1914): in the dry run the store's
+``.m3u`` goes to the side directory, diffed against today's, and nothing else
+changes; with ``on`` it is the playlist, followed by its ``sources`` tail."""
 
 from __future__ import annotations
 
@@ -48,6 +49,7 @@ def env(tmp_path: Path, monkeypatch):
     monkeypatch.setattr("music_scan.scan.PLAYLISTS", playlists_dir)
     monkeypatch.setattr("music_scan.scan.MusicLibrary", mock.MagicMock(return_value=lib))
     monkeypatch.setattr(store, "DRYRUN_DIR", side)
+    monkeypatch.setattr(store, "STORE_DIR", tmp_path / "store")
     return spotdl_dir, playlists_dir, side
 
 
@@ -129,4 +131,82 @@ def test_a_failing_dry_run_leaves_the_playlist_alone(env, monkeypatch, caplog) -
         counts = regen_playlists()
     assert counts == {"pl": 3}
     assert (playlists_dir / "pl.m3u").exists()
-    assert "Playlist store dry run failed for pl" in caplog.text
+    assert "Playlist store failed for pl" in caplog.text
+
+
+# ---------------------------------------------------------------------------
+# PLAYLIST_STORE=on (homelab#1914 stage a)
+# ---------------------------------------------------------------------------
+
+
+def _whole_list(directory: Path) -> None:
+    """The store the nightly wrote: the whole Spotify list."""
+    store.Store.from_songs("pl", [_song("Tagged", "T1"), _song("Words", "W1"), _song("Elsewhere", "E1"),
+                                  _song("Nowhere", "N1")]).save(directory / "pl.json")
+
+
+def test_on_writes_the_store_view_then_the_sources_tail(env, monkeypatch, caplog) -> None:
+    from music_scan.scan import regen_playlists
+
+    _, playlists_dir, _ = env
+    monkeypatch.setenv(store.STORE_ENV, store.ON)
+    _whole_list(store.STORE_DIR)
+    with caplog.at_level(logging.INFO, logger="music_fetch.store"):
+        counts = regen_playlists()
+
+    # Store order by ID/ISRC, then the tagged items no entry resolves (Words is a [WORDS]-only
+    # match today), alphabetically.
+    expected = ["../library/tagged.m4a", "../library/elsewhere.m4a", "../library/extra.m4a",
+                "../library/words.m4a"]
+    assert (playlists_dir / "pl.m3u").read_text(encoding="utf-8").splitlines() == expected
+    assert counts == {"pl": 4}
+    # The diff against what today's path would have written still runs, in the store directory.
+    assert (store.STORE_DIR / "pl.m3u.diff").read_text(encoding="utf-8").splitlines() == [
+        "+ ../library/elsewhere.m4a", "~ the lines both hold are in another order"]
+    assert "[STORE-DIFF] pl m3u: today 3 | store 4 | +1 -0 | order differs" in caplog.text
+
+
+def test_on_reads_a_store_the_dry_run_built(env, monkeypatch) -> None:
+    from music_scan.scan import regen_playlists
+
+    _, playlists_dir, side = env
+    monkeypatch.setenv(store.STORE_ENV, store.ON)
+    _whole_list(side)
+    regen_playlists()
+    assert "../library/elsewhere.m4a" in (playlists_dir / "pl.m3u").read_text(encoding="utf-8").splitlines()
+
+
+def test_on_without_a_store_writes_todays_playlist(env, monkeypatch) -> None:
+    from music_scan.scan import regen_playlists
+
+    _, playlists_dir, _ = env
+    monkeypatch.setenv(store.STORE_ENV, store.ON)
+    regen_playlists()
+    assert (playlists_dir / "pl.m3u").read_text(encoding="utf-8").splitlines() == [
+        "../library/tagged.m4a", "../library/words.m4a", "../library/extra.m4a"]
+
+
+def test_on_a_failing_store_writes_todays_playlist(env, monkeypatch, caplog) -> None:
+    from music_scan.scan import regen_playlists
+
+    _, playlists_dir, _ = env
+    monkeypatch.setenv(store.STORE_ENV, store.ON)
+    _whole_list(store.STORE_DIR)
+    with mock.patch("music_scan.scan.store_view", side_effect=RuntimeError("boom")):
+        counts = regen_playlists()
+    assert counts == {"pl": 3}
+    assert "Playlist store failed for pl" in caplog.text
+
+
+def test_on_leaves_an_album_playlist_on_todays_path(env, monkeypatch) -> None:
+    from music_scan.scan import regen_playlists
+
+    spotdl_dir, playlists_dir, _ = env
+    (spotdl_dir / "pl.album").touch()
+    monkeypatch.setenv(store.STORE_ENV, store.ON)
+    with mock.patch("music_scan.playlists.album_paths",
+                    side_effect=[([Path("/x/today.m4a")], [], 1), ([Path("/x/store.m4a")], [], 1)]):
+        regen_playlists()
+    lines = (playlists_dir / "pl.m3u").read_text(encoding="utf-8").splitlines()
+    assert [Path(line).name for line in lines] == ["today.m4a"]
+    assert (store.STORE_DIR / "pl.m3u").exists()
