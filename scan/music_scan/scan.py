@@ -268,23 +268,22 @@ def store_view(name: str, spotdl_file: Path, library: ItemIndex, by_album) -> li
     (homelab#1914): its entries resolved by Spotify ID or ISRC only, against
     the whole library, each file once and in store order, with no ``sources``
     and no tail; an ``album`` playlist through :func:`playlists.album_paths`
-    on the same entries.  A spotdl playlist's store is the one the nightly's
-    dry run wrote.  An ``album`` playlist's ``.spotdl`` is already its whole
-    Spotify list, so its store is seeded from it.  A ``nosync`` playlist's is
-    the one the nightly built from Spotify once, seeded from its ``.spotdl``
-    until then.  None when a spotdl playlist has no store yet."""
+    on the same entries.  A spotdl playlist's store is the one the nightly
+    wrote.  An ``album`` playlist's ``.spotdl`` is already its whole Spotify
+    list, so its store is seeded from it.  A ``nosync`` playlist's is the one
+    the nightly built from Spotify once, seeded from its ``.spotdl`` until
+    then.  None when a spotdl playlist has no store yet."""
     is_album = (SPOTDL_DIR / f"{name}.album").exists()
     nosync = (SPOTDL_DIR / f"{name}.nosync").exists()
-    path = store.DRYRUN_DIR / f"{name}.json"
     if is_album or nosync:
-        playlist = store.Store.load(path) if nosync else None
+        playlist = store.load(name) if nosync else None
         if playlist is None or playlist.source != store.SPOTIFY:
             playlist = store.Store.from_songs(name, playlists.spotdl_songs(spotdl_file))
-            playlist.save(path)
+            playlist.save(store.path(name))
     else:
-        playlist = store.Store.load(path)
+        playlist = store.load(name)
         if playlist is None:
-            logger.info("  [STORE] %s: no store yet — the nightly's dry run writes it", name)
+            logger.info("  [STORE] %s: no store yet — the nightly writes it", name)
             return None
     none = ItemIndex([])
     if is_album:
@@ -292,15 +291,29 @@ def store_view(name: str, spotdl_file: Path, library: ItemIndex, by_album) -> li
     return playlist_paths(playlists.resolve([Entry.from_song(s) for s in playlist.songs], none, library), [])
 
 
-def _store_dry_run(name: str, spotdl_file: Path, lines: list[str], library: ItemIndex, by_album) -> None:
-    """Write the store's ``.m3u`` for *name* to the side directory, diffed
-    against today's *lines*.  Never raises: the dry run must not fail a scan."""
+def _store_m3u(name: str, spotdl_file: Path, lines: list[str], source_items: list, library: ItemIndex,
+               by_album) -> list[str]:
+    """Write the store's ``.m3u`` view of *name* to :func:`store.store_dir`,
+    diffed against today's *lines*, and return the lines the playlist gets.
+    With ``PLAYLIST_STORE=on`` a spotdl or ``nosync`` playlist gets the
+    store's view, then its ``sources`` tail: the *source_items* no entry
+    resolves, alphabetically, its local-only tracks.  Otherwise, and when the
+    playlist has no store yet, *lines*.  Never raises: a store failure falls
+    back to *lines*, so it never fails a scan or empties a playlist."""
     try:
         paths = store_view(name, spotdl_file, library, by_album)
-        if paths is not None:
-            store.write_view(name, "m3u", lines, [os.path.relpath(p, PLAYLISTS) for p in paths])
+        if paths is None:
+            return lines
+        use = store.mode() == store.ON and not (SPOTDL_DIR / f"{name}.album").exists()
+        if use:
+            matched = set(paths)
+            paths = paths + sorted(p for p in map(_item_path, source_items) if p not in matched)
+        view = [os.path.relpath(p, PLAYLISTS) for p in paths]
+        store.write_view(name, "m3u", lines, view)
+        return view if use else lines
     except Exception:
-        logger.error("Playlist store dry run failed for %s — today's playlist is unaffected", name, exc_info=True)
+        logger.error("Playlist store failed for %s — today's playlist is written instead", name, exc_info=True)
+        return lines
 
 
 def regen_playlists(metrics: ScanMetrics | None = None) -> dict[str, int]:
@@ -312,7 +325,9 @@ def regen_playlists(metrics: ScanMetrics | None = None) -> dict[str, int]:
     every playlist that lists it at the next scan, with no download and no tag
     write (#228).  *metrics*, when given, takes the empty-slot count per playlist.
     With ``PLAYLIST_STORE=dry-run`` each playlist's store view is written to the
-    side directory too (:func:`store_view`, homelab#1914).
+    side directory too (:func:`store_view`, homelab#1914); with ``on`` a spotdl
+    or ``nosync`` playlist's ``.m3u`` is that view plus its ``sources`` tail
+    (:func:`_store_m3u`).
 
     An ``album`` playlist (``<name>.album`` next to its ``.spotdl``) lists every
     local track of every album on it instead (#268, :func:`playlists.album_paths`).
@@ -325,7 +340,7 @@ def regen_playlists(metrics: ScanMetrics | None = None) -> dict[str, int]:
 
     counts: dict[str, int] = {}
     empty: dict[str, int] = {}
-    store_dry_run = store.dry_run()
+    store_active = store.active()
     with MusicLibrary(LIBRARY_DB) as lib:
         all_items = lib.all_items()
         library = ItemIndex(all_items)
@@ -346,12 +361,12 @@ def regen_playlists(metrics: ScanMetrics | None = None) -> dict[str, int]:
             playlists.log_slots(name, slots)
 
             lines = [os.path.relpath(p, PLAYLISTS) for p in paths]
+            if store_active:
+                by_album = playlists.by_album_id(all_items) if by_album is None else by_album
+                lines = _store_m3u(name, spotdl_file, lines, source_items, library, by_album)
             m3u.write_text("\n".join(lines) + ("\n" if lines else ""), encoding="utf-8")
             counts[name] = len(lines)
             empty[name] = playlists.empty_slots(slots)
-            if store_dry_run:
-                by_album = playlists.by_album_id(all_items) if by_album is None else by_album
-                _store_dry_run(name, spotdl_file, lines, library, by_album)
 
     if metrics is not None:
         metrics.slots_empty = empty

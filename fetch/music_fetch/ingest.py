@@ -306,11 +306,10 @@ def _store_dry_run(
     the budget).  *failures* is the backoff as the sync read it.  Never raises:
     the dry run must not fail the nightly."""
     try:
-        path = store.DRYRUN_DIR / f"{name}.json"
-        previous = store.Store.load(path)
+        previous = store.load(name)
         known = {} if previous is None else {s.get("url"): s for s in previous.songs}
         playlist = store.Store.from_songs(name, store.merge_spotify(result.songs, {**known, **result.records}))
-        playlist.save(path)
+        playlist.save(store.path(name))
         store.write_view(name, "want", result.wanted, store.want_list(playlist.songs, resolves, held, failures))
     except Exception:
         logger.error("Playlist store dry run failed for %s — today's sync is unaffected", name, exc_info=True)
@@ -323,14 +322,15 @@ def _store_dry_run_frozen(name: str, spotdl_file: Path) -> None:
     downloaded before it was frozen, not the whole Spotify list.  Never raises:
     the dry run must not fail the nightly."""
     try:
-        path = store.DRYRUN_DIR / f"{name}.json"
-        previous = store.Store.load(path)
+        previous = store.load(name)
         if previous is not None and previous.source == store.SPOTIFY:
+            if not store.path(name).exists():
+                previous.save(store.path(name))  # PLAYLIST_STORE=on: move the dry run's store
             return
         known = {s.get("url"): s for s in _snapshot_songs(json.loads(spotdl_file.read_text(encoding="utf-8")))}
         playlist = store.Store.from_songs(name, store.merge_spotify(fetch_songs(spotdl_file, COOKIE_FILE), known))
         playlist.source = store.SPOTIFY
-        playlist.save(path)
+        playlist.save(store.path(name))
         logger.info("[STORE] %s: built from Spotify, %d entries (.spotdl has %d)", name, len(playlist.entries), len(known))
     except Exception:
         logger.error("Playlist store dry run failed for %s — today's sync is unaffected", name, exc_info=True)
@@ -353,8 +353,8 @@ def sync_playlists(
     track, tagging it with the playlist if so; those tracks are not downloaded (#187).
 
     *resolves(song)* (no tagging) and *held* (URLs downloaded into quarantine)
-    feed the playlist store's dry run, which runs only when both
-    ``PLAYLIST_STORE=dry-run`` and *resolves* are given (homelab#1914).
+    feed the playlist store, which is built only when both ``PLAYLIST_STORE``
+    is ``dry-run`` or ``on`` and *resolves* is given (homelab#1914).
     """
     if start is None:
         start = time.monotonic()
@@ -400,9 +400,9 @@ def sync_playlists(
         logger.info("No .spotdl files found in %s", SPOTDL_DIR)
 
     pending_removals: list[RemovedTrack] = []
-    store_dry_run = resolves is not None and store.dry_run()
+    store_dry_run = resolves is not None and store.active()
     if store_dry_run:
-        logger.info("Playlist store dry run: writing the store's view to %s", store.DRYRUN_DIR)
+        logger.info("Playlist store (%s): writing the stores and their views to %s", store.mode(), store.store_dir())
     # Read only: the album tick owns it (#205).
     album_state = albums.State.load(SPOTDL_DIR / albums.STATE_FILE.name)
 

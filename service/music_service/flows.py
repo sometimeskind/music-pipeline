@@ -111,7 +111,7 @@ def spotdl_sync_task(remove_sources: list[str], metrics):
     # holds back what reconcile keeps: downloads sitting in quarantine.
     with MusicLibrary(scan.LIBRARY_DB) as lib:
         index = ItemIndex(lib.all_items())
-        dry_run = {} if not store.dry_run() else {
+        dry_run = {} if not store.active() else {
             "resolves": lambda song: index.match_song(song, words=False)[0] is not None,
             "held": reconcile.quarantine_urls(reconcile.QUARANTINE_DIR),
         }

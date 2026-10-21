@@ -15,7 +15,7 @@ def song(sid: str, **extra) -> dict:
 
 @pytest.mark.parametrize("value, expected", [
     (None, store.OFF), ("", store.OFF), ("off", store.OFF), ("dry-run", store.DRY_RUN),
-    (" Dry-Run ", store.DRY_RUN), ("on", store.OFF), ("yes", store.OFF),
+    (" Dry-Run ", store.DRY_RUN), ("on", store.ON), ("yes", store.OFF),
 ])
 def test_mode(monkeypatch, value, expected) -> None:
     if value is None:
@@ -104,6 +104,7 @@ def _sync(tmp_path, monkeypatch, result, mode: str | None = store.DRY_RUN, snaps
     else:
         monkeypatch.setenv(store.STORE_ENV, mode)
     monkeypatch.setattr(store, "DRYRUN_DIR", tmp_path / "side")
+    monkeypatch.setattr(store, "STORE_DIR", tmp_path / "store")
     with mock.patch.object(ingest, "SPOTDL_DIR", spotdl_dir), \
          mock.patch.object(ingest, "CONF_PATH", tmp_path / "missing.conf"), \
          mock.patch.object(ingest, "COOKIE_FILE", tmp_path / "cookies.txt"), \
@@ -185,3 +186,30 @@ def test_nightly_dry_run_failure_never_fails_the_sync(tmp_path, monkeypatch, cap
 
     _sync(tmp_path, monkeypatch, _result(songs=[song("A")]), resolves=boom)
     assert "Playlist store dry run failed for pl" in caplog.text
+
+
+# ---------------------------------------------------------------------------
+# PLAYLIST_STORE=on (homelab#1914 stage a)
+# ---------------------------------------------------------------------------
+
+
+def test_on_moves_the_dry_runs_store_and_keeps_its_records(tmp_path, monkeypatch) -> None:
+    full_b = song("B", album_name="Full record")
+    (tmp_path / "side").mkdir()
+    store.Store.from_songs("pl", [full_b]).save(tmp_path / "side" / "pl.json")
+    _sync(tmp_path, monkeypatch, _result(wanted=[URL + "C"], songs=[song("B"), song("C")]), mode=store.ON,
+          resolves=lambda s: s["song_id"] == "B")
+    assert store.Store.load(tmp_path / "store" / "pl.json").songs == [full_b, song("C")]
+    assert (tmp_path / "store" / "pl.want").read_text(encoding="utf-8").splitlines() == [URL + "C"]
+
+
+def test_on_moves_a_nosync_store_built_from_spotify_without_a_fetch(tmp_path, monkeypatch) -> None:
+    built = store.Store.from_songs("pl", [song("A"), song("B")])
+    built.source = store.SPOTIFY
+    (tmp_path / "side").mkdir()
+    built.save(tmp_path / "side" / "pl.json")
+    _sync(tmp_path, monkeypatch, None, mode=store.ON, snapshot=[song("A")], nosync=True, resolves=lambda s: True,
+          fetched=AssertionError("fetched"))
+    moved = store.Store.load(tmp_path / "store" / "pl.json")
+    assert moved.source == store.SPOTIFY
+    assert moved.songs == [song("A"), song("B")]

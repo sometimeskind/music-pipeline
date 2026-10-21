@@ -8,16 +8,22 @@ is the entry resolving to a library item by Spotify ID or ISRC, recomputed
 every time.  Step 1 has one-way semantics: Spotify decides membership and
 order, and the store keeps the richest record known for each entry.
 
-For now the store runs in the shadow only.  ``PLAYLIST_STORE=dry-run`` builds
-each playlist's store next to today's state (``.spotdl``, ``sources``) and
-writes what the store would produce to :data:`DRYRUN_DIR`: the store itself
-(``<playlist>.json``), its ``.m3u`` lines (``<playlist>.m3u``) and its nightly
-want list (``<playlist>.want``), each with a ``.diff`` against what today's
-path produced, and one ``[STORE-DIFF]`` log line and ``history.tsv`` row per
-comparison.  Nothing reads the side directory, so the dry run changes no
-playlist, download or tag.  ``off`` (the default) does nothing.  Once the
-diffs hold over a few nightlies, the store replaces ``.spotdl``,
-``sources``-as-membership, the unlink queue and ``reconcile``.
+``PLAYLIST_STORE=dry-run`` builds each playlist's store next to today's state
+(``.spotdl``, ``sources``) and writes what the store would produce to
+:data:`DRYRUN_DIR`: the store itself (``<playlist>.json``), its ``.m3u`` lines
+(``<playlist>.m3u``) and its nightly want list (``<playlist>.want``), each with
+a ``.diff`` against what today's path produced, and one ``[STORE-DIFF]`` log
+line and ``history.tsv`` row per comparison.  Nothing reads the side
+directory, so the dry run changes no playlist, download or tag.  ``off`` (the
+default) does nothing.
+
+``PLAYLIST_STORE=on`` (homelab#1914 stage a) does the same in
+:data:`STORE_DIR`, and a spotdl or ``nosync`` playlist's ``.m3u`` is the
+store's view, followed by its ``sources`` tail: the items tagged with the
+playlist that no entry resolves, its local-only tracks.  The diffs keep
+running against what today's path would have written.  Downloads, album
+playlists, ``.spotdl``, ``sources``, the unlink queue and ``reconcile`` are
+unchanged; later stages retire them.
 """
 
 from __future__ import annotations
@@ -33,13 +39,14 @@ from typing import Callable
 logger = logging.getLogger(__name__)
 
 STORE_ENV = "PLAYLIST_STORE"
-OFF, DRY_RUN = "off", "dry-run"
-MODES = (OFF, DRY_RUN)
+OFF, DRY_RUN, ON = "off", "dry-run", "on"
+MODES = (OFF, DRY_RUN, ON)
 
 SPOTDL_DIR = Path("/root/Music/inbox/spotdl")
-# On pipeline-state, next to the .spotdl files.  A dot directory: beets'
-# import ignores it, and it holds no audio for the inbox sweep to move.
+# On pipeline-state, next to the .spotdl files.  Dot directories: beets'
+# import ignores them, and they hold no audio for the inbox sweep to move.
 DRYRUN_DIR = SPOTDL_DIR / ".store-dryrun"
+STORE_DIR = SPOTDL_DIR / ".store"
 VERSION = 1
 # Store.source of a store built from a Spotify fetch.  A ``nosync`` playlist's
 # .spotdl is not its whole Spotify list when it ran as a spotdl playlist before
@@ -48,8 +55,8 @@ SPOTIFY = "spotify"
 
 
 def mode() -> str:
-    """``PLAYLIST_STORE``: ``off`` (default) or ``dry-run``.  Anything else is
-    logged and treated as ``off``: an unknown mode never writes."""
+    """``PLAYLIST_STORE``: ``off`` (default), ``dry-run`` or ``on``.  Anything
+    else is logged and treated as ``off``: an unknown mode never writes."""
     value = (os.environ.get(STORE_ENV) or OFF).strip().lower()
     if value not in MODES:
         logger.error("%s=%r is not one of %s — treating it as %s", STORE_ENV, value, "|".join(MODES), OFF)
@@ -59,6 +66,31 @@ def mode() -> str:
 
 def dry_run() -> bool:
     return mode() == DRY_RUN
+
+
+def active() -> bool:
+    """The store is built: ``dry-run`` or ``on``."""
+    return mode() != OFF
+
+
+def store_dir() -> Path:
+    """Where the stores and their views live: :data:`STORE_DIR` when ``on``,
+    else :data:`DRYRUN_DIR`."""
+    return STORE_DIR if mode() == ON else DRYRUN_DIR
+
+
+def path(name: str) -> Path:
+    return store_dir() / f"{name}.json"
+
+
+def load(name: str) -> "Store | None":
+    """Playlist *name*'s store, or None.  When ``on``, a store the dry run
+    built and :data:`STORE_DIR` doesn't hold yet is read from :data:`DRYRUN_DIR`,
+    so the switch keeps every store the dry run built (the next save moves it)."""
+    playlist = Store.load(path(name))
+    if playlist is None and mode() == ON:
+        playlist = Store.load(DRYRUN_DIR / f"{name}.json")
+    return playlist
 
 
 def _now() -> str:
@@ -174,9 +206,9 @@ def diff(today: list[str], store: list[str]) -> Diff:
 
 def write_view(name: str, kind: str, today: list[str], store: list[str], directory: Path | None = None) -> Diff:
     """Write the store's *kind* view of playlist *name* (``m3u`` or ``want``)
-    to *directory* (:data:`DRYRUN_DIR`), with a ``.diff`` against *today*'s, log one
+    to *directory* (:func:`store_dir`), with a ``.diff`` against *today*'s, log one
     ``[STORE-DIFF]`` line and append a ``history.tsv`` row."""
-    directory = DRYRUN_DIR if directory is None else directory
+    directory = store_dir() if directory is None else directory
     d = diff(today, store)
     _write(directory / f"{name}.{kind}", "\n".join(store) + ("\n" if store else ""))
     lines = [f"+ {line}" for line in d.added] + [f"- {line}" for line in d.removed]
