@@ -1,6 +1,7 @@
 """The playlist store at regen (homelab#1914): in the dry run the store's
 ``.m3u`` goes to the side directory, diffed against today's, and nothing else
-changes; with ``on`` it is the playlist, followed by its ``sources`` tail."""
+changes; with ``on`` it is the playlist, followed by its local entries, which
+the ``sources`` tail seeds (stage b)."""
 
 from __future__ import annotations
 
@@ -34,6 +35,8 @@ def env(tmp_path: Path, monkeypatch):
     words = _item("Words", lib_root / "words.m4a", sources="pl")  # matched by title+artist only
     extra = _item("Extra", lib_root / "extra.m4a", sources="pl")  # tagged, no entry: the tail
     elsewhere = _item("Elsewhere", lib_root / "elsewhere.m4a", spotify_ids="E1", sources="other")
+    for n, it in enumerate((tagged, words, extra, elsewhere), 1):
+        it.id = n
     spotdl_dir, playlists_dir, side = tmp_path / "spotdl", tmp_path / "playlists", tmp_path / "side"
     spotdl_dir.mkdir()
     playlists_dir.mkdir()
@@ -210,3 +213,125 @@ def test_on_leaves_an_album_playlist_on_todays_path(env, monkeypatch) -> None:
     lines = (playlists_dir / "pl.m3u").read_text(encoding="utf-8").splitlines()
     assert [Path(line).name for line in lines] == ["today.m4a"]
     assert (store.STORE_DIR / "pl.m3u").exists()
+
+
+# ---------------------------------------------------------------------------
+# Stage b: local entries, album stores, the listings top-ups ask
+# ---------------------------------------------------------------------------
+
+
+def test_on_turns_the_sources_tail_into_local_entries(env, monkeypatch, caplog) -> None:
+    from music_scan.scan import regen_playlists
+
+    _, playlists_dir, _ = env
+    monkeypatch.setenv(store.STORE_ENV, store.ON)
+    _whole_list(store.STORE_DIR)
+    with caplog.at_level(logging.INFO, logger="music_scan.scan"):
+        regen_playlists()
+    saved = store.Store.load(store.STORE_DIR / "pl.json")
+    assert [(e["id"], e["title"]) for e in saved.locals] == [(3, "Extra"), (2, "Words")]
+    assert [e["song_id"] for e in saved.songs] == ["T1", "W1", "E1", "N1"]
+    assert "[STORE-TAIL] pl: 2 local entries, 2 new, 0 resolved" in caplog.text
+
+    # Seeded once: the next regen reads them and adds nothing.
+    caplog.clear()
+    with caplog.at_level(logging.INFO, logger="music_scan.scan"):
+        regen_playlists()
+    assert "[STORE-TAIL] pl: 2 local entries, 0 new, 0 resolved" in caplog.text
+    assert (playlists_dir / "pl.m3u").read_text(encoding="utf-8").splitlines() == [
+        "../library/tagged.m4a", "../library/elsewhere.m4a", "../library/extra.m4a", "../library/words.m4a"]
+
+
+def test_a_local_entry_stays_when_its_item_loses_the_tag(env, monkeypatch) -> None:
+    from music_scan.scan import regen_playlists
+
+    _, playlists_dir, _ = env
+    monkeypatch.setenv(store.STORE_ENV, store.ON)
+    store.Store("pl", [{"song": _song("Tagged", "T1")},
+                       {store.LOCAL: {"id": 4, "path": "x", "title": "Elsewhere", "artist": "Artist"}}]
+                ).save(store.STORE_DIR / "pl.json")
+    regen_playlists()
+    lines = (playlists_dir / "pl.m3u").read_text(encoding="utf-8").splitlines()
+    assert lines[:2] == ["../library/tagged.m4a", "../library/elsewhere.m4a"]
+
+
+def test_a_local_entry_whose_item_is_gone_is_left_out(env, monkeypatch) -> None:
+    from music_scan.scan import regen_playlists
+
+    _, playlists_dir, _ = env
+    monkeypatch.setenv(store.STORE_ENV, store.ON)
+    store.Store("pl", [{"song": _song("Tagged", "T1")},
+                       {store.LOCAL: {"id": 99, "path": "x", "title": "Gone", "artist": "Artist"}}]
+                ).save(store.STORE_DIR / "pl.json")
+    regen_playlists()
+    # Tagged from the view, then the sources tail; the gone item's entry adds no line.
+    assert (playlists_dir / "pl.m3u").read_text(encoding="utf-8").splitlines() == [
+        "../library/tagged.m4a", "../library/extra.m4a", "../library/words.m4a"]
+
+
+def test_an_album_store_the_tick_wrote_is_kept(env, monkeypatch) -> None:
+    from music_scan.scan import regen_playlists
+
+    spotdl_dir, _, _ = env
+    (spotdl_dir / "pl.album").touch()
+    monkeypatch.setenv(store.STORE_ENV, store.ON)
+    ticked = store.Store.from_songs("pl", [_song("Elsewhere", "E1")])
+    ticked.source = store.SPOTIFY
+    ticked.save(store.STORE_DIR / "pl.json")
+    with mock.patch("music_scan.playlists.album_paths", return_value=([], [], 0)):
+        regen_playlists()
+    assert [s["song_id"] for s in store.Store.load(store.STORE_DIR / "pl.json").songs] == ["E1"]
+
+
+def test_store_listings_by_recording(env, monkeypatch) -> None:
+    from music_scan.scan import store_listings
+
+    spotdl_dir, _, _ = env
+    monkeypatch.setenv(store.STORE_ENV, store.ON)
+    (spotdl_dir / "album.spotdl").write_text("{}", encoding="utf-8")
+    store.Store("pl", [{"song": _song("Tagged", "T1")}, {"song": {**_song("Isrc", "I1"), "isrc": "GB1"}},
+                       {store.LOCAL: {"id": 9, "path": "x", "title": "Local", "artist": "Artist"}}]
+                ).save(store.STORE_DIR / "pl.json")
+    store.Store.from_songs("album", [_song("Tagged", "T1")]).save(store.STORE_DIR / "album.json")
+    listed = store_listings()
+    # A loose copy of T1 is listed by both stores, whichever item the index holds for T1.
+    assert listed(_item("Copy", "/c.m4a", spotify_ids="T1")) == {"pl", "album"}
+    assert listed(_item("By ISRC", "/i.m4a", isrc="GB1")) == {"pl"}
+    local = _item("Local", "/l.m4a")
+    local.id = 9
+    assert listed(local) == {"pl"}
+    assert listed(_item("Nowhere", "/n.m4a", spotify_ids="Z9")) == set()
+
+
+def test_store_listings_fall_back_to_sources(env, monkeypatch) -> None:
+    from music_scan.scan import store_listings
+
+    monkeypatch.setenv(store.STORE_ENV, store.DRY_RUN)
+    assert store_listings() is None
+    monkeypatch.setenv(store.STORE_ENV, store.ON)
+    assert store_listings() is None  # pl has no store yet
+
+
+def test_a_local_entry_the_store_now_resolves_is_dropped(env, monkeypatch, caplog) -> None:
+    """Extra gained Spotify ID X1, which the playlist lists: its Spotify entry
+    now decides its place, and whether it stays."""
+    from music_scan.scan import regen_playlists
+
+    _, playlists_dir, _ = env
+    monkeypatch.setenv(store.STORE_ENV, store.ON)
+    store.Store("pl", [{"song": _song("Tagged", "T1")}, {"song": _song("Words", "W1")},
+                       {store.LOCAL: {"id": 3, "path": "x", "title": "Extra", "artist": "Artist"}}]
+                ).save(store.STORE_DIR / "pl.json")
+    extra = store.Store.load(store.STORE_DIR / "pl.json")
+    extra.entries.insert(0, {"song": _song("Extra", "X1")})
+    extra.save(store.STORE_DIR / "pl.json")
+    from music_scan import scan
+    lib = scan.MusicLibrary()
+    lib.all_items.return_value[2].get.side_effect = lambda k, d=None: {"spotify_ids": "X1", "sources": "pl"}.get(k, d)
+    with caplog.at_level(logging.INFO, logger="music_scan.scan"):
+        regen_playlists()
+    saved = store.Store.load(store.STORE_DIR / "pl.json")
+    assert [e["title"] for e in saved.locals] == ["Words"]
+    assert "1 resolved" in caplog.text
+    assert (playlists_dir / "pl.m3u").read_text(encoding="utf-8").splitlines()[:2] == [
+        "../library/extra.m4a", "../library/tagged.m4a"]

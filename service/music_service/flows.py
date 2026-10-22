@@ -479,7 +479,7 @@ def _album_library_hooks(lib):
         from music_scan import release  # noqa: PLC0415
 
         with concurrency("pipeline", occupy=1):
-            n = release.retire(lib, key, record, keep, drop)
+            n = release.retire(lib, key, record, keep, drop, scan.store_listings())
             if n:
                 scan.regen_playlists()
         return n
@@ -569,11 +569,13 @@ def _album_mixed_hook(lib):
     from music_scan.playlists import by_album_id  # noqa: PLC0415
 
     on_album: dict[str, list] = {}
+    listed: list = []
 
     def mixed(key: str, record: dict) -> list[str]:
         if not on_album:
             on_album.update(by_album_id(lib.all_items()) or {"": []})
-        return release.mixed_reasons(key, record, on_album.get(key, []))
+            listed.append(scan.store_listings())
+        return release.mixed_reasons(key, record, on_album.get(key, []), listed[0])
 
     return mixed
 

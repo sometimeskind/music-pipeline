@@ -603,3 +603,15 @@ def test_list_twins_gives_each_pair_its_merge_command(caplog) -> None:
     # The keeper is the release item, though the extra is the Spotify-length copy: the album is the unit (#311).
     assert "2555 Psycho Killer - Live (268s, legacy) ~ 3730 (258s): music-audit-dupes --merge 3730 2555" in caplog.text
     assert "1 album(s) with local-only extras sharing a title" in caplog.text
+
+
+def test_copies_asks_the_playlist_stores_when_given_listings() -> None:
+    """homelab#1914 stage b: which playlists list a spotdl copy is the stores' answer,
+    not its sources: a copy tagged only keep but listed by aaaaaah too is loose."""
+    record = {**RTD, "playlists": {"keep": [], "later": []}}
+    topup = FakeItem(1, via="spotdl", spotify_album_id="RTD", sources="keep")
+    loose = FakeItem(3, via="spotdl", spotify_album_id="RTD", sources="keep")
+    listed = {1: {"keep"}, 3: {"keep", "aaaaaah"}}
+    assert release.copies([topup, loose], "RTD", record, "r1@1", None, lambda i: listed[i.id]) == [topup]
+    # Unlisted by any store: a top-up, as an untagged copy is by sources.
+    assert release.copies([loose], "RTD", record, "r1@1", None, lambda i: set()) == [loose]

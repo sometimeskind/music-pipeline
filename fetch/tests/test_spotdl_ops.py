@@ -1383,3 +1383,54 @@ def test_pin_for_a_track_in_the_library_is_skipped(tmp_path: Path, caplog) -> No
     spotdl.download_songs.assert_not_called()
     assert (batch.attempted, len(batch.linked)) == (0, 1)
     assert "[PIN] Artist - T0 → already in the library; its pin is unused" in caplog.text
+
+
+# ---------------------------------------------------------------------------
+# sync_playlist — the playlist store's want test (homelab#1914 stage b)
+# ---------------------------------------------------------------------------
+
+
+def test_sync_playlist_downloads_a_snapshot_entry_the_store_wants(tmp_path: Path, simple_songs, caplog) -> None:
+    """With *wants*, an entry the .spotdl already lists is downloaded again when
+    the store wants it (no library item holds it); the others stay [SKIP]."""
+    known, gone, new = (_make_mock_song(f"https://open.spotify.com/track/{i}") for i in ("K", "G", "N"))
+    spotdl_file = tmp_path / "pl.spotdl"
+    spotdl_file.write_text(json.dumps({"type": "sync", "query": ["q"], "songs": [known.json, gone.json]}),
+                           encoding="utf-8")
+    simple_songs.return_value = [known, gone, new]
+    spotdl = _mock_spotdl([(gone, Path("/tmp/g.m4a")), (new, Path("/tmp/n.m4a"))])
+    with mock.patch("music_fetch.spotdl_ops._make_spotdl", return_value=spotdl), caplog.at_level("INFO"):
+        result = sync_playlist(spotdl_file=spotdl_file, output_dir=tmp_path, cookie_file=tmp_path / "c.txt",
+                               wants=lambda song: song["url"].endswith("G") and "isrc" not in song)
+    assert [s.url for s in spotdl.download_songs.call_args[0][0]] == [gone.url, new.url]
+    assert result.downloaded == 2
+    assert "[STORE-WANT]" in caplog.text and caplog.text.count("[SKIP]") == 1
+    # The .spotdl still lists every entry once, in playlist order.
+    songs = json.loads(spotdl_file.read_text(encoding="utf-8"))["songs"]
+    assert [s["url"] for s in songs] == [known.url, gone.url, new.url]
+
+
+def test_sync_playlist_without_wants_never_downloads_a_snapshot_entry(tmp_path: Path, simple_songs) -> None:
+    known = _make_mock_song("https://open.spotify.com/track/K")
+    spotdl_file = tmp_path / "pl.spotdl"
+    spotdl_file.write_text(json.dumps({"type": "sync", "query": ["q"], "songs": [known.json]}), encoding="utf-8")
+    simple_songs.return_value = [known]
+    spotdl = _mock_spotdl([])
+    with mock.patch("music_fetch.spotdl_ops._make_spotdl", return_value=spotdl):
+        result = sync_playlist(spotdl_file=spotdl_file, output_dir=tmp_path, cookie_file=tmp_path / "c.txt")
+    assert result.attempted == 0
+
+
+def test_the_store_judges_a_snapshot_entry_by_its_snapshot_record(tmp_path: Path, simple_songs) -> None:
+    """The page record lacks the ISRC the .spotdl record carries; an item matched
+    by that ISRC holds the track, so it is not downloaded again."""
+    known = _make_mock_song("https://open.spotify.com/track/K")
+    spotdl_file = tmp_path / "pl.spotdl"
+    spotdl_file.write_text(json.dumps({"type": "sync", "query": ["q"], "songs": [{**known.json, "isrc": "GB1"}]}),
+                           encoding="utf-8")
+    simple_songs.return_value = [known]
+    spotdl = _mock_spotdl([])
+    with mock.patch("music_fetch.spotdl_ops._make_spotdl", return_value=spotdl):
+        result = sync_playlist(spotdl_file=spotdl_file, output_dir=tmp_path, cookie_file=tmp_path / "c.txt",
+                               wants=lambda song: song.get("isrc") != "GB1")
+    assert result.attempted == 0

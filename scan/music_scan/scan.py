@@ -13,13 +13,14 @@ import shutil
 import tempfile
 import time
 from pathlib import Path
+from typing import Callable
 
 from music_fetch import store
 from music_fetch.ingest import PendingRemovals, clear_pending_removals
 from music_scan import playlists
 from music_scan.guard import guard_inbox
 from music_scan.identity import (
-    ItemIndex, PlaylistTrack, add_to_list, item_isrcs, same_base_title, spotify_id,
+    ItemIndex, PlaylistTrack, add_to_list, item_isrcs, item_spotify_ids, same_base_title, spotify_id,
 )
 from music_scan.identity import name_words as _name_words
 from music_scan.library import MusicLibrary
@@ -269,16 +270,19 @@ def store_view(name: str, spotdl_file: Path, library: ItemIndex, by_album) -> li
     the whole library, each file once and in store order, with no ``sources``
     and no tail; an ``album`` playlist through :func:`playlists.album_paths`
     on the same entries.  A spotdl playlist's store is the one the nightly
-    wrote.  An ``album`` playlist's ``.spotdl`` is already its whole Spotify
-    list, so its store is seeded from it.  A ``nosync`` playlist's is the one
-    the nightly built from Spotify once, seeded from its ``.spotdl`` until
-    then.  None when a spotdl playlist has no store yet."""
+    wrote.  An ``album`` playlist's is the one the album tick wrote, and a
+    ``nosync`` playlist's the one the nightly built from Spotify once; each
+    is seeded from its ``.spotdl`` until then, which for an ``album``
+    playlist is already its whole Spotify list.  Local entries are not in
+    the view (:func:`_local_tail`).  None when a spotdl playlist has no
+    store yet."""
     is_album = (SPOTDL_DIR / f"{name}.album").exists()
     nosync = (SPOTDL_DIR / f"{name}.nosync").exists()
     if is_album or nosync:
-        playlist = store.load(name) if nosync else None
+        previous = store.load(name)
+        playlist = previous
         if playlist is None or playlist.source != store.SPOTIFY:
-            playlist = store.Store.from_songs(name, playlists.spotdl_songs(spotdl_file))
+            playlist = store.Store.from_songs(name, playlists.spotdl_songs(spotdl_file), keep=previous)
             playlist.save(store.path(name))
     else:
         playlist = store.load(name)
@@ -291,23 +295,98 @@ def store_view(name: str, spotdl_file: Path, library: ItemIndex, by_album) -> li
     return playlist_paths(playlists.resolve([Entry.from_song(s) for s in playlist.songs], none, library), [])
 
 
+def _local_tail(name: str, paths: list[Path], source_items: list, library: ItemIndex) -> list[Path]:
+    """The ``.m3u`` paths of playlist *name*'s local entries (homelab#1914
+    stage b), after its store view *paths*: each local entry whose item is
+    still in the library, in store order, then each item tagged with the
+    playlist (*source_items*) that neither the view nor a local entry holds,
+    alphabetically.  Those become local entries, at the store's end.  A local
+    entry whose item the view now holds (it gained a Spotify ID) is dropped:
+    its Spotify entry decides its place, and its removal.  Logs one
+    ``[STORE-TAIL]`` line: a new local entry is either a local-only track or
+    one the store can't resolve by Spotify ID or ISRC."""
+    playlist = store.load(name)
+    if playlist is None:
+        return []
+    matched = set(paths)
+    by_id = {item.id: item for item in library.items}
+
+    def resolved(entry: dict) -> bool:
+        local = entry.get(store.LOCAL)
+        return bool(local) and local.get("id") in by_id and _item_path(by_id[local["id"]]) in matched
+
+    dropped = [e for e in playlist.entries if resolved(e)]
+    playlist.entries = [e for e in playlist.entries if not resolved(e)]
+    known = {entry.get("id") for entry in playlist.locals}
+    new = sorted((item for item in source_items if item.id not in known and _item_path(item) not in matched),
+                 key=_item_path)
+    playlist.entries += [{store.LOCAL: {"id": item.id, "path": str(_item_path(item)),
+                                        "title": item.title, "artist": item.artist}} for item in new]
+    if new or dropped:
+        playlist.save(store.path(name))
+    logger.info("  [STORE-TAIL] %s: %d local entr%s, %d new, %d resolved%s", name, len(playlist.locals),
+                "y" if len(playlist.locals) == 1 else "ies", len(new), len(dropped),
+                "".join(f"\n    + {item.artist} — {item.title}" for item in new))
+    out: list[Path] = []
+    for entry in playlist.locals:
+        if entry.get("id") in by_id and (p := _item_path(by_id[entry["id"]])) not in matched:
+            matched.add(p)
+            out.append(p)
+    return out
+
+
+def store_listings() -> Callable[[object], set[str]] | None:
+    """``listed(item)``: the playlists whose store lists *item*'s recording,
+    by Spotify ID or ISRC, or holds it as a local entry (homelab#1914 stage
+    b), for :func:`music_scan.release._topup`.  By recording, not by the item
+    an entry resolves to: a loose copy of a track another playlist lists is
+    listed too.  None, so ``sources`` answers, unless ``PLAYLIST_STORE=on``
+    and every playlist has a store."""
+    if store.mode() != store.ON:
+        return None
+    by_key: dict[str, set[str]] = {}
+    local: dict[object, set[str]] = {}
+    for spotdl_file in sorted(SPOTDL_DIR.glob("*.spotdl")):
+        name = spotdl_file.stem
+        playlist = store.load(name)
+        if playlist is None:
+            logger.info("  [STORE] %s: no store yet — top-ups are judged by sources", name)
+            return None
+        for song in playlist.songs:
+            if sid := song.get("song_id") or spotify_id(song.get("url")):
+                by_key.setdefault(f"spotify:{sid}", set()).add(name)
+            if code := song.get("isrc"):
+                by_key.setdefault(f"isrc:{code}", set()).add(name)
+        for entry in playlist.locals:
+            local.setdefault(entry.get("id"), set()).add(name)
+
+    def listed(item) -> set[str]:
+        names = set(local.get(item.id, ()))
+        for sid in item_spotify_ids(item):
+            names |= by_key.get(f"spotify:{sid}", set())
+        for code in item_isrcs(item):
+            names |= by_key.get(f"isrc:{code}", set())
+        return names
+
+    return listed
+
+
 def _store_m3u(name: str, spotdl_file: Path, lines: list[str], source_items: list, library: ItemIndex,
                by_album) -> list[str]:
     """Write the store's ``.m3u`` view of *name* to :func:`store.store_dir`,
     diffed against today's *lines*, and return the lines the playlist gets.
     With ``PLAYLIST_STORE=on`` a spotdl or ``nosync`` playlist gets the
-    store's view, then its ``sources`` tail: the *source_items* no entry
-    resolves, alphabetically, its local-only tracks.  Otherwise, and when the
-    playlist has no store yet, *lines*.  Never raises: a store failure falls
-    back to *lines*, so it never fails a scan or empties a playlist."""
+    store's view, then its local entries (:func:`_local_tail`).  Otherwise,
+    and when the playlist has no store yet, *lines*.  Never raises: a store
+    failure falls back to *lines*, so it never fails a scan or empties a
+    playlist."""
     try:
         paths = store_view(name, spotdl_file, library, by_album)
         if paths is None:
             return lines
         use = store.mode() == store.ON and not (SPOTDL_DIR / f"{name}.album").exists()
         if use:
-            matched = set(paths)
-            paths = paths + sorted(p for p in map(_item_path, source_items) if p not in matched)
+            paths = paths + _local_tail(name, paths, source_items, library)
         view = [os.path.relpath(p, PLAYLISTS) for p in paths]
         store.write_view(name, "m3u", lines, view)
         return view if use else lines

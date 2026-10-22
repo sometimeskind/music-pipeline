@@ -21,9 +21,15 @@ default) does nothing.
 :data:`STORE_DIR`, and a spotdl or ``nosync`` playlist's ``.m3u`` is the
 store's view, followed by its ``sources`` tail: the items tagged with the
 playlist that no entry resolves, its local-only tracks.  The diffs keep
-running against what today's path would have written.  Downloads, album
-playlists, ``.spotdl``, ``sources``, the unlink queue and ``reconcile`` are
-unchanged; later stages retire them.
+running against what today's path would have written.
+
+Stage b moves the rest onto the store, with ``.spotdl`` and ``sources``
+still written alongside: a tail item becomes a :data:`LOCAL` entry, kept at
+the playlist's end; the nightly also downloads an entry no library item
+holds that its ``.spotdl`` lists; album mode writes each album playlist's
+tracklist to its store; and a spotdl copy is a top-up when no store outside
+its album record lists its recording.  ``.spotdl``, the unlink queue and
+``reconcile`` go in stage c.
 """
 
 from __future__ import annotations
@@ -52,6 +58,9 @@ VERSION = 1
 # .spotdl is not its whole Spotify list when it ran as a spotdl playlist before
 # it was frozen (homelab#1914: wedding), so its store is fetched once instead.
 SPOTIFY = "spotify"
+# The key of a local-only entry: ``{"local": {"id", "path", "title", "artist"}}``,
+# a library item on the playlist that is not on its Spotify list (stage b).
+LOCAL = "local"
 
 
 def mode() -> str:
@@ -107,8 +116,9 @@ def _write(path: Path, text: str) -> None:
 
 @dataclasses.dataclass
 class Store:
-    """One playlist's store: its entries in order, each ``{"song": <record>}``.
-    *source* is :data:`SPOTIFY` when the entries came from a Spotify fetch."""
+    """One playlist's store: its entries in order, each ``{"song": <record>}``,
+    then its :data:`LOCAL` entries.  *source* is :data:`SPOTIFY` when the
+    entries came from a Spotify fetch."""
 
     name: str
     entries: list[dict]
@@ -119,9 +129,16 @@ class Store:
     def songs(self) -> list[dict]:
         return [e["song"] for e in self.entries if e.get("song")]
 
+    @property
+    def locals(self) -> list[dict]:
+        return [e[LOCAL] for e in self.entries if e.get(LOCAL)]
+
     @classmethod
-    def from_songs(cls, name: str, songs: list[dict]) -> "Store":
-        return cls(name, [{"song": song} for song in songs])
+    def from_songs(cls, name: str, songs: list[dict], keep: "Store | None" = None) -> "Store":
+        """A store of *songs*, followed by *keep*'s local entries: a rebuild
+        from Spotify never drops a local-only track."""
+        local = [] if keep is None else [e for e in keep.entries if e.get(LOCAL)]
+        return cls(name, [{"song": song} for song in songs] + local)
 
     @classmethod
     def load(cls, path: Path) -> "Store | None":

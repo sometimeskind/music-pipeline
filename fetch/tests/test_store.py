@@ -86,7 +86,7 @@ def test_write_view(tmp_path) -> None:
 
 
 def _sync(tmp_path, monkeypatch, result, mode: str | None = store.DRY_RUN, snapshot=(), nosync=False,
-          fetched=None, **kwargs):
+          fetched=None, calls=None, **kwargs):
     import json
     from unittest import mock
 
@@ -109,7 +109,8 @@ def _sync(tmp_path, monkeypatch, result, mode: str | None = store.DRY_RUN, snaps
          mock.patch.object(ingest, "CONF_PATH", tmp_path / "missing.conf"), \
          mock.patch.object(ingest, "COOKIE_FILE", tmp_path / "cookies.txt"), \
          mock.patch.object(ingest, "FAILURES_FILE", tmp_path / ".failures.json"), \
-         mock.patch("music_fetch.ingest.sync_playlist", return_value=result), \
+         mock.patch("music_fetch.ingest.sync_playlist",
+                    side_effect=lambda **kw: (calls.append(kw) if calls is not None else None) or result), \
          mock.patch("music_fetch.ingest.fetch_songs", side_effect=fetched), \
          mock.patch("music_fetch.ingest.time.sleep"):
         ingest.sync_playlists([], IngestMetrics(), **kwargs)
@@ -213,3 +214,41 @@ def test_on_moves_a_nosync_store_built_from_spotify_without_a_fetch(tmp_path, mo
     moved = store.Store.load(tmp_path / "store" / "pl.json")
     assert moved.source == store.SPOTIFY
     assert moved.songs == [song("A"), song("B")]
+
+
+# ---------------------------------------------------------------------------
+# Stage b (homelab#1914): local entries, the store's want test
+# ---------------------------------------------------------------------------
+
+LOCAL = {"local": {"id": 7, "path": "/library/local.m4a", "title": "Local", "artist": "Artist"}}
+
+
+def test_from_songs_keeps_an_earlier_stores_local_entries() -> None:
+    earlier = store.Store("pl", [{"song": song("A")}, LOCAL])
+    rebuilt = store.Store.from_songs("pl", [song("B")], keep=earlier)
+    assert rebuilt.entries == [{"song": song("B")}, LOCAL]
+    assert rebuilt.songs == [song("B")] and rebuilt.locals == [LOCAL["local"]]
+
+
+def test_the_nightly_rebuild_keeps_local_entries(tmp_path, monkeypatch) -> None:
+    (tmp_path / "store").mkdir()
+    store.Store("pl", [{"song": song("A")}, LOCAL]).save(tmp_path / "store" / "pl.json")
+    _sync(tmp_path, monkeypatch, _result(songs=[song("A"), song("B")]), mode=store.ON, resolves=lambda s: True)
+    assert store.Store.load(tmp_path / "store" / "pl.json").entries == [{"song": song("A")}, {"song": song("B")},
+                                                                         LOCAL]
+
+
+def test_on_downloads_what_the_store_wants(tmp_path, monkeypatch) -> None:
+    calls: list = []
+    _sync(tmp_path, monkeypatch, _result(songs=[song("A")]), mode=store.ON, calls=calls,
+          resolves=lambda s: s["song_id"] == "A", held={URL + "H"})
+    wants = calls[0]["wants"]
+    assert not wants(song("A"))  # a library item holds it
+    assert not wants(song("H"))  # in quarantine
+    assert wants(song("C"))
+
+
+def test_the_dry_run_leaves_downloads_alone(tmp_path, monkeypatch) -> None:
+    calls: list = []
+    _sync(tmp_path, monkeypatch, _result(songs=[song("A")]), calls=calls, resolves=lambda s: False)
+    assert calls[0]["wants"] is None
