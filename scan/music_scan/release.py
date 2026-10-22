@@ -226,7 +226,7 @@ TWIN = "album_extra_twin"
 def copies(items, key: str, record: dict, keep: str | None, drop: str | None, listed=None) -> list:
     """The record's copies :func:`retire` weighs: with *drop*, that release's;
     else every copy but release *keep*'s, legacy items, spotdl top-ups
-    (:func:`_topup`, *listed*) and earlier extras included."""
+    (:func:`_topup`, with its shadow *listed*) and earlier extras included."""
     from music_scan.rollback import _claims  # noqa: PLC0415
 
     if drop is not None:
@@ -237,18 +237,35 @@ def copies(items, key: str, record: dict, keep: str | None, drop: str | None, li
             or (not i.get("album_record") and _topup(i, key, record, listed))]
 
 
+# The (item, record) pairs a [TOPUP-DIFF] line was logged for: once per process.
+_topup_diffs: set[tuple] = set()
+
+
 def _topup(item, key: str, record: dict, listed=None) -> bool:
     """A spotdl copy on the album's Spotify album that no playlist but the
-    record's own lists: spotdl's top-up, which a reimport retires.  A spotdl
-    copy another playlist also lists is a loose copy, left to supersede.
-    Which playlists list it is *listed(item)* (:func:`music_scan.scan.store_listings`,
-    the playlist stores, homelab#1914 stage b) when given, else its ``sources``."""
+    record's own lists by its ``sources``: spotdl's top-up, which a reimport
+    retires.  A spotdl copy another playlist also lists is a loose copy, left
+    to supersede.
+
+    *listed(item)* (:func:`music_scan.scan.store_listings`, homelab#1914
+    stage b) is a shadow only: the playlists whose store lists the copy's
+    recording.  Where it gives the other answer, ``[TOPUP-DIFF]`` is logged
+    and ``sources`` still decide.  A store-loose copy goes to supersede,
+    which replaces it rather than retiring it, so the store answers only
+    once those lines have been read (stage c)."""
     from music_scan.identity import split_list  # noqa: PLC0415
 
     if item.get("via") != "spotdl" or item.get("spotify_album_id") != key:
         return False
-    playlists = set(split_list(item.get("sources"))) if listed is None else listed(item)
-    return playlists <= set(record.get("playlists") or {})
+    own = set(record.get("playlists") or {})
+    by_sources = set(split_list(item.get("sources"))) <= own
+    if listed is not None and (listed(item) <= own) != by_sources and (item.id, key) not in _topup_diffs:
+        _topup_diffs.add((item.id, key))
+        logger.info("[TOPUP-DIFF] %s %s — %s [%s]: sources say %s, the store says %s (listed by %s)",
+                    item.id, item.get("artist"), item.get("title"), item.get("album"),
+                    "top-up" if by_sources else "loose", "loose" if by_sources else "top-up",
+                    ", ".join(sorted(listed(item))) or "no store")
+    return by_sources
 
 
 def superseded(items, key: str, keep: str, others: list) -> tuple[list, list]:

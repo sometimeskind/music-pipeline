@@ -26,10 +26,11 @@ running against what today's path would have written.
 Stage b moves the rest onto the store, with ``.spotdl`` and ``sources``
 still written alongside: a tail item becomes a :data:`LOCAL` entry, kept at
 the playlist's end; the nightly also downloads an entry no library item
-holds that its ``.spotdl`` lists; album mode writes each album playlist's
-tracklist to its store; and a spotdl copy is a top-up when no store outside
-its album record lists its recording.  ``.spotdl``, the unlink queue and
-``reconcile`` go in stage c.
+holds that its ``.spotdl`` lists; and album mode writes each album
+playlist's tracklist to its store.  Whether a spotdl copy is a top-up stays
+with ``sources``; the store's answer is logged where it differs
+(``[TOPUP-DIFF]``).  ``.spotdl``, the unlink queue and ``reconcile`` go in
+stage c, and the top-up check once the diff lines are read.
 """
 
 from __future__ import annotations

@@ -605,13 +605,25 @@ def test_list_twins_gives_each_pair_its_merge_command(caplog) -> None:
     assert "1 album(s) with local-only extras sharing a title" in caplog.text
 
 
-def test_copies_asks_the_playlist_stores_when_given_listings() -> None:
-    """homelab#1914 stage b: which playlists list a spotdl copy is the stores' answer,
-    not its sources: a copy tagged only keep but listed by aaaaaah too is loose."""
+
+def test_copies_logs_where_the_stores_disagree_but_sources_decide(caplog) -> None:
+    """homelab#1914 stage b: the stores' answer is a shadow.  A copy tagged only keep
+    but listed by aaaaaah's store too stays a top-up, with a [TOPUP-DIFF] line, once."""
+    release._topup_diffs.clear()
     record = {**RTD, "playlists": {"keep": [], "later": []}}
     topup = FakeItem(1, via="spotdl", spotify_album_id="RTD", sources="keep")
-    loose = FakeItem(3, via="spotdl", spotify_album_id="RTD", sources="keep")
-    listed = {1: {"keep"}, 3: {"keep", "aaaaaah"}}
-    assert release.copies([topup, loose], "RTD", record, "r1@1", None, lambda i: listed[i.id]) == [topup]
-    # Unlisted by any store: a top-up, as an untagged copy is by sources.
-    assert release.copies([loose], "RTD", record, "r1@1", None, lambda i: set()) == [loose]
+    listed = {1: {"keep", "aaaaaah"}}
+    with caplog.at_level("INFO", logger="music_scan.release"):
+        assert release.copies([topup], "RTD", record, "r1@1", None, lambda i: listed[i.id]) == [topup]
+        release.copies([topup], "RTD", record, "r1@1", None, lambda i: listed[i.id])
+    assert caplog.text.count("[TOPUP-DIFF]") == 1
+    assert "sources say top-up, the store says loose (listed by aaaaaah, keep)" in caplog.text
+
+
+def test_copies_logs_nothing_where_the_stores_agree(caplog) -> None:
+    release._topup_diffs.clear()
+    record = {**RTD, "playlists": {"keep": [], "later": []}}
+    topup = FakeItem(1, via="spotdl", spotify_album_id="RTD", sources="keep")
+    with caplog.at_level("INFO", logger="music_scan.release"):
+        assert release.copies([topup], "RTD", record, "r1@1", None, lambda i: {"keep"}) == [topup]
+    assert "[TOPUP-DIFF]" not in caplog.text

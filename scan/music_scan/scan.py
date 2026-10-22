@@ -338,10 +338,11 @@ def _local_tail(name: str, paths: list[Path], source_items: list, library: ItemI
 def store_listings() -> Callable[[object], set[str]] | None:
     """``listed(item)``: the playlists whose store lists *item*'s recording,
     by Spotify ID or ISRC, or holds it as a local entry (homelab#1914 stage
-    b), for :func:`music_scan.release._topup`.  By recording, not by the item
-    an entry resolves to: a loose copy of a track another playlist lists is
-    listed too.  None, so ``sources`` answers, unless ``PLAYLIST_STORE=on``
-    and every playlist has a store."""
+    b), the shadow :func:`music_scan.release._topup` compares with
+    ``sources`` (``[TOPUP-DIFF]``).  By recording, not by the item an entry
+    resolves to: a loose copy of a track another playlist lists is listed
+    too.  None, so nothing is compared, unless ``PLAYLIST_STORE=on`` and every
+    playlist has a store."""
     if store.mode() != store.ON:
         return None
     by_key: dict[str, set[str]] = {}
@@ -350,7 +351,7 @@ def store_listings() -> Callable[[object], set[str]] | None:
         name = spotdl_file.stem
         playlist = store.load(name)
         if playlist is None:
-            logger.info("  [STORE] %s: no store yet — top-ups are judged by sources", name)
+            logger.info("  [STORE] %s: no store yet — no [TOPUP-DIFF] comparison", name)
             return None
         for song in playlist.songs:
             if sid := song.get("song_id") or spotify_id(song.get("url")):
