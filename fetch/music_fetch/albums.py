@@ -59,6 +59,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Callable, Protocol
 
+from music_fetch import store
 from music_fetch.metrics import _gauge, _push
 from music_fetch.usenet import Release, clean_album, edition, normalise, rank, readable, words
 
@@ -383,6 +384,7 @@ def refresh_playlists(
             json.dumps({"type": "sync", "query": [url], "songs": songs}, indent=4, ensure_ascii=False),
             encoding="utf-8",
         )
+        _save_store(name, songs)
 
         wanted = reduce_to_albums(songs)
         for key, album in wanted.items():
@@ -398,6 +400,20 @@ def refresh_playlists(
         entry["snapshot_id"] = snapshot
         result.refreshed.append(name)
         logger.info("    %d track(s) on %d album(s)", len(songs), len(wanted))
+
+
+def _save_store(name: str, songs: list[dict]) -> None:
+    """The playlist store (homelab#1914 stage b): an album playlist's store is
+    its Spotify tracklist, as its ``.spotdl`` is.  Never raises: the store
+    must not fail the tick."""
+    if not store.active():
+        return
+    try:
+        playlist = store.Store.from_songs(name, songs)
+        playlist.source = store.SPOTIFY
+        playlist.save(store.path(name))
+    except Exception:
+        logger.error("Playlist store failed for %s — its .spotdl is written as before", name, exc_info=True)
 
 
 def _requery(record: dict, search: Plan) -> bool:

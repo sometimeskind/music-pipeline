@@ -308,7 +308,8 @@ def _store_dry_run(
     try:
         previous = store.load(name)
         known = {} if previous is None else {s.get("url"): s for s in previous.songs}
-        playlist = store.Store.from_songs(name, store.merge_spotify(result.songs, {**known, **result.records}))
+        playlist = store.Store.from_songs(name, store.merge_spotify(result.songs, {**known, **result.records}),
+                                          keep=previous)
         playlist.save(store.path(name))
         store.write_view(name, "want", result.wanted, store.want_list(playlist.songs, resolves, held, failures))
     except Exception:
@@ -328,7 +329,8 @@ def _store_dry_run_frozen(name: str, spotdl_file: Path) -> None:
                 previous.save(store.path(name))  # PLAYLIST_STORE=on: move the dry run's store
             return
         known = {s.get("url"): s for s in _snapshot_songs(json.loads(spotdl_file.read_text(encoding="utf-8")))}
-        playlist = store.Store.from_songs(name, store.merge_spotify(fetch_songs(spotdl_file, COOKIE_FILE), known))
+        playlist = store.Store.from_songs(name, store.merge_spotify(fetch_songs(spotdl_file, COOKIE_FILE), known),
+                                          keep=previous)
         playlist.source = store.SPOTIFY
         playlist.save(store.path(name))
         logger.info("[STORE] %s: built from Spotify, %d entries (.spotdl has %d)", name, len(playlist.entries), len(known))
@@ -354,7 +356,10 @@ def sync_playlists(
 
     *resolves(song)* (no tagging) and *held* (URLs downloaded into quarantine)
     feed the playlist store, which is built only when both ``PLAYLIST_STORE``
-    is ``dry-run`` or ``on`` and *resolves* is given (homelab#1914).
+    is ``dry-run`` or ``on`` and *resolves* is given (homelab#1914).  With
+    ``on`` they also decide what is downloaded: an entry the ``.spotdl`` lists
+    is fetched again when no library item holds it and it is not *held*
+    (stage b).
     """
     if start is None:
         start = time.monotonic()
@@ -403,6 +408,11 @@ def sync_playlists(
     store_dry_run = resolves is not None and store.active()
     if store_dry_run:
         logger.info("Playlist store (%s): writing the stores and their views to %s", store.mode(), store.store_dir())
+    # PLAYLIST_STORE=on (stage b): the store decides what is downloaded.
+    wants: Callable[[dict], bool] | None = None
+    if store_dry_run and store.mode() == store.ON:
+        def wants(song: dict) -> bool:
+            return (song.get("url") or "") not in held and not resolves(song)
     # Read only: the album tick owns it (#205).
     album_state = albums.State.load(SPOTDL_DIR / albums.STATE_FILE.name)
 
@@ -490,6 +500,7 @@ def sync_playlists(
                     track_limit=track_limit,
                     failures_file=FAILURES_FILE,
                     in_library=playlist_in_library,
+                    wants=wants,
                 )
         except Exception as exc:
             reason = classify_failure(str(exc))

@@ -571,7 +571,8 @@ def test_album_completion_wires_the_release_hooks():
 
     assert events == [("claim", ["Juicy"]), "m3u", ("retire", 2), ("rest", 1), ("identify", {"missing": 0})]
     assert claim.call_args.args[1:] == ("keep", 100.0, "K", "r1", "Job")
-    assert retire.call_args.args[1:] == ("K", {}, "r1", None)
+    # The listings are None: PLAYLIST_STORE is off, so sources judge top-ups.
+    assert retire.call_args.args[1:] == ("K", {}, "r1", None, None)
     assert rest.call_args.args[2:] == ("keep", "Job")
 
 

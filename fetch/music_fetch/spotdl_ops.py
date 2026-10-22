@@ -565,6 +565,7 @@ def sync_playlist(
     track_limit: int | None = None,
     failures_file: Path | None = None,
     in_library: Callable[[dict], bool] | None = None,
+    wants: Callable[[dict], bool] | None = None,
 ) -> SyncResult:
     """Sync a playlist from its .spotdl file.
 
@@ -579,6 +580,12 @@ def sync_playlist(
     *in_library* is asked about each new track before the backoff and the budget.
     True means the library already holds it (and the callback tagged it with this
     playlist): the track is not downloaded and goes into the snapshot as known (#187).
+
+    *wants*, given with ``PLAYLIST_STORE=on`` (homelab#1914 stage b), is the
+    playlist store's want test: an entry the snapshot already lists that it
+    wants (no library item holds it, and it is not in quarantine) is new
+    again, logged ``[STORE-WANT]``, and goes through the same checks, backoff
+    and budget as any new track.
 
     Returns a :class:`SyncResult` (see its docstring for the per-field meaning).
 
@@ -622,13 +629,20 @@ def sync_playlist(
     if removed_urls:
         logger.info("%d track(s) removed from Spotify playlist", len(removed_urls))
 
+    # A snapshot entry the store wants is downloaded again (stage b), judged by
+    # its snapshot record: the page record may lack the ISRC an item matches by.
+    rewanted = set() if wants is None else {
+        s.url for s in new_songs if s.url in old_urls and wants(old_entries[s.url])}
+
     # Log SKIP for tracks already in the snapshot (not re-attempted this session).
     for song in new_songs:
-        if song.url in old_urls:
+        if song.url in rewanted:
+            logger.info("[STORE-WANT] %s → listed in the .spotdl, but no library item holds it", _song_label(song))
+        elif song.url in old_urls:
             logger.info("[SKIP] %s", _song_label(song))
 
-    # Identify tracks not yet downloaded (absent from the previous snapshot).
-    truly_new = [s for s in new_songs if s.url not in old_urls]
+    # Identify tracks not yet downloaded (absent from the previous snapshot, or wanted by the store).
+    truly_new = [s for s in new_songs if s.url not in old_urls or s.url in rewanted]
 
     batch = _download_batch(spotdl_obj, truly_new, track_limit, failures_file, in_library, removed_urls)
 

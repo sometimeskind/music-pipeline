@@ -603,3 +603,27 @@ def test_list_twins_gives_each_pair_its_merge_command(caplog) -> None:
     # The keeper is the release item, though the extra is the Spotify-length copy: the album is the unit (#311).
     assert "2555 Psycho Killer - Live (268s, legacy) ~ 3730 (258s): music-audit-dupes --merge 3730 2555" in caplog.text
     assert "1 album(s) with local-only extras sharing a title" in caplog.text
+
+
+
+def test_copies_logs_where_the_stores_disagree_but_sources_decide(caplog) -> None:
+    """homelab#1914 stage b: the stores' answer is a shadow.  A copy tagged only keep
+    but listed by aaaaaah's store too stays a top-up, with a [TOPUP-DIFF] line, once."""
+    release._topup_diffs.clear()
+    record = {**RTD, "playlists": {"keep": [], "later": []}}
+    topup = FakeItem(1, via="spotdl", spotify_album_id="RTD", sources="keep")
+    listed = {1: {"keep", "aaaaaah"}}
+    with caplog.at_level("INFO", logger="music_scan.release"):
+        assert release.copies([topup], "RTD", record, "r1@1", None, lambda i: listed[i.id]) == [topup]
+        release.copies([topup], "RTD", record, "r1@1", None, lambda i: listed[i.id])
+    assert caplog.text.count("[TOPUP-DIFF]") == 1
+    assert "sources say top-up, the store says loose (listed by aaaaaah, keep)" in caplog.text
+
+
+def test_copies_logs_nothing_where_the_stores_agree(caplog) -> None:
+    release._topup_diffs.clear()
+    record = {**RTD, "playlists": {"keep": [], "later": []}}
+    topup = FakeItem(1, via="spotdl", spotify_album_id="RTD", sources="keep")
+    with caplog.at_level("INFO", logger="music_scan.release"):
+        assert release.copies([topup], "RTD", record, "r1@1", None, lambda i: {"keep"}) == [topup]
+    assert "[TOPUP-DIFF]" not in caplog.text

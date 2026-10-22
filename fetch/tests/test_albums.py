@@ -1460,3 +1460,27 @@ def test_tick_grabs_even_when_the_mixed_hook_fails(tmp_path: Path) -> None:
         tick([], FakeSpotify("s", []), prowlarr, sab, never_have, tmp_path, Settings(mode="on"),
              state_file=state_file, mixed=broken)
     top.assert_called_once()
+
+
+def test_refresh_writes_the_playlist_store(tmp_path: Path, monkeypatch) -> None:
+    """homelab#1914 stage b: an album playlist's store is its Spotify tracklist."""
+    from music_fetch import store
+
+    monkeypatch.setenv(store.STORE_ENV, store.ON)
+    monkeypatch.setattr(store, "STORE_DIR", tmp_path / "store")
+    refresh_playlists(State(), [("later", "url")], FakeSpotify("s1", [song("One", "A")]), tmp_path,
+                      albums.TickResult())
+    written = store.Store.load(tmp_path / "store" / "later.json")
+    assert written.source == store.SPOTIFY
+    assert [s["name"] for s in written.songs] == ["One"]
+
+
+def test_refresh_writes_no_store_when_off(tmp_path: Path, monkeypatch) -> None:
+    from music_fetch import store
+
+    monkeypatch.delenv(store.STORE_ENV, raising=False)
+    monkeypatch.setattr(store, "STORE_DIR", tmp_path / "store")
+    monkeypatch.setattr(store, "DRYRUN_DIR", tmp_path / "side")
+    refresh_playlists(State(), [("later", "url")], FakeSpotify("s1", [song("One", "A")]), tmp_path,
+                      albums.TickResult())
+    assert not (tmp_path / "store").exists() and not (tmp_path / "side").exists()
