@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from contextlib import nullcontext
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -39,59 +40,41 @@ def test_preflight_task_raises_on_failure():
         assert metrics.failure_reason == "missing_cookies"
 
 
-def test_reconcile_playlists_task_returns_remove_sources():
+def test_reconcile_playlists_task_deletes_removed_playlists_and_queues_nothing():
+    """homelab#1914: a playlist gone from playlists.conf loses its store and .m3u
+    in reconcile_playlists itself; nothing is handed on to the sync."""
     from music_service.flows import reconcile_playlists_task
     with patch("music_service.flows.ingest") as mock_ingest:
         mock_ingest.reconcile_playlists.return_value = ["old-playlist"]
-        result = reconcile_playlists_task(MagicMock())
-        assert result == ["old-playlist"]
+        assert reconcile_playlists_task(MagicMock()) is None
+        mock_ingest.reconcile_playlists.assert_called_once_with()
 
 
-def test_spotdl_sync_task_returns_pending_and_counts_into_metrics():
+def test_reconcile_playlists_task_marks_a_failure():
+    from music_service.flows import reconcile_playlists_task
+    metrics = MagicMock(failure_reason="")
+    with patch("music_service.flows.ingest") as mock_ingest:
+        mock_ingest.reconcile_playlists.side_effect = OSError("disk")
+        with pytest.raises(OSError):
+            reconcile_playlists_task(metrics)
+    assert metrics.failure_reason == "reconcile_error"
+
+
+def test_spotdl_sync_task_passes_metrics_and_the_sync_hooks():
     from music_service.flows import spotdl_sync_task
-    mock_pending = MagicMock()
     metrics = MagicMock()
+    hooks = {"resolves": MagicMock(), "held": frozenset({"Q"}), "in_library": MagicMock()}
     with patch("music_service.flows.ingest") as mock_ingest, \
-         patch("music_scan.library.MusicLibrary"):
-        mock_ingest.sync_playlists.return_value = mock_pending
-        result = spotdl_sync_task([], metrics)
-        assert result is mock_pending
-        assert mock_ingest.sync_playlists.call_args.args[1] is metrics
-        metrics.push.assert_not_called()
+         patch("music_service.flows.scan.sync_hooks", return_value=nullcontext(hooks)):
+        assert spotdl_sync_task(metrics) is None
+    mock_ingest.sync_playlists.assert_called_once_with(metrics, **hooks)
+    metrics.push.assert_not_called()
 
 
-def test_spotdl_sync_task_links_tracks_the_library_has(tmp_path):
-    """The sync's in_library callback tags library items by Spotify ID (#187)."""
-    from beets.library import Item
-
-    from music_scan.library import MusicLibrary
-    from music_service.flows import spotdl_sync_task
-
-    db = tmp_path / "library.db"
-    with MusicLibrary(db, tmp_path) as lib:
-        item = Item(title="Song", artist="Artist", sources="liked", spotify_ids="A1")
-        lib._lib.add(item)
-
-    answers = []
-
-    def fake_sync(_remove, _metrics, in_library=None):
-        answers.append(in_library("later", {"url": "https://open.spotify.com/track/A1"}))
-        answers.append(in_library("later", {"url": "https://open.spotify.com/track/ZZ"}))
-        return MagicMock()
-
-    with patch("music_service.flows.ingest") as mock_ingest, \
-         patch("music_service.flows.scan.LIBRARY_DB", db):
-        mock_ingest.sync_playlists.side_effect = fake_sync
-        spotdl_sync_task([], MagicMock(tracks_linked=1))
-
-    assert answers == [True, False]
-    with MusicLibrary(db, tmp_path) as lib:
-        assert lib._lib.get_item(item.id).get("sources") == "liked,later"
-
-
-def test_spotdl_sync_task_feeds_the_store_dry_run(tmp_path, monkeypatch):
-    """With PLAYLIST_STORE=dry-run the sync also gets a resolver that tags
-    nothing and the quarantined URLs (homelab#1914)."""
+def test_spotdl_sync_task_resolves_without_tagging_holds_and_links(tmp_path):
+    """The sync's hooks (homelab#1914): ``resolves`` matches a library item by
+    Spotify ID without tagging it, ``held`` is the downloads waiting in the inbox
+    or quarantine, and ``in_library`` tags the item with the playlist (#187)."""
     from beets.library import Item
 
     from music_scan.library import MusicLibrary
@@ -104,87 +87,32 @@ def test_spotdl_sync_task_feeds_the_store_dry_run(tmp_path, monkeypatch):
 
     seen = {}
 
-    def fake_sync(_remove, _metrics, in_library=None, resolves=None, held=frozenset()):
+    def fake_sync(_metrics, resolves, held=frozenset(), in_library=None):
         seen["held"] = held
-        seen["answers"] = [resolves({"url": "https://open.spotify.com/track/A1"}),
-                           resolves({"url": "https://open.spotify.com/track/ZZ"})]
-        return MagicMock()
+        seen["resolves"] = [resolves({"url": "https://open.spotify.com/track/A1"}),
+                            resolves({"url": "https://open.spotify.com/track/ZZ"})]
+        with MusicLibrary(db, tmp_path) as lib:
+            seen["after_resolves"] = lib._lib.get_item(item.id).get("sources")
+        seen["linked"] = [in_library("later", {"url": "https://open.spotify.com/track/A1"}),
+                          in_library("later", {"url": "https://open.spotify.com/track/ZZ"})]
 
-    monkeypatch.setenv("PLAYLIST_STORE", "dry-run")
     with patch("music_service.flows.ingest") as mock_ingest, \
-         patch("music_service.flows.reconcile.quarantine_urls", return_value=frozenset({"Q"})), \
-         patch("music_service.flows.scan.LIBRARY_DB", db):
+         patch("music_service.flows.scan.LIBRARY_DB", db), \
+         patch("music_service.flows.scan.held_urls", return_value=frozenset({"Q"})) as held_urls:
         mock_ingest.sync_playlists.side_effect = fake_sync
-        spotdl_sync_task([], MagicMock(tracks_linked=0))
+        spotdl_sync_task(MagicMock(tracks_linked=1))
 
-    assert seen == {"held": frozenset({"Q"}), "answers": [True, False]}
+    assert seen == {"held": frozenset({"Q"}), "resolves": [True, False], "after_resolves": "liked",
+                    "linked": [True, False]}
+    from music_service.flows import scan
+    held_urls.assert_called_once_with(scan.QUARANTINE, scan.SPOTDL_DIR)
     with MusicLibrary(db, tmp_path) as lib:
-        assert lib._lib.get_item(item.id).get("sources") == "liked"
+        assert lib._lib.get_item(item.id).get("sources") == "liked,later"
 
 
 # ---------------------------------------------------------------------------
 # Scan tasks
 # ---------------------------------------------------------------------------
-
-
-def test_save_removals_task_skips_when_empty():
-    from music_service.flows import save_removals_task
-    mock_pending = MagicMock()
-    mock_pending.tracks = []
-    mock_pending.remove_sources = []
-    with patch("music_service.flows.ingest") as mock_ingest:
-        save_removals_task(mock_pending)
-        mock_ingest.save_pending_removals.assert_not_called()
-
-
-def test_save_removals_task_writes_when_non_empty():
-    from music_service.flows import save_removals_task
-    mock_pending = MagicMock()
-    mock_pending.tracks = [MagicMock()]
-    mock_pending.remove_sources = []
-    with patch("music_service.flows.ingest") as mock_ingest:
-        save_removals_task(mock_pending)
-        mock_ingest.save_pending_removals.assert_called_once_with(mock_pending)
-
-
-def test_apply_removals_task_skips_when_no_file():
-    from music_service.flows import apply_removals_task
-    with patch("music_service.flows.ingest") as mock_ingest, \
-         patch("music_service.flows.scan") as mock_scan:
-        mock_ingest.load_pending_removals.return_value = None
-        apply_removals_task()
-        mock_scan.apply_pending_removals.assert_not_called()
-
-
-def test_apply_removals_task_calls_apply_pending_removals():
-    from music_service.flows import apply_removals_task
-    mock_pending = MagicMock()
-    mock_lib = MagicMock()
-    with patch("music_service.flows.ingest") as mock_ingest, \
-         patch("music_service.flows.scan") as mock_scan, \
-         patch("music_scan.library.MusicLibrary") as MockLib:
-        mock_ingest.load_pending_removals.return_value = mock_pending
-        MockLib.return_value.__enter__ = lambda _: mock_lib
-        MockLib.return_value.__exit__ = MagicMock(return_value=False)
-        apply_removals_task()
-        mock_scan.apply_pending_removals.assert_called_once()
-        mock_ingest.clear_pending_removals.assert_called_once_with(mock_pending)
-
-
-def test_apply_removals_task_keeps_the_file_when_apply_crashes():
-    """A crash leaves the pending removals for the next scan (#259)."""
-    from music_service.flows import apply_removals_task
-    mock_lib = MagicMock()
-    with patch("music_service.flows.ingest") as mock_ingest, \
-         patch("music_service.flows.scan") as mock_scan, \
-         patch("music_scan.library.MusicLibrary") as MockLib:
-        mock_ingest.load_pending_removals.return_value = MagicMock()
-        mock_scan.apply_pending_removals.side_effect = RuntimeError("db locked")
-        MockLib.return_value.__enter__ = lambda _: mock_lib
-        MockLib.return_value.__exit__ = MagicMock(return_value=False)
-        with pytest.raises(RuntimeError):
-            apply_removals_task()
-        mock_ingest.clear_pending_removals.assert_not_called()
 
 
 def test_beet_import_task_returns_imported():
@@ -221,13 +149,6 @@ def test_regen_playlists_task_calls_regen():
         mock_scan.regen_playlists.assert_called_once_with(None)
 
 
-def test_reconcile_task_calls_reconcile_all():
-    from music_service.flows import reconcile_task
-    with patch("music_service.flows.reconcile") as mock_reconcile:
-        reconcile_task()
-        mock_reconcile.reconcile_all.assert_called_once()
-
-
 # ---------------------------------------------------------------------------
 # Flows
 # ---------------------------------------------------------------------------
@@ -236,13 +157,9 @@ def test_reconcile_task_calls_reconcile_all():
 def test_fetch_flow_runs_fetch_then_scan():
     from music_service.flows import fetch_and_scan_flow
     call_order: list[str] = []
-    mock_pending = MagicMock()
-    mock_pending.tracks = []
-    mock_pending.remove_sources = []
 
     with patch("music_service.flows.ingest") as mock_ingest, \
          patch("music_service.flows.scan") as mock_scan, \
-         patch("music_service.flows.reconcile") as mock_reconcile, \
          patch("music_scan.library.MusicLibrary"), \
          patch("music_service.flows.concurrency") as mock_concurrency, \
          patch("music_scan.process.run_beet_update"), \
@@ -251,10 +168,9 @@ def test_fetch_flow_runs_fetch_then_scan():
         mock_concurrency.return_value.__exit__.return_value = False
         mock_ingest.preflight.side_effect = lambda: call_order.append("preflight")
         mock_ingest.reconcile_playlists.side_effect = lambda: (call_order.append("reconcile-playlists"), [])[1]
-        mock_ingest.sync_playlists.side_effect = lambda *_, **__: (call_order.append("spotdl-sync"), mock_pending)[1]
-        mock_ingest.load_pending_removals.return_value = None
+        mock_ingest.sync_playlists.side_effect = lambda *_, **__: call_order.append("spotdl-sync")
+        mock_scan.sync_hooks.return_value = nullcontext({})
         mock_scan.run_inbox_import.side_effect = lambda: (call_order.append("beet-import"), [])[1]
-        mock_reconcile.reconcile_all.return_value = 0
 
         fetch_and_scan_flow()
 
@@ -275,11 +191,8 @@ def _flow_ingest_pushes(tmp_path, monkeypatch, *, preflight=None, linked=0):
         ".youtube.com\tTRUE\t/\tTRUE\t1792766198\tSAPISID\tvalue\n",
         encoding="utf-8",
     )
-    pending = ingest.PendingRemovals(tracks=[], remove_sources=[])
-
-    def fake_sync(_remove, metrics, in_library=None):
+    def fake_sync(metrics, **_hooks):
         metrics.tracks_linked += linked
-        return pending
 
     pushes: list[tuple[str, str]] = []
     monkeypatch.setattr("music_fetch.metrics._push", lambda body, job: pushes.append((body, job)))
@@ -293,7 +206,7 @@ def _flow_ingest_pushes(tmp_path, monkeypatch, *, preflight=None, linked=0):
     from music_service.flows import fetch_and_scan_flow
     with patch("music_service.flows.concurrency"), \
          patch("music_service.flows._run_scan_tasks"), \
-         patch("music_scan.library.MusicLibrary"):
+         patch("music_service.flows.scan.sync_hooks", return_value=nullcontext({})):
         if preflight:
             with pytest.raises(RuntimeError):
                 fetch_and_scan_flow()
@@ -325,16 +238,13 @@ def test_scan_flow_runs_all_scan_steps_in_order():
 
     with patch("music_service.flows.ingest") as mock_ingest, \
          patch("music_service.flows.scan") as mock_scan, \
-         patch("music_service.flows.reconcile") as mock_reconcile, \
          patch("music_service.flows.concurrency") as mock_concurrency:
         mock_concurrency.return_value.__enter__.return_value = None
         mock_concurrency.return_value.__exit__.return_value = False
-        mock_ingest.load_pending_removals.return_value = None
         mock_scan.run_inbox_import.side_effect = lambda: (call_order.append("beet-import"), [])[1]
         mock_scan.quarantine_inbox_leftovers.side_effect = lambda: (call_order.append("quarantine"), 0)[1]
         mock_scan.import_asis_from_quarantine.side_effect = lambda: (call_order.append("asis-import"), 0)[1]
         mock_scan.regen_playlists.side_effect = lambda metrics: (call_order.append("regen-playlists"), {})[1]
-        mock_reconcile.reconcile_all.side_effect = lambda: (call_order.append("reconcile-snapshots"), 0)[1]
 
         with patch("music_scan.process.run_beet_update") as mock_update, \
              patch("music_scan.navidrome.trigger_scan") as mock_navidrome, \
@@ -355,8 +265,7 @@ def test_scan_flow_runs_all_scan_steps_in_order():
         "beet-update",
         "regen-playlists",
         "navidrome",
-        "reconcile-snapshots",
-    ]
+    ]  # no removals before the import, no snapshot reconcile after Navidrome (homelab#1914)
     mock_ingest.preflight.assert_not_called()
     mock_ingest.sync_playlists.assert_not_called()
 
@@ -365,11 +274,11 @@ def test_scan_flow_skips_when_pipeline_busy():
     """Scan exits immediately if the pipeline concurrency slot is taken."""
     from music_service.flows import scan_flow
     with patch("music_service.flows.concurrency") as mock_concurrency, \
-         patch("music_service.flows.ingest") as mock_ingest:
+         patch("music_service.flows._run_scan_tasks") as run_scan:
         mock_concurrency.return_value.__enter__.side_effect = TimeoutError
         mock_concurrency.return_value.__exit__.return_value = False
         scan_flow()
-        mock_ingest.load_pending_removals.assert_not_called()
+        run_scan.assert_not_called()
 
 
 # ---------------------------------------------------------------------------
@@ -378,7 +287,6 @@ def test_scan_flow_skips_when_pipeline_busy():
 
 
 def _scan_mocks(mock_scan, mock_ingest):
-    mock_ingest.load_pending_removals.return_value = None
     mock_scan.run_inbox_import.return_value = [("A", "B"), ("C", "D")]
     mock_scan.quarantine_inbox_leftovers.return_value = 1
     mock_scan.import_asis_from_quarantine.return_value = 3
@@ -392,13 +300,11 @@ def test_scan_pushes_metrics_on_success():
 
     with patch("music_service.flows.ingest") as mock_ingest, \
          patch("music_service.flows.scan") as mock_scan, \
-         patch("music_service.flows.reconcile") as mock_reconcile, \
          patch("music_service.flows.concurrency"), \
          patch("music_scan.process.run_beet_update"), \
          patch("music_scan.navidrome.trigger_scan"), \
          patch("music_scan.metrics.ScanMetrics.push", autospec=True, side_effect=pushed.append):
         _scan_mocks(mock_scan, mock_ingest)
-        mock_reconcile.reconcile_all.return_value = 0
         _run_scan_tasks()
 
     (m,) = pushed
@@ -453,13 +359,11 @@ def test_scan_reports_a_musicbrainz_outage():
 
     with patch("music_service.flows.ingest") as mock_ingest, \
          patch("music_service.flows.scan") as mock_scan, \
-         patch("music_service.flows.reconcile") as mock_reconcile, \
          patch("music_service.flows.concurrency"), \
          patch("music_scan.process.run_beet_update"), \
          patch("music_scan.navidrome.trigger_scan"), \
          patch("music_scan.metrics.ScanMetrics.push", autospec=True, side_effect=pushed.append):
         _scan_mocks(mock_scan, mock_ingest)
-        mock_reconcile.reconcile_all.return_value = 0
         mock_scan.run_inbox_import.side_effect = MusicBrainzUnavailable("503", [("A", "B")])
         with pytest.raises(MusicBrainzUnavailable):
             _run_scan_tasks()
@@ -559,7 +463,9 @@ def test_album_completion_wires_the_release_hooks():
         return albums.IMPORTED
 
     title = MagicMock(title="Juicy")
+    listed = MagicMock(name="listed")
     with patch.object(albums, "complete", side_effect=fake_complete), \
+         patch.object(flows.scan, "store_listings", return_value=listed), \
          patch.object(release, "claim", return_value=[title]) as claim, \
          patch.object(release, "retire", return_value=2) as retire, \
          patch.object(release, "import_rest", return_value=1) as rest, \
@@ -571,8 +477,8 @@ def test_album_completion_wires_the_release_hooks():
 
     assert events == [("claim", ["Juicy"]), "m3u", ("retire", 2), ("rest", 1), ("identify", {"missing": 0})]
     assert claim.call_args.args[1:] == ("keep", 100.0, "K", "r1", "Job")
-    # The listings are None: PLAYLIST_STORE is off, so sources judge top-ups.
-    assert retire.call_args.args[1:] == ("K", {}, "r1", None, None)
+    # The stores' listings judge top-ups (homelab#1914), not ``sources``.
+    assert retire.call_args.args[1:] == ("K", {}, "r1", None, listed)
     assert rest.call_args.args[2:] == ("keep", "Job")
 
 
@@ -631,7 +537,6 @@ def test_scan_purges_quarantine_replaced_and_pushes_the_counts():
 
     with patch("music_service.flows.ingest") as mock_ingest, \
          patch("music_service.flows.scan") as mock_scan, \
-         patch("music_service.flows.reconcile") as mock_reconcile, \
          patch("music_service.flows.concurrency"), \
          patch("music_scan.process.run_beet_update"), \
          patch("music_scan.navidrome.trigger_scan"), \
@@ -640,7 +545,6 @@ def test_scan_purges_quarantine_replaced_and_pushes_the_counts():
                return_value={"superseded": 3, "only_copy": 17, "purged": 5}) as purge, \
          patch("music_scan.metrics.ScanMetrics.push", autospec=True, side_effect=pushed.append):
         _scan_mocks(mock_scan, mock_ingest)
-        mock_reconcile.reconcile_all.return_value = 0
         _run_scan_tasks()
 
     assert purge.call_args.args[2] == 14
@@ -654,7 +558,48 @@ def test_album_mixed_hook_reads_the_library_once():
     lib = MagicMock()
     item = {"spotify_album_id": "K", "via": "spotdl"}
     lib.all_items.return_value = [MagicMock(get=item.get)]
-    mixed = flows._album_mixed_hook(lib)
-    assert mixed("K", {"status": "imported"}) == ["1 spotdl track(s) on the album"]
-    assert mixed("OTHER", {"status": "imported"}) == []
+    with patch.object(flows.scan, "store_listings", return_value=lambda i: set()) as listings:
+        mixed = flows._album_mixed_hook(lib)
+        assert mixed("K", {"status": "imported"}) == ["1 spotdl track(s) on the album"]
+        assert mixed("OTHER", {"status": "imported"}) == []
     lib.all_items.assert_called_once()
+    listings.assert_called_once_with()  # the stores are read once too
+
+
+def test_album_mixed_hook_leaves_a_copy_another_playlists_store_lists():
+    """homelab#1914: a spotdl copy another playlist's store lists is loose, not a top-up."""
+    from music_service import flows
+
+    lib = MagicMock()
+    item = {"spotify_album_id": "K", "via": "spotdl"}
+    lib.all_items.return_value = [MagicMock(get=item.get)]
+    with patch.object(flows.scan, "store_listings", return_value=lambda i: {"keep", "aaaaaah"}):
+        mixed = flows._album_mixed_hook(lib)
+        assert mixed("K", {"status": "imported", "playlists": {"keep": []}}) == []
+
+
+def test_album_tick_task_writes_no_removal_queue():
+    """homelab#1914: the tick writes the album playlists' stores; a song gone from
+    Spotify leaves the next store, so nothing is queued for the scan to unlink."""
+    import music_fetch.albums as albums
+    from music_service import flows
+
+    settings = albums.Settings(mode="on")
+    playlist = MagicMock(album=True, url="https://open.spotify.com/playlist/P")
+    playlist.name = "keep"
+    with patch("music_service.flows.ingest") as mock_ingest, \
+         patch("music_service.flows.load_playlists", return_value=[playlist]), \
+         patch("music_scan.library.MusicLibrary"), \
+         patch("music_fetch.spotdl_ops.SpotifyPlaylists") as spotify, \
+         patch("music_fetch.usenet.Prowlarr") as prowlarr, \
+         patch("music_fetch.usenet.Sabnzbd") as sabnzbd, \
+         patch.object(albums, "tick") as tick:
+        tick.return_value = MagicMock(removed_songs={"keep": [{"url": "https://open.spotify.com/track/X"}]})
+        flows.album_tick_task(settings)
+
+    args = tick.call_args.args
+    assert args[0] == [("keep", "https://open.spotify.com/playlist/P")]
+    assert args[1:4] == (spotify.return_value, prowlarr.return_value, sabnzbd.return_value)
+    assert callable(args[4]) and args[5] is settings and len(args) == 6
+    assert set(tick.call_args.kwargs) == {"on_completion", "missing", "mixed"}
+    assert [c[0] for c in mock_ingest.method_calls] == []  # no schedule_unlink, no save_pending_removals

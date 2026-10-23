@@ -1,9 +1,6 @@
 """Tests for music_scan.identity and the library's use of spotify_ids."""
 
-from pathlib import Path
 from unittest.mock import MagicMock
-
-import pytest
 
 from music_scan.identity import (
     BY_ID,
@@ -60,31 +57,6 @@ def test_add_to_list_appends_once() -> None:
     assert data["spotify_ids"] == "A,B"
 
 
-def test_spotify_urls_by_source_includes_spotify_ids(tmp_path: Path) -> None:
-    """A duplicate that took a second playlist keeps the first one's spotify_url;
-    reconcile must still see the second entry's URL."""
-    from beets.library import Item
-
-    from music_scan.library import MusicLibrary
-
-    with MusicLibrary(tmp_path / "library.db", tmp_path) as lib:
-        item = Item(title="Song", artist="Artist")
-        item["sources"] = "a,b"
-        item["spotify_url"] = "https://open.spotify.com/track/ALBUM"
-        item["spotify_ids"] = "ALBUM,SINGLE"
-        lib._lib.add(item)
-        legacy = Item(title="Old", artist="Artist")
-        legacy["sources"] = "b"
-        legacy["spotify_url"] = "https://open.spotify.com/track/OLD"
-        lib._lib.add(legacy)
-
-        assert lib.spotify_urls_by_source("b") == {
-            "https://open.spotify.com/track/ALBUM",
-            "https://open.spotify.com/track/SINGLE",
-            "https://open.spotify.com/track/OLD",
-        }
-
-
 def test_item_spotify_ids_includes_legacy_spotify_url() -> None:
     item = _item(spotify_ids="A,B", spotify_url="https://open.spotify.com/track/C")
     assert item_spotify_ids(item) == {"A", "B", "C"}
@@ -120,84 +92,6 @@ def test_words_rung_skips_identified_items() -> None:
     assert index.match("LIVE", None, "Girlfriend Is Better", "Artist") == (live, BY_ID)
     idless = _item("Girlfriend Is Better")
     assert ItemIndex([live, idless]).match("STUDIO", None, "Girlfriend Is Better", "Artist") == (idless, BY_WORDS)
-
-def _beets_lib(tmp_path: Path):
-    from beets.library import Item
-
-    from music_scan.library import MusicLibrary
-
-    lib = MusicLibrary(tmp_path / "library.db", tmp_path)
-
-    def add(title, **flex):
-        item = Item(title=title, artist="Artist", isrc=flex.pop("isrc", ""))
-        for k, v in flex.items():
-            item[k] = v
-        lib._lib.add(item)
-        return item
-
-    return lib, add
-
-
-def test_clear_source_tag_matches_removed_entry_by_spotify_id(tmp_path: Path) -> None:
-    """Studio and live share a title; removing the live entry leaves the studio take."""
-    lib, add = _beets_lib(tmp_path)
-    with lib:
-        studio = add("Song", sources="a", spotify_ids="STUDIO")
-        live = add("Song", sources="a", spotify_ids="LIVE")
-        assert lib.clear_source_tag("Song", "Artist", "a", spotify_id="LIVE")
-        assert lib._lib.get_item(live.id).get("sources") == ""
-        assert lib._lib.get_item(studio.id).get("sources") == "a"
-
-
-def test_clear_source_tag_by_isrc_then_words(tmp_path: Path, caplog) -> None:
-    lib, add = _beets_lib(tmp_path)
-    with lib:
-        remaster = add("Song (Remastered)", sources="a,b", isrc="X1;X2")
-        old = add("Old", sources="a")
-        assert lib.clear_source_tag("Song", "Artist", "a", spotify_id="NOPE", isrc="X2")
-        assert lib._lib.get_item(remaster.id).get("sources") == "b"
-        with caplog.at_level("INFO", logger="music_scan.library"):
-            assert lib.clear_source_tag("Old", "Artist", "a")
-        assert lib._lib.get_item(old.id).get("sources") == ""
-        assert "[WORDS]" in caplog.text
-
-
-def test_clear_source_tag_words_fallback_skips_identified_items(tmp_path: Path) -> None:
-    """Removing the studio entry by title never clears the live take, which has its own ID (#257)."""
-    lib, add = _beets_lib(tmp_path)
-    with lib:
-        live = add("Girlfriend Is Better", sources="a", spotify_ids="LIVE")
-        assert lib.clear_source_tag("Girlfriend Is Better", "Artist", "a", spotify_id="STUDIO") == []
-        assert lib._lib.get_item(live.id).get("sources") == "a"
-
-
-@pytest.mark.parametrize("title", ["You'll Need Those Fingers for Crossing (2018 Remaster)", 'The "Real" Thing', "Don't"])
-def test_clear_source_tag_words_fallback_survives_quotes(tmp_path: Path, title) -> None:
-    """An apostrophe or a quote in the title no longer breaks the fallback's query (#259)."""
-    lib, add = _beets_lib(tmp_path)
-    with lib:
-        item = add(title, sources="keep,later")
-        other = add("Another Song", sources="keep")
-        assert [i.id for i in lib.clear_source_tag(title, "Artist", "keep")] == [item.id]
-        assert lib._lib.get_item(item.id).get("sources") == "later"
-        assert lib._lib.get_item(other.id).get("sources") == "keep"
-
-
-def test_clear_source_tag_words_fallback_is_case_insensitive_substring(tmp_path: Path) -> None:
-    lib, add = _beets_lib(tmp_path)
-    with lib:
-        item = add("Song (Live)", sources="a")
-        assert lib.clear_source_tag("song", "artist", "a")
-        assert lib._lib.get_item(item.id).get("sources") == ""
-
-
-def test_clear_source_tag_needs_the_exact_source(tmp_path: Path) -> None:
-    """``keep`` is a substring of ``keepsake``; only an item tagged ``keep`` itself is changed."""
-    lib, add = _beets_lib(tmp_path)
-    with lib:
-        item = add("Song", sources="keepsake")
-        assert lib.clear_source_tag("Song", "Artist", "keep") == []
-        assert lib._lib.get_item(item.id).get("sources") == "keepsake"
 
 
 # --- release_match (#240) -----------------------------------------------------

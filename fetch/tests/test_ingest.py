@@ -1,12 +1,19 @@
 """Tests for pipeline.ingest — pure-Python logic (no I/O, no external tools)."""
 
-import json
 from pathlib import Path
 
 import pytest
 
-from music_fetch.ingest import classify_failure, _collect_removals, _deadline_reached, reconcile_playlists, PendingRemovals, RemovedTrack
-from music_fetch.spotdl_ops import SyncResult, find_track_in_snapshot
+from music_fetch import ingest, store
+from music_fetch.ingest import classify_failure, _deadline_reached, reconcile_playlists
+from music_fetch.spotdl_ops import SyncResult
+
+
+@pytest.fixture(autouse=True)
+def _state_dirs(tmp_path: Path, monkeypatch):
+    """Playlist stores and .m3u files land in tmp_path, never under /root (homelab#1914)."""
+    monkeypatch.setattr(store, "STORE_DIR", tmp_path / "store")
+    monkeypatch.setattr(ingest, "PLAYLISTS_DIR", tmp_path / "playlists")
 
 
 # ---------------------------------------------------------------------------
@@ -54,155 +61,6 @@ def test_deadline_reached_past_limit() -> None:
 
 
 # ---------------------------------------------------------------------------
-# find_track_in_snapshot
-# ---------------------------------------------------------------------------
-
-SNAPSHOT = [
-    {"url": "https://spotify.com/track/A", "name": "Song A", "artists": ["Artist 1"]},
-    {"url": "https://spotify.com/track/B", "name": "Song B", "artists": ["Artist 2"]},
-]
-
-
-def test_find_track_found() -> None:
-    result = find_track_in_snapshot(SNAPSHOT, "https://spotify.com/track/A")
-    assert result is not None
-    assert result["name"] == "Song A"
-
-
-def test_find_track_not_found() -> None:
-    result = find_track_in_snapshot(SNAPSHOT, "https://spotify.com/track/Z")
-    assert result is None
-
-
-def test_find_track_empty_snapshot() -> None:
-    assert find_track_in_snapshot([], "https://spotify.com/track/A") is None
-
-
-# ---------------------------------------------------------------------------
-# Snapshot diff logic (as it would be used in ingest.run)
-# ---------------------------------------------------------------------------
-
-def _diff(old: list[dict], new_urls: set[str]) -> set[str]:
-    """Replicate the removal-detection logic from ingest.run."""
-    old_urls = {s["url"] for s in old}
-    return old_urls - new_urls
-
-
-def test_diff_detects_removal() -> None:
-    old = [
-        {"url": "https://spotify.com/track/A"},
-        {"url": "https://spotify.com/track/B"},
-    ]
-    new_urls = {"https://spotify.com/track/A"}
-    removed = _diff(old, new_urls)
-    assert removed == {"https://spotify.com/track/B"}
-
-
-def test_diff_no_removal() -> None:
-    old = [{"url": "https://spotify.com/track/A"}]
-    new_urls = {"https://spotify.com/track/A", "https://spotify.com/track/B"}
-    assert _diff(old, new_urls) == set()
-
-
-def test_diff_all_removed() -> None:
-    old = [{"url": "https://spotify.com/track/A"}, {"url": "https://spotify.com/track/B"}]
-    assert _diff(old, set()) == {"https://spotify.com/track/A", "https://spotify.com/track/B"}
-
-
-def test_diff_empty_old() -> None:
-    assert _diff([], {"https://spotify.com/track/A"}) == set()
-
-
-# ---------------------------------------------------------------------------
-# Track budget logic (as it would be used in spotdl_ops.sync_playlist)
-# ---------------------------------------------------------------------------
-
-def _apply_budget(
-    old_urls: set[str],
-    all_new_urls: list[str],
-    budget: int | None,
-) -> tuple[list[str], list[str]]:
-    """Replicate the track-limiting logic from spotdl_ops.sync_playlist.
-
-    Returns (batch_downloaded, songs_written_to_spotdl_file).
-    """
-    truly_new = [u for u in all_new_urls if u not in old_urls]
-    batch = truly_new if budget is None else truly_new[:budget]
-    batch_set = set(batch)
-    written = [u for u in all_new_urls if u in old_urls or u in batch_set]
-    return batch, written
-
-
-def test_budget_none_downloads_all_new() -> None:
-    old = {"https://spotify.com/track/A"}
-    new = ["https://spotify.com/track/A", "https://spotify.com/track/B", "https://spotify.com/track/C"]
-    batch, written = _apply_budget(old, new, budget=None)
-    assert set(batch) == {"https://spotify.com/track/B", "https://spotify.com/track/C"}
-    assert set(written) == set(new)
-
-
-def test_budget_limits_downloads_and_defers_remainder() -> None:
-    old: set[str] = set()
-    new = ["https://spotify.com/track/A", "https://spotify.com/track/B", "https://spotify.com/track/C"]
-    batch, written = _apply_budget(old, new, budget=2)
-    assert batch == ["https://spotify.com/track/A", "https://spotify.com/track/B"]
-    # C is deferred — not written to the snapshot
-    assert "https://spotify.com/track/C" not in written
-    assert set(written) == {"https://spotify.com/track/A", "https://spotify.com/track/B"}
-
-
-def test_budget_gte_new_behaves_like_unlimited() -> None:
-    old: set[str] = set()
-    new = ["https://spotify.com/track/A", "https://spotify.com/track/B"]
-    batch_limited, written_limited = _apply_budget(old, new, budget=10)
-    batch_unlimited, written_unlimited = _apply_budget(old, new, budget=None)
-    assert batch_limited == batch_unlimited
-    assert written_limited == written_unlimited
-
-
-def test_budget_deferred_tracks_reappear_next_session() -> None:
-    """Tracks excluded from the snapshot show up as new on the next run."""
-    old: set[str] = set()
-    new = ["https://spotify.com/track/A", "https://spotify.com/track/B", "https://spotify.com/track/C"]
-
-    # Session 1: budget=1, downloads A
-    batch1, written1 = _apply_budget(old, new, budget=1)
-    assert batch1 == ["https://spotify.com/track/A"]
-
-    # Session 2: old_urls = what was written to .spotdl after session 1
-    old2 = set(written1)
-    batch2, written2 = _apply_budget(old2, new, budget=1)
-    assert batch2 == ["https://spotify.com/track/B"]
-
-    # Session 3
-    old3 = set(written2)
-    batch3, _ = _apply_budget(old3, new, budget=1)
-    assert batch3 == ["https://spotify.com/track/C"]
-
-
-def test_budget_spans_playlists() -> None:
-    """Simulate budget consumption across two playlists."""
-    budget = 5
-
-    # Playlist A: 3 new tracks
-    old_a: set[str] = set()
-    new_a = [f"https://spotify.com/track/A{i}" for i in range(3)]
-    batch_a, _ = _apply_budget(old_a, new_a, budget=budget)
-    budget -= len(batch_a)  # budget → 2
-
-    # Playlist B: 4 new tracks, only 2 slots remain
-    old_b: set[str] = set()
-    new_b = [f"https://spotify.com/track/B{i}" for i in range(4)]
-    batch_b, written_b = _apply_budget(old_b, new_b, budget=budget)
-
-    assert len(batch_a) == 3
-    assert len(batch_b) == 2  # capped by remaining budget
-    # B2 and B3 are deferred
-    assert "https://spotify.com/track/B2" not in written_b
-    assert "https://spotify.com/track/B3" not in written_b
-
-
-# ---------------------------------------------------------------------------
 # sync_playlists — config ordering
 # ---------------------------------------------------------------------------
 
@@ -210,7 +68,7 @@ def test_budget_spans_playlists() -> None:
 def test_sync_playlists_processes_in_config_order(tmp_path: Path) -> None:
     """Playlists are synced in playlists.conf order, not alphabetically.
 
-    Regression: previously sorted(glob("*.spotdl")) produced alphabetical
+    Regression: an earlier sorted(glob("*.spotdl")) produced alphabetical
     order, so 'later' was processed before 'wedding' even though 'wedding'
     was listed first in the config.
     """
@@ -231,159 +89,61 @@ def test_sync_playlists_processes_in_config_order(tmp_path: Path) -> None:
     )
 
     # Alphabetical order would be: aaaaaaah, later, wedding
-    for name in ("aaaaaaah", "later", "wedding"):
-        (spotdl_dir / f"{name}.spotdl").write_text(
-            '{"type":"sync","query":["https://open.spotify.com/playlist/X"],"songs":[]}',
-            encoding="utf-8",
-        )
-
     processed: list[str] = []
 
-    def fake_sync(spotdl_file, **_kwargs):
-        processed.append(spotdl_file.stem)
+    def fake_sync(name, **_kwargs):
+        processed.append(name)
         return SyncResult(set(), 0, 0, 0, 0, {})
 
     with mock.patch.object(ingest, "SPOTDL_DIR", spotdl_dir), \
          mock.patch.object(ingest, "CONF_PATH", conf), \
          mock.patch.object(ingest, "COOKIE_FILE", tmp_path / "cookies.txt"), \
          mock.patch.object(ingest, "FAILURES_FILE", tmp_path / ".failures.json"), \
-         mock.patch("music_fetch.ingest.sync_playlist", side_effect=fake_sync):
-        ingest.sync_playlists([], IngestMetrics())
+         mock.patch("music_fetch.ingest.sync_playlist", side_effect=fake_sync), \
+         mock.patch("music_fetch.ingest.time.sleep"):
+        ingest.sync_playlists(IngestMetrics(), resolves=lambda song: False)
 
     assert processed == ["aaaaaaah", "wedding", "later"]
 
 
 # ---------------------------------------------------------------------------
-# _collect_removals
+# run()
 # ---------------------------------------------------------------------------
 
-SNAPSHOT = [
-    {"url": "https://spotify.com/track/A", "name": "Song A", "artists": ["Artist 1"]},
-    {"url": "https://spotify.com/track/B", "name": "Song B", "artists": []},
-]
 
-
-def test_collect_removals_normal_case() -> None:
-    pending: list[RemovedTrack] = []
-    _collect_removals(pending, {"https://spotify.com/track/A"}, SNAPSHOT, "my-playlist")
-    assert pending == [RemovedTrack(title="Song A", artist="Artist 1", source="my-playlist")]
-
-
-def test_collect_removals_url_not_in_snapshot() -> None:
-    """URL missing from snapshot → entry is skipped, no crash."""
-    pending: list[RemovedTrack] = []
-    _collect_removals(pending, {"https://spotify.com/track/Z"}, SNAPSHOT, "my-playlist")
-    assert pending == []
-
-
-def test_collect_removals_empty_artists() -> None:
-    """artists=[] → artist field defaults to empty string."""
-    pending: list[RemovedTrack] = []
-    _collect_removals(pending, {"https://spotify.com/track/B"}, SNAPSHOT, "my-playlist")
-    assert pending == [RemovedTrack(title="Song B", artist="", source="my-playlist")]
-
-
-def test_collect_removals_logs_each_track(caplog) -> None:
-    """One line per removed track, naming the playlist (#190)."""
-    pending: list[RemovedTrack] = []
-    with caplog.at_level("INFO", logger="music_fetch.ingest"):
-        _collect_removals(pending, {"https://spotify.com/track/A"}, SNAPSHOT, "my-playlist")
-    assert "Scheduling unlink: Song A — Artist 1 (my-playlist)" in caplog.text
-
-
-def test_collect_removals_no_removed_urls() -> None:
-    pending: list[RemovedTrack] = []
-    _collect_removals(pending, set(), SNAPSHOT, "my-playlist")
-    assert pending == []
-
-
-def test_sync_playlists_reads_removals_from_dict_snapshot(tmp_path: Path) -> None:
-    """A .spotdl file is a dict; the removed entry comes from its songs list (#169)."""
+def test_run_reconciles_then_syncs_with_the_scan_hooks(tmp_path: Path) -> None:
+    """run() reconciles playlists.conf, then syncs with music_scan's view of the library."""
     import unittest.mock as mock
-    from music_fetch import ingest
-    from music_fetch.metrics import IngestMetrics
+    from contextlib import contextmanager
 
-    spotdl_dir = tmp_path / "spotdl"
-    spotdl_dir.mkdir()
-    removed = {"url": "https://open.spotify.com/track/B", "name": "Song B", "artists": ["Artist"], "isrc": "GBX2"}
-    (spotdl_dir / "pl.spotdl").write_text(json.dumps({
-        "type": "sync",
-        "query": ["https://open.spotify.com/playlist/X"],
-        "songs": [{"url": "https://open.spotify.com/track/A", "name": "Song A", "artists": ["Artist"]}, removed],
-    }), encoding="utf-8")
-
-    with mock.patch.object(ingest, "SPOTDL_DIR", spotdl_dir), \
-         mock.patch.object(ingest, "CONF_PATH", tmp_path / "missing.conf"), \
-         mock.patch.object(ingest, "COOKIE_FILE", tmp_path / "cookies.txt"), \
-         mock.patch.object(ingest, "FAILURES_FILE", tmp_path / ".failures.json"), \
-         mock.patch("music_fetch.ingest.sync_playlist", return_value=SyncResult({removed["url"]}, 0, 0, 0, 0, {})), \
-         mock.patch("music_fetch.ingest.time.sleep"):
-        result = ingest.sync_playlists([], IngestMetrics())
-
-    assert result.tracks == [RemovedTrack("Song B", "Artist", "pl", spotify_id="B", isrc="GBX2")]
-
-
-@pytest.mark.parametrize("sync_data", [{"type": "sync", "query": []}, [], None])
-def test_snapshot_songs_without_songs_list(sync_data) -> None:
-    from music_fetch.ingest import _snapshot_songs
-
-    assert _snapshot_songs(sync_data) == []
-
-
-# ---------------------------------------------------------------------------
-# run() — PendingRemovals return type
-# ---------------------------------------------------------------------------
-
-
-def test_run_returns_pending_removals_empty(tmp_path: Path) -> None:
-    """run() returns PendingRemovals(tracks=[], remove_sources=[]) when nothing to remove."""
-    import unittest.mock as mock
-    from music_fetch import ingest
-
-    spotdl_dir = tmp_path / "spotdl"
-    spotdl_dir.mkdir()
     cookie_file = tmp_path / "cookies.txt"
     cookie_file.touch()
+    hooks = {"resolves": lambda song: False, "held": frozenset({"https://open.spotify.com/track/H"}),
+             "in_library": lambda pl, song: False}
+    order: list[str] = []
 
-    with mock.patch.object(ingest, "SPOTDL_DIR", spotdl_dir), \
-         mock.patch.object(ingest, "COOKIE_FILE", cookie_file), \
-         mock.patch.object(ingest, "CONF_PATH", tmp_path / "missing.conf"), \
+    @contextmanager
+    def fake_hooks():
+        order.append("hooks")
+        yield hooks
+
+    with mock.patch.object(ingest, "COOKIE_FILE", cookie_file), \
          mock.patch.object(ingest, "FAILURES_FILE", tmp_path / ".failures.json"), \
          mock.patch.dict("os.environ", {"SPOTIFY_CLIENT_ID": "id", "SPOTIFY_CLIENT_SECRET": "secret"}), \
          mock.patch("shutil.disk_usage", return_value=mock.Mock(free=10 * 1024**3)), \
+         mock.patch("music_scan.scan.sync_hooks", fake_hooks), \
+         mock.patch("music_fetch.ingest.reconcile_playlists",
+                    side_effect=lambda: order.append("reconcile") or ["gone"]), \
+         mock.patch("music_fetch.ingest.sync_playlists",
+                    side_effect=lambda *a, **kw: order.append("sync")) as sync, \
          mock.patch("music_fetch.ingest.IngestMetrics"), \
          mock.patch("music_fetch.ingest._jitter"):
-        result = ingest.run()
+        assert ingest.run() is None
 
-    assert isinstance(result, PendingRemovals)
-    assert result.tracks == []
-    assert result.remove_sources == []
-
-
-def test_run_returns_pending_removals_with_remove_sources(tmp_path: Path) -> None:
-    """run() returns PendingRemovals with remove_sources from reconcile_playlists."""
-    import unittest.mock as mock
-    from music_fetch import ingest
-
-    spotdl_dir = tmp_path / "spotdl"
-    spotdl_dir.mkdir()
-    cookie_file = tmp_path / "cookies.txt"
-    cookie_file.touch()
-
-    with mock.patch.object(ingest, "SPOTDL_DIR", spotdl_dir), \
-         mock.patch.object(ingest, "COOKIE_FILE", cookie_file), \
-         mock.patch.object(ingest, "CONF_PATH", tmp_path / "missing.conf"), \
-         mock.patch.object(ingest, "FAILURES_FILE", tmp_path / ".failures.json"), \
-         mock.patch.dict("os.environ", {"SPOTIFY_CLIENT_ID": "id", "SPOTIFY_CLIENT_SECRET": "secret"}), \
-         mock.patch("shutil.disk_usage", return_value=mock.Mock(free=10 * 1024**3)), \
-         mock.patch("music_fetch.ingest.reconcile_playlists", return_value=["gone-playlist"]), \
-         mock.patch("music_fetch.ingest.IngestMetrics"), \
-         mock.patch("music_fetch.ingest._jitter"):
-        result = ingest.run()
-
-    assert isinstance(result, PendingRemovals)
-    assert result.remove_sources == ["gone-playlist"]
-    assert result.tracks == []
+    assert order == ["reconcile", "hooks", "sync"]
+    kwargs = sync.call_args.kwargs
+    assert {k: kwargs[k] for k in hooks} == hooks
+    assert isinstance(kwargs["start"], float)
 
 
 def test_run_reconcile_failure_sets_reconcile_error_reason(tmp_path: Path) -> None:
@@ -453,9 +213,8 @@ def test_reconcile_no_conf(tmp_path: Path) -> None:
 
 
 def test_reconcile_provisions_new_playlist(tmp_path: Path) -> None:
-    """New playlist entry → save_playlist is called; .spotdl file is created."""
+    """A new playlist gets its download dir, and no .spotdl stub: its first sync writes its store."""
     import unittest.mock as mock
-    from music_fetch import ingest
 
     spotdl_dir = tmp_path / "spotdl"
     spotdl_dir.mkdir()
@@ -463,34 +222,29 @@ def test_reconcile_provisions_new_playlist(tmp_path: Path) -> None:
 
     with mock.patch.object(ingest, "CONF_PATH", conf), \
          mock.patch.object(ingest, "SPOTDL_DIR", spotdl_dir), \
-         mock.patch.object(ingest, "COOKIE_FILE", tmp_path / "cookies.txt"), \
-         mock.patch("music_fetch.ingest.save_playlist") as mock_save:
+         mock.patch.object(ingest, "COOKIE_FILE", tmp_path / "cookies.txt"):
         result = reconcile_playlists()
 
-    mock_save.assert_called_once()
-    call_kwargs = mock_save.call_args[1]
-    assert call_kwargs["url"] == "https://open.spotify.com/playlist/abc"
-    assert call_kwargs["spotdl_file"] == spotdl_dir / "my-playlist.spotdl"
     assert result == []
+    assert (spotdl_dir / "my-playlist").is_dir()
+    assert not list(tmp_path.rglob("*.spotdl"))
+    assert store.names() == []
 
 
-def test_reconcile_skips_existing_spotdl(tmp_path: Path) -> None:
-    """Playlist whose .spotdl already exists is not re-provisioned."""
+def test_reconcile_leaves_an_existing_playlist_alone(tmp_path: Path) -> None:
     import unittest.mock as mock
-    from music_fetch import ingest
 
     spotdl_dir = tmp_path / "spotdl"
-    spotdl_dir.mkdir()
-    (spotdl_dir / "my-playlist.spotdl").write_text("{}", encoding="utf-8")
+    (spotdl_dir / "my-playlist").mkdir(parents=True)
+    (spotdl_dir / "my-playlist" / "track.m4a").touch()
+    store.Store.from_songs("my-playlist", [{"url": "u"}]).save(store.path("my-playlist"))
     conf = _make_conf(tmp_path, ["my-playlist  https://open.spotify.com/playlist/abc"])
 
-    with mock.patch.object(ingest, "CONF_PATH", conf), \
-         mock.patch.object(ingest, "SPOTDL_DIR", spotdl_dir), \
-         mock.patch("music_fetch.ingest.save_playlist") as mock_save:
-        result = reconcile_playlists()
+    with mock.patch.object(ingest, "CONF_PATH", conf), mock.patch.object(ingest, "SPOTDL_DIR", spotdl_dir):
+        assert reconcile_playlists() == []
 
-    mock_save.assert_not_called()
-    assert result == []
+    assert (spotdl_dir / "my-playlist" / "track.m4a").exists()
+    assert store.load("my-playlist").songs == [{"url": "u"}]
 
 
 def test_reconcile_creates_nosync_sentinel(tmp_path: Path) -> None:
@@ -500,12 +254,10 @@ def test_reconcile_creates_nosync_sentinel(tmp_path: Path) -> None:
 
     spotdl_dir = tmp_path / "spotdl"
     spotdl_dir.mkdir()
-    (spotdl_dir / "frozen.spotdl").write_text("{}", encoding="utf-8")
     conf = _make_conf(tmp_path, ["frozen  https://open.spotify.com/playlist/abc  nosync"])
 
     with mock.patch.object(ingest, "CONF_PATH", conf), \
-         mock.patch.object(ingest, "SPOTDL_DIR", spotdl_dir), \
-         mock.patch("music_fetch.ingest.save_playlist"):
+         mock.patch.object(ingest, "SPOTDL_DIR", spotdl_dir):
         reconcile_playlists()
 
     assert (spotdl_dir / "frozen.nosync").exists()
@@ -518,42 +270,59 @@ def test_reconcile_removes_nosync_sentinel(tmp_path: Path) -> None:
 
     spotdl_dir = tmp_path / "spotdl"
     spotdl_dir.mkdir()
-    (spotdl_dir / "mypl.spotdl").write_text("{}", encoding="utf-8")
     (spotdl_dir / "mypl.nosync").touch()
     conf = _make_conf(tmp_path, ["mypl  https://open.spotify.com/playlist/abc"])
 
     with mock.patch.object(ingest, "CONF_PATH", conf), \
-         mock.patch.object(ingest, "SPOTDL_DIR", spotdl_dir), \
-         mock.patch("music_fetch.ingest.save_playlist"):
+         mock.patch.object(ingest, "SPOTDL_DIR", spotdl_dir):
         reconcile_playlists()
 
     assert not (spotdl_dir / "mypl.nosync").exists()
 
 
 def test_reconcile_detects_removed_playlist(tmp_path: Path) -> None:
-    """Playlist on disk but absent from config → queued for removal, files deleted."""
+    """A playlist with a store but absent from config loses its store, sentinels, dir and .m3u."""
     import unittest.mock as mock
-    from music_fetch import ingest
 
     spotdl_dir = tmp_path / "spotdl"
-    spotdl_dir.mkdir()
-    # Playlist on disk but not in config
-    (spotdl_dir / "gone.spotdl").write_text("{}", encoding="utf-8")
-    (spotdl_dir / "gone").mkdir()
+    playlists_dir = tmp_path / "playlists"
+    (spotdl_dir / "gone").mkdir(parents=True)
     (spotdl_dir / "gone" / "track.m4a").touch()
-    # Playlist in both config and disk
-    (spotdl_dir / "kept.spotdl").write_text("{}", encoding="utf-8")
+    (spotdl_dir / "gone.nosync").touch()
+    (spotdl_dir / "gone.album").touch()
+    (spotdl_dir / "kept").mkdir()
+    playlists_dir.mkdir()
+    for name in ("gone", "kept"):
+        store.Store.from_songs(name, [{"url": f"u-{name}"}]).save(store.path(name))
+        (playlists_dir / f"{name}.m3u").write_text("/library/x.m4a\n", encoding="utf-8")
     conf = _make_conf(tmp_path, ["kept  https://open.spotify.com/playlist/abc"])
 
-    with mock.patch.object(ingest, "CONF_PATH", conf), \
-         mock.patch.object(ingest, "SPOTDL_DIR", spotdl_dir), \
-         mock.patch("music_fetch.ingest.save_playlist"):
+    with mock.patch.object(ingest, "CONF_PATH", conf), mock.patch.object(ingest, "SPOTDL_DIR", spotdl_dir):
         result = reconcile_playlists()
 
     assert result == ["gone"]
-    assert not (spotdl_dir / "gone.spotdl").exists()
+    assert store.names() == ["kept"]
     assert not (spotdl_dir / "gone").exists()
-    assert (spotdl_dir / "kept.spotdl").exists()
+    assert not (spotdl_dir / "gone.nosync").exists()
+    assert not (spotdl_dir / "gone.album").exists()
+    assert not (playlists_dir / "gone.m3u").exists()
+    assert (playlists_dir / "kept.m3u").exists()
+    assert (spotdl_dir / "kept").is_dir()
+
+
+def test_reconcile_ignores_a_leftover_spotdl_file(tmp_path: Path) -> None:
+    """A .spotdl file is never read: without a store, its playlist is not 'removed' (homelab#1914)."""
+    import unittest.mock as mock
+
+    spotdl_dir = tmp_path / "spotdl"
+    spotdl_dir.mkdir()
+    (spotdl_dir / "old.spotdl").write_text("{}", encoding="utf-8")
+    conf = _make_conf(tmp_path, [])
+
+    with mock.patch.object(ingest, "CONF_PATH", conf), mock.patch.object(ingest, "SPOTDL_DIR", spotdl_dir):
+        assert reconcile_playlists() == []
+
+    assert (spotdl_dir / "old.spotdl").read_text(encoding="utf-8") == "{}"
 
 
 # ---------------------------------------------------------------------------
@@ -625,17 +394,17 @@ def test_reconcile_deletes_nosync_for_removed_playlist(tmp_path: Path) -> None:
 
     spotdl_dir = tmp_path / "spotdl"
     spotdl_dir.mkdir()
-    (spotdl_dir / "gone.spotdl").write_text("{}", encoding="utf-8")
+    store.Store.from_songs("gone", []).save(store.path("gone"))
     (spotdl_dir / "gone.nosync").touch()
     conf = _make_conf(tmp_path, [])
 
     with mock.patch.object(ingest, "CONF_PATH", conf), \
-         mock.patch.object(ingest, "SPOTDL_DIR", spotdl_dir), \
-         mock.patch("music_fetch.ingest.save_playlist"):
+         mock.patch.object(ingest, "SPOTDL_DIR", spotdl_dir):
         result = reconcile_playlists()
 
     assert result == ["gone"]
     assert not (spotdl_dir / "gone.nosync").exists()
+    assert store.names() == []
 
 
 # ---------------------------------------------------------------------------
@@ -661,11 +430,7 @@ def _run_sync_playlists(tmp_path: Path, results: list, cookie_file_exists: bool 
 
     spotdl_dir = tmp_path / "spotdl"
     spotdl_dir.mkdir(exist_ok=True)
-    for i in range(len(results)):
-        (spotdl_dir / f"pl{i}.spotdl").write_text(
-            '{"type":"sync","query":["https://open.spotify.com/playlist/X"],"songs":[]}',
-            encoding="utf-8",
-        )
+    conf = _make_conf(tmp_path, [f"pl{i}  https://open.spotify.com/playlist/X{i}" for i in range(len(results))])
     cookie_file = tmp_path / "cookies.txt"
     if cookie_file_exists:
         cookie_file.touch()
@@ -673,12 +438,12 @@ def _run_sync_playlists(tmp_path: Path, results: list, cookie_file_exists: bool 
     queued = iter(results)
     metrics = IngestMetrics()
     with mock.patch.object(ingest, "SPOTDL_DIR", spotdl_dir), \
-         mock.patch.object(ingest, "CONF_PATH", tmp_path / "missing.conf"), \
+         mock.patch.object(ingest, "CONF_PATH", conf), \
          mock.patch.object(ingest, "COOKIE_FILE", cookie_file), \
          mock.patch.object(ingest, "FAILURES_FILE", tmp_path / ".failures.json"), \
          mock.patch("music_fetch.ingest.sync_playlist", side_effect=lambda **_kwargs: next(queued)), \
          mock.patch("music_fetch.ingest.time.sleep"):
-        ingest.sync_playlists([], metrics)
+        ingest.sync_playlists(metrics, resolves=lambda song: False)
     return metrics
 
 
@@ -793,73 +558,6 @@ def test_cookies_expired_heuristic_ignores_empty_run(tmp_path: Path) -> None:
     assert metrics.cookies_expired is False
 
 
-# ---------------------------------------------------------------------------
-# save_pending_removals — merges with an unconsumed handoff file
-# ---------------------------------------------------------------------------
-
-
-def test_save_pending_removals_merges(tmp_path: Path, monkeypatch) -> None:
-    import music_fetch.ingest as ingest
-
-    monkeypatch.setattr(ingest, "PENDING_REMOVALS_PATH", tmp_path / ".pending-removals.json")
-    ingest.save_pending_removals(PendingRemovals(tracks=[RemovedTrack("A", "X", "later")], remove_sources=["old"]))
-    ingest.save_pending_removals(PendingRemovals(tracks=[RemovedTrack("B", "Y", "keep")], remove_sources=["old"]))
-    loaded = ingest.load_pending_removals()
-    assert [t.title for t in loaded.tracks] == ["A", "B"]
-    assert loaded.remove_sources == ["old"]
-
-
-
-def test_load_pending_removals_keeps_the_file(tmp_path: Path, monkeypatch) -> None:
-    """Reading doesn't consume: a crash before clear_pending_removals keeps every removal (#259)."""
-    import music_fetch.ingest as ingest
-
-    path = tmp_path / ".pending-removals.json"
-    monkeypatch.setattr(ingest, "PENDING_REMOVALS_PATH", path)
-    ingest.save_pending_removals(PendingRemovals(tracks=[RemovedTrack("A", "X", "keep")], remove_sources=[]))
-    assert ingest.load_pending_removals().tracks == [RemovedTrack("A", "X", "keep")]
-    assert ingest.load_pending_removals().tracks == [RemovedTrack("A", "X", "keep")]
-
-
-def test_clear_pending_removals_keeps_what_was_queued_since(tmp_path: Path, monkeypatch) -> None:
-    import music_fetch.ingest as ingest
-
-    path = tmp_path / ".pending-removals.json"
-    monkeypatch.setattr(ingest, "PENDING_REMOVALS_PATH", path)
-    ingest.save_pending_removals(PendingRemovals(tracks=[RemovedTrack("A", "X", "keep", spotify_id="S1")],
-                                                 remove_sources=["old"]))
-    applied = ingest.load_pending_removals()
-    # The album tick queues more while the scan applies the first batch.
-    ingest.save_pending_removals(PendingRemovals(tracks=[RemovedTrack("B", "Y", "later")], remove_sources=["gone"]))
-    ingest.clear_pending_removals(applied)
-    left = ingest.load_pending_removals()
-    assert left.tracks == [RemovedTrack("B", "Y", "later")]
-    assert left.remove_sources == ["gone"]
-    ingest.clear_pending_removals(left)
-    assert not path.exists()
-
-
-def test_clear_pending_removals_matches_files_queued_before_176(tmp_path: Path, monkeypatch) -> None:
-    import music_fetch.ingest as ingest
-
-    path = tmp_path / ".pending-removals.json"
-    monkeypatch.setattr(ingest, "PENDING_REMOVALS_PATH", path)
-    path.write_text('{"tracks": [{"title": "T", "artist": "A", "source": "pl"}], "remove_sources": []}')
-    ingest.clear_pending_removals(ingest.load_pending_removals())
-    assert not path.exists()
-
-
-def test_unreadable_pending_removals_are_moved_aside(tmp_path: Path, monkeypatch) -> None:
-    import music_fetch.ingest as ingest
-
-    path = tmp_path / ".pending-removals.json"
-    monkeypatch.setattr(ingest, "PENDING_REMOVALS_PATH", path)
-    path.write_text("{not json")
-    assert ingest.load_pending_removals() is None
-    assert not path.exists()
-    assert (tmp_path / ".pending-removals.json.bad").read_text() == "{not json"
-
-
 def test_reconcile_album_sentinel_follows_config(tmp_path: Path) -> None:
     """The album flag creates a .album sentinel; dropping the flag removes it."""
     import unittest.mock as mock
@@ -868,7 +566,6 @@ def test_reconcile_album_sentinel_follows_config(tmp_path: Path) -> None:
     conf = tmp_path / "playlists.conf"
     spotdl_dir = tmp_path / "spotdl"
     spotdl_dir.mkdir()
-    (spotdl_dir / "later.spotdl").write_text('{"type": "sync", "query": [], "songs": []}')
     with mock.patch.object(ingest, "CONF_PATH", conf), mock.patch.object(ingest, "SPOTDL_DIR", spotdl_dir):
         conf.write_text("later https://open.spotify.com/playlist/AAA album\n")
         reconcile_playlists()
@@ -876,26 +573,6 @@ def test_reconcile_album_sentinel_follows_config(tmp_path: Path) -> None:
         conf.write_text("later https://open.spotify.com/playlist/AAA\n")
         reconcile_playlists()
         assert not (spotdl_dir / "later.album").exists()
-
-
-def test_removed_track_from_song_carries_identity() -> None:
-    from music_fetch.ingest import RemovedTrack
-
-    song = {"name": "Song", "artists": ["A", "B"], "url": "https://open.spotify.com/track/SID?si=x", "isrc": "GBX1"}
-    assert RemovedTrack.from_song(song, "pl") == RemovedTrack("Song", "A", "pl", spotify_id="SID", isrc="GBX1")
-    assert RemovedTrack.from_song({"name": "x", "song_id": "S2"}, "pl").spotify_id == "S2"
-
-
-def test_pending_removals_queued_before_176_still_load(tmp_path) -> None:
-    from unittest.mock import patch
-
-    from music_fetch import ingest
-
-    path = tmp_path / "pending.json"
-    path.write_text('{"tracks": [{"title": "T", "artist": "A", "source": "pl"}], "remove_sources": []}')
-    with patch.object(ingest, "PENDING_REMOVALS_PATH", path):
-        pending = ingest.load_pending_removals()
-    assert pending.tracks == [ingest.RemovedTrack("T", "A", "pl")]
 
 
 def test_sync_playlists_asks_the_library_per_playlist(tmp_path: Path) -> None:
@@ -907,24 +584,23 @@ def test_sync_playlists_asks_the_library_per_playlist(tmp_path: Path) -> None:
 
     spotdl_dir = tmp_path / "spotdl"
     spotdl_dir.mkdir()
-    (spotdl_dir / "later.spotdl").write_text(
-        '{"type":"sync","query":["https://open.spotify.com/playlist/L"],"songs":[]}', encoding="utf-8"
-    )
+    conf = _make_conf(tmp_path, ["later  https://open.spotify.com/playlist/L"])
     asked: list[tuple[str, dict]] = []
 
-    def fake_sync(spotdl_file, in_library=None, **_kwargs):
+    def fake_sync(in_library=None, **_kwargs):
         assert in_library is not None
         assert in_library({"url": "u"}) is True
         return SyncResult(set(), 0, 0, 0, 0, {}, linked=2)
 
     metrics = IngestMetrics()
     with mock.patch.object(ingest, "SPOTDL_DIR", spotdl_dir), \
-         mock.patch.object(ingest, "CONF_PATH", tmp_path / "missing.conf"), \
+         mock.patch.object(ingest, "CONF_PATH", conf), \
          mock.patch.object(ingest, "COOKIE_FILE", tmp_path / "cookies.txt"), \
          mock.patch.object(ingest, "FAILURES_FILE", tmp_path / ".failures.json"), \
          mock.patch("music_fetch.ingest.sync_playlist", side_effect=fake_sync), \
          mock.patch("music_fetch.ingest.time.sleep"):
-        ingest.sync_playlists([], metrics, in_library=lambda pl, song: asked.append((pl, song)) or True)
+        ingest.sync_playlists(metrics, resolves=lambda song: False,
+                              in_library=lambda pl, song: asked.append((pl, song)) or True)
 
     assert asked == [("later", {"url": "u"})]
     assert metrics.tracks_linked == 2
@@ -1045,10 +721,9 @@ def test_sync_playlists_fetches_album_fallback_tracks_in_playlist_order(tmp_path
         encoding="utf-8",
     )
     later_songs = [{"url": f"u{i}", "song_id": f"s{i}", "name": f"T{i}", "artists": ["A"]} for i in range(3)]
-    for name, songs in (("aaaaaaah", []), ("later", later_songs), ("keep", []), ("zzz", [])):
-        (spotdl_dir / f"{name}.spotdl").write_text(
-            json.dumps({"type": "sync", "query": ["q"], "songs": songs}), encoding="utf-8"
-        )
+    # The album playlist's fallback songs are read from its store.
+    for name, songs in (("later", later_songs), ("keep", [])):
+        store.Store.from_songs(name, songs).save(store.path(name))
     for name in ("later", "keep"):
         (spotdl_dir / f"{name}.album").touch()
     state = albums.State(albums={"a0": {"status": albums.FALLBACK, "fallback_tracks": {"later": ["s2", "s0"]}}})
@@ -1056,8 +731,8 @@ def test_sync_playlists_fetches_album_fallback_tracks_in_playlist_order(tmp_path
 
     calls: list[tuple[str, int | None]] = []
 
-    def fake_sync(spotdl_file, track_limit=None, **_kwargs):
-        calls.append((spotdl_file.stem, track_limit))
+    def fake_sync(name, track_limit=None, **_kwargs):
+        calls.append((name, track_limit))
         return SyncResult(set(), 3, 3, 0, 0, {})
 
     def fake_fallback(songs, output_dir, track_limit=None, in_library=None, **_kwargs):
@@ -1074,17 +749,18 @@ def test_sync_playlists_fetches_album_fallback_tracks_in_playlist_order(tmp_path
          mock.patch("music_fetch.ingest.sync_playlist", side_effect=fake_sync), \
          mock.patch("music_fetch.ingest.download_fallback", side_effect=fake_fallback), \
          mock.patch("music_fetch.ingest.time.sleep"):
-        ingest.sync_playlists([], metrics, in_library=lambda pl, song: False)
+        ingest.sync_playlists(metrics, resolves=lambda song: False, in_library=lambda pl, song: False)
 
     assert calls == [("aaaaaaah", 10), ("fallback:later:s0,s2", 7), ("zzz", 5)]
     assert metrics.playlists_skipped == 1  # keep: nothing to fall back on
-    # The album tick owns the album playlist's .spotdl.
-    assert json.loads((spotdl_dir / "later.spotdl").read_text(encoding="utf-8"))["songs"] == later_songs
+    # The album tick owns the album playlist's store.
+    assert store.load("later").songs == later_songs
+    assert store.load("keep").songs == []
 
 
 def test_spent_budget_still_checks_the_later_playlists(tmp_path: Path) -> None:
     """Once SYNC_TRACK_LIMIT is spent the remaining playlists are synced with a
-    limit of 0 (fetched, [HAVE]-linked, removals collected) instead of skipped;
+    limit of 0 (fetched, [HAVE]-linked, store written) instead of skipped;
     they count as deferred (#228)."""
     import unittest.mock as mock
     from music_fetch import ingest
@@ -1095,15 +771,12 @@ def test_spent_budget_still_checks_the_later_playlists(tmp_path: Path) -> None:
     conf = tmp_path / "playlists.conf"
     conf.write_text("first   https://open.spotify.com/playlist/A\nsecond  https://open.spotify.com/playlist/B\n"
                     "third   https://open.spotify.com/playlist/C\n", encoding="utf-8")
-    for name in ("first", "second", "third"):
-        (spotdl_dir / f"{name}.spotdl").write_text(
-            '{"type":"sync","query":["https://open.spotify.com/playlist/X"],"songs":[]}', encoding="utf-8")
 
     calls: list[tuple[str, int | None]] = []
 
-    def fake_sync(spotdl_file, track_limit=None, **_kwargs):
-        calls.append((spotdl_file.stem, track_limit))
-        removed = {"https://open.spotify.com/track/gone"} if spotdl_file.stem == "third" else set()
+    def fake_sync(name, track_limit=None, **_kwargs):
+        calls.append((name, track_limit))
+        removed = {"https://open.spotify.com/track/gone"} if name == "third" else set()
         return SyncResult(removed, min(track_limit, 3), min(track_limit, 3), 0, 0, {})
 
     metrics = IngestMetrics()
@@ -1114,8 +787,151 @@ def test_spent_budget_still_checks_the_later_playlists(tmp_path: Path) -> None:
          mock.patch.dict("os.environ", {"SYNC_TRACK_LIMIT": "2"}), \
          mock.patch("music_fetch.ingest.sync_playlist", side_effect=fake_sync), \
          mock.patch("music_fetch.ingest.time.sleep"):
-        ingest.sync_playlists([], metrics)
+        ingest.sync_playlists(metrics, resolves=lambda song: False)
 
     assert calls == [("first", 2), ("second", 0), ("third", 0)]
     assert (metrics.playlists_total, metrics.playlists_deferred, metrics.playlists_skipped) == (3, 2, 0)
     assert metrics.tracks_attempted == 2
+
+
+# ---------------------------------------------------------------------------
+# sync_playlists — the playlist store (homelab#1914 stage c)
+# ---------------------------------------------------------------------------
+
+PL_URL = "https://open.spotify.com/playlist/P"
+TRACK = "https://open.spotify.com/track/"
+LOCAL = {"local": {"id": 7, "path": "/library/local.m4a", "title": "Local", "artist": "Artist"}}
+
+
+def song(sid: str, **extra) -> dict:
+    return {"url": TRACK + sid, "song_id": sid, "name": f"Song {sid}", "artists": ["Artist"], **extra}
+
+
+def _sync(tmp_path: Path, lines: list[str], result=None, calls=None, fetched=None, sentinels=(), **kwargs):
+    """Run sync_playlists over playlists.conf *lines* with spotdl stubbed out:
+    sync_playlist returns *result* (its kwargs go to *calls*), fetch_songs is *fetched*."""
+    import unittest.mock as mock
+    from music_fetch.metrics import IngestMetrics
+
+    spotdl_dir = tmp_path / "spotdl"
+    spotdl_dir.mkdir(exist_ok=True)
+    for sentinel in sentinels:
+        (spotdl_dir / sentinel).touch()
+    conf = _make_conf(tmp_path, lines)
+
+    def fake_sync(**kw):
+        if calls is not None:
+            calls.append(kw)
+        return result
+
+    kwargs.setdefault("resolves", lambda song: False)
+    metrics = IngestMetrics()
+    with mock.patch.object(ingest, "SPOTDL_DIR", spotdl_dir), \
+         mock.patch.object(ingest, "CONF_PATH", conf), \
+         mock.patch.object(ingest, "COOKIE_FILE", tmp_path / "cookies.txt"), \
+         mock.patch.object(ingest, "FAILURES_FILE", tmp_path / ".failures.json"), \
+         mock.patch("music_fetch.ingest.sync_playlist", side_effect=fake_sync), \
+         mock.patch("music_fetch.ingest.fetch_songs", side_effect=fetched), \
+         mock.patch("music_fetch.ingest.time.sleep"):
+        ingest.sync_playlists(metrics, **kwargs)
+    return metrics
+
+
+def _result(**kwargs) -> SyncResult:
+    return SyncResult(set(), 0, 0, 0, 0, {}, **kwargs)
+
+
+def test_sync_writes_each_playlists_store_from_its_conf_url(tmp_path: Path) -> None:
+    full_a = song("A", album_name="Full record")
+    calls: list = []
+    _sync(tmp_path, [f"pl  {PL_URL}"], _result(songs=[song("A"), song("B")], records={TRACK + "A": full_a}),
+          calls=calls)
+    assert len(calls) == 1
+    assert calls[0]["url"] == PL_URL and calls[0]["name"] == "pl"
+    assert calls[0]["output_dir"] == tmp_path / "spotdl" / "pl"
+    assert calls[0]["previous"] == []
+    # Spotify's order and membership, each entry the richest record known.
+    assert store.load("pl").songs == [full_a, song("B")]
+    assert not list(tmp_path.rglob("*.spotdl"))
+
+
+def test_sync_keeps_an_earlier_stores_records_and_local_entries(tmp_path: Path) -> None:
+    full_b = song("B", album_name="Full record")
+    full_c = song("C", album_name="Downloaded")
+    store.Store("pl", [{"song": song("A")}, {"song": full_b}, LOCAL]).save(store.path("pl"))
+    calls: list = []
+    _sync(tmp_path, [f"pl  {PL_URL}"], _result(songs=[song("B"), song("C")], records={TRACK + "C": full_c}),
+          calls=calls)
+    # The sync judges the want list by the store as it was.
+    assert calls[0]["previous"] == [song("A"), full_b]
+    # A left Spotify and is gone; B keeps its richer record; the local entry stays last.
+    assert store.load("pl").entries == [{"song": full_b}, {"song": full_c}, LOCAL]
+
+
+def test_sync_downloads_what_the_store_wants(tmp_path: Path) -> None:
+    calls: list = []
+    _sync(tmp_path, [f"pl  {PL_URL}"], _result(songs=[song("A")]), calls=calls,
+          resolves=lambda s: s["song_id"] == "A", held=frozenset({TRACK + "H"}))
+    wants = calls[0]["wants"]
+    assert not wants(song("A"))  # a library item holds it
+    assert not wants(song("H"))  # held: in quarantine or waiting in the inbox
+    assert wants(song("C"))
+
+
+def test_sync_failure_keeps_the_earlier_store(tmp_path: Path) -> None:
+    import unittest.mock as mock
+
+    store.Store.from_songs("pl", [song("A")]).save(store.path("pl"))
+    spotdl_dir = tmp_path / "spotdl"
+    spotdl_dir.mkdir()
+    from music_fetch.metrics import IngestMetrics
+
+    metrics = IngestMetrics()
+    with mock.patch.object(ingest, "SPOTDL_DIR", spotdl_dir), \
+         mock.patch.object(ingest, "CONF_PATH", _make_conf(tmp_path, [f"pl  {PL_URL}"])), \
+         mock.patch.object(ingest, "COOKIE_FILE", tmp_path / "cookies.txt"), \
+         mock.patch.object(ingest, "FAILURES_FILE", tmp_path / ".failures.json"), \
+         mock.patch("music_fetch.ingest.sync_playlist", side_effect=RuntimeError("429 Too Many Requests")), \
+         mock.patch("music_fetch.ingest.time.sleep"):
+        with pytest.raises(RuntimeError):
+            ingest.sync_playlists(metrics, resolves=lambda song: False)
+
+    assert metrics.success is False and metrics.failure_reason == "rate_limited"
+    assert store.load("pl").songs == [song("A")]
+
+
+def test_sync_builds_a_nosync_store_from_spotify_once(tmp_path: Path, caplog) -> None:
+    caplog.set_level("INFO")
+    full_a = song("A", album_name="Full record")
+    # A store seeded before the freeze lists only what was downloaded: B is on Spotify but not in it.
+    store.Store("pl", [{"song": full_a}, LOCAL]).save(store.path("pl"))
+    fetched_urls: list[str] = []
+    calls: list = []
+    metrics = _sync(tmp_path, [f"pl  {PL_URL}  nosync"], calls=calls, sentinels=["pl.nosync"],
+                    fetched=lambda url, cookie_file: fetched_urls.append(url) or [song("A"), song("B")])
+    built = store.load("pl")
+    assert fetched_urls == [PL_URL]
+    assert calls == []  # never synced by spotdl
+    assert metrics.playlists_skipped == 1
+    assert built.source == store.SPOTIFY
+    assert built.entries == [{"song": full_a}, {"song": song("B")}, LOCAL]
+    assert "[STORE] pl: built from Spotify, 3 entries" in caplog.text
+
+    # Kept from then on: no second fetch.
+    caplog.clear()
+    _sync(tmp_path, [f"pl  {PL_URL}  nosync"], sentinels=["pl.nosync"], fetched=AssertionError("fetched again"))
+    assert "fetched again" not in caplog.text
+    assert "Could not build the store" not in caplog.text
+    assert store.load("pl").entries == built.entries
+
+
+def test_sync_nosync_fetch_failure_never_fails_the_sync(tmp_path: Path, caplog) -> None:
+    calls: list = []
+    metrics = _sync(tmp_path, [f"frozen  {PL_URL}  nosync", f"pl  {PL_URL}2"], _result(songs=[song("A")]),
+                    calls=calls, sentinels=["frozen.nosync"], fetched=RuntimeError("spotify down"))
+    assert "Could not build the store of nosync playlist frozen from Spotify" in caplog.text
+    assert store.load("frozen") is None
+    # The next playlist still syncs.
+    assert [c["name"] for c in calls] == ["pl"]
+    assert store.load("pl").songs == [song("A")]
+    assert metrics.success is True

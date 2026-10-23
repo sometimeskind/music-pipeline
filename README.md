@@ -17,66 +17,59 @@ A single long-running service container orchestrates everything via Prefect. Two
 
 ## Pipeline internals
 
-A full sync cycle (`music-ingest` followed by `music-scan`) runs 9 discrete steps. Steps 1–2 are the **fetch phase**; steps 3–9 are the **scan phase**.
+A full sync cycle (`music-ingest` followed by `music-scan`) runs 8 discrete steps. Steps 1–2 are the **fetch phase**; steps 3–8 are the **scan phase**.
 
 ```
 ┌─ FETCH PHASE (music-ingest) ──────────────────────────────────────────┐
 │                                                                        │
 │  [1] Playlist reconciliation                                           │
-│        Reads playlists.conf; provisions new .spotdl files, syncs      │
-│        .nosync sentinels, queues playlists removed from config.        │
+│        Reads playlists.conf; creates new playlists' inbox dirs, syncs  │
+│        .nosync/.album sentinels, deletes the store and .m3u of a      │
+│        playlist removed from config.                                   │
 │        │                                                               │
 │        ▼                                                               │
 │  [2] spotdl sync                                                       │
-│        Downloads new tracks from Spotify/YouTube into inbox/.          │
-│        Diffs snapshot URLs to detect tracks removed from Spotify.      │
-│        Returns a PendingRemovals struct (removed tracks + playlists).  │
+│        Fetches each playlist from Spotify, writes its playlist store   │
+│        and downloads its want list (tracks no library item holds)     │
+│        into inbox/. A track removed on Spotify leaves the store.      │
 │                                                                        │
 └────────────────────────────────────────┬───────────────────────────────┘
-                                         │ PendingRemovals
+                                         │
 ┌─ SCAN PHASE (music-scan) ─────────────▼───────────────────────────────┐
 │                                                                        │
-│  [3] Pending-removal cleanup           ◄── (no-op if scan runs alone) │
-│        Clears beets source= tags for tracks/playlists that were        │
-│        removed from Spotify or from playlists.conf.                    │
-│        │                                                               │
-│        ▼                                                               │
-│  [4] Length guard (LENGTH_GUARD)                                       │
+│  [3] Length guard (LENGTH_GUARD)                                       │
 │        Checks each spotdl download against the Spotify duration (±10%) │
 │        and for mid-track silence; moves wrong audio to                 │
 │        quarantine/rejected/ (asis pass skips it, no re-download).      │
 │        │                                                               │
 │        ▼                                                               │
-│  [5] Beets import                                                      │
+│  [4] Beets import                                                      │
 │        Matches inbox audio to MusicBrainz/AcoustID; moves matched      │
 │        files to library/. Low-confidence matches go to quarantine/.    │
 │        │                                                               │
 │        ▼                                                               │
-│  [6] Quarantine + asis pass                                            │
+│  [5] Quarantine + asis pass                                            │
 │        Moves unmatched inbox leftovers to quarantine/. Then attempts   │
 │        a second beet import --asis for quarantine files that already   │
 │        have sufficient embedded tags (title, artist, album, track#).   │
 │        │                                                               │
 │        ▼                                                               │
-│  [7] Library metadata refresh                                          │
+│  [6] Library metadata refresh                                          │
 │        Runs beet update to refresh metadata on existing library items. │
 │        │                                                               │
 │        ▼                                                               │
-│  [8] Snapshot reconciliation                                           │
-│        Diffs each .spotdl file against the beets library + quarantine. │
-│        Drops URLs absent from both so spotdl re-downloads them next    │
-│        fetch rather than silently skipping forever. Skips album and    │
-│        nosync playlists: spotdl never re-adds their entries.           │
+│  [7] Playlist generation                                               │
+│        Regenerates each .m3u from its playlist store (in Spotify       │
+│        playlist order), resolving entries against the library.         │
 │        │                                                               │
 │        ▼                                                               │
-│  [9] Playlist generation + Navidrome trigger                           │
-│        Regenerates .m3u files (in Spotify playlist order). Calls the   │
-│        Navidrome Subsonic API to trigger a library rescan.             │
+│  [8] Navidrome trigger                                                 │
+│        Calls the Navidrome Subsonic API to trigger a library rescan.   │
 │                                                                        │
 └────────────────────────────────────────────────────────────────────────┘
 ```
 
-Steps 3, 8, and 9 are no-ops when `music-scan` runs on its 5-minute schedule with no preceding fetch (no removals to apply, Navidrome already up to date). The scan phase is idempotent and safe to run at any time.
+The scan phase is idempotent and safe to run at any time: on its 5-minute schedule with no preceding fetch it only imports what arrived and rewrites the `.m3u` files.
 
 ---
 
@@ -142,7 +135,7 @@ The optional `nosync` flag freezes a playlist: `music-ingest` creates a `.nosync
 
 The optional `album` flag is for playlists that hold only whole albums. spotdl never syncs them (a `.album` sentinel). Instead, the `music-albums` flow downloads each album whole from Usenet through Prowlarr and SABnzbd. Every `ALBUM_POLL_SECONDS` it checks the playlist's Spotify `snapshot_id` and re-reads the tracks only when it has changed, so a playlist edit is picked up within one poll. Then it tops the SABnzbd queue up to `ALBUM_MAX_IN_FLIGHT` within a rolling-24h indexer budget. Its state (album status, release blocklist, indexer use) is `.albums.json` next to the `.spotdl` files. Set `ALBUM_MODE=dry-run` first: it searches and logs `[PICK]` lines but never grabs.
 
-**Album playlists sync at the album level (#268).** Spotify decides *which* albums are on the playlist; the local release decides *what is on* each album. An album is on the playlist while at least one of its tracks is, so adding one song on Spotify brings in the whole album: the album counts as `have` only when the library holds every playlist track and at least Spotify's track count of the album's tracks. The `.m3u` lists every local track of every album on the playlist (the items its entries resolve to, and every item canon filed on that Spotify album or, under the same name, on its #214 twin), album by album in playlist order, each in disc/track order, so a release's tracks without a Spotify ID are listed too. A track canon moved to another album (a single's track filed on its standard album) is listed alone. Removing one of an album's tracks on Spotify does nothing; when the last one goes, the tick logs `[UNLINK] <artist> — <album>: no track left on <playlist>`, the album's lines leave the `.m3u` at the next regen, and its former entries are unlinked from `sources` by the scan as before. Normal playlists stay track level. `music-audit-playlists --albums` (read-only) prints, per album playlist, the `.m3u` on disk, the track-level listing (before #268) and the album-level one, with the lines added (`+`) and dropped (`-`); then the album records whose old `partial`/`gap` fallback the next tick settles (`[SETTLE]`), and the `have`/`filled` albums whose library copy is not whole, which are left as they are (`[NOTWHOLE]`). `--clear-tail` refuses an album playlist: its other tracks belong on it, tagged or not.
+**Album playlists sync at the album level (#268).** Spotify decides *which* albums are on the playlist; the local release decides *what is on* each album. An album is on the playlist while at least one of its tracks is, so adding one song on Spotify brings in the whole album: the album counts as `have` only when the library holds every playlist track and at least Spotify's track count of the album's tracks. The `.m3u` lists every local track of every album on the playlist (the items its entries resolve to, and every item canon filed on that Spotify album or, under the same name, on its #214 twin), album by album in playlist order, each in disc/track order, so a release's tracks without a Spotify ID are listed too. A track canon moved to another album (a single's track filed on its standard album) is listed alone. Removing one of an album's tracks on Spotify does nothing; when the last one goes, the tick logs `[GONE] <artist> — <album>: no track left on <playlist>`, and the album's lines leave the `.m3u` at the next regen. The tick writes the playlist's tracklist to its playlist store, as the nightly does for normal playlists. Normal playlists stay track level.
 
 When SABnzbd finishes an album job, its post-processing script POSTs to `/trigger-album-import` (bearer `ALBUM_IMPORT_TOKEN`, which opens only that route). The `music-album-import` flow then:
 1. moves the job into `inbox/usenet/<playlist>/`, so beets tags it `sources=<playlist>` and `via=usenet`;
@@ -156,9 +149,9 @@ Searches use the names as release names spell them: diacritics folded, `$` as `s
 
 A track spotdl's search can't find (`[MISS] … no source found`, e.g. a title made of glyphs) misses again on every retry, so it can be pinned to a source by hand (#247): `track-pins.conf`, one `<spotify track id>  <source url>` per line (the ID may be the track's `open.spotify.com` URL; anything after the source URL is a label). A YouTube share link's tracking parameters (`&si=…`) are dropped; `music.youtube.com` and `www.youtube.com` links both work. The nightly sync downloads a pinned track from that URL instead of searching (`[PIN] <track> → downloading from <url>`), ignores its backoff and spends the budget on it before the playlist's other tracks; the import and the scan's length guard treat it like any other download. A pin whose track the library already holds logs `[PIN] … already in the library; its pin is unused` and is skipped, so a stale pin can stay until it is tidied.
 
-**spotdl fallback (#205).** In `on`, what Usenet can't supply goes to spotdl: a `missing` album (from its first miss) or a `failed` one. An imported release never falls back, and sends nothing to spotdl (#268, #279). spotdl fetches the Spotify album's whole tracklist, not just the playlist's tracks: the tick reads it once per album (two Spotify calls, `album_songs` in `.albums.json`, up to 10 albums a tick), and until then the playlist's tracks stand in. The album becomes `fallback` (`[FALLBACK] … N track(s) left to spotdl (<why>)`), its absent tracks' Spotify IDs are kept in `fallback_tracks` under its first playlist, and album mode no longer searches it. A record from before #268 whose fallback came from an imported release (`fallback_from: partial` or `gap`) is settled by the next tick: `imported`, `settled_from` keeps why, the tracks spotdl already fetched stay and the rest leave its queue (`[SETTLED]`). The nightly sync downloads those tracks into the album playlist's inbox at the playlist's place in `playlists.conf` order, from the same `SYNC_TRACK_LIMIT` budget, with the usual `[HAVE]` check, backoff and length guard, and never rewrites the album playlist's `.spotdl`. Once the library holds every track of the album's tracklist the tick marks the album `filled` (`[FILLED]`). `music_albums{status="fallback"|"filled"}` and `music_albums_fallback_tracks` (tracks waiting) are on the `music_albums` push. `music-album-requeue [<album id>…] [--since <ISO time>]` puts albums a miss demoted (`fallback_from: missing`) back to `wanted`, by key or by when they fell back, and takes their tracks spotdl hasn't downloaded yet off its queue; dry run unless `--apply`. It is the recovery for misses that were really an indexer outage.
+**spotdl fallback (#205).** In `on`, what Usenet can't supply goes to spotdl: a `missing` album (from its first miss) or a `failed` one. An imported release never falls back, and sends nothing to spotdl (#268, #279). spotdl fetches the Spotify album's whole tracklist, not just the playlist's tracks: the tick reads it once per album (two Spotify calls, `album_songs` in `.albums.json`, up to 10 albums a tick), and until then the playlist's tracks stand in. The album becomes `fallback` (`[FALLBACK] … N track(s) left to spotdl (<why>)`), its absent tracks' Spotify IDs are kept in `fallback_tracks` under its first playlist, and album mode no longer searches it. A record from before #268 whose fallback came from an imported release (`fallback_from: partial` or `gap`) is settled by the next tick: `imported`, `settled_from` keeps why, the tracks spotdl already fetched stay and the rest leave its queue (`[SETTLED]`). The nightly sync downloads those tracks into the album playlist's inbox at the playlist's place in `playlists.conf` order, from the same `SYNC_TRACK_LIMIT` budget, with the usual `[HAVE]` check, backoff and length guard, and never rewrites the album playlist's store. Once the library holds every track of the album's tracklist the tick marks the album `filled` (`[FILLED]`). `music_albums{status="fallback"|"filled"}` and `music_albums_fallback_tracks` (tracks waiting) are on the `music_albums` push. `music-album-requeue [<album id>…] [--since <ISO time>]` puts albums a miss demoted (`fallback_from: missing`) back to `wanted`, by key or by when they fell back, and takes their tracks spotdl hasn't downloaded yet off its queue; dry run unless `--apply`. It is the recovery for misses that were really an indexer outage.
 
-This file is the single source of truth for playlists. `music-ingest` reconciles disk state to match it on every run — provisioning new entries, reconciling `.nosync` sentinels, and queuing removed playlists for cleanup.
+This file is the single source of truth for playlists. `music-ingest` reconciles disk state to match it on every run — provisioning new entries, reconciling the `.nosync` and `.album` sentinels, and deleting the playlist store and `.m3u` of a playlist removed from it.
 
 ### 5. Run the first ingest
 
@@ -166,7 +159,7 @@ This file is the single source of truth for playlists. `music-ingest` reconciles
 just fetch
 ```
 
-This provisions `.spotdl` files for all entries in `playlists.conf` and begins downloading. To add or remove playlists later, just edit `playlists.conf` and run `just fetch` again.
+This writes a playlist store for every entry in `playlists.conf` and begins downloading. To add or remove playlists later, just edit `playlists.conf` and run `just fetch` again.
 
 ### 6. Start the service
 
@@ -199,7 +192,7 @@ A `justfile` lives in the repo root. Run these from the repo directory.
 /root/Music/
   inbox/
     spotdl/
-      <name>.spotdl      ← spotdl sync state (do not delete; backed by PVC)
+      .store/<name>.json ← playlist store: the playlist's entries (backed by PVC)
       <name>.nosync      ← optional sentinel to freeze a playlist from re-syncing
       <name>/            ← spotdl downloads (cleared after beet import)
   library/               ← beets-managed: $albumartist/$album/$track - $title.m4a
@@ -271,7 +264,6 @@ Mount `cookies.txt` at `/root/.config/spotdl/cookies.txt` read-only. Update by p
 | `SYNC_JITTER_SECONDS` | Plain value | `""` | Random pre-sync sleep (seconds) to stagger retries |
 | `SYNC_TRACK_LIMIT` | Plain value | `""` | Cap new tracks downloaded per run. Pipeline resumes next run. |
 | `LENGTH_GUARD` | Plain value | `dry-run` | `on` rejects wrong-length or silence-padded spotdl downloads before import, `dry-run` only logs `[WOULD-REJECT]`, `off` skips the check |
-| `PLAYLIST_STORE` | Plain value | `off` | `dry-run` builds the playlist store (homelab#1914) in the shadow: the nightly writes each playlist's store and want list, and every regen its `.m3u`, to `/root/Music/inbox/spotdl/.store-dryrun/` with a `.diff` against today's, a `[STORE-DIFF]` log line and a `history.tsv` row. Changes no playlist, download or tag. `on` (stage a) writes the same to `.store/` and makes a spotdl or `nosync` playlist's `.m3u` the store's view followed by its `sources` tail (tagged items no entry resolves); downloads, album playlists, `.spotdl` and `sources` are unchanged. A store the dry run built is read from `.store-dryrun/` until the next save moves it. `off` does nothing |
 | `ALBUM_MODE` | Plain value | `off` | `off`, `dry-run` (search and log picks, never grab) or `on` |
 | `ALBUM_DRY_RUN_LIMIT` | Plain value | `25` | Albums searched in total while `dry-run`; then it only polls. `on` searches every album again, so dry-run is a sample |
 | `ALBUM_POLL_SECONDS` | Plain value | `1800` | Interval of the `music-albums` flow (Spotify snapshot poll + queue top-up) |
@@ -292,7 +284,7 @@ Playlist management is fully declarative: edit `config/playlists.conf` and updat
 **Add a new playlist:**
 1. Add the entry to `config/playlists.conf`, commit and push.
 2. Update the `music-pipeline-playlists` ConfigMap (or let GitOps do it).
-3. The next scheduled fetch run provisions the `.spotdl` file and begins syncing.
+3. The next scheduled fetch run writes its playlist store and begins syncing.
 
 **Freeze a playlist (stop syncing):**
 1. Add `nosync` as the third field on the playlist's line in `config/playlists.conf`.
@@ -302,7 +294,7 @@ Playlist management is fully declarative: edit `config/playlists.conf` and updat
 **Remove a playlist:**
 1. Remove the entry from `config/playlists.conf`, commit and push.
 2. Update the `music-pipeline-playlists` ConfigMap.
-3. The next fetch run queues beets tag cleanup and deletes the `.spotdl` file.
+3. The next fetch run deletes its playlist store, `.m3u` and inbox dir. Its tracks stay in the library, and their `sources` still name it (where they came from).
 
 **Trigger a manual fetch now:**
 ```bash
@@ -346,7 +338,7 @@ kubectl exec -n <ns> deploy/music-pipeline -- music-rollback-releases          #
 kubectl exec -n <ns> deploy/music-pipeline -- music-rollback-releases --apply  # link [LINK], quarantine [FAILED]
 ```
 
-**Album covers (#204):** Usenet album tracks get Spotify's album cover embedded after import (the convert command drops a FLAC's picture, and singleton imports get no `fetchart`/`embedart`). The cover URL comes from the `.spotdl` files, so no Spotify calls. `music-embed-covers` backfills every `via=usenet` item with no embedded art, then triggers a Navidrome rescan:
+**Album covers (#204):** Usenet album tracks get Spotify's album cover embedded after import (the convert command drops a FLAC's picture, and singleton imports get no `fetchart`/`embedart`). The cover URL comes from the playlist stores, so no Spotify calls. `music-embed-covers` backfills every `via=usenet` item with no embedded art, then triggers a Navidrome rescan:
 ```bash
 kubectl exec -n <ns> deploy/music-pipeline -- music-embed-covers           # dry run: [ART] line per album
 kubectl exec -n <ns> deploy/music-pipeline -- music-embed-covers --apply   # embed, then rescan Navidrome
@@ -361,20 +353,18 @@ The dry run still looks albums up on MusicBrainz (about 1–6 s each) and caches
 
 **Recover after PVC loss:**
 1. Restore `beets-data` PVC from backup (restores `library.db`).
-2. Trigger a fetch — it re-provisions all `.spotdl` files from `playlists.conf` and re-downloads.
+2. Trigger a fetch — it rebuilds every playlist store from Spotify and downloads only what the restored library lacks. Local-only entries (none so far) are lost with the stores.
 
 ---
 
 ## Notes and gotchas
 
 - **Track identity.** `spotify_ids` (comma-separated Spotify track IDs: one recording has different IDs on the single, the album and compilations) and `isrc` (`;`-separated, MusicBrainz's plus Spotify's) decide whether a playlist entry is a library item: Spotify ID, then ISRC, then MusicBrainz recording ID, and title+artist only as a logged last resort (`[WORDS]`, whole titles: a remaster is another track, #252). The title+artist resort only reaches items with no Spotify ID (#257): an item that has one is that track, so a same-title entry with another ID never takes it (the slots, `.m3u` regen, and a removal's title fallback alike). Two recordings are one track only when one of those identifiers agrees (#255): the duplicate hook merges an incoming track only on a shared Spotify ID, ISRC or recording ID (`[SAME]`), and a same-title track imports as its own item, `[SPLIT]` when the ISRCs differ and `[APART]` when one side has none. Real duplicates that arrive without IDs are found by `music-audit-dupes` (fingerprints).
-- **`sources` is comma-separated.** A track imported by multiple playlists carries all playlist names (e.g. `sources=playlist-a,playlist-b`). It is one of the two ways a track reaches a playlist's `.m3u`; see playlist slots below.
-- **Playlist slots (#228).** Each playlist entry is a slot that every scan fills by resolving it against the library, never by recording anything: first to an item tagged with the playlist in `sources` (Spotify ID, ISRC, then title+artist, `[WORDS]`), else to any library item by Spotify ID, then ISRC (`[SLOT] <playlist>: N entr(ies) filled from the library by ID/ISRC`, per track at debug). So a track that arrived by any route (a Usenet album, another playlist's download, a manual import or replacement) is listed by every playlist that names it at the next scan, with no download and no tag write. The album hooks' `missing` and `have` read the same resolution. The scan pushes `music_playlist_slots_empty{playlist}` (entries with no item; for a spotdl playlist the `.spotdl` holds only downloaded and linked entries, so its count stays near 0 until homelab#1914's store). `music-audit-playlists` is the read-only proof: per playlist, the `.m3u` on disk, today's path, the slots, the added entries and any the file on disk would lose (exit 1 if any). This is the first slice of homelab#1914, which replaces `.spotdl` and `sources` with one playlist store.
-- **Pending removals survive a crash (#259).** `.pending-removals.json` stays on disk until the scan has applied it, and then only the applied entries are dropped (ones the album tick queued meanwhile stay). An entry that raises is logged as `[SKIP]` and skipped, not fatal. Removals lost before this fix leave tagged items no entry resolves to (the audit's tail lines): `music-audit-playlists --clear-tail <playlist>` lists the ones with a Spotify ID as `[UNTAG]` and those without (local-only extras, #245) or that an entry agrees with by ID or ISRC as `[KEEP]`; `--apply` clears the playlist's tag on the `[UNTAG]` items, and the next scan rewrites the `.m3u`.
+- **`sources` is provenance, not membership.** A track imported or linked by several playlists carries all their names (e.g. `sources=playlist-a,playlist-b`), and keeps them after it leaves a playlist. What a playlist lists is its store's alone (homelab#1914).
+- **Playlist slots (#228).** Each playlist entry is a slot that every scan fills by resolving it against the whole library by Spotify ID, then ISRC (`[SLOT] <playlist>: N entr(ies) filled from the library by ID/ISRC`, per track at debug), never by recording anything. So a track that arrived by any route (a Usenet album, another playlist's download, a manual import or replacement) is listed by every playlist that names it at the next scan, with no download and no tag write. The album hooks' `missing` and `have` read the same resolution. The scan pushes `music_playlist_slots_empty{playlist}` (entries with no item: on a spotdl playlist, tracks still waiting for a download).
 - **`beet update` does not prune deleted files.** Use `beet remove <query>` with a specific query. Never run `beet remove` without a query.
 - **Cookies expire.** Re-export from browser when downloads fail at quality.
 - **Spotify rate limits.** Always use your own app credentials — the spotdl defaults are shared and hit limits quickly. For large playlists, set `SYNC_TRACK_LIMIT` to cap new downloads per session (e.g. `50`); the pipeline picks up where it left off each run. The budget is spent on one want list across playlists in `playlists.conf` order (new entries the library lacks, minus backoff); once spent, the remaining playlists are still fetched, `[HAVE]`-linked and diffed for removals, and only their downloads wait (`[DEFER]`), so no playlist goes unchecked (#228).
 - **Long Spotify rate limits fail the run.** A 429 whose `Retry-After` exceeds 120s is not slept through (it once said 17.5h): the run fails with `Spotify rate-limited: Retry-After <n>s, until <UTC>`, the end goes to `.spotify-rate-limit.json` on pipeline-state and to the `music_spotify_rate_limited_until_seconds` gauge (Pushgateway job `music_spotify`), and every Spotify reader fails without calling Spotify until then. Shorter ones are waited out.
 - **MusicBrainz threshold.** `strong_rec_thresh: 0.10` in `config/beets/config.yaml`. Tracks that don't match confidently land in quarantine. A second `--asis` pass then imports any quarantined file that already has sufficient embedded tags (title, artist, album, tracknumber); the rest stay in quarantine for manual review. Raise the threshold if too many valid tracks are being quarantined.
-- **The playlist store (homelab#1914) is being switched on in stages.** One file per playlist holding every entry, in Spotify's order, with the full song record; "downloaded" is the entry resolving to a library item by Spotify ID or ISRC, never recorded. It will replace `.spotdl`, `sources`-as-membership, the unlink queue and `reconcile`. With `PLAYLIST_STORE=on` (stage a) it writes spotdl and `nosync` playlists' `.m3u` (store order by ID/ISRC, then the `sources` tail of local-only tracks); album mode and downloads move to it in stage b, and stage c retires the rest. `PLAYLIST_STORE=dry-run` only writes its view to `.store-dryrun/` for diffing: `cat .store-dryrun/*.diff` and `history.tsv` over a few nightlies show what the switch would change. Expected differences: `[WORDS]`-only matches and `sources` tail lines drop out of a spotdl playlist's `.m3u`, and entries the library holds by ID that `.spotdl` never listed come in.
-- **`.spotdl` files are the sync state.** Never delete them manually. They are backed by the PVC and re-created by `music-ingest` from `config/playlists.conf` on first run or after PVC loss. When `SYNC_TRACK_LIMIT` is active, the snapshot intentionally contains only downloaded tracks — deferred tracks are absent so they re-appear as new on the next run.
+- **The playlist store (homelab#1914) is the playlist state.** One file per playlist in `inbox/spotdl/.store/`, holding every entry in Spotify's order with the full song record, then its local entries (library items on the playlist that are not on Spotify; none so far). "Downloaded" is the entry resolving to a library item by Spotify ID or ISRC, never recorded. The nightly rewrites a spotdl playlist's store from Spotify and downloads its want list: entries no library item holds, minus downloads waiting in the inbox or quarantine (never fetched again, #165) and backoff, a known entry logged `[STORE-WANT]`. The album tick writes an `album` playlist's; a `nosync` playlist's is built from Spotify once and kept. A track removed on Spotify leaves the store and the `.m3u`; its file stays in the library (soft delete). Whether a spotdl copy is an album's top-up is the store's answer too (`release._topup`). The stores replaced `.spotdl`, the unlink queue and `reconcile` (stage c); old `.spotdl` files left on the PVC are no longer read.

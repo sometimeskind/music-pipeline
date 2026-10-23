@@ -44,9 +44,14 @@ def _on_disk(tmp_path: Path, i: FakeItem) -> FakeItem:
     return i
 
 
-def spotdl(tmp_path: Path, name: str, songs: list[dict]) -> Path:
-    (tmp_path / f"{name}.spotdl").write_text(json.dumps({"songs": songs}))
-    return tmp_path
+def stores(tmp_path: Path, monkeypatch, **playlists: list[dict]) -> Path:
+    """Point the playlist stores at *tmp_path* and write one per ``name=songs`` (homelab#1914)."""
+    from music_fetch import store
+
+    monkeypatch.setattr(store, "STORE_DIR", tmp_path / "store")
+    for name, songs in playlists.items():
+        store.Store.from_songs(name, songs).save(store.path(name))
+    return store.STORE_DIR
 
 
 def record(status, name="Remain in Light (Deluxe Version)", artist="Talking Heads", **extra) -> dict:
@@ -54,10 +59,18 @@ def record(status, name="Remain in Light (Deluxe Version)", artist="Talking Head
             "grabbed_at": GRAB.isoformat(), "imported_at": IMPORT.isoformat(), **extra}
 
 
-def test_entry_keys_cover_every_playlist(tmp_path) -> None:
-    spotdl(tmp_path, "later", [{"song_id": "s1", "isrc": "GB1"}, {"url": "https://open.spotify.com/track/s2"}])
-    spotdl(tmp_path, "keep", [{"song_id": "s3"}])
-    assert entry_keys(tmp_path) == ({"s1", "s2", "s3"}, {"GB1"})
+def test_entry_keys_cover_every_playlist_store(tmp_path, monkeypatch) -> None:
+    from music_fetch import store
+
+    store_dir = stores(tmp_path, monkeypatch,
+                       later=[{"song_id": "s1", "isrc": "GB1"}, {"url": "https://open.spotify.com/track/s2"}],
+                       keep=[{"song_id": "s3"}])
+    # A local entry is no Spotify entry, and a .spotdl file is never read (homelab#1914).
+    keep = store.load("keep")
+    keep.entries.append({store.LOCAL: {"id": 7, "path": "/x.m4a", "title": "X", "artist": "Y"}})
+    keep.save(store.path("keep"))
+    (store_dir.parent / "old.spotdl").write_text(json.dumps({"songs": [{"song_id": "s9", "isrc": "GB9"}]}))
+    assert entry_keys() == ({"s1", "s2", "s3"}, {"GB1"})
 
 
 def test_unmatched_by_spotify_id_or_isrc_only() -> None:
@@ -168,7 +181,7 @@ def test_cleanup_canonicalises_the_items_it_links(tmp_path, monkeypatch) -> None
     records = _drake({"later": [["Make Me Proud", "Drake", "s1"]]})
     monkeypatch.setattr(albums.State, "load", classmethod(lambda cls, path=None: albums.State(albums=records)))
     monkeypatch.setattr(library, "MusicLibrary", lambda db: lib)
-    monkeypatch.setattr(scan, "SPOTDL_DIR", spotdl(tmp_path, "later", []))
+    stores(tmp_path, monkeypatch, later=[])
     monkeypatch.setattr(rollback, "pipeline_lock", nullcontext)
     events = []
     monkeypatch.setattr(canon, "canonicalize_items", lambda items, budget=None: events.append(("canon", items)))

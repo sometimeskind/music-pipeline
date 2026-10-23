@@ -16,11 +16,14 @@ URL = "https://open.spotify.com/track/abc123"
 
 
 
-def _spotdl(spotdl_dir: Path, playlist: str, duration: int | None, url: str = URL) -> None:
+def _store(playlist: str, duration: int | None, url: str = URL) -> None:
+    """Write *playlist*'s store with one song (homelab#1914); the ``dirs`` fixture points the stores."""
+    from music_fetch import store
+
     song = {"url": url, "name": "Song", "artists": ["Artist"]}
     if duration is not None:
         song["duration"] = duration
-    (spotdl_dir / f"{playlist}.spotdl").write_text(json.dumps({"songs": [song]}))
+    store.Store.from_songs(playlist, [song]).save(store.path(playlist))
 
 
 # ---------------------------------------------------------------------------
@@ -70,18 +73,21 @@ def test_mid_track_silence_window_rules() -> None:
 # ---------------------------------------------------------------------------
 
 @pytest.fixture
-def dirs(tmp_path: Path) -> tuple[Path, Path]:
+def dirs(tmp_path: Path, monkeypatch) -> tuple[Path, Path]:
+    from music_fetch import store
+
     inbox, rejected = tmp_path / "inbox" / "spotdl", tmp_path / "quarantine" / "rejected"
     (inbox / "wedding").mkdir(parents=True)
+    monkeypatch.setattr(store, "STORE_DIR", inbox / ".store")  # where it lives in production
     return inbox, rejected
 
 
 def test_guard_rejects_into_playlist_dir_with_reason(dirs, clip) -> None:
     inbox, rejected = dirs
-    _spotdl(inbox, "wedding", 30)
+    _store("wedding", 30)
     clip(inbox / "wedding" / "Artist - Song.m4a", ("tone", 20))
 
-    counts = guard_inbox(inbox, inbox, rejected, AUDIO_EXTS, mode="on")
+    counts = guard_inbox(inbox, rejected, AUDIO_EXTS, mode="on")
 
     assert counts == {"duration": 1, "silence": 0}
     assert not (inbox / "wedding" / "Artist - Song.m4a").exists()
@@ -92,10 +98,10 @@ def test_guard_rejects_into_playlist_dir_with_reason(dirs, clip) -> None:
 
 def test_guard_dry_run_moves_nothing(dirs, caplog, clip) -> None:
     inbox, rejected = dirs
-    _spotdl(inbox, "wedding", 30)
+    _store("wedding", 30)
     clip(inbox / "wedding" / "Artist - Song.m4a", ("tone", 20))
 
-    counts = guard_inbox(inbox, inbox, rejected, AUDIO_EXTS, mode="dry-run")
+    counts = guard_inbox(inbox, rejected, AUDIO_EXTS, mode="dry-run")
 
     assert sum(counts.values()) == 0
     assert (inbox / "wedding" / "Artist - Song.m4a").exists()
@@ -104,11 +110,11 @@ def test_guard_dry_run_moves_nothing(dirs, caplog, clip) -> None:
 
 def test_guard_song_missing_from_snapshot_fails_open(dirs, caplog, clip) -> None:
     inbox, rejected = dirs
-    _spotdl(inbox, "wedding", 30, url="https://open.spotify.com/track/other")
+    _store("wedding", 30, url="https://open.spotify.com/track/other")
     clip(inbox / "wedding" / "Artist - Song.m4a", ("tone", 20))
 
     with caplog.at_level("INFO"):
-        counts = guard_inbox(inbox, inbox, rejected, AUDIO_EXTS, mode="on")
+        counts = guard_inbox(inbox, rejected, AUDIO_EXTS, mode="on")
 
     assert sum(counts.values()) == 0
     assert (inbox / "wedding" / "Artist - Song.m4a").exists()
@@ -117,26 +123,39 @@ def test_guard_song_missing_from_snapshot_fails_open(dirs, caplog, clip) -> None
 
 def test_guard_song_without_duration_fails_open(dirs, clip) -> None:
     inbox, rejected = dirs
-    _spotdl(inbox, "wedding", None)
+    _store("wedding", None)
     clip(inbox / "wedding" / "Artist - Song.m4a", ("tone", 20))
 
-    assert sum(guard_inbox(inbox, inbox, rejected, AUDIO_EXTS, mode="on").values()) == 0
+    assert sum(guard_inbox(inbox, rejected, AUDIO_EXTS, mode="on").values()) == 0
 
 
 def test_guard_finds_duration_in_another_playlist(dirs, clip) -> None:
-    """A backfill re-download may sit in a playlist whose .spotdl lacks the entry."""
+    """A backfill re-download may sit in a playlist whose store lacks the entry."""
     inbox, rejected = dirs
-    _spotdl(inbox, "keep", 30)
+    _store("keep", 30)
     clip(inbox / "wedding" / "Artist - Song.m4a", ("tone", 20))
 
-    assert guard_inbox(inbox, inbox, rejected, AUDIO_EXTS, mode="on")["duration"] == 1
+    assert guard_inbox(inbox, rejected, AUDIO_EXTS, mode="on")["duration"] == 1
+
+
+def test_expected_durations_read_every_store_never_a_spotdl_file(dirs) -> None:
+    """homelab#1914: durations by playlist from the stores; songs without a URL or a
+    duration are left out, and a ``.spotdl`` snapshot beside them is ignored."""
+    from music_fetch import store
+
+    inbox, _ = dirs
+    store.Store.from_songs("keep", [{"url": URL, "duration": 30}, {"url": "https://x/2"},
+                                    {"duration": 40}]).save(store.path("keep"))
+    _store("wedding", 200, url="https://x/3")
+    (inbox / "old.spotdl").write_text(json.dumps({"songs": [{"url": URL, "duration": 1}]}))
+    assert guard.expected_durations() == {"keep": {URL: 30}, "wedding": {"https://x/3": 200}}
 
 
 def test_guard_off_checks_nothing(dirs, monkeypatch, clip) -> None:
     inbox, rejected = dirs
     monkeypatch.setattr(guard, "check_file", lambda *a, **k: pytest.fail("checked with LENGTH_GUARD=off"))
     clip(inbox / "wedding" / "Artist - Song.m4a", ("tone", 20))
-    guard_inbox(inbox, inbox, rejected, AUDIO_EXTS, mode="off")
+    guard_inbox(inbox, rejected, AUDIO_EXTS, mode="off")
 
 
 @pytest.mark.parametrize("value,mode", [("on", "on"), ("OFF", "off"), ("", "dry-run"), ("bogus", "dry-run")])

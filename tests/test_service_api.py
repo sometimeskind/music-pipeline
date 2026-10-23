@@ -12,6 +12,7 @@ MusicBrainz network calls.
 from __future__ import annotations
 
 import io
+import json
 import zipfile
 
 import requests
@@ -265,9 +266,10 @@ def test_upload_and_scan_generates_playlist(running_service_asis, fixture_audio)
     playlist_name = "test-playlist"
 
     # The zip must reproduce the spotdl inbox layout so the plugin assigns source=
-    # and _regen_playlists() finds the .spotdl sentinel file.
+    # and regen_playlists() finds the playlist's store (homelab#1914).
     _upload_zip(svc, {
-        f"spotdl/{playlist_name}.spotdl": b"[]",
+        f"spotdl/.store/{playlist_name}.json": json.dumps(
+            {"version": 1, "playlist": playlist_name, "entries": []}).encode(),
         f"spotdl/{playlist_name}/{fixture_audio.name}": fixture_audio.read_bytes(),
     })
 

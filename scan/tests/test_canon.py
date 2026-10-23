@@ -21,6 +21,16 @@ def _song(sid, album_id="A1", name="Album", album_type="album", date="2019-09-17
             "tracks_count": tracks, "isrc": isrc, "cover_url": COVER, **extra}
 
 
+def _stores(tmp_path, monkeypatch, **playlists):
+    """Point the playlist stores at *tmp_path* and write one per ``name=songs`` (homelab#1914)."""
+    from music_fetch import store
+
+    monkeypatch.setattr(store, "STORE_DIR", tmp_path / "store")
+    for name, songs in playlists.items():
+        store.Store.from_songs(name, songs).save(store.path(name))
+    return store.STORE_DIR
+
+
 class FakeItem(dict):
     def get(self, key, default=None):
         return super().get(key, default)
@@ -80,6 +90,23 @@ def test_placements_first_source_wins_and_disc_total_is_the_highest_seen():
     full = placements_from([([_song("T", disc_count=3, date="2019")], True)])["T"]
     assert spotify_fields(full)["disctotal"] == 3
     assert (spotify_fields(full)["month"], spotify_fields(full)["day"]) == (0, 0)
+
+
+def test_store_songs_are_every_playlist_stores_song_records(tmp_path, monkeypatch):
+    """homelab#1914: the album data comes from the stores; local entries carry no song,
+    and a ``.spotdl`` file beside them is never read."""
+    from music_fetch import store
+    from music_scan.canon import store_songs
+
+    store_dir = _stores(tmp_path, monkeypatch, a=[_song("T1"), _song("T2", track=2)], b=[_song("T3", "A2")])
+    with_local = store.load("b")
+    with_local.entries.append({store.LOCAL: {"id": 9, "path": "/x.m4a", "title": "X", "artist": "Y"}})
+    with_local.save(store.path("b"))
+    (store_dir.parent / "a.spotdl").write_text(json.dumps({"songs": [_song("OLD")]}), encoding="utf-8")
+
+    assert [s["song_id"] for s in store_songs()] == ["T1", "T2", "T3"]
+    _stores(tmp_path / "none", monkeypatch)
+    assert store_songs() == []
 
 
 # ----------------------------------------------------------------------
@@ -342,12 +369,7 @@ def test_pending_musicbrainz_leaves_mb_tags_until_a_later_scan(tmp_path, ffmpeg,
     from music_scan.mb_release import Resolver
 
     jp, _, _, songs = _editions(tmp_path, lib)
-    spotdl_dir = tmp_path / "spotdl"
-    spotdl_dir.mkdir()
-    (spotdl_dir / "later.spotdl").write_text(json.dumps({"songs": songs}), encoding="utf-8")
-    from music_fetch import ingest
-
-    monkeypatch.setattr(ingest, "SPOTDL_DIR", spotdl_dir)
+    _stores(tmp_path, monkeypatch, later=songs)
     from music_scan import cover
 
     art = _jpeg(tmp_path / "c.jpg")
@@ -371,7 +393,6 @@ def test_backfill_dry_run_apply_then_zero(tmp_path, ffmpeg, lib, monkeypatch, ca
     import logging
 
     caplog.set_level(logging.INFO)
-    from music_fetch import ingest
     from music_scan import canon, cover, library, navidrome, scan
     from music_scan.mb_release import Resolver
 
@@ -381,7 +402,7 @@ def test_backfill_dry_run_apply_then_zero(tmp_path, ffmpeg, lib, monkeypatch, ca
     monkeypatch.setattr(albums_state, "STATE_FILE", tmp_path / "no-albums.json")
     monkeypatch.setattr(library, "LIBRARY_DB", tmp_path / "library.db")
     monkeypatch.setattr(library, "LIBRARY_DIR", tmp_path / "library")
-    monkeypatch.setattr(ingest, "SPOTDL_DIR", tmp_path / "nospotdl")
+    _stores(tmp_path, monkeypatch)
     monkeypatch.setattr(canon, "read_pages", lambda refresh=False: {"later": songs})
     monkeypatch.setattr(canon, "Resolver", lambda budget=None: Resolver(
         cache_file=tmp_path / "mb.json", mb=FakeMB(), upc_of=lambda _: None))
@@ -738,7 +759,6 @@ def test_twin_items_take_the_representatives_id_date_and_numbering(tmp_path, ffm
 
 def test_after_scan_takes_an_item_linked_after_its_import(tmp_path, ffmpeg, lib, monkeypatch):
     """A music-rollback-releases [LINK] gives an old item a Spotify ID: the next scan canonicalises it."""
-    from music_fetch import ingest
     from music_scan import canon, cover
     from music_scan.mb_release import Resolver
 
@@ -746,10 +766,7 @@ def test_after_scan_takes_an_item_linked_after_its_import(tmp_path, ffmpeg, lib,
                   album="Take Care", via="usenet", spotify_ids="T1")
     linked.added = 0
     linked.store()
-    spotdl_dir = tmp_path / "spotdl"
-    spotdl_dir.mkdir()
-    (spotdl_dir / "p.spotdl").write_text(json.dumps({"songs": [_song("T1", name="Take Care (Deluxe)")]}))
-    monkeypatch.setattr(ingest, "SPOTDL_DIR", spotdl_dir)
+    _stores(tmp_path, monkeypatch, p=[_song("T1", name="Take Care (Deluxe)")])
     monkeypatch.setattr(cover, "download", lambda url: _jpeg(tmp_path / "c.jpg"))
     monkeypatch.setattr(canon, "Resolver", lambda budget=None: Resolver(
         cache_file=tmp_path / "mb.json", mb=FakeMB(url="REL"), upc_of=lambda _: None))
@@ -876,13 +893,11 @@ def test_import_canon_keeps_1979_on_mellon_collie(tmp_path, ffmpeg, lib, monkeyp
     from music_scan import canon
 
     _, _, the_1979 = _pumpkins(tmp_path, lib, moved=False)
-    spotdl = tmp_path / "spotdl"
-    spotdl.mkdir()
-    (spotdl / "keep.spotdl").write_text(json.dumps({"songs": _pumpkins_songs()}))
+    songs = _pumpkins_songs()
     monkeypatch.setattr(canon, "Resolver", lambda budget=None: None)
     monkeypatch.setattr(canon, "AlbumsByIsrc", lambda budget=None: None)
 
-    canon.canonicalize_items([lib.get_item(the_1979.id)], spotdl, records=_pumpkins_records())
+    canon.canonicalize_items([lib.get_item(the_1979.id)], songs, records=_pumpkins_records())
 
     item = lib.get_item(the_1979.id)
     assert (item.get("spotify_album_id"), item.album, item.track) == ("MC30", MC, 31)
@@ -892,7 +907,6 @@ def test_backfill_moves_3092_back_to_mellon_collie(tmp_path, ffmpeg, lib, monkey
     import logging
 
     from music_fetch import albums as albums_state
-    from music_fetch import ingest
     from music_scan import canon, cover, library, navidrome, scan
 
     caplog.set_level(logging.INFO)
@@ -902,7 +916,7 @@ def test_backfill_moves_3092_back_to_mellon_collie(tmp_path, ffmpeg, lib, monkey
     monkeypatch.setattr(albums_state, "STATE_FILE", state)
     monkeypatch.setattr(library, "LIBRARY_DB", tmp_path / "library.db")
     monkeypatch.setattr(library, "LIBRARY_DIR", tmp_path / "library")
-    monkeypatch.setattr(ingest, "SPOTDL_DIR", tmp_path / "nospotdl")
+    _stores(tmp_path, monkeypatch)
     monkeypatch.setattr(canon, "read_pages", lambda refresh=False: {"keep": _pumpkins_songs()})
     monkeypatch.setattr(canon, "Resolver", lambda budget=None: None)
     art = _jpeg(tmp_path / "c.jpg")
@@ -937,9 +951,7 @@ def test_an_album_records_items_take_its_album_whatever_their_ids(tmp_path, ffmp
     no_id = _set_added(lib, _add(lib, _m4a(rel_dir / "114 - Take Me Down.m4a"), title="Take Me Down",
                                  artist=PUMPKINS, albumartist=PUMPKINS, album="Mellon Collie and the Infinite Sadness",
                                  disc=1, track=14, via="usenet", album_record="MC30", release="r1"), t0)
-    spotdl = tmp_path / "spotdl"
-    spotdl.mkdir()
-    (spotdl / "keep.spotdl").write_text(json.dumps({"songs": _pumpkins_songs()}))
+    songs = _pumpkins_songs()
     records = {"MC30": {**_pumpkins_records()["MC30"],
                         "release_files": {"mb_albumid": "MB2012", "mb": {"mb_albumid": "MB2012",
                                                                         "mb_releasegroupid": "RG"}}}}
@@ -949,7 +961,7 @@ def test_an_album_records_items_take_its_album_whatever_their_ids(tmp_path, ffmp
     monkey_download = cover.download
     cover.download = lambda url: art
     try:
-        canon.canonicalize_items([lib.get_item(best_of_id.id), lib.get_item(no_id.id)], spotdl, budget=None,
+        canon.canonicalize_items([lib.get_item(best_of_id.id), lib.get_item(no_id.id)], songs, budget=None,
                                  records=records)
     finally:
         cover.download = monkey_download
@@ -974,9 +986,7 @@ def test_an_album_records_item_whose_path_is_taken_is_tagged_in_place(tmp_path, 
     stray = tmp_path / "library" / "Unknown" / "Mellon Collie" / "02 - Tonight, Tonight.m4a"
     track = _add(lib, _m4a(stray), title="Tonight, Tonight", artist=PUMPKINS, albumartist="", album="Mellon Collie",
                  track=2, via="usenet", album_record="MC30", release="r1")
-    spotdl = tmp_path / "spotdl"
-    spotdl.mkdir()
-    (spotdl / "keep.spotdl").write_text(json.dumps({"songs": _pumpkins_songs()}))
+    songs = _pumpkins_songs()
     records = {"MC30": {**_pumpkins_records()["MC30"], "release_files": {"mb": {"mb_albumid": "MB2025"}}}}
     from music_scan import cover
 
@@ -985,21 +995,21 @@ def test_an_album_records_item_whose_path_is_taken_is_tagged_in_place(tmp_path, 
     cover.download = lambda url: art
     try:
         with caplog.at_level("INFO"):
-            canon.canonicalize_items([lib.get_item(track.id)], spotdl, budget=None, records=records)
+            canon.canonicalize_items([lib.get_item(track.id)], songs, budget=None, records=records)
         item = lib.get_item(track.id)
         assert (item.album, item.albumartist, item.mb_albumid) == (MC, PUMPKINS, "MB2025")
         assert Path(os.fsdecode(item.path)) == stray and item.get("canon_clash") == "1"
         assert f"[CLASH] {track.id} {stray} →" in caplog.text and "tagged in place" in caplog.text
         assert Path(os.fsdecode(lib.get_item(extra.id).path)).exists()
         # Still taken: nothing to change, nothing written again.
-        assert canon.canonicalize_items([lib.get_item(track.id)], spotdl, budget=None, records=records) == 0
+        assert canon.canonicalize_items([lib.get_item(track.id)], songs, budget=None, records=records) == 0
         # The operator merged the extra away: the next scan moves the release's track onto the path.
         Path(os.fsdecode(lib.get_item(extra.id).path)).unlink()
         lib.get_item(extra.id).remove(delete=False)
         with monkeypatch.context() as m:
             m.setattr(canon, "canonicalize_items", lambda items: [i.id for i in items])
             assert canon.after_scan(lib, 1e12) == [track.id]  # every scan tries it again
-        assert canon.canonicalize_items([lib.get_item(track.id)], spotdl, budget=None, records=records) == 1
+        assert canon.canonicalize_items([lib.get_item(track.id)], songs, budget=None, records=records) == 1
     finally:
         cover.download = monkey_download
     item = lib.get_item(track.id)

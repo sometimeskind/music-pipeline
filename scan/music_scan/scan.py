@@ -244,22 +244,19 @@ def _item_path(item) -> Path:
     return Path(raw) if Path(raw).is_absolute() else LIBRARY / raw
 
 
-def playlist_paths(slots: list[Slot], source_items: list, slot_fills: bool = True) -> list[Path]:
-    """The ``.m3u`` lines of a playlist: its resolved slots in playlist order
-    (each file once), then the *source_items* no entry matched, alphabetically.
-    Without *slot_fills* the slots filled from the whole library are left out:
-    today's path, which the result always contains (#228)."""
+def playlist_paths(slots: list[Slot]) -> list[Path]:
+    """The ``.m3u`` lines of a playlist: its resolved slots in playlist order,
+    each file once."""
     ordered: list[Path] = []
     matched: set[Path] = set()
     for slot in slots:
-        if slot.item is None or (not slot_fills and slot.filled_from_library):
+        if slot.item is None:
             continue
         p = _item_path(slot.item)
         if p not in matched:
             ordered.append(p)
             matched.add(p)
-    unmatched = sorted(p for p in (_item_path(item) for item in source_items) if p not in matched)
-    return ordered + unmatched
+    return ordered
 
 
 def store_view(name: str, library: ItemIndex, by_album) -> tuple[list[Path], list[Slot]] | None:
@@ -267,11 +264,11 @@ def store_view(name: str, library: ItemIndex, by_album) -> tuple[list[Path], lis
     and the slots behind them: its entries resolved by Spotify ID or ISRC only,
     against the whole library, each file once and in store order; an ``album``
     playlist through :func:`playlists.album_paths` on the same entries.  Local
-    entries are not in the view (:func:`_local_tail`).  None when the playlist
-    has no store yet: its first sync, album tick or Spotify fetch writes it."""
+    entries are not in the view (:func:`_local_tail`).  None when its store
+    can't be read: *name* comes from :func:`store.names`, so the file exists."""
     playlist = store.load(name)
     if playlist is None:
-        logger.info("  [STORE] %s: no store yet — its first sync writes it", name)
+        logger.error("  [STORE] %s: its store can't be read — its .m3u is left as it was", name)
         return None
     none = ItemIndex([])
     if (SPOTDL_DIR / f"{name}.album").exists():
@@ -279,7 +276,7 @@ def store_view(name: str, library: ItemIndex, by_album) -> tuple[list[Path], lis
         logger.info("  %s: %d album(s), %d track(s) (album level)", name, n_albums, len(paths))
         return paths, slots
     slots = playlists.resolve([Entry.from_song(s) for s in playlist.songs], none, library)
-    return playlist_paths(slots, []), slots
+    return playlist_paths(slots), slots
 
 
 def _local_tail(name: str, paths: list[Path], library: ItemIndex) -> list[Path]:
@@ -354,7 +351,7 @@ def sync_hooks() -> Iterator[dict]:
         index = ItemIndex(lib.all_items())
         yield {
             "resolves": lambda song: index.match_song(song, words=False)[0] is not None,
-            "held": held_urls(),
+            "held": held_urls(QUARANTINE, SPOTDL_DIR),
             "in_library": lambda pl, song: link_song(index, pl, song),
         }
 
