@@ -8,10 +8,18 @@ on:
     branches: [main]
     paths: ["service/**", "fetch/**", "scan/**", "scripts/**", "tests/**", "config/**", "compose.yml", "justfile", ".github/workflows/service.yml"]
 
+# A second push to a PR cancels the run it supersedes instead of billing both.
+# Pushes to main are never cancelled: those publish the image (#318).
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   test:
     name: Unit Tests
     runs-on: ubuntu-latest
+    # Normally 3–5 min. A stalled Prefect test-server start-up has run for 20 (#318).
+    timeout-minutes: 10
 
     steps:
       - name: Checkout
@@ -35,9 +43,15 @@ jobs:
       - name: Run tests
         run: pytest --import-mode=importlib fetch/tests scan/tests service/tests scripts/tests
 
+  # The build plus integration tests bill 5–7 minutes a run, and every PR push ran them
+  # even when only Python under test changed. On a pull request they now run only when
+  # something the image or the integration tests depend on changed (the Dockerfile, a
+  # dependency file, compose.yml, config/, tests/, this workflow); unit tests still run on
+  # every push, and the merge to main always builds, checks and publishes the image (#318).
   build-and-check:
     name: Build, Health Check & Push (service)
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     permissions:
       contents: read
       packages: write
@@ -45,8 +59,30 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # The gate below diffs against the base branch.
+          fetch-depth: 0
+
+      - name: Decide whether the image needs building
+        id: gate
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BASE_REF: ${{ github.base_ref }}
+        run: |
+          set -euo pipefail
+          if [[ "$EVENT_NAME" != pull_request ]]; then
+            echo "build=true" >> "$GITHUB_OUTPUT"
+          elif git diff --quiet "origin/${BASE_REF}...HEAD" -- \
+              service/Dockerfile '*requirements*.txt' '*pyproject.toml' compose.yml config tests \
+              .github/workflows/service.yml; then
+            echo "Image inputs and integration tests unchanged; skipping the build."
+            echo "build=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "build=true" >> "$GITHUB_OUTPUT"
+          fi
 
       - name: Set up Docker Buildx
+        if: steps.gate.outputs.build == 'true'
         uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
 
       - name: Log in to GitHub Container Registry
@@ -58,6 +94,7 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Extract metadata (service)
+        if: steps.gate.outputs.build == 'true'
         id: meta
         uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
         with:
@@ -67,6 +104,7 @@ jobs:
             type=sha,format=short
 
       - name: Build service image
+        if: steps.gate.outputs.build == 'true'
         id: build
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
@@ -81,43 +119,55 @@ jobs:
           cache-to: type=gha,mode=max
 
       - name: Tag image for health checks
+        if: steps.gate.outputs.build == 'true'
         env:
           IMAGE_ID: ${{ steps.build.outputs.imageid }}
         run: docker tag "$IMAGE_ID" music-pipeline:ci-local
 
       - name: Health check — music-pipeline entry point
+        if: steps.gate.outputs.build == 'true'
         run: docker run --rm --entrypoint which music-pipeline:ci-local music-pipeline
 
       - name: Health check — music-ingest entry point
+        if: steps.gate.outputs.build == 'true'
         run: docker run --rm --entrypoint which music-pipeline:ci-local music-ingest
 
       - name: Health check — music-scan entry point
+        if: steps.gate.outputs.build == 'true'
         run: docker run --rm --entrypoint which music-pipeline:ci-local music-scan
 
       - name: Health check — rclone
+        if: steps.gate.outputs.build == 'true'
         run: docker run --rm --entrypoint rclone music-pipeline:ci-local version
 
       - name: Health check — beet
+        if: steps.gate.outputs.build == 'true'
         run: docker run --rm --entrypoint beet music-pipeline:ci-local version
 
       - name: Health check — spotdl
+        if: steps.gate.outputs.build == 'true'
         run: docker run --rm --entrypoint spotdl music-pipeline:ci-local --version
 
       - name: Health check — deno
+        if: steps.gate.outputs.build == 'true'
         run: docker run --rm --entrypoint deno music-pipeline:ci-local --version
 
       - name: Health check — yt-dlp
+        if: steps.gate.outputs.build == 'true'
         run: docker run --rm --entrypoint yt-dlp music-pipeline:ci-local --version
 
       - name: Health check — fpcalc
+        if: steps.gate.outputs.build == 'true'
         run: docker run --rm --entrypoint fpcalc music-pipeline:ci-local -version
 
       - name: Set up Python for integration tests
+        if: steps.gate.outputs.build == 'true'
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.13"
 
       - name: Integration tests
+        if: steps.gate.outputs.build == 'true'
         run: |
           pip install -r tests/requirements.txt
           SERVICE_IMAGE=music-pipeline:ci-local pytest tests/ -m "not auth" -v
