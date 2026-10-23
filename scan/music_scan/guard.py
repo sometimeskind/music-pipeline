@@ -9,15 +9,15 @@ Before ``beet import``, every spotdl inbox file is checked against its playlist
 entry:
 
 1. **Duration**: the ``ffprobe`` length must be within ``TOLERANCE`` of the
-   entry's ``duration`` (whole seconds, from the ``.spotdl`` snapshot).
+   entry's ``duration`` (whole seconds, from the playlist store).
 2. **Mid-track silence**: no ``silencedetect`` window may start more than
    ``EDGE_SECONDS`` after the beginning and end more than ``EDGE_SECONDS``
    before the end.  Leading and trailing silence (fades, hidden tracks) is fine.
 
 A file with no entry or no duration fails open, with a log line.  Rejected files
 move to ``quarantine/rejected/<playlist>/`` with a ``<file>.reason`` sidecar;
-the asis pass skips that directory, and reconcile keeps their URLs, so spotdl
-does not download the same wrong video again.
+the asis pass skips that directory, and the nightly holds their URLs back
+(:mod:`music_scan.held`), so spotdl does not download the same wrong video again.
 
 ``LENGTH_GUARD``: ``on`` rejects, ``dry-run`` (default) only logs
 ``[WOULD-REJECT]``, ``off`` skips the check.  Usenet albums are not checked:
@@ -26,7 +26,6 @@ the whole-release match verifies them.
 
 from __future__ import annotations
 
-import json
 import logging
 import os
 import re
@@ -129,16 +128,12 @@ def read_comment(path: Path) -> str | None:
         return None
 
 
-def expected_durations(spotdl_dir: Path) -> dict[str, dict[str, int]]:
-    """``{playlist: {spotify_url: duration}}`` from every ``.spotdl`` snapshot."""
-    out: dict[str, dict[str, int]] = {}
-    for f in sorted(spotdl_dir.glob("*.spotdl")):
-        try:
-            songs = json.loads(f.read_text(encoding="utf-8")).get("songs", [])
-        except Exception:
-            continue
-        out[f.stem] = {s["url"]: s["duration"] for s in songs if s.get("url") and s.get("duration")}
-    return out
+def expected_durations() -> dict[str, dict[str, int]]:
+    """``{playlist: {spotify_url: duration}}`` from every playlist store (homelab#1914)."""
+    from music_fetch import store  # noqa: PLC0415
+
+    return {name: {s["url"]: s["duration"] for s in songs if s.get("url") and s.get("duration")}
+            for name, songs in store.songs_by_playlist().items()}
 
 
 def _expected(durations: dict[str, dict[str, int]], playlist: str, url: str | None) -> int | None:
@@ -159,8 +154,7 @@ def reject(path: Path, rejection: Rejection, inbox: Path, rejected_dir: Path) ->
     return dest
 
 
-def guard_inbox(inbox: Path, spotdl_dir: Path, rejected_dir: Path, audio_exts: set[str],
-                mode: str | None = None) -> Counter:
+def guard_inbox(inbox: Path, rejected_dir: Path, audio_exts: set[str], mode: str | None = None) -> Counter:
     """Check every spotdl inbox file; returns the count of files rejected per reason.
 
     *inbox* is ``inbox/spotdl``: files sit at ``<playlist>/<file>``.  In ``dry-run``
@@ -170,7 +164,7 @@ def guard_inbox(inbox: Path, spotdl_dir: Path, rejected_dir: Path, audio_exts: s
     rejected: Counter = Counter({r: 0 for r in REASONS})
     if mode == "off" or not inbox.exists():
         return rejected
-    durations = expected_durations(spotdl_dir)
+    durations = expected_durations()
     for f in sorted(inbox.rglob("*")):
         if not f.is_file() or f.suffix.lower() not in audio_exts:
             continue

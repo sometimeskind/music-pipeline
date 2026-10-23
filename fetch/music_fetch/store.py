@@ -1,36 +1,22 @@
-"""The playlist store (homelab#1914 step 1): one file per playlist, the single
+"""The playlist store (homelab#1914): one file per playlist, the single
 source of truth for its entries.
 
-A store holds the playlist's full entry list in order, each entry with the
-full Spotify song record (the dict a ``.spotdl`` file holds, which ``canon``
-needs for album data).  Whether an entry is downloaded is never recorded: it
-is the entry resolving to a library item by Spotify ID or ISRC, recomputed
-every time.  Step 1 has one-way semantics: Spotify decides membership and
+A store holds the playlist's full entry list in Spotify order, each entry with
+the full Spotify song record (the dict spotdl's ``Song.json`` gives, which
+``canon`` needs for album data), then its :data:`LOCAL` entries: library
+items on the playlist that are not on its Spotify list.  Whether an entry is
+downloaded is never recorded: it is the entry resolving to a library item by
+Spotify ID or ISRC, recomputed every time.  Spotify decides membership and
 order, and the store keeps the richest record known for each entry.
 
-``PLAYLIST_STORE=dry-run`` builds each playlist's store next to today's state
-(``.spotdl``, ``sources``) and writes what the store would produce to
-:data:`DRYRUN_DIR`: the store itself (``<playlist>.json``), its ``.m3u`` lines
-(``<playlist>.m3u``) and its nightly want list (``<playlist>.want``), each with
-a ``.diff`` against what today's path produced, and one ``[STORE-DIFF]`` log
-line and ``history.tsv`` row per comparison.  Nothing reads the side
-directory, so the dry run changes no playlist, download or tag.  ``off`` (the
-default) does nothing.
+The nightly writes a spotdl playlist's store from its Spotify fetch and
+downloads its want list; the album tick writes an ``album`` playlist's; a
+``nosync`` playlist's is built from Spotify once and kept.  A track removed on
+Spotify is gone from the next store, and so from the ``.m3u``: nothing is
+unlinked.  The beets ``sources`` field records where an item came from and is
+never read as membership.
 
-``PLAYLIST_STORE=on`` (homelab#1914 stage a) does the same in
-:data:`STORE_DIR`, and a spotdl or ``nosync`` playlist's ``.m3u`` is the
-store's view, followed by its ``sources`` tail: the items tagged with the
-playlist that no entry resolves, its local-only tracks.  The diffs keep
-running against what today's path would have written.
-
-Stage b moves the rest onto the store, with ``.spotdl`` and ``sources``
-still written alongside: a tail item becomes a :data:`LOCAL` entry, kept at
-the playlist's end; the nightly also downloads an entry no library item
-holds that its ``.spotdl`` lists; and album mode writes each album
-playlist's tracklist to its store.  Whether a spotdl copy is a top-up stays
-with ``sources``; the store's answer is logged where it differs
-(``[TOPUP-DIFF]``).  ``.spotdl``, the unlink queue and ``reconcile`` go in
-stage c, and the top-up check once the diff lines are read.
+``.spotdl`` files, the unlink queue and ``reconcile`` were retired in stage c.
 """
 
 from __future__ import annotations
@@ -38,69 +24,52 @@ from __future__ import annotations
 import dataclasses
 import json
 import logging
-import os
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable
 
 logger = logging.getLogger(__name__)
 
-STORE_ENV = "PLAYLIST_STORE"
-OFF, DRY_RUN, ON = "off", "dry-run", "on"
-MODES = (OFF, DRY_RUN, ON)
-
 SPOTDL_DIR = Path("/root/Music/inbox/spotdl")
-# On pipeline-state, next to the .spotdl files.  Dot directories: beets'
-# import ignores them, and they hold no audio for the inbox sweep to move.
-DRYRUN_DIR = SPOTDL_DIR / ".store-dryrun"
+# On pipeline-state, in the inbox.  A dot directory: beets' import ignores it,
+# and it holds no audio for the inbox sweep to move.
 STORE_DIR = SPOTDL_DIR / ".store"
 VERSION = 1
-# Store.source of a store built from a Spotify fetch.  A ``nosync`` playlist's
-# .spotdl is not its whole Spotify list when it ran as a spotdl playlist before
-# it was frozen (homelab#1914: wedding), so its store is fetched once instead.
+# Store.source of a store built from a Spotify fetch: a ``nosync`` playlist's
+# store is fetched once and kept from then on.
 SPOTIFY = "spotify"
 # The key of a local-only entry: ``{"local": {"id", "path", "title", "artist"}}``,
 # a library item on the playlist that is not on its Spotify list (stage b).
 LOCAL = "local"
 
 
-def mode() -> str:
-    """``PLAYLIST_STORE``: ``off`` (default), ``dry-run`` or ``on``.  Anything
-    else is logged and treated as ``off``: an unknown mode never writes."""
-    value = (os.environ.get(STORE_ENV) or OFF).strip().lower()
-    if value not in MODES:
-        logger.error("%s=%r is not one of %s — treating it as %s", STORE_ENV, value, "|".join(MODES), OFF)
-        return OFF
-    return value
-
-
-def dry_run() -> bool:
-    return mode() == DRY_RUN
-
-
-def active() -> bool:
-    """The store is built: ``dry-run`` or ``on``."""
-    return mode() != OFF
-
-
-def store_dir() -> Path:
-    """Where the stores and their views live: :data:`STORE_DIR` when ``on``,
-    else :data:`DRYRUN_DIR`."""
-    return STORE_DIR if mode() == ON else DRYRUN_DIR
-
-
 def path(name: str) -> Path:
-    return store_dir() / f"{name}.json"
+    return STORE_DIR / f"{name}.json"
 
 
 def load(name: str) -> "Store | None":
-    """Playlist *name*'s store, or None.  When ``on``, a store the dry run
-    built and :data:`STORE_DIR` doesn't hold yet is read from :data:`DRYRUN_DIR`,
-    so the switch keeps every store the dry run built (the next save moves it)."""
-    playlist = Store.load(path(name))
-    if playlist is None and mode() == ON:
-        playlist = Store.load(DRYRUN_DIR / f"{name}.json")
-    return playlist
+    """Playlist *name*'s store, or None."""
+    return Store.load(path(name))
+
+
+def names() -> list[str]:
+    """The playlists that have a store, sorted."""
+    return sorted(p.stem for p in STORE_DIR.glob("*.json"))
+
+
+def remove(name: str) -> None:
+    """Delete playlist *name*'s store: the playlist left ``playlists.conf``."""
+    path(name).unlink(missing_ok=True)
+
+
+def songs_by_playlist() -> dict[str, list[dict]]:
+    """Every store's Spotify song records, by playlist."""
+    out: dict[str, list[dict]] = {}
+    for name in names():
+        playlist = load(name)
+        if playlist is not None:
+            out[name] = playlist.songs
+    return out
 
 
 def _now() -> str:
@@ -196,51 +165,3 @@ def want_list(
             continue
         wanted.append(url)
     return wanted
-
-
-@dataclasses.dataclass(frozen=True)
-class Diff:
-    added: list[str]
-    removed: list[str]
-    reordered: bool
-
-    @property
-    def same(self) -> bool:
-        return not self.added and not self.removed and not self.reordered
-
-
-def diff(today: list[str], store: list[str]) -> Diff:
-    """What the store's lines add to and drop from *today*'s, and whether the
-    lines both hold are in another order."""
-    in_today, in_store = set(today), set(store)
-    common_today = [line for line in today if line in in_store]
-    common_store = [line for line in store if line in in_today]
-    return Diff(
-        added=[line for line in store if line not in in_today],
-        removed=[line for line in today if line not in in_store],
-        reordered=common_today != common_store,
-    )
-
-
-def write_view(name: str, kind: str, today: list[str], store: list[str], directory: Path | None = None) -> Diff:
-    """Write the store's *kind* view of playlist *name* (``m3u`` or ``want``)
-    to *directory* (:func:`store_dir`), with a ``.diff`` against *today*'s, log one
-    ``[STORE-DIFF]`` line and append a ``history.tsv`` row."""
-    directory = store_dir() if directory is None else directory
-    d = diff(today, store)
-    _write(directory / f"{name}.{kind}", "\n".join(store) + ("\n" if store else ""))
-    lines = [f"+ {line}" for line in d.added] + [f"- {line}" for line in d.removed]
-    if d.reordered:
-        lines.append("~ the lines both hold are in another order")
-    _write(directory / f"{name}.{kind}.diff", "\n".join(lines) + ("\n" if lines else ""))
-    # INFO either way: differences are expected until the store's rules are settled.
-    logger.info("[STORE-DIFF] %s %s: today %d | store %d | +%d -%d%s", name, kind, len(today), len(store),
-        len(d.added), len(d.removed), " | order differs" if d.reordered else "")
-    history = directory / "history.tsv"
-    try:
-        with history.open("a", encoding="utf-8") as fh:
-            fh.write(f"{_now()}\t{name}\t{kind}\t{len(today)}\t{len(store)}\t{len(d.added)}\t{len(d.removed)}"
-                     f"\t{int(d.reordered)}\n")
-    except OSError:
-        logger.warning("Could not append to %s", history, exc_info=True)
-    return d

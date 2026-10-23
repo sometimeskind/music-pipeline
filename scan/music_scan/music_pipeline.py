@@ -1,13 +1,14 @@
-"""Beets plugin: tag-on-import and multi-playlist membership via duplicate append.
+"""Beets plugin: tag-on-import and multi-playlist provenance via duplicate append.
 
 Responsibilities
 ----------------
 1. **tag_source_on_created** (``import_task_created``): every track imported
    from the spotdl inbox gets two flexible attributes:
 
-   * ``sources=<playlist>``  — playlist membership; drives .m3u generation,
-     ``clear_source_tag``, and ``music-remove``.  Comma-separated when a track
-     belongs to multiple playlists (appended by handle_duplicates).
+   * ``sources=<playlist>``  — the playlists a track came from (provenance).
+     Playlist membership is the playlist store's (homelab#1914), never this
+     field.  Comma-separated when a track came from several playlists
+     (appended by handle_duplicates).
    * ``spotify_ids=<id>``     — Spotify track IDs of the playlist entries the
      item satisfies (#176), a comma list appended by handle_duplicates.  Read
      with ``isrc`` from spotdl's ``----:spotdl:*`` atoms, which ``scrub``

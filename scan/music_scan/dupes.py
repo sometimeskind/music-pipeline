@@ -35,8 +35,8 @@ release item are one album's copies, so they merge, as :func:`music_scan.release
 ``--apply`` merges each other certain group onto one item, chosen by: an album
 record's release item, then one of its local-only extras, so the album keeps
 its track; then length closest to Spotify's duration for any of the group's
-Spotify IDs (from the ``.spotdl`` snapshots, no Spotify calls), then bitrate,
-then playlists, then the older item.  The keeper takes the others' ``spotify_ids``, ``isrc``, ``sources`` and
+Spotify IDs (from the playlist stores, no Spotify calls), then bitrate,
+then the older item.  The keeper takes the others' ``spotify_ids``, ``isrc``, ``sources`` and
 a missing ``mb_trackid``; their files move to ``quarantine/replaced/`` (never
 deleted) and their rows leave the database.  The keeper records the moved files'
 names in :data:`MERGED_FILES` (with any its losers had recorded), so the purge
@@ -326,13 +326,13 @@ def album_loss(keeper, drop) -> str:
     return f"{drop.id} is a {kind} of album record {key} [{drop.get('album') or '?'}]: its album loses the track"
 
 
-def spotify_durations(spotdl_dir: Path) -> dict[str, float]:
-    """Spotify track ID → duration (seconds), from the ``.spotdl`` snapshots."""
-    from music_scan.scan import _spotdl_songs  # noqa: PLC0415
+def spotify_durations() -> dict[str, float]:
+    """Spotify track ID → duration (seconds), from the playlist stores (homelab#1914)."""
+    from music_fetch import store  # noqa: PLC0415
 
     durations: dict[str, float] = {}
-    for f in sorted(spotdl_dir.glob("*.spotdl")):
-        for song in _spotdl_songs(f):
+    for songs in store.songs_by_playlist().values():
+        for song in songs:
             sid = song.get("song_id") or spotify_id(song.get("url"))
             if sid and song.get("duration"):
                 durations.setdefault(sid, float(song["duration"]))
@@ -346,10 +346,12 @@ def expected_lengths(group: Group, durations: dict[str, float]) -> list[float]:
 
 def keep_order(item, expected: list[float]) -> tuple:
     """Sort key: the item to keep sorts first.  An album record's release item, then
-    its extra, before any length: the album is the unit (#279)."""
+    its extra, before any length: the album is the unit (#279).  Playlists don't
+    break a tie: the stores list a recording, so every copy has the same ones
+    (homelab#1914)."""
     album = 2 if not item.get("album_record") else 1 if _is_extra(item) else 0
     off = min((abs(float(item.length or 0) - d) for d in expected), default=0.0)
-    return (album, round(off), -int(item.bitrate or 0), -len(split_list(item.get("sources"))), item.id)
+    return (album, round(off), -int(item.bitrate or 0), item.id)
 
 
 def _rel(item) -> str:
@@ -534,14 +536,14 @@ def run(apply: bool = False, fingerprints: list[int] | None = None, merge_ids: l
     missing one) fingerprint instead; with *merge_ids* merge those items instead."""
     from music_scan.library import LIBRARY_DB, MusicLibrary  # noqa: PLC0415
     from music_scan.navidrome import trigger_scan  # noqa: PLC0415
-    from music_scan.scan import SPOTDL_DIR, regen_playlists  # noqa: PLC0415
+    from music_scan.scan import regen_playlists  # noqa: PLC0415
 
     with MusicLibrary(LIBRARY_DB) as lib:
         items = lib.all_items()
         if fingerprints is not None:
             fingerprint_missing(items, apply, fingerprints)
             return [], []
-        durations = spotify_durations(SPOTDL_DIR)
+        durations = spotify_durations()
         if merge_ids is not None:
             if not apply:
                 merge_chosen(items, merge_ids, False, allow_manual, durations, REPLACED)

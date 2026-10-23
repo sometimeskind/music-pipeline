@@ -9,7 +9,7 @@ album, imported whole, and a copy that isn't kept is retired as a whole
 items imported before, and the album-record attribution others reuse.
 
 "Matches an entry" is the #228 resolver's whole-library rung: a Spotify ID or
-ISRC of any entry in any playlist's ``.spotdl``.
+ISRC of any entry in any playlist's store.
 
 Bonus tracks of a *successful* release (a deluxe edition's extras) stay as
 local-only items (operator decision on #238): only failed releases roll back.
@@ -43,16 +43,18 @@ from music_scan.dupes import _free
 from music_scan.identity import (
     ItemIndex, PlaylistTrack, add_to_list, item_isrcs, item_spotify_ids, release_match,
 )
-from music_scan.playlists import playlist_entries
 
 logger = logging.getLogger(__name__)
 
-def entry_keys(spotdl_dir: Path) -> tuple[set[str], set[str]]:
-    """Spotify IDs and ISRCs of every entry in every ``.spotdl`` playlist."""
+def entry_keys() -> tuple[set[str], set[str]]:
+    """Spotify IDs and ISRCs of every entry in every playlist store (homelab#1914)."""
+    from music_fetch import store  # noqa: PLC0415
+    from music_scan.playlists import Entry  # noqa: PLC0415
+
     ids: set[str] = set()
     isrcs: set[str] = set()
-    for spotdl_file in sorted(spotdl_dir.glob("*.spotdl")):
-        for entry in playlist_entries(spotdl_file):
+    for songs in store.songs_by_playlist().values():
+        for entry in (Entry.from_song(s) for s in songs):
             if entry.song_id:
                 ids.add(entry.song_id)
             if entry.isrc:
@@ -159,12 +161,12 @@ def run(apply: bool = False) -> int:
     from music_fetch.albums import STATE_FILE, State  # noqa: PLC0415
     from music_scan.library import LIBRARY_DB, MusicLibrary  # noqa: PLC0415
     from music_scan.navidrome import trigger_scan  # noqa: PLC0415
-    from music_scan.scan import SPOTDL_DIR, regen_playlists  # noqa: PLC0415
+    from music_scan.scan import regen_playlists  # noqa: PLC0415
 
     records = State.load(STATE_FILE).albums
     with MusicLibrary(LIBRARY_DB) as lib:
         usenet = [i for i in lib.all_items() if i.get("via") == "usenet"]
-        loose = unmatched(usenet, *entry_keys(SPOTDL_DIR))
+        loose = unmatched(usenet, *entry_keys())
         failed, kept, unknown = failed_release_items(loose, records)
         linked = links(failed, records, ItemIndex(lib.all_items()))
         failed = [i for i in failed if all(i is not item for item, _ in linked)]

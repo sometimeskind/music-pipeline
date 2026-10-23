@@ -6,7 +6,6 @@ import logging
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from music_scan.identity import SPOTIFY_TRACK_URL, ItemIndex, item_spotify_ids, split_list
 
 if TYPE_CHECKING:
     from beets.library import Item
@@ -67,65 +66,3 @@ class MusicLibrary:
             for item in self._lib.items()
             if (item.added or 0) >= since
         ]
-
-    def paths_by_source(self, source: str) -> list[Path]:
-        """File paths for all items with the given source tag."""
-        items = self.items_by_source(source)
-        return [
-            Path(item.path.decode() if isinstance(item.path, bytes) else item.path)
-            for item in items
-        ]
-
-    def spotify_urls_by_source(self, source: str) -> frozenset[str]:
-        """Spotify track URLs of all items with the given source tag.
-
-        Built from ``spotify_ids`` too: an item that took a second playlist as
-        a duplicate keeps the first playlist's ``spotify_url``.
-        """
-        urls: set[str] = set()
-        for item in self.items_by_source(source):
-            if item.get("spotify_url"):
-                urls.add(item.get("spotify_url"))
-            urls.update(SPOTIFY_TRACK_URL + sid for sid in split_list(item.get("spotify_ids")))
-        return frozenset(urls)
-
-    # ------------------------------------------------------------------
-    # Modification helpers
-    # ------------------------------------------------------------------
-
-    def clear_source_tag(
-        self, title: str, artist: str, source: str, spotify_id: str | None = None, isrc: str | None = None
-    ) -> list:
-        """Clear the source tag on the item the removed playlist entry maps to.
-
-        Matches the entry's Spotify ID, then its ISRC, among the *source* items.
-        Without either hit (or entries queued before #176), falls back to
-        title + artist, each a case-insensitive substring as beets' ``field:``
-        query matched it, among the items with no Spotify ID (#257: one that
-        has one is another recording), and logs it.  The fallback compares the
-        values in Python, never through a beets query string, whose shlex
-        parsing breaks on an apostrophe or a quote (#259).  Returns the items
-        modified (empty when nothing matched).
-        """
-        source_items = [i for i in self.items_by_source(source) if source in _sources(i)]
-        item, _ = ItemIndex(source_items).match(spotify_id, isrc, words=False)
-        if item is not None:
-            items = [item]
-        else:
-            items = [
-                i for i in source_items
-                if title and not item_spotify_ids(i)
-                and title.lower() in (i.title or "").lower() and artist.lower() in (i.artist or "").lower()
-            ]
-            if not items:
-                return []
-            logger.info("  [WORDS] %s: removed %s — %s matched by title+artist only", source, title, artist)
-        for item in items:
-            item["sources"] = ",".join(p for p in _sources(item) if p != source)
-            item.store()
-        return items
-
-
-def _sources(item) -> list[str]:
-    """The playlists in an item's ``sources`` tag, in order."""
-    return [p.strip() for p in (item.get("sources") or "").split(",") if p.strip()]

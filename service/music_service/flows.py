@@ -10,7 +10,6 @@ from prefect import flow, get_run_logger, task
 from prefect.concurrency.sync import concurrency
 
 import music_fetch.ingest as ingest
-import music_scan.reconcile as reconcile
 import music_scan.scan as scan
 from music_fetch.config import load_playlists
 from music_scan.metrics import ScanMetrics
@@ -43,8 +42,8 @@ def preflight_task(metrics) -> None:
 
 
 @task(name="reconcile-playlists", log_prints=True)
-def reconcile_playlists_task(metrics) -> list[str]:
-    """Reconcile playlists.conf: provision new entries, queue removed ones."""
+def reconcile_playlists_task(metrics) -> None:
+    """Reconcile playlists.conf: provision new entries, delete removed ones."""
     logger = get_run_logger()
 
     if ingest.CONF_PATH.exists():
@@ -66,28 +65,23 @@ def reconcile_playlists_task(metrics) -> list[str]:
             logger.warning("Could not pre-read playlists.conf: %s", exc)
 
     try:
-        remove_sources = ingest.reconcile_playlists()
+        removed = ingest.reconcile_playlists()
     except Exception:
         metrics.failure_reason = "reconcile_error"
         raise
-    if remove_sources:
-        logger.info("Removed from config (queued for cleanup): %s", ", ".join(remove_sources))
+    if removed:
+        logger.info("Removed from config (store and playlist deleted): %s", ", ".join(removed))
     else:
         logger.info("No playlists removed from config")
-    return remove_sources
 
 
 @task(name="spotdl-sync", log_prints=True, persist_result=False)
-def spotdl_sync_task(remove_sources: list[str], metrics):
-    """Run spotdl sync for all active playlists. Returns PendingRemovals.
+def spotdl_sync_task(metrics) -> None:
+    """Run spotdl sync for all active playlists, writing their stores (homelab#1914).
 
-    Tracks the library already holds (by Spotify ID or ISRC) are tagged with the
-    playlist instead of downloaded (#187).  The index is built once: a track
-    downloaded earlier in this run isn't in the library until the scan.
+    Tracks the library already holds are tagged with the playlist instead of
+    downloaded (#187); see :func:`music_scan.scan.sync_hooks`.
     """
-    from music_scan.identity import ItemIndex  # noqa: PLC0415
-    from music_scan.library import MusicLibrary  # noqa: PLC0415
-
     logger = get_run_logger()
     if ingest.FAILURES_FILE.exists():
         try:
@@ -105,19 +99,8 @@ def spotdl_sync_task(remove_sources: list[str], metrics):
             logger.warning("Could not read backoff state from %s", ingest.FAILURES_FILE)
     else:
         logger.info("Backoff state: empty")
-    from music_fetch import store  # noqa: PLC0415
-
-    # The playlist store's dry run (homelab#1914) resolves without tagging, and
-    # holds back what reconcile keeps: downloads sitting in quarantine.
-    with MusicLibrary(scan.LIBRARY_DB) as lib:
-        index = ItemIndex(lib.all_items())
-        dry_run = {} if not store.active() else {
-            "resolves": lambda song: index.match_song(song, words=False)[0] is not None,
-            "held": reconcile.quarantine_urls(reconcile.QUARANTINE_DIR),
-        }
-        result = ingest.sync_playlists(
-            remove_sources, metrics, in_library=lambda pl, song: scan.link_song(index, pl, song), **dry_run
-        )
+    with scan.sync_hooks() as hooks:
+        ingest.sync_playlists(metrics, **hooks)
     not_downloaded = metrics.tracks_attempted - metrics.tracks_downloaded
     suffix = ""
     if not_downloaded:
@@ -129,12 +112,11 @@ def spotdl_sync_task(remove_sources: list[str], metrics):
         if parts:
             suffix = f" ({', '.join(parts)})"
     logger.info(
-        "Sync complete: %d of %d track(s) downloaded%s, %d playlist(s) processed, %d pending removal(s)",
+        "Sync complete: %d of %d track(s) downloaded%s, %d playlist(s) processed",
         metrics.tracks_downloaded,
         metrics.tracks_attempted,
         suffix,
         metrics.playlists_total,
-        len(result.tracks),
     )
     if metrics.tracks_linked:
         logger.info("  %d track(s) already in the library, tagged instead of downloaded", metrics.tracks_linked)
@@ -142,49 +124,11 @@ def spotdl_sync_task(remove_sources: list[str], metrics):
         logger.info("  %d nosync playlist(s) skipped", metrics.playlists_skipped)
     if metrics.playlists_deferred:
         logger.info("  %d playlist(s) deferred (budget/timeout)", metrics.playlists_deferred)
-    return result
 
 
 # ---------------------------------------------------------------------------
 # Scan tasks
 # ---------------------------------------------------------------------------
-
-
-@task(name="save-removals", log_prints=True)
-def save_removals_task(pending) -> None:
-    """Persist pending removals to disk for the scan flow to consume."""
-    logger = get_run_logger()
-    if pending.tracks or pending.remove_sources:
-        ingest.save_pending_removals(pending)
-        logger.info(
-            "Saved %d track removal(s), %d source removal(s)",
-            len(pending.tracks),
-            len(pending.remove_sources),
-        )
-    else:
-        logger.info("No pending removals")
-
-
-@task(name="apply-removals", log_prints=True)
-def apply_removals_task() -> int:
-    """Clear beets source tags for tracks removed from Spotify playlists."""
-    logger = get_run_logger()
-    pending = ingest.load_pending_removals()
-    if pending is None:
-        logger.info("No pending removals")
-        return 0
-    logger.info(
-        "Applying removals: %d track(s), %d full-source removal(s)",
-        len(pending.tracks),
-        len(pending.remove_sources),
-    )
-    from music_scan.library import MusicLibrary  # noqa: PLC0415
-    with MusicLibrary(scan.LIBRARY_DB) as lib:
-        count = scan.apply_pending_removals(pending, lib)
-    # Only now: a crash above keeps the file for the next scan (#259).
-    ingest.clear_pending_removals(pending)
-    logger.info("Cleared the source tag on %d beets item(s)", count)
-    return count
 
 
 @task(name="beet-import", log_prints=True)
@@ -308,17 +252,6 @@ def navidrome_task() -> None:
     logger.info("Navidrome rescan triggered")
 
 
-@task(name="reconcile-snapshots", log_prints=True)
-def reconcile_task() -> None:
-    """Drop stale URLs from .spotdl snapshots so spotdl re-downloads them next fetch."""
-    logger = get_run_logger()
-    dropped = reconcile.reconcile_all()
-    if dropped:
-        logger.info("Dropped %d stale URL(s) from snapshots — will re-download next fetch", dropped)
-    else:
-        logger.info("All snapshot URLs verified — no stale entries found")
-
-
 # ---------------------------------------------------------------------------
 # Flows
 # ---------------------------------------------------------------------------
@@ -329,7 +262,6 @@ def _run_scan_tasks() -> None:
     metrics = ScanMetrics()
     start = time.monotonic()
     try:
-        metrics.tracks_removed = apply_removals_task()
         since = time.time()
         outage: MusicBrainzUnavailable | None = None
         try:
@@ -351,7 +283,6 @@ def _run_scan_tasks() -> None:
         except Exception:
             metrics.failure_reason = "navidrome_trigger_failed"
             raise
-        reconcile_task()
         if outage is not None:
             metrics.failure_reason = "musicbrainz_unavailable"
             raise outage
@@ -387,15 +318,14 @@ def fetch_and_scan_flow() -> None:
     with concurrency("pipeline", occupy=1):
         with ingest.ingest_run() as metrics:
             preflight_task(metrics)
-            remove_sources = reconcile_playlists_task(metrics)
-            pending = spotdl_sync_task(remove_sources, metrics)
-        save_removals_task(pending)
+            reconcile_playlists_task(metrics)
+            spotdl_sync_task(metrics)
         _run_scan_tasks()
 
 
 @flow(name="music-scan", log_prints=True)
 def scan_flow() -> None:
-    """Scan: apply any pending removals, import inbox, regenerate playlists."""
+    """Scan: import inbox, regenerate playlists."""
     logger = get_run_logger()
     try:
         with concurrency("pipeline", occupy=1, timeout_seconds=SKIP_IF_BUSY_SECONDS):
@@ -412,12 +342,13 @@ def scan_flow() -> None:
 def _album_library_hooks(lib):
     """have / missing / complete callbacks over one open beets library.
 
-    ``have`` caches each playlist's track keys and the whole library for a tick;
-    ``complete`` imports a finished download and drops the caches, since the
-    import changed the library.  ``have`` is true when the library holds the
-    album whole (#268); it also counts tracks the library holds under another
-    playlist, and then tags them with this one (#187).  ``missing`` lists the
-    tracks the library lacks, tagging nothing (#205).
+    ``have`` caches the whole library for a tick; ``complete`` imports a
+    finished download and drops the cache, since the import changed the
+    library.  ``have`` is true when the library holds the album whole (#268),
+    each track resolved by Spotify ID or ISRC as the store view resolves it
+    (homelab#1914: ``sources`` is not membership); it tags the tracks with the
+    playlist (#187).  ``missing`` lists the tracks the library lacks, tagging
+    nothing (#205).
     """
     import music_fetch.albums as albums  # noqa: PLC0415
     from music_scan.identity import ItemIndex  # noqa: PLC0415
@@ -426,13 +357,13 @@ def _album_library_hooks(lib):
 
     keys: dict[str | None, ItemIndex] = {}  # None: the whole library
     albums_by_id: dict[str, list] = {}
+    none = ItemIndex([])
 
     def indexes(playlist: str) -> tuple[ItemIndex, ItemIndex]:
-        if playlist not in keys:
-            keys[playlist] = ItemIndex(lib.items_by_source(playlist))
+        # No playlist index: an entry resolves to any item by ID or ISRC.
         if None not in keys:
             keys[None] = ItemIndex(lib.all_items())
-        return keys[playlist], keys[None]
+        return none, keys[None]
 
     def have(key: str, record: dict) -> bool:
         library = indexes(next(iter(record.get("playlists", {})), ""))[1]
@@ -546,7 +477,7 @@ def _album_library_hooks(lib):
 
         fresh = [i for i in lib.items_by_source(playlist) if (i.added or 0) >= since]
         try:
-            if cover.embed_covers(fresh, cover.covers_by_id(ingest.SPOTDL_DIR)):
+            if cover.embed_covers(fresh, cover.covers_by_id()):
                 trigger_scan()
         except Exception:
             cover.logger.exception("Album covers: embedding failed; music-embed-covers retries it")
@@ -596,26 +527,17 @@ def album_tick_task(settings) -> None:
 
     with MusicLibrary(scan.LIBRARY_DB) as lib:
         have, missing, complete = _album_library_hooks(lib)
-        result = albums.tick(
+        albums.tick(
             playlists,
             SpotifyPlaylists(ingest.COOKIE_FILE),
             Prowlarr(),
             Sabnzbd(),
             have,
-            ingest.SPOTDL_DIR,
             settings,
             on_completion=complete,
             missing=missing,
             mixed=_album_mixed_hook(lib),
         )
-
-    removed: list = []
-    for name, songs in result.removed_songs.items():
-        for song in songs:
-            ingest.schedule_unlink(removed, song, name)
-    if removed:
-        ingest.save_pending_removals(ingest.PendingRemovals(tracks=removed, remove_sources=[]))
-        logger.info("Queued %d track removal(s) from album playlists for the next scan", len(removed))
 
 
 @flow(name="music-albums", log_prints=True)

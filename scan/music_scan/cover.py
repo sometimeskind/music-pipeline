@@ -3,7 +3,7 @@
 Usenet imports end up with no art: the convert command's ``-vn`` drops a
 FLAC's embedded picture, and ``fetchart``/``embedart`` act on album imports
 only, never on singletons.  The cover comes from the same place spotdl's
-does: every ``.spotdl`` song carries ``cover_url``, the album's largest
+does: every playlist store song carries ``cover_url``, the album's largest
 Spotify image, so no Spotify API calls are needed.
 
 An item finds its cover by its ``spotify_ids`` (set after the import by
@@ -19,7 +19,6 @@ run by default, ``--apply`` writes.  Safe to re-run.
 from __future__ import annotations
 
 import argparse
-import json
 import logging
 import os
 import urllib.request
@@ -33,14 +32,12 @@ logger = logging.getLogger(__name__)
 DOWNLOAD_TIMEOUT = 30
 
 
-def covers_by_id(spotdl_dir: Path) -> dict[str, str]:
-    """``{spotify track id: cover_url}`` from every ``.spotdl`` snapshot."""
+def covers_by_id() -> dict[str, str]:
+    """``{spotify track id: cover_url}`` from every playlist store (homelab#1914)."""
+    from music_fetch import store  # noqa: PLC0415
+
     covers: dict[str, str] = {}
-    for f in sorted(spotdl_dir.glob("*.spotdl")):
-        try:
-            songs = json.loads(f.read_text(encoding="utf-8")).get("songs", [])
-        except Exception:
-            continue
+    for songs in store.songs_by_playlist().values():
         for song in songs:
             sid = song.get("song_id") or spotify_id(song.get("url"))
             url = song.get("cover_url")
@@ -94,7 +91,7 @@ def plan_covers(items: Iterable, covers: dict[str, str]) -> tuple[dict[int, tupl
 
 
 def download(url: str) -> bytes:
-    with urllib.request.urlopen(url, timeout=DOWNLOAD_TIMEOUT) as resp:  # noqa: S310 — https only, from .spotdl
+    with urllib.request.urlopen(url, timeout=DOWNLOAD_TIMEOUT) as resp:  # noqa: S310 — https only, from a playlist store
         return resp.read()
 
 
@@ -126,7 +123,7 @@ def embed_covers(
     fetch = fetch or download
     planned, missing = plan_covers(items, covers)
     for item in missing:
-        logger.warning("  [NOART] %s: no Spotify cover found (no matching .spotdl entry)", _path(item))
+        logger.warning("  [NOART] %s: no Spotify cover found (no matching playlist store entry)", _path(item))
 
     by_album: dict[tuple[str, str], list[tuple[object, str]]] = {}
     for item, url in planned.values():
@@ -162,14 +159,13 @@ def embed_covers(
 
 
 def run(apply: bool = False) -> int:
-    from music_fetch import ingest  # noqa: PLC0415
     from music_scan.library import LIBRARY_DB, LIBRARY_DIR, MusicLibrary  # noqa: PLC0415
     from music_scan.navidrome import trigger_scan  # noqa: PLC0415
 
-    covers = covers_by_id(ingest.SPOTDL_DIR)
+    covers = covers_by_id()
     with MusicLibrary(LIBRARY_DB, LIBRARY_DIR) as lib:
         items = [i for i in lib.all_items() if i.get("via") == "usenet"]
-        logger.info("%d usenet item(s); %d cover URL(s) in the .spotdl files", len(items), len(covers))
+        logger.info("%d usenet item(s); %d cover URL(s) in the playlist stores", len(items), len(covers))
         count = embed_covers(items, covers, apply=apply)
     if not apply:
         logger.info("Dry run: %d item(s) would get a cover. Re-run with --apply to write.", count)
