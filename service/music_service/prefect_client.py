@@ -50,8 +50,7 @@ def _run_fetch_and_scan() -> None:
     import music_fetch.ingest as ingest
     try:
         logger.info("==> Fetch starting")
-        pending = ingest.run()
-        ingest.save_pending_removals(pending)
+        ingest.run()
         logger.info("==> Fetch complete")
     except Exception:
         logger.exception("fetch failed")
@@ -60,14 +59,10 @@ def _run_fetch_and_scan() -> None:
 
 
 def _run_scan() -> None:
-    import music_fetch.ingest as ingest
-    import music_scan.reconcile as reconcile
     import music_scan.scan as scan
     try:
         logger.info("==> Scan starting")
-        pending = ingest.load_pending_removals()
-        scan.run(pending)  # clears the removals it applied (#259)
-        reconcile.reconcile_all()
+        scan.run()
         logger.info("==> Scan complete")
     except Exception:
         logger.exception("scan failed")

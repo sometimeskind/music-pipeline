@@ -12,13 +12,14 @@ import os
 import shutil
 import tempfile
 import time
+from contextlib import contextmanager
 from pathlib import Path
-from typing import Callable
+from typing import Callable, Iterator
 
 from music_fetch import store
-from music_fetch.ingest import PendingRemovals, clear_pending_removals
 from music_scan import playlists
 from music_scan.guard import guard_inbox
+from music_scan.held import held_urls
 from music_scan.identity import (
     ItemIndex, PlaylistTrack, add_to_list, item_isrcs, item_spotify_ids, same_base_title, spotify_id,
 )
@@ -238,73 +239,52 @@ def import_asis_from_quarantine() -> int:
     return len(asis_imported)
 
 
-_spotdl_songs = playlists.spotdl_songs
-
-
 def _item_path(item) -> Path:
     raw = item.path.decode() if isinstance(item.path, bytes) else item.path
     return Path(raw) if Path(raw).is_absolute() else LIBRARY / raw
 
 
-def playlist_paths(slots: list[Slot], source_items: list, slot_fills: bool = True) -> list[Path]:
-    """The ``.m3u`` lines of a playlist: its resolved slots in playlist order
-    (each file once), then the *source_items* no entry matched, alphabetically.
-    Without *slot_fills* the slots filled from the whole library are left out:
-    today's path, which the result always contains (#228)."""
+def playlist_paths(slots: list[Slot]) -> list[Path]:
+    """The ``.m3u`` lines of a playlist: its resolved slots in playlist order,
+    each file once."""
     ordered: list[Path] = []
     matched: set[Path] = set()
     for slot in slots:
-        if slot.item is None or (not slot_fills and slot.filled_from_library):
+        if slot.item is None:
             continue
         p = _item_path(slot.item)
         if p not in matched:
             ordered.append(p)
             matched.add(p)
-    unmatched = sorted(p for p in (_item_path(item) for item in source_items) if p not in matched)
-    return ordered + unmatched
+    return ordered
 
 
-def store_view(name: str, spotdl_file: Path, library: ItemIndex, by_album) -> list[Path] | None:
-    """The ``.m3u`` paths playlist *name* gets from the playlist store
-    (homelab#1914): its entries resolved by Spotify ID or ISRC only, against
-    the whole library, each file once and in store order, with no ``sources``
-    and no tail; an ``album`` playlist through :func:`playlists.album_paths`
-    on the same entries.  A spotdl playlist's store is the one the nightly
-    wrote.  An ``album`` playlist's is the one the album tick wrote, and a
-    ``nosync`` playlist's the one the nightly built from Spotify once; each
-    is seeded from its ``.spotdl`` until then, which for an ``album``
-    playlist is already its whole Spotify list.  Local entries are not in
-    the view (:func:`_local_tail`).  None when a spotdl playlist has no
-    store yet."""
-    is_album = (SPOTDL_DIR / f"{name}.album").exists()
-    nosync = (SPOTDL_DIR / f"{name}.nosync").exists()
-    if is_album or nosync:
-        previous = store.load(name)
-        playlist = previous
-        if playlist is None or playlist.source != store.SPOTIFY:
-            playlist = store.Store.from_songs(name, playlists.spotdl_songs(spotdl_file), keep=previous)
-            playlist.save(store.path(name))
-    else:
-        playlist = store.load(name)
-        if playlist is None:
-            logger.info("  [STORE] %s: no store yet — the nightly writes it", name)
-            return None
+def store_view(name: str, library: ItemIndex, by_album) -> tuple[list[Path], list[Slot]] | None:
+    """The ``.m3u`` paths playlist *name* gets from its store (homelab#1914),
+    and the slots behind them: its entries resolved by Spotify ID or ISRC only,
+    against the whole library, each file once and in store order; an ``album``
+    playlist through :func:`playlists.album_paths` on the same entries.  Local
+    entries are not in the view (:func:`_local_tail`).  None when its store
+    can't be read: *name* comes from :func:`store.names`, so the file exists."""
+    playlist = store.load(name)
+    if playlist is None:
+        logger.error("  [STORE] %s: its store can't be read — its .m3u is left as it was", name)
+        return None
     none = ItemIndex([])
-    if is_album:
-        return playlists.album_paths(playlist.songs, none, library, by_album)[0]
-    return playlist_paths(playlists.resolve([Entry.from_song(s) for s in playlist.songs], none, library), [])
+    if (SPOTDL_DIR / f"{name}.album").exists():
+        paths, slots, n_albums = playlists.album_paths(playlist.songs, none, library, by_album)
+        logger.info("  %s: %d album(s), %d track(s) (album level)", name, n_albums, len(paths))
+        return paths, slots
+    slots = playlists.resolve([Entry.from_song(s) for s in playlist.songs], none, library)
+    return playlist_paths(slots), slots
 
 
-def _local_tail(name: str, paths: list[Path], source_items: list, library: ItemIndex) -> list[Path]:
-    """The ``.m3u`` paths of playlist *name*'s local entries (homelab#1914
-    stage b), after its store view *paths*: each local entry whose item is
-    still in the library, in store order, then each item tagged with the
-    playlist (*source_items*) that neither the view nor a local entry holds,
-    alphabetically.  Those become local entries, at the store's end.  A local
-    entry whose item the view now holds (it gained a Spotify ID) is dropped:
-    its Spotify entry decides its place, and its removal.  Logs one
-    ``[STORE-TAIL]`` line: a new local entry is either a local-only track or
-    one the store can't resolve by Spotify ID or ISRC."""
+def _local_tail(name: str, paths: list[Path], library: ItemIndex) -> list[Path]:
+    """The ``.m3u`` paths of playlist *name*'s local entries, after its store
+    view *paths*: each local entry whose item is still in the library, in store
+    order.  A local entry whose item the view now holds (it gained a Spotify
+    ID) is dropped: its Spotify entry decides its place, and its removal.
+    Logs one ``[STORE-TAIL]`` line."""
     playlist = store.load(name)
     if playlist is None:
         return []
@@ -316,17 +296,11 @@ def _local_tail(name: str, paths: list[Path], source_items: list, library: ItemI
         return bool(local) and local.get("id") in by_id and _item_path(by_id[local["id"]]) in matched
 
     dropped = [e for e in playlist.entries if resolved(e)]
-    playlist.entries = [e for e in playlist.entries if not resolved(e)]
-    known = {entry.get("id") for entry in playlist.locals}
-    new = sorted((item for item in source_items if item.id not in known and _item_path(item) not in matched),
-                 key=_item_path)
-    playlist.entries += [{store.LOCAL: {"id": item.id, "path": str(_item_path(item)),
-                                        "title": item.title, "artist": item.artist}} for item in new]
-    if new or dropped:
+    if dropped:
+        playlist.entries = [e for e in playlist.entries if not resolved(e)]
         playlist.save(store.path(name))
-    logger.info("  [STORE-TAIL] %s: %d local entr%s, %d new, %d resolved%s", name, len(playlist.locals),
-                "y" if len(playlist.locals) == 1 else "ies", len(new), len(dropped),
-                "".join(f"\n    + {item.artist} — {item.title}" for item in new))
+    logger.info("  [STORE-TAIL] %s: %d local entr%s, %d resolved", name, len(playlist.locals),
+                "y" if len(playlist.locals) == 1 else "ies", len(dropped))
     out: list[Path] = []
     for entry in playlist.locals:
         if entry.get("id") in by_id and (p := _item_path(by_id[entry["id"]])) not in matched:
@@ -335,24 +309,17 @@ def _local_tail(name: str, paths: list[Path], source_items: list, library: ItemI
     return out
 
 
-def store_listings() -> Callable[[object], set[str]] | None:
+def store_listings() -> Callable[[object], set[str]]:
     """``listed(item)``: the playlists whose store lists *item*'s recording,
-    by Spotify ID or ISRC, or holds it as a local entry (homelab#1914 stage
-    b), the shadow :func:`music_scan.release._topup` compares with
-    ``sources`` (``[TOPUP-DIFF]``).  By recording, not by the item an entry
-    resolves to: a loose copy of a track another playlist lists is listed
-    too.  None, so nothing is compared, unless ``PLAYLIST_STORE=on`` and every
-    playlist has a store."""
-    if store.mode() != store.ON:
-        return None
+    by Spotify ID or ISRC, or holds it as a local entry (homelab#1914).  By
+    recording, not by the item an entry resolves to: a loose copy of a track
+    another playlist lists is listed too."""
     by_key: dict[str, set[str]] = {}
     local: dict[object, set[str]] = {}
-    for spotdl_file in sorted(SPOTDL_DIR.glob("*.spotdl")):
-        name = spotdl_file.stem
+    for name in store.names():
         playlist = store.load(name)
         if playlist is None:
-            logger.info("  [STORE] %s: no store yet — no [TOPUP-DIFF] comparison", name)
-            return None
+            continue
         for song in playlist.songs:
             if sid := song.get("song_id") or spotify_id(song.get("url")):
                 by_key.setdefault(f"spotify:{sid}", set()).add(name)
@@ -372,79 +339,63 @@ def store_listings() -> Callable[[object], set[str]] | None:
     return listed
 
 
-def _store_m3u(name: str, spotdl_file: Path, lines: list[str], source_items: list, library: ItemIndex,
-               by_album) -> list[str]:
-    """Write the store's ``.m3u`` view of *name* to :func:`store.store_dir`,
-    diffed against today's *lines*, and return the lines the playlist gets.
-    With ``PLAYLIST_STORE=on`` a spotdl or ``nosync`` playlist gets the
-    store's view, then its local entries (:func:`_local_tail`).  Otherwise,
-    and when the playlist has no store yet, *lines*.  Never raises: a store
-    failure falls back to *lines*, so it never fails a scan or empties a
-    playlist."""
-    try:
-        paths = store_view(name, spotdl_file, library, by_album)
-        if paths is None:
-            return lines
-        use = store.mode() == store.ON and not (SPOTDL_DIR / f"{name}.album").exists()
-        if use:
-            paths = paths + _local_tail(name, paths, source_items, library)
-        view = [os.path.relpath(p, PLAYLISTS) for p in paths]
-        store.write_view(name, "m3u", lines, view)
-        return view if use else lines
-    except Exception:
-        logger.error("Playlist store failed for %s — today's playlist is written instead", name, exc_info=True)
-        return lines
+@contextmanager
+def sync_hooks() -> Iterator[dict]:
+    """The nightly sync's view of the library (:func:`music_fetch.ingest.sync_playlists`):
+    ``resolves`` (a library item holds the track by Spotify ID or ISRC, no
+    tagging), ``held`` (downloads waiting in the inbox or quarantine) and
+    ``in_library`` (the full ladder, tagging the item with the playlist, #187).
+    The index is built once: a track downloaded earlier in the run isn't in
+    the library until the scan, and is held instead."""
+    with MusicLibrary(LIBRARY_DB) as lib:
+        index = ItemIndex(lib.all_items())
+        yield {
+            "resolves": lambda song: index.match_song(song, words=False)[0] is not None,
+            "held": held_urls(QUARANTINE, SPOTDL_DIR),
+            "in_library": lambda pl, song: link_song(index, pl, song),
+        }
 
 
 def regen_playlists(metrics: ScanMetrics | None = None) -> dict[str, int]:
-    """Regenerate .m3u files for every .spotdl playlist. Returns {name: track_count}.
+    """Regenerate the .m3u file of every playlist with a store. Returns {name: track_count}.
 
-    Each entry is a slot (:mod:`music_scan.playlists`): resolved to an item tagged
-    with the playlist by the identity ladder as before, else to any library item
-    by Spotify ID or ISRC (``[SLOT]``), so a track imported by any route reaches
-    every playlist that lists it at the next scan, with no download and no tag
-    write (#228).  *metrics*, when given, takes the empty-slot count per playlist.
-    With ``PLAYLIST_STORE=dry-run`` each playlist's store view is written to the
-    side directory too (:func:`store_view`, homelab#1914); with ``on`` a spotdl
-    or ``nosync`` playlist's ``.m3u`` is that view plus its ``sources`` tail
-    (:func:`_store_m3u`).
+    A playlist's ``.m3u`` is its store's view (:func:`store_view`), then its
+    local entries (:func:`_local_tail`): each entry resolved to any library
+    item by Spotify ID or ISRC, so a track imported by any route reaches every
+    playlist that lists it at the next scan, with no download and no tag
+    write (#228).  *metrics*, when given, takes the empty-slot count per
+    playlist.
 
-    An ``album`` playlist (``<name>.album`` next to its ``.spotdl``) lists every
-    local track of every album on it instead (#268, :func:`playlists.album_paths`).
+    An ``album`` playlist lists every local track of every album on it instead
+    (#268, :func:`playlists.album_paths`).  A playlist whose store fails is
+    logged and keeps its last ``.m3u``: a store failure never fails a scan or
+    empties a playlist.
     """
     PLAYLISTS.mkdir(parents=True, exist_ok=True)
-    spotdl_files = sorted(SPOTDL_DIR.glob("*.spotdl"))
-    if not spotdl_files:
-        logger.debug("No .spotdl files found — no playlists to generate")
+    names = store.names()
+    if not names:
+        logger.debug("No playlist stores found — no playlists to generate")
         return {}
 
     counts: dict[str, int] = {}
     empty: dict[str, int] = {}
-    store_active = store.active()
     with MusicLibrary(LIBRARY_DB) as lib:
         all_items = lib.all_items()
         library = ItemIndex(all_items)
-        by_album = None
-        for spotdl_file in spotdl_files:
-            name = spotdl_file.stem
-            m3u = PLAYLISTS / f"{name}.m3u"
-
-            source_items = lib.items_by_source(name)
-            if (SPOTDL_DIR / f"{name}.album").exists():
-                by_album = playlists.by_album_id(all_items) if by_album is None else by_album
-                paths, slots, n_albums = playlists.album_paths(
-                    playlists.spotdl_songs(spotdl_file), ItemIndex(source_items), library, by_album)
-                logger.info("  %s: %d album(s), %d track(s) (album level)", name, n_albums, len(paths))
-            else:
-                slots = playlists.resolve(playlists.playlist_entries(spotdl_file), ItemIndex(source_items), library)
-                paths = playlist_paths(slots, source_items)
-            playlists.log_slots(name, slots)
-
+        by_album = playlists.by_album_id(all_items)
+        for name in names:
+            try:
+                view = store_view(name, library, by_album)
+                if view is None:
+                    continue
+                paths, slots = view
+                playlists.log_slots(name, slots)
+                paths = paths + _local_tail(name, paths, library)
+            except Exception:
+                logger.error("Playlist store failed for %s — its .m3u is left as it was", name, exc_info=True)
+                continue
             lines = [os.path.relpath(p, PLAYLISTS) for p in paths]
-            if store_active:
-                by_album = playlists.by_album_id(all_items) if by_album is None else by_album
-                lines = _store_m3u(name, spotdl_file, lines, source_items, library, by_album)
-            m3u.write_text("\n".join(lines) + ("\n" if lines else ""), encoding="utf-8")
+            (PLAYLISTS / f"{name}.m3u").write_text("\n".join(lines) + ("\n" if lines else ""), encoding="utf-8")
             counts[name] = len(lines)
             empty[name] = playlists.empty_slots(slots)
 
@@ -475,7 +426,7 @@ def _link(item, source: str, song_id: str | None) -> bool:
 
 
 def link_song(index: ItemIndex, source: str, song: dict) -> bool:
-    """Tag the library item holding a .spotdl *song* with *source* instead of downloading it (#187).
+    """Tag the library item holding a playlist *song* with *source* instead of downloading it (#187).
 
     Matches by Spotify ID, then ISRC, never title+artist: a wrong skip loses the
     track silently, while a redundant download is merged by the duplicate hook.
@@ -606,65 +557,7 @@ def tag_album_ids(lib: MusicLibrary, source: str, tracks: list[list], since: flo
 
 
 
-def apply_pending_removals(pending: PendingRemovals, lib: MusicLibrary) -> int:
-    """Clear beets source tags for tracks and playlists in *pending*.
-
-    Logs one ``[UNLINK]`` line per item cleared, whichever rung matched it.
-    Returns the number of items modified; entries with no library item are
-    logged and counted separately (#190).  An entry that raises is logged with
-    its traceback and skipped, so it can't drop the rest (#259).
-    """
-    logger.info(
-        "==> Processing pending removals: %d track(s), %d source(s)...",
-        len(pending.tracks),
-        len(pending.remove_sources),
-    )
-    total = not_found = failed = 0
-    for track in pending.tracks:
-        try:
-            items = lib.clear_source_tag(
-                title=track.title, artist=track.artist, source=track.source,
-                spotify_id=track.spotify_id, isrc=track.isrc,
-            )
-        except Exception:
-            logger.error(
-                "  [SKIP] %s: removing %s by %s failed — skipped (spotify_id=%s isrc=%s)",
-                track.source, track.title, track.artist, track.spotify_id or "-", track.isrc or "-",
-                exc_info=True,
-            )
-            failed += 1
-            continue
-        if not items:
-            logger.warning(
-                "  WARNING: not found in beets — may need manual cleanup: %s by %s (source=%s)",
-                track.title,
-                track.artist,
-                track.source,
-            )
-            not_found += 1
-        for item in items:
-            logger.info("  [UNLINK] %s: %s — %s", track.source, item.get("title"), item.get("artist"))
-        total += len(items)
-
-    for source_name in pending.remove_sources:
-        logger.info("==> Removing all tracks from playlist: %s", source_name)
-        items = lib.items_by_source(source_name)
-        for item in items:
-            parts = [p for p in (item.get("sources") or "").split(",") if p.strip() and p.strip() != source_name]
-            item["sources"] = ",".join(parts)
-            item.store()
-        m3u = PLAYLISTS / f"{source_name}.m3u"
-        m3u.unlink(missing_ok=True)
-        logger.info("  Cleared %d item(s) and removed .m3u for source=%s", len(items), source_name)
-        total += len(items)
-
-    logger.info("Cleared the source tag on %d item(s); %d removed entr(ies) not found", total, not_found)
-    if failed:
-        logger.error("%d removed entr(ies) failed and were skipped ([SKIP] above)", failed)
-    return total
-
-
-def run(pending: PendingRemovals | None = None) -> None:
+def run() -> None:
     """Execute the full scan pipeline, push metrics on completion."""
     metrics = ScanMetrics()
     start = time.monotonic()
@@ -672,21 +565,11 @@ def run(pending: PendingRemovals | None = None) -> None:
     try:
         logger.info("==> music-scan starting")
 
-        metrics.tracks_removed = 0
-        if pending is not None:
-            logger.info("==> Applying pending removals...")
-            try:
-                with MusicLibrary(LIBRARY_DB) as lib:
-                    metrics.tracks_removed = apply_pending_removals(pending, lib)
-                clear_pending_removals(pending)
-            except Exception:
-                logger.error("Pending-removals step failed — continuing with import", exc_info=True)
-
         quarantined_before = _count_quarantine()
 
         logger.info("==> Checking download lengths...")
         try:
-            metrics.rejected = guard_inbox(SPOTDL_DIR, SPOTDL_DIR, REJECTED, AUDIO_EXTS)
+            metrics.rejected = guard_inbox(SPOTDL_DIR, REJECTED, AUDIO_EXTS)
         except Exception:
             logger.error("Length guard failed — continuing with import", exc_info=True)
 

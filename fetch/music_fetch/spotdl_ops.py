@@ -1,9 +1,9 @@
 """spotdl operations implemented via the spotdl Python library.
 
 We use spotdl's internal classes directly instead of subprocess so that:
-- The snapshot diff is computed before downloading (no temp file needed).
-- Removed tracks are identified natively as a set difference.
-- We control sync_without_deleting explicitly (we do soft deletes via beets).
+- The want list is computed from the playlist store before downloading.
+- We control sync_without_deleting explicitly: removed tracks stay in the
+  library (soft delete), they only leave the store and the playlist.
 """
 
 from __future__ import annotations
@@ -87,10 +87,8 @@ class SyncResult:
     - fail_reasons: Spotify track URL → reason string for every [FAIL] track, including
       the chained yt-dlp cause when spotdl exposed it (e.g. "HTTP Error 403: Forbidden")
     - linked: new tracks the library already had, tagged instead of downloaded (#187)
-    - wanted: the want list before the budget, in order (URLs), for the store's
-      dry run to compare with (homelab#1914)
     - songs: the whole Spotify playlist in order, page records (sync_playlist only)
-    - records: the richest record known per URL: the snapshot's, a download's, a
+    - records: the richest record known per URL: a download's, the store's, a
       linked track's (sync_playlist only)
     """
 
@@ -101,7 +99,6 @@ class SyncResult:
     failed: int
     fail_reasons: dict[str, str]
     linked: int = 0
-    wanted: list[str] = dataclasses.field(default_factory=list)
     songs: list[dict] = dataclasses.field(default_factory=list)
     records: dict[str, dict] = dataclasses.field(default_factory=dict)
 
@@ -338,24 +335,6 @@ def _make_spotdl(settings: dict):
 # ---------------------------------------------------------------------------
 
 
-def save_playlist(url: str, spotdl_file: Path) -> None:
-    """Write a stub .spotdl sync file for a newly provisioned playlist.
-
-    Writes an empty songs list so the first sync treats all tracks as new and
-    downloads them.  The snapshot is populated by sync_playlist() as tracks are
-    downloaded; it records what has been downloaded, not what Spotify reports.
-    Idempotent: callers should check whether the file already exists before calling.
-    """
-    sync_data = {
-        "type": "sync",
-        "query": [url],
-        "songs": [],
-    }
-    with open(spotdl_file, "w", encoding="utf-8") as fh:
-        json.dump(sync_data, fh, indent=4, ensure_ascii=False)
-    logger.info("Provisioned stub .spotdl file for %s", spotdl_file.stem)
-
-
 @dataclasses.dataclass
 class _Batch:
     """What _download_batch did with one playlist's new tracks."""
@@ -366,7 +345,6 @@ class _Batch:
     missed: int
     failed: int
     fail_reasons: dict[str, str]
-    wanted: list[str] = dataclasses.field(default_factory=list)
 
     def result(self, removed_urls: set[str], songs: list[dict] | None = None,
                records: dict[str, dict] | None = None) -> SyncResult:
@@ -378,7 +356,6 @@ class _Batch:
             failed=self.failed,
             fail_reasons=self.fail_reasons,
             linked=len(self.linked),
-            wanted=self.wanted,
             songs=songs or [],
             records=records or {},
         )
@@ -431,7 +408,6 @@ def _download_batch(
     pins = load_pins() if pins is None else pins
     failures: dict = _load_failures(failures_file) if failures_file is not None else {}
     truly_new, linked_songs, backed_off = want_list(truly_new, in_library, failures, pins=pins)
-    wanted = [song.url for song in truly_new]
     # Tracks the library already has under another playlist or from Usenet (#187).
     linked: dict[str, dict] = {song.url: song.json for song in linked_songs}
     for song in linked_songs:
@@ -521,7 +497,7 @@ def _download_batch(
     if failures_file is not None:
         _save_failures(failures_file, failures)
 
-    return _Batch(len(truly_new), list(results), linked, n_missed, n_failed, fail_reasons, wanted)
+    return _Batch(len(truly_new), list(results), linked, n_missed, n_failed, fail_reasons)
 
 
 def download_fallback(
@@ -532,11 +508,11 @@ def download_fallback(
     failures_file: Path | None = None,
     in_library: Callable[[dict], bool] | None = None,
 ) -> SyncResult:
-    """Download an album playlist's fallback tracks (#205): the .spotdl *songs*
+    """Download an album playlist's fallback tracks (#205): the store's *songs*
     album mode could not get from Usenet, in playlist order.
 
     The same [HAVE] check, backoff and budget as :func:`sync_playlist`, but the
-    playlist's .spotdl is left alone: the album tick owns it.  Downloads land in
+    playlist's store is left alone: the album tick owns it.  Downloads land in
     *output_dir*, the playlist's inbox, so the scan tags them with the playlist.
     """
     from spotdl.types.song import Song  # noqa: PLC0415
@@ -546,54 +522,49 @@ def download_fallback(
     return batch.result(set())
 
 
-def fetch_songs(spotdl_file: Path, cookie_file: Path) -> list[dict]:
-    """The Spotify playlist behind *spotdl_file*, in order, as page records,
-    read the way :func:`sync_playlist` reads it.  Downloads nothing and leaves
-    the file alone."""
+def fetch_songs(url: str, cookie_file: Path) -> list[dict]:
+    """The Spotify playlist at *url*, in order, as page records, read the way
+    :func:`sync_playlist` reads it.  Downloads nothing."""
     from spotdl.utils.search import get_simple_songs  # noqa: PLC0415
 
-    with open(spotdl_file, encoding="utf-8") as fh:
-        query: list[str] = json.load(fh)["query"]
     _make_spotdl(_make_downloader_settings(cookie_file=cookie_file))
-    return [song.json for song in get_simple_songs(query)]
+    return [song.json for song in get_simple_songs([url])]
 
 
 def sync_playlist(
-    spotdl_file: Path,
+    url: str,
+    name: str,
+    previous: list[dict],
+    wants: Callable[[dict], bool],
     output_dir: Path,
     cookie_file: Path,
     track_limit: int | None = None,
     failures_file: Path | None = None,
     in_library: Callable[[dict], bool] | None = None,
-    wants: Callable[[dict], bool] | None = None,
 ) -> SyncResult:
-    """Sync a playlist from its .spotdl file.
+    """Sync playlist *name* from its Spotify playlist at *url* (homelab#1914).
 
-    Downloads tracks new to the Spotify playlist, up to *track_limit* new
-    downloads this session.  When *track_limit* is None all new tracks are
-    downloaded.  Tracks deferred by the limit are excluded from the updated
-    snapshot so they re-appear as new on the next run.
+    *previous* is the song list of the playlist's store before this sync.
+    Each track on the playlist that the store *wants* (no library item holds
+    it by Spotify ID or ISRC, and no download of it waits in the inbox or
+    quarantine) goes on the want list, judged by its *previous* record when
+    there is one: the page record may lack the ISRC an item matches by.  A
+    wanted track that was already on the playlist is logged ``[STORE-WANT]``.
 
-    Does NOT delete downloaded files for removed tracks — we handle that
-    separately via beets source-tag removal (soft delete).
+    The want list then goes through *in_library* ([HAVE]: the library holds it
+    by the full identity ladder, and the callback tagged it), the backoff and
+    up to *track_limit* downloads this session; when *track_limit* is None
+    all are downloaded.  Removed tracks are never deleted: they are gone from
+    the next store, and so from the playlist (soft delete).
 
-    *in_library* is asked about each new track before the backoff and the budget.
-    True means the library already holds it (and the callback tagged it with this
-    playlist): the track is not downloaded and goes into the snapshot as known (#187).
-
-    *wants*, given with ``PLAYLIST_STORE=on`` (homelab#1914 stage b), is the
-    playlist store's want test: an entry the snapshot already lists that it
-    wants (no library item holds it, and it is not in quarantine) is new
-    again, logged ``[STORE-WANT]``, and goes through the same checks, backoff
-    and budget as any new track.
-
-    Returns a :class:`SyncResult` (see its docstring for the per-field meaning).
+    Returns a :class:`SyncResult` whose *songs* and *records* the caller
+    writes to the store.
 
     The playlist is read from its item pages only (get_simple_songs, one call per
     100 tracks).  Spotdl.search() would also re-fetch every track (track, artist and
     album calls) on every run (#183).  spotdl's downloader still re-fetches each song
     it downloads, since the page data lacks genres, so only new tracks cost per-track
-    calls.  Known tracks keep their snapshot entry from when they were downloaded.
+    calls.  Known tracks keep their record from when they were downloaded.
 
     Note on ordering: when *track_limit* is set, the batch is taken from the front of
     the playlist, in playlist order (oldest-added first for Liked Songs).  This means
@@ -602,15 +573,7 @@ def sync_playlist(
     """
     from spotdl.utils.search import get_simple_songs  # noqa: PLC0415
 
-    with open(spotdl_file, encoding="utf-8") as fh:
-        sync_data = json.load(fh)
-
-    if sync_data.get("type") != "sync":
-        raise ValueError(f"Not a valid spotdl sync file: {spotdl_file}")
-
-    old_entries: dict[str, dict] = {s["url"]: s for s in sync_data.get("songs", [])}
-    old_urls: set[str] = set(old_entries)
-    query: list[str] = sync_data["query"]
+    known: dict[str, dict] = {s["url"]: s for s in previous if s.get("url")}
 
     spotdl_obj = _make_spotdl(
         _make_downloader_settings(
@@ -620,59 +583,38 @@ def sync_playlist(
         )
     )
 
-    # Fetch current Spotify playlist state.
-    logger.info("Fetching current Spotify state for %s", spotdl_file.stem)
-    new_songs = get_simple_songs(query)
+    logger.info("Fetching current Spotify state for %s", name)
+    new_songs = get_simple_songs([url])
     new_urls: set[str] = {s.url for s in new_songs}
 
-    removed_urls = old_urls - new_urls
+    removed_urls = set(known) - new_urls
     if removed_urls:
         logger.info("%d track(s) removed from Spotify playlist", len(removed_urls))
 
-    # A snapshot entry the store wants is downloaded again (stage b), judged by
-    # its snapshot record: the page record may lack the ISRC an item matches by.
-    rewanted = set() if wants is None else {
-        s.url for s in new_songs if s.url in old_urls and wants(old_entries[s.url])}
-
-    # Log SKIP for tracks already in the snapshot (not re-attempted this session).
+    wanted = []
+    seen: set[str] = set()
     for song in new_songs:
-        if song.url in rewanted:
-            logger.info("[STORE-WANT] %s → listed in the .spotdl, but no library item holds it", _song_label(song))
-        elif song.url in old_urls:
+        if song.url in seen:
+            continue
+        seen.add(song.url)
+        if not wants(known.get(song.url) or song.json):
             logger.info("[SKIP] %s", _song_label(song))
+            continue
+        if song.url in known:
+            logger.info("[STORE-WANT] %s → on the playlist, but no library item holds it", _song_label(song))
+        wanted.append(song)
 
-    # Identify tracks not yet downloaded (absent from the previous snapshot, or wanted by the store).
-    truly_new = [s for s in new_songs if s.url not in old_urls or s.url in rewanted]
+    batch = _download_batch(spotdl_obj, wanted, track_limit, failures_file, in_library, removed_urls)
 
-    batch = _download_batch(spotdl_obj, truly_new, track_limit, failures_file, in_library, removed_urls)
-
-    # Only persist songs that were actually downloaded (path is not None).
-    # Songs where spotdl returned None failed silently — exclude them from the snapshot
-    # so they are retried as 'truly_new' on the next run.
     # Downloaded songs carry the full metadata spotdl fetched for them; known tracks keep
-    # the entry they were downloaded with; linked tracks keep the page data.  Written in
-    # playlist order.
+    # their earlier record; linked tracks keep the page data.
     downloaded = {song.url: song.json for song, path in batch.results if path is not None}
-    entries = {**batch.linked, **downloaded, **old_entries}
-    songs_to_write = [entries[s.url] for s in new_songs if s.url in entries]
-
-    with open(spotdl_file, "w", encoding="utf-8") as fh:
-        json.dump(
-            {
-                "type": "sync",
-                "query": query,
-                "songs": songs_to_write,
-            },
-            fh,
-            indent=4,
-            ensure_ascii=False,
-        )
-
-    return batch.result(removed_urls, [s.json for s in new_songs], entries)
+    records = {**batch.linked, **known, **downloaded}
+    return batch.result(removed_urls, [s.json for s in new_songs], records)
 
 
 def download_song(song: dict, output_dir: Path, cookie_file: Path) -> Path | None:
-    """Download one track from its .spotdl song entry into *output_dir*.
+    """Download one track from its song record (a store entry) into *output_dir*.
 
     The entry already holds the metadata, so this makes no Spotify calls.
     Returns the file's path, or None when the download failed.
@@ -682,11 +624,6 @@ def download_song(song: dict, output_dir: Path, cookie_file: Path) -> Path | Non
     spotdl_obj = _make_spotdl(_make_downloader_settings(cookie_file=cookie_file, output_dir=output_dir))
     [(_, path)] = spotdl_obj.download_songs([Song.from_dict(song)])
     return path
-
-
-def find_track_in_snapshot(snapshot: list[dict], url: str) -> dict | None:
-    """Return the first song entry in a .spotdl snapshot that matches *url*."""
-    return next((t for t in snapshot if t.get("url") == url), None)
 
 
 class SpotifyPlaylists:
@@ -702,7 +639,7 @@ class SpotifyPlaylists:
         return SpotifyClient().playlist(url, fields="snapshot_id")["snapshot_id"]
 
     def songs(self, url: str) -> list[dict]:
-        """Every track on the playlist, in the .spotdl song format.
+        """Every track on the playlist, in spotdl's song format.
 
         Built from the playlist item pages only, one call per 100 tracks.
         Spotdl.search() would also re-fetch every track (track, artist and album
@@ -713,7 +650,7 @@ class SpotifyPlaylists:
         return [s.json for s in get_simple_songs([url])]
 
     def album_songs(self, album_id: str) -> list[dict]:
-        """The album's whole tracklist, in the .spotdl song format (#268).
+        """The album's whole tracklist, in spotdl's song format (#268).
 
         Two calls (the album and its track pages), no per-track lookups; the
         songs carry no ISRC, which spotdl fills in when it downloads them.

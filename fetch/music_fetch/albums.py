@@ -4,8 +4,8 @@ A playlist flagged ``album`` in playlists.conf is never synced by spotdl.  Inste
 :func:`tick` runs every ``ALBUM_POLL_SECONDS``:
 
 1. Poll each album playlist's Spotify ``snapshot_id``.  Only a changed snapshot
-   re-reads the track list, which is written to the playlist's ``.spotdl`` file
-   and reduced to distinct albums.
+   re-reads the track list, which is written to the playlist's store
+   (homelab#1914) and reduced to distinct albums.
 2. Top the Usenet queue up to ``ALBUM_MAX_IN_FLIGHT``: for each wanted album not
    already whole in the library, search Prowlarr, rank the releases (Spotify's
    edition first, #279) and send the best to SABnzbd.
@@ -36,14 +36,14 @@ MusicBrainz release, when another copy of the same edition is tried
 Album playlists sync at the album level (#268).  Spotify decides *which*
 albums are on the playlist; the local release decides *what is on* each album.
 An album is on the playlist while at least one of its tracks is, and leaves it
-(its tracks unlinked, its lines gone from the ``.m3u``) when none remain:
-removing one track of several does nothing.
+(its lines gone from the ``.m3u``) when none remain: removing one track of
+several does nothing.
 
 ``ALBUM_MODE`` is ``off`` (default), ``dry-run`` (search and log the pick, never
 grab) or ``on``.  Indexer use is capped by a rolling-24h budget counted from our
 own timestamps, because the indexer's reset window is unknown.
 
-State lives in one JSON file next to the .spotdl files (on the persistent
+State lives in one JSON file next to the playlist stores (on the persistent
 pipeline-state volume): losing it would forget blocklists and the grab budget.
 """
 
@@ -346,22 +346,20 @@ class TickResult:
     searched: int = 0
     grabbed: int = 0
     reimported: int = 0
-    # Per playlist, the former songs of the albums that left it (#268).
-    removed_songs: dict[str, list[dict]] = dataclasses.field(default_factory=dict)
 
 
 def refresh_playlists(
     state: State,
     playlists: list[tuple[str, str]],
     spotify: SpotifySource,
-    spotdl_dir: Path,
     result: TickResult,
 ) -> None:
-    """Re-read every album playlist whose Spotify snapshot changed.
+    """Re-read every album playlist whose Spotify snapshot changed, and write
+    its tracklist to its store.
 
     An album leaves the playlist only when none of its tracks remain (#268):
-    its former songs go to ``result.removed_songs`` to be unlinked.  A track
-    removed from an album that still has others on the playlist is not."""
+    the ``.m3u`` lists whole albums, so a track removed from an album that
+    still has others on the playlist changes nothing."""
     for name, url in playlists:
         snapshot = spotify.snapshot_id(url)
         entry = state.playlists.setdefault(name, {})
@@ -370,21 +368,12 @@ def refresh_playlists(
         logger.info("==> Album playlist changed: %s — re-reading tracks", name)
         songs = spotify.songs(url)
 
-        spotdl_file = spotdl_dir / f"{name}.spotdl"
-        old_songs: list[dict] = []
-        if spotdl_file.exists():
-            old_songs = json.loads(spotdl_file.read_text(encoding="utf-8")).get("songs", [])
+        previous = store.load(name)
         kept = {album_key(s) for s in songs}
-        removed = [s for s in old_songs if album_key(s) not in kept]
-        if removed:
-            result.removed_songs[name] = removed
-            for key, album in reduce_to_albums(removed).items():
-                logger.info("    [UNLINK] %s — %s: no track left on %s", album["artist"], album["name"], name)
-        spotdl_file.write_text(
-            json.dumps({"type": "sync", "query": [url], "songs": songs}, indent=4, ensure_ascii=False),
-            encoding="utf-8",
-        )
-        _save_store(name, songs)
+        removed = [] if previous is None else [s for s in previous.songs if album_key(s) not in kept]
+        for key, album in reduce_to_albums(removed).items():
+            logger.info("    [GONE] %s — %s: no track left on %s", album["artist"], album["name"], name)
+        _save_store(name, songs, previous)
 
         wanted = reduce_to_albums(songs)
         for key, album in wanted.items():
@@ -402,18 +391,13 @@ def refresh_playlists(
         logger.info("    %d track(s) on %d album(s)", len(songs), len(wanted))
 
 
-def _save_store(name: str, songs: list[dict]) -> None:
-    """The playlist store (homelab#1914 stage b): an album playlist's store is
-    its Spotify tracklist, as its ``.spotdl`` is.  Never raises: the store
-    must not fail the tick."""
-    if not store.active():
-        return
-    try:
-        playlist = store.Store.from_songs(name, songs)
-        playlist.source = store.SPOTIFY
-        playlist.save(store.path(name))
-    except Exception:
-        logger.error("Playlist store failed for %s — its .spotdl is written as before", name, exc_info=True)
+def _save_store(name: str, songs: list[dict], previous: store.Store | None) -> None:
+    """An album playlist's store is its Spotify tracklist (homelab#1914), then
+    *previous*'s local entries.  A failure fails the tick before the snapshot
+    is recorded, so the next tick re-reads the playlist."""
+    playlist = store.Store.from_songs(name, songs, keep=previous)
+    playlist.source = store.SPOTIFY
+    playlist.save(store.path(name))
 
 
 def _requery(record: dict, search: Plan) -> bool:
@@ -676,7 +660,7 @@ def auto_reimport(
 
 # missing(playlist, tracks): the entries of *tracks* the library lacks.
 Missing = Callable[[str, list[list]], list[list]]
-# album_songs(album id): the Spotify album's tracklist, in the .spotdl song format.
+# album_songs(album id): the Spotify album's tracklist, in spotdl's song format.
 AlbumSongs = Callable[[str], list[dict]]
 
 
@@ -775,7 +759,7 @@ def fallback_queue(state: State) -> int:
 def fallback_songs(state: State, playlist: str, songs: list[dict]) -> list[dict]:
     """The songs of *playlist* left to spotdl, album by album: from each
     fallback album's Spotify tracklist once read (#268), else from the
-    playlist's .spotdl *songs*, in their order."""
+    playlist's store *songs*, in their order."""
     out: list[dict] = []
     seen: set[str] = set()
     for record in state.albums.values():
@@ -820,7 +804,6 @@ def tick(
     prowlarr,
     sabnzbd,
     have: Have,
-    spotdl_dir: Path,
     settings: Settings | None = None,
     state_file: Path = STATE_FILE,
     on_completion: Callable[[State, "Completion"], object] | None = None,
@@ -840,7 +823,7 @@ def tick(
     start = time.monotonic()
     success = False
     try:
-        refresh_playlists(state, playlists, spotify, spotdl_dir, result)
+        refresh_playlists(state, playlists, spotify, result)
         if settings.mode == "on" and on_completion is not None:
             for completion in lost_completions(state, sabnzbd):
                 logger.info("Recovering lost import trigger for %s", completion.nzo_id)

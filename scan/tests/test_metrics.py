@@ -67,12 +67,12 @@ def test_scan_metrics_tracks_imported(monkeypatch: pytest.MonkeyPatch) -> None:
     pushed: list[str] = []
     monkeypatch.setattr("music_scan.metrics._push", lambda body, job: pushed.append(body))
 
-    m = ScanMetrics(tracks_imported=15, tracks_removed=3)
+    m = ScanMetrics(tracks_imported=15)
     m.push()
 
     body = pushed[0]
     assert "music_scan_tracks_imported_total 15" in body
-    assert "music_scan_tracks_removed_total 3" in body
+    assert "music_scan_tracks_removed_total" not in body  # retired with reconcile (homelab#1914)
 
 
 def test_scan_metrics_track_counters_default_zero(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -83,7 +83,6 @@ def test_scan_metrics_track_counters_default_zero(monkeypatch: pytest.MonkeyPatc
 
     body = pushed[0]
     assert "music_scan_tracks_imported_total 0" in body
-    assert "music_scan_tracks_removed_total 0" in body
 
 
 def test_scan_metrics_lossless_items(monkeypatch: pytest.MonkeyPatch) -> None:

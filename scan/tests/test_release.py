@@ -131,6 +131,13 @@ def test_claim_stamps_this_imports_usenet_items() -> None:
 RTD = {"name": "Ready to Die (The Remaster)", "artist": "The Notorious B.I.G."}
 
 
+def _listed(by_id: dict | None = None):
+    """A ``listed(item)`` as :func:`music_scan.scan.store_listings` gives it: the
+    playlists whose store lists each item's recording, by item ID (homelab#1914)."""
+    by_id = by_id or {}
+    return lambda item: set(by_id.get(item.id, ()))
+
+
 def _legacy(id_, **f):
     return FakeItem(id_, via="usenet", album="Ready to Die", albumartist="The Notorious B.I.G.", **f)
 
@@ -143,20 +150,21 @@ def test_copies_takes_every_other_copy_and_the_legacy_items_of_the_album() -> No
     another_album = _legacy(5, spotify_album_id="BESTOF")
     other_record = FakeItem(6, album_record="OTHER", release="r9")
     spotdl = FakeItem(7, via="spotdl", album="Ready to Die", albumartist="The Notorious B.I.G.",
-                      spotify_album_id="RTD", sources="aaaaaah")  # a loose copy: supersede's
+                      spotify_album_id="RTD")  # aaaaaah's store lists it: a loose copy, supersede's
     items = [kept, earlier, legacy, legacy_no_album, another_album, other_record, spotdl]
-    assert release.copies(items, "RTD", RTD, "r2", None) == [earlier, legacy, legacy_no_album]
-    assert release.copies(items, "RTD", RTD, None, "r1") == [earlier]
+    listed = _listed({7: {"aaaaaah"}})
+    assert release.copies(items, "RTD", RTD, "r2", None, listed) == [earlier, legacy, legacy_no_album]
+    assert release.copies(items, "RTD", RTD, None, "r1", listed) == [earlier]
 
 
 def test_mixed_reasons_name_what_the_track_rules_did() -> None:
     record = {"status": "imported", "blocklist": ["r0"], "rejected_tracks": {"keep": ["s3"]}, "gaps": ["s3"]}
     items = [FakeItem(1, via="usenet", spotify_album_id="RTD"), FakeItem(2, via="spotdl", spotify_album_id="RTD")]
-    reasons = release.mixed_reasons("RTD", record, items)
+    reasons = release.mixed_reasons("RTD", record, items, _listed())
     assert len(reasons) == 4 and "1 spotdl track(s) on the album" in reasons
     whole = [FakeItem(1, via="usenet", spotify_album_id="RTD", album_record="RTD")]
-    assert release.mixed_reasons("RTD", record, whole) == []
-    assert release.mixed_reasons("RTD", {"status": "fallback", "fallback_from": "failed"}, items) == []
+    assert release.mixed_reasons("RTD", record, whole, _listed()) == []
+    assert release.mixed_reasons("RTD", {"status": "fallback", "fallback_from": "failed"}, items, _listed()) == []
 
 
 def test_replaced_copies_by_album_and_artist_tags(tmp_path, ffmpeg) -> None:
@@ -172,19 +180,46 @@ def test_copies_tells_two_imports_of_one_release_apart() -> None:
     """After music-album-reset --reimport the same release may be grabbed again: the old import goes."""
     old = FakeItem(1, album_record="RTD", release="r1@100")
     new = FakeItem(2, album_record="RTD", release="r1@200")
-    assert release.copies([old, new], "RTD", RTD, "r1@200", None) == [old]
+    assert release.copies([old, new], "RTD", RTD, "r1@200", None, _listed()) == [old]
 
 
 def test_copies_takes_spotdls_top_ups_but_not_a_loose_copy_another_playlist_lists() -> None:
     """Mellon Collie's 14 tracks spotdl fetched (#272/#205) go with a reset's re-import (#279);
-    a spotdl copy aaaaaah also lists stays, for supersede."""
+    a spotdl copy aaaaaah's store also lists stays, for supersede (homelab#1914: by the stores)."""
     record = {**RTD, "playlists": {"keep": [], "later": []}}
-    topup = FakeItem(1, via="spotdl", spotify_album_id="RTD", sources="keep")
-    unlinked = FakeItem(2, via="spotdl", spotify_album_id="RTD", sources="")
-    loose = FakeItem(3, via="spotdl", spotify_album_id="RTD", sources="keep,aaaaaah")
-    elsewhere = FakeItem(4, via="spotdl", spotify_album_id="OTHER", sources="keep")
-    assert release.copies([topup, unlinked, loose, elsewhere], "RTD", record, "r1@1", None) == [topup, unlinked]
-    assert release.copies([topup], "RTD", record, None, "r1@1") == []
+    topup = FakeItem(1, via="spotdl", spotify_album_id="RTD")
+    unlinked = FakeItem(2, via="spotdl", spotify_album_id="RTD")
+    loose = FakeItem(3, via="spotdl", spotify_album_id="RTD")
+    elsewhere = FakeItem(4, via="spotdl", spotify_album_id="OTHER")
+    listed = _listed({1: {"keep"}, 3: {"keep", "aaaaaah"}, 4: {"keep"}})
+    assert release.copies([topup, unlinked, loose, elsewhere], "RTD", record, "r1@1", None, listed) == [
+        topup, unlinked]
+    assert release.copies([topup], "RTD", record, None, "r1@1", listed) == []
+
+
+def test_topup_is_decided_by_the_stores_listings_never_by_sources() -> None:
+    """homelab#1914 stage c: a spotdl copy on the album is a top-up when every
+    store that lists its recording is one of the record's own playlists (none
+    lists it: a top-up too), and a loose copy when another playlist's store
+    lists it.  ``sources`` is provenance only: it says the opposite here and
+    decides nothing."""
+    record = {**RTD, "playlists": {"keep": [], "later": []}}
+    own = FakeItem(1, via="spotdl", spotify_album_id="RTD", sources="keep,aaaaaah")
+    both_own = FakeItem(2, via="spotdl", spotify_album_id="RTD", sources="aaaaaah")
+    unlisted = FakeItem(3, via="spotdl", spotify_album_id="RTD", sources="aaaaaah")
+    loose = FakeItem(4, via="spotdl", spotify_album_id="RTD", sources="keep")
+    usenet = FakeItem(5, via="usenet", spotify_album_id="RTD")
+    other_album = FakeItem(6, via="spotdl", spotify_album_id="OTHER")
+    listed = _listed({1: {"keep"}, 2: {"keep", "later"}, 4: {"keep", "aaaaaah"}, 5: {"keep"}, 6: {"keep"}})
+    assert release._topup(own, "RTD", record, listed)
+    assert release._topup(both_own, "RTD", record, listed)
+    assert release._topup(unlisted, "RTD", record, listed)
+    assert not release._topup(loose, "RTD", record, listed)
+    assert not release._topup(usenet, "RTD", record, listed)  # only spotdl copies top up
+    assert not release._topup(other_album, "RTD", record, listed)  # nor one on another album
+    # A record with no playlists: any listing makes the copy loose.
+    assert not release._topup(own, "RTD", RTD, listed)
+    assert release._topup(unlisted, "RTD", RTD, listed)
 
 
 def test_album_query_falls_back_to_the_key_for_twins() -> None:
@@ -239,10 +274,11 @@ def test_retire_keeps_the_recordings_a_smaller_edition_lacks_as_extras(quarantin
     cd[0]["mb_trackid"] = "rec-1"
     legacy_held = FakeItem(50, title="Track 1", mb_trackid="rec-1", **legacy)
     legacy_unknown = FakeItem(51, title="Track 3", **legacy)  # the same title: not the same recording
-    topup = FakeItem(52, via="spotdl", spotify_album_id="BOYS", sources="keep", spotify_ids="SPX",
+    topup = FakeItem(52, via="spotdl", spotify_album_id="BOYS", spotify_ids="SPX",
                      title="Stevie Nix (Live)")
+    listed = _listed({52: {"keep"}})
     lib = FakeLib([*deluxe, *cd, legacy_held, legacy_unknown, topup])
-    assert release.retire(lib, "BOYS", BOYS, "cd@2", None) == 12
+    assert release.retire(lib, "BOYS", BOYS, "cd@2", None, listed) == 12
     assert quarantined == [*deluxe[:11], legacy_held]
     extras = [*deluxe[11:], legacy_unknown, topup]
     for item in extras:
@@ -252,14 +288,14 @@ def test_retire_keeps_the_recordings_a_smaller_edition_lacks_as_extras(quarantin
     # Canon keeps them on the album, and the album is no longer mixed.
     for item in [*cd, *extras]:
         item["spotify_album_id"] = "BOYS"
-    assert release.mixed_reasons("BOYS", {"status": "imported", "blocklist": ["x"]}, [*cd, *extras]) == []
+    assert release.mixed_reasons("BOYS", {"status": "imported", "blocklist": ["x"]}, [*cd, *extras], listed) == []
 
 
 def test_retire_takes_every_copy_a_same_edition_reimport_holds(quarantined) -> None:
     old = [_cd("deluxe@1", n) for n in range(1, 12)]
     new = [_cd("cd@2", n) for n in range(1, 12)]
-    topup = FakeItem(52, via="spotdl", spotify_album_id="BOYS", sources="keep", isrc="USHS060005")
-    assert release.retire(FakeLib([*old, *new, topup]), "BOYS", BOYS, "cd@2", None) == 12
+    topup = FakeItem(52, via="spotdl", spotify_album_id="BOYS", isrc="USHS060005")
+    assert release.retire(FakeLib([*old, *new, topup]), "BOYS", BOYS, "cd@2", None, _listed({52: {"keep"}})) == 12
     assert quarantined == [*old, topup]
     assert not any(i.get(release.EXTRA) for i in [*old, *new])
 
@@ -268,7 +304,7 @@ def test_retire_extras_go_once_a_later_release_holds_them(quarantined) -> None:
     extra = _cd("deluxe@1", 12, album_extra="1")
     again = [_cd("cd@2", n) for n in range(1, 12)] + [FakeItem(200, album_record="BOYS", release="cd@2",
                                                               isrc="USHS060012")]
-    assert release.retire(FakeLib([extra, *again]), "BOYS", BOYS, "cd@2", None) == 1
+    assert release.retire(FakeLib([extra, *again]), "BOYS", BOYS, "cd@2", None, _listed()) == 1
     assert quarantined == [extra]
 
 
@@ -276,7 +312,7 @@ def test_retire_with_drop_takes_the_whole_release(quarantined) -> None:
     """A rolled-back release (another album) goes whole: its files are the wrong ones."""
     kept = [_cd("deluxe@1", n) for n in range(1, 3)]
     wrong = [FakeItem(9, album_record="BOYS", release="wrong@3", isrc="XX0000000001")]
-    assert release.retire(FakeLib([*kept, *wrong]), "BOYS", BOYS, None, "wrong@3") == 1
+    assert release.retire(FakeLib([*kept, *wrong]), "BOYS", BOYS, None, "wrong@3", _listed()) == 1
     assert quarantined == wrong and not wrong[0].get(release.EXTRA)
 
 
@@ -381,7 +417,7 @@ def test_retire_held_retires_the_extras_tag_album_ids_shows_the_release_holds(qu
            for n, t in enumerate(BOTT_TITLES, 1)]
     lib = _SourceLib([*held, lacking, *new])
 
-    assert release.retire(lib, "BOTT", BOTT, "r@200", None) == 0
+    assert release.retire(lib, "BOTT", BOTT, "r@200", None, _listed()) == 0
     assert all(i.get(release.EXTRA) for i in [*held, lacking])
     assert release.retire_held(lib) == 0  # nothing to go on yet
 
@@ -476,18 +512,19 @@ def test_retire_held_leaves_an_extra_two_release_items_hold_the_audio_of(quarant
 
 def test_mixed_reasons_a_whole_import_with_a_loose_spotdl_copy_is_not_mixed() -> None:
     """Zero 7 Simple Things (#295): imported whole since #279 after a reset by
-    hand, plus one spotdl copy another playlist also lists, which retire leaves
-    on purpose.  A reimport would grab the same release again."""
+    hand, plus one spotdl copy another playlist's store also lists, which retire
+    leaves on purpose.  A reimport would grab the same release again."""
     record = {"name": "Simple Things", "artist": "Zero 7", "status": "imported", "blocklist": ["r0"],
               "playlists": {"keep": []}}
     release_items = [FakeItem(n, via="usenet", spotify_album_id="Z7", album_record="Z7", release="v@1")
                      for n in range(1, 12)]
-    loose = FakeItem(20, via="spotdl", spotify_album_id="Z7", sources="keep,aaaaaah")
+    loose = FakeItem(20, via="spotdl", spotify_album_id="Z7")
     extra = FakeItem(21, via="usenet", spotify_album_id="Z7", album_record="Z7", album_extra="1")
-    assert release.mixed_reasons("Z7", record, [*release_items, loose, extra]) == []
+    listed = _listed({20: {"keep", "aaaaaah"}})
+    assert release.mixed_reasons("Z7", record, [*release_items, loose, extra], listed) == []
     # Nor any other leftover: the import already retired every copy a reimport would.
     stray = FakeItem(22, via="usenet", spotify_album_id="Z7", album="Simple Things (Remastered)")
-    assert release.mixed_reasons("Z7", record, [*release_items, loose, stray]) == []
+    assert release.mixed_reasons("Z7", record, [*release_items, loose, stray], listed) == []
 
 
 def test_mixed_reasons_before_279_ignores_loose_copies_but_not_top_ups() -> None:
@@ -495,11 +532,13 @@ def test_mixed_reasons_before_279_ignores_loose_copies_but_not_top_ups() -> None
     not a copy another playlist lists, and keeps its history's reasons."""
     record = {"status": "imported", "playlists": {"keep": []}}
     legacy = FakeItem(1, via="usenet", spotify_album_id="RTD")
-    loose = FakeItem(2, via="spotdl", spotify_album_id="RTD", sources="keep,aaaaaah")
-    topup = FakeItem(3, via="spotdl", spotify_album_id="RTD", sources="keep")
-    assert release.mixed_reasons("RTD", record, [legacy, loose]) == []
-    assert release.mixed_reasons("RTD", record, [legacy, loose, topup]) == ["1 spotdl track(s) on the album"]
-    assert release.mixed_reasons("RTD", {**record, "gaps": ["s3"], "blocklist": ["r0"]}, [legacy, loose]) == [
+    loose = FakeItem(2, via="spotdl", spotify_album_id="RTD")
+    topup = FakeItem(3, via="spotdl", spotify_album_id="RTD")
+    listed = _listed({2: {"keep", "aaaaaah"}, 3: {"keep"}})
+    assert release.mixed_reasons("RTD", record, [legacy, loose], listed) == []
+    assert release.mixed_reasons("RTD", record, [legacy, loose, topup], listed) == ["1 spotdl track(s) on the album"]
+    assert release.mixed_reasons("RTD", {**record, "gaps": ["s3"], "blocklist": ["r0"]}, [legacy, loose],
+                                 listed) == [
         "imported short of Spotify's tracklist ([PART]/[GAP])",
         "1 release(s) blocklisted before (their unmatched tracks rolled back)",
     ]
@@ -603,27 +642,3 @@ def test_list_twins_gives_each_pair_its_merge_command(caplog) -> None:
     # The keeper is the release item, though the extra is the Spotify-length copy: the album is the unit (#311).
     assert "2555 Psycho Killer - Live (268s, legacy) ~ 3730 (258s): music-audit-dupes --merge 3730 2555" in caplog.text
     assert "1 album(s) with local-only extras sharing a title" in caplog.text
-
-
-
-def test_copies_logs_where_the_stores_disagree_but_sources_decide(caplog) -> None:
-    """homelab#1914 stage b: the stores' answer is a shadow.  A copy tagged only keep
-    but listed by aaaaaah's store too stays a top-up, with a [TOPUP-DIFF] line, once."""
-    release._topup_diffs.clear()
-    record = {**RTD, "playlists": {"keep": [], "later": []}}
-    topup = FakeItem(1, via="spotdl", spotify_album_id="RTD", sources="keep")
-    listed = {1: {"keep", "aaaaaah"}}
-    with caplog.at_level("INFO", logger="music_scan.release"):
-        assert release.copies([topup], "RTD", record, "r1@1", None, lambda i: listed[i.id]) == [topup]
-        release.copies([topup], "RTD", record, "r1@1", None, lambda i: listed[i.id])
-    assert caplog.text.count("[TOPUP-DIFF]") == 1
-    assert "sources say top-up, the store says loose (listed by aaaaaah, keep)" in caplog.text
-
-
-def test_copies_logs_nothing_where_the_stores_agree(caplog) -> None:
-    release._topup_diffs.clear()
-    record = {**RTD, "playlists": {"keep": [], "later": []}}
-    topup = FakeItem(1, via="spotdl", spotify_album_id="RTD", sources="keep")
-    with caplog.at_level("INFO", logger="music_scan.release"):
-        assert release.copies([topup], "RTD", record, "r1@1", None, lambda i: {"keep"}) == [topup]
-    assert "[TOPUP-DIFF]" not in caplog.text

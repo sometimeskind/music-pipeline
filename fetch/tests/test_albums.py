@@ -1,6 +1,5 @@
 """Tests for music_fetch.albums — playlist reduction, budget and the tick's state transitions."""
 
-import json
 import shutil
 import subprocess
 from datetime import datetime, timedelta, timezone
@@ -10,6 +9,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 import music_fetch.albums as albums
+from music_fetch import store
 from music_fetch.albums import Settings, State, reduce_to_albums, refresh_playlists, tick, top_up
 from music_fetch.usenet import Release
 
@@ -21,6 +21,12 @@ NOW = datetime(2026, 10, 4, 12, 0, tzinfo=timezone.utc)
 def _no_push():
     with patch.object(albums, "_push"):
         yield
+
+
+@pytest.fixture(autouse=True)
+def _store_dir(tmp_path: Path, monkeypatch):
+    """The album tick writes each album playlist's store (homelab#1914)."""
+    monkeypatch.setattr(store, "STORE_DIR", tmp_path / "store")
 
 
 @pytest.fixture(autouse=True)
@@ -108,53 +114,77 @@ def test_reduce_to_albums_keeps_track_identity() -> None:
 def test_refresh_skips_unchanged_snapshot(tmp_path: Path) -> None:
     state = State(playlists={"later": {"snapshot_id": "s1"}})
     spotify = FakeSpotify("s1", [song("One", "A")])
-    refresh_playlists(state, [("later", "url")], spotify, tmp_path, albums.TickResult())
+    refresh_playlists(state, [("later", "url")], spotify, albums.TickResult())
     assert spotify.song_reads == 0
     assert state.albums == {}
 
 
-def test_refresh_writes_spotdl_and_reports_removed_songs(tmp_path: Path) -> None:
-    old = song("Gone", "Z", url="https://open.spotify.com/track/gone")
-    (tmp_path / "later.spotdl").write_text(json.dumps({"type": "sync", "query": ["url"], "songs": [old]}))
+def test_refresh_writes_the_store_and_logs_albums_that_left(tmp_path: Path, caplog) -> None:
+    old = song("Gone", "Z", album="Old Album", url="https://open.spotify.com/track/gone")
+    store.Store.from_songs("later", [old]).save(store.path("later"))
     state = State()
-    result = albums.TickResult()
-    refresh_playlists(state, [("later", "url")], FakeSpotify("s2", [song("One", "A")]), tmp_path, result)
+    caplog.set_level("INFO", logger="music_fetch.albums")
+    refresh_playlists(state, [("later", "url")], FakeSpotify("s2", [song("One", "A")]), albums.TickResult())
 
-    written = json.loads((tmp_path / "later.spotdl").read_text())
-    assert [s["name"] for s in written["songs"]] == ["One"]
-    assert result.removed_songs == {"later": [old]}
+    written = store.load("later")
+    assert written.source == store.SPOTIFY
+    assert [s["name"] for s in written.songs] == ["One"]
+    assert "[GONE] Artist — Old Album: no track left on later" in caplog.text
+    assert not list(tmp_path.rglob("*.spotdl"))
     assert state.albums["A"]["status"] == albums.WANTED
     assert state.playlists["later"]["snapshot_id"] == "s2"
 
 
-def test_refresh_removing_one_of_an_albums_tracks_unlinks_nothing(tmp_path: Path) -> None:
+def test_refresh_removing_one_of_an_albums_tracks_drops_no_album(caplog) -> None:
     """#268: the album stays on the playlist while any of its tracks is."""
     one, two = song("One", "A"), song("Two", "A")
     state = State()
-    refresh_playlists(state, [("later", "url")], FakeSpotify("s1", [one, two]), tmp_path, albums.TickResult())
-    result = albums.TickResult()
-    refresh_playlists(state, [("later", "url")], FakeSpotify("s2", [two]), tmp_path, result)
-    assert result.removed_songs == {}
+    refresh_playlists(state, [("later", "url")], FakeSpotify("s1", [one, two]), albums.TickResult())
+    caplog.set_level("INFO", logger="music_fetch.albums")
+    refresh_playlists(state, [("later", "url")], FakeSpotify("s2", [two]), albums.TickResult())
+    assert "[GONE]" not in caplog.text
     assert "later" in state.albums["A"]["playlists"]
+    assert store.load("later").songs == [two]
 
 
-def test_refresh_removing_an_albums_last_track_unlinks_the_album(tmp_path: Path) -> None:
-    """#268: the album's former songs are unlinked once none of its tracks remain."""
-    one, two, other = song("One", "A"), song("Two", "A"), song("X", "B")
+def test_refresh_removing_an_albums_last_track_drops_the_album(caplog) -> None:
+    """#268: the album leaves the playlist once none of its tracks remain."""
+    one, two, other = song("One", "A"), song("Two", "A"), song("X", "B", album="Other")
     state = State()
-    refresh_playlists(state, [("later", "url")], FakeSpotify("s1", [one, two, other]), tmp_path, albums.TickResult())
-    refresh_playlists(state, [("later", "url")], FakeSpotify("s2", [two, other]), tmp_path, albums.TickResult())
-    result = albums.TickResult()
-    refresh_playlists(state, [("later", "url")], FakeSpotify("s3", [other]), tmp_path, result)
-    # The .spotdl held only Two by then; One's removal unlinked nothing before.
-    assert result.removed_songs == {"later": [two]}
+    refresh_playlists(state, [("later", "url")], FakeSpotify("s1", [one, two, other]), albums.TickResult())
+    refresh_playlists(state, [("later", "url")], FakeSpotify("s2", [two, other]), albums.TickResult())
+    caplog.set_level("INFO", logger="music_fetch.albums")
+    refresh_playlists(state, [("later", "url")], FakeSpotify("s3", [other]), albums.TickResult())
+    gone = [r.getMessage() for r in caplog.records if "[GONE]" in r.getMessage()]
+    assert gone == ["    [GONE] Artist — Album: no track left on later"]
     assert "A" not in state.albums and "B" in state.albums
+    assert store.load("later").songs == [other]
+
+
+def test_refresh_keeps_the_stores_local_entries() -> None:
+    local = {"local": {"id": 7, "path": "/library/local.m4a", "title": "Local", "artist": "Artist"}}
+    store.Store("later", [{"song": song("Old", "Z")}, local]).save(store.path("later"))
+    refresh_playlists(State(), [("later", "url")], FakeSpotify("s1", [song("One", "A")]), albums.TickResult())
+    assert store.load("later").entries == [{"song": song("One", "A")}, local]
+
+
+def test_refresh_store_failure_fails_before_the_snapshot_is_recorded(monkeypatch) -> None:
+    """A store that can't be written fails the tick; the next one re-reads the playlist."""
+    def broken(self, path):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(store.Store, "save", broken)
+    state = State()
+    with pytest.raises(OSError):
+        refresh_playlists(state, [("later", "url")], FakeSpotify("s1", [song("One", "A")]), albums.TickResult())
+    assert "snapshot_id" not in state.playlists.get("later", {})
+    assert state.albums == {}
 
 
 def test_refresh_one_new_track_makes_its_whole_album_wanted(tmp_path: Path) -> None:
     """#268: one song on Spotify brings in the album; have() judges the whole album."""
     state = State()
-    refresh_playlists(state, [("later", "url")], FakeSpotify("s1", [song("One", "A")]), tmp_path, albums.TickResult())
+    refresh_playlists(state, [("later", "url")], FakeSpotify("s1", [song("One", "A")]), albums.TickResult())
     record = state.albums["A"]
     assert record["status"] == albums.WANTED and record["tracks_count"] == 2
     asked = []
@@ -166,9 +196,9 @@ def test_refresh_one_new_track_makes_its_whole_album_wanted(tmp_path: Path) -> N
 
 def test_refresh_drops_wanted_albums_no_longer_in_playlist(tmp_path: Path) -> None:
     state = State()
-    refresh_playlists(state, [("later", "url")], FakeSpotify("s1", [song("One", "A"), song("X", "B")]), tmp_path, albums.TickResult())
+    refresh_playlists(state, [("later", "url")], FakeSpotify("s1", [song("One", "A"), song("X", "B")]), albums.TickResult())
     state.albums["B"]["status"] = albums.GRABBED
-    refresh_playlists(state, [("later", "url")], FakeSpotify("s2", []), tmp_path, albums.TickResult())
+    refresh_playlists(state, [("later", "url")], FakeSpotify("s2", []), albums.TickResult())
     assert "A" not in state.albums
     # In flight: kept so the import trigger still finds it.
     assert state.albums["B"]["status"] == albums.GRABBED
@@ -380,7 +410,7 @@ def test_results_reset_the_empty_run() -> None:
 def test_tick_off_touches_nothing(tmp_path: Path) -> None:
     spotify = FakeSpotify("s1", [song("One", "A")])
     prowlarr, sab = fakes()
-    tick([("later", "url")], spotify, prowlarr, sab, never_have, tmp_path, Settings(mode="off"), tmp_path / "state.json")
+    tick([("later", "url")], spotify, prowlarr, sab, never_have, Settings(mode="off"), tmp_path / "state.json")
     assert not (tmp_path / "state.json").exists()
     assert spotify.song_reads == 0
 
@@ -388,7 +418,7 @@ def test_tick_off_touches_nothing(tmp_path: Path) -> None:
 def test_tick_persists_state(tmp_path: Path) -> None:
     prowlarr, sab = fakes()
     tick([("later", "url")], FakeSpotify("s1", [song("One", "A"), song("Two", "A")]), prowlarr, sab,
-         never_have, tmp_path, Settings(mode="dry-run"), tmp_path / "state.json")
+         never_have, Settings(mode="dry-run"), tmp_path / "state.json")
     saved = State.load(tmp_path / "state.json")
     assert saved.albums["A"]["status"] == albums.DRY_RUN
     assert saved.playlists["later"]["snapshot_id"] == "s1"
@@ -402,7 +432,7 @@ def test_tick_fails_on_a_spotify_rate_limit(tmp_path: Path) -> None:
     spotify.snapshot_id = MagicMock(side_effect=SpotifyRateLimited(NOW, 62939))
     prowlarr, sab = fakes()
     with patch.object(albums, "push_metrics") as push, pytest.raises(SpotifyRateLimited):
-        tick([("later", "url")], spotify, prowlarr, sab, never_have, tmp_path,
+        tick([("later", "url")], spotify, prowlarr, sab, never_have,
              Settings(mode="dry-run"), tmp_path / "state.json")
     push.assert_called_once()
     assert push.call_args.args[1] is False
@@ -616,7 +646,7 @@ def test_tick_recovers_lost_triggers_only_when_on(tmp_path: Path) -> None:
     sab.finished.return_value = {"nzo1": {"ok": False, "storage": "", "fail_message": "x"}}
     calls = []
     for mode in ("dry-run", "on"):
-        tick([], FakeSpotify("s", []), prowlarr, sab, never_have, tmp_path, Settings(mode=mode),
+        tick([], FakeSpotify("s", []), prowlarr, sab, never_have, Settings(mode=mode),
              tmp_path / "state.json", on_completion=lambda st, c: calls.append((mode, c.nzo_id)))
     assert calls == [("on", "nzo1")]
 
@@ -1440,7 +1470,7 @@ def test_tick_resets_mixed_albums_before_the_top_up_and_pushes_the_counts(tmp_pa
     with patch.object(albums, "_push") as push, patch.object(albums, "refresh_playlists"), \
             patch.object(albums, "lost_completions", return_value=[]), \
             patch.object(albums, "top_up") as top:
-        tick([], FakeSpotify("s", []), prowlarr, sab, never_have, tmp_path, Settings(mode="on"),
+        tick([], FakeSpotify("s", []), prowlarr, sab, never_have, Settings(mode="on"),
              state_file=state_file, mixed=_all_mixed)
     assert top.call_args.args[0].albums["K0"]["reimport"]
     body = push.call_args.args[0]
@@ -1457,30 +1487,6 @@ def test_tick_grabs_even_when_the_mixed_hook_fails(tmp_path: Path) -> None:
     state_file = tmp_path / ".albums.json"
     _mixed_state(1).save(state_file)
     with patch.object(albums, "refresh_playlists"), patch.object(albums, "top_up") as top:
-        tick([], FakeSpotify("s", []), prowlarr, sab, never_have, tmp_path, Settings(mode="on"),
+        tick([], FakeSpotify("s", []), prowlarr, sab, never_have, Settings(mode="on"),
              state_file=state_file, mixed=broken)
     top.assert_called_once()
-
-
-def test_refresh_writes_the_playlist_store(tmp_path: Path, monkeypatch) -> None:
-    """homelab#1914 stage b: an album playlist's store is its Spotify tracklist."""
-    from music_fetch import store
-
-    monkeypatch.setenv(store.STORE_ENV, store.ON)
-    monkeypatch.setattr(store, "STORE_DIR", tmp_path / "store")
-    refresh_playlists(State(), [("later", "url")], FakeSpotify("s1", [song("One", "A")]), tmp_path,
-                      albums.TickResult())
-    written = store.Store.load(tmp_path / "store" / "later.json")
-    assert written.source == store.SPOTIFY
-    assert [s["name"] for s in written.songs] == ["One"]
-
-
-def test_refresh_writes_no_store_when_off(tmp_path: Path, monkeypatch) -> None:
-    from music_fetch import store
-
-    monkeypatch.delenv(store.STORE_ENV, raising=False)
-    monkeypatch.setattr(store, "STORE_DIR", tmp_path / "store")
-    monkeypatch.setattr(store, "DRYRUN_DIR", tmp_path / "side")
-    refresh_playlists(State(), [("later", "url")], FakeSpotify("s1", [song("One", "A")]), tmp_path,
-                      albums.TickResult())
-    assert not (tmp_path / "store").exists() and not (tmp_path / "side").exists()

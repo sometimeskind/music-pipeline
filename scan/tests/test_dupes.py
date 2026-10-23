@@ -203,15 +203,31 @@ def test_a_certain_pair_is_not_also_listed_uncertain() -> None:
 
 # --- keep rule ----------------------------------------------------------------
 
-def test_keep_prefers_spotify_length_then_bitrate_then_playlists_then_older() -> None:
+def test_keep_prefers_spotify_length_then_bitrate_then_older() -> None:
+    """Playlists don't break a tie (homelab#1914): ``sources`` is provenance, and the
+    stores list a recording, so every copy has the same playlists."""
     expected = [200.0]
     clip = FakeItem(1, "S", length=30.0, bitrate=320000)
     right = FakeItem(2, "S", length=200.4, bitrate=128000)
     better = FakeItem(3, "S", length=199.8, bitrate=256000)
-    more = FakeItem(4, "S", length=200.0, bitrate=256000, sources="a,b")
-    older = FakeItem(0, "S", length=200.0, bitrate=256000, sources="c,d")
+    more = FakeItem(4, "S", length=200.0, bitrate=256000, sources="a,b,c")
+    older = FakeItem(0, "S", length=200.0, bitrate=256000)
     order = sorted([clip, right, better, more, older], key=lambda i: keep_order(i, expected))
-    assert [i.id for i in order] == [0, 4, 3, 2, 1]
+    assert [i.id for i in order] == [0, 3, 4, 2, 1]
+
+
+def test_spotify_durations_read_every_store_first_listing_wins(tmp_path, monkeypatch) -> None:
+    """homelab#1914: durations come from the playlist stores, by song ID or URL; a
+    ``.spotdl`` file is never read."""
+    from music_fetch import store
+
+    monkeypatch.setattr(store, "STORE_DIR", tmp_path / "store")
+    store.Store.from_songs("a", [{"song_id": "S1", "duration": 200}, {"song_id": "S2"},
+                                 {"url": "https://open.spotify.com/track/S3", "duration": 180.5}]).save(store.path("a"))
+    store.Store.from_songs("b", [{"song_id": "S1", "duration": 999}, {"song_id": "S4", "duration": 90}]
+                           ).save(store.path("b"))
+    (tmp_path / "c.spotdl").write_text('{"songs": [{"song_id": "OLD", "duration": 1}]}')
+    assert dupes.spotify_durations() == {"S1": 200.0, "S3": 180.5, "S4": 90.0}
 
 
 def test_keep_without_spotify_length_uses_bitrate() -> None:
@@ -448,7 +464,9 @@ def _patch_run(monkeypatch, items, tmp_path):
     monkeypatch.setattr(library, "MusicLibrary", lambda *_: lib)
     monkeypatch.setattr(navidrome, "trigger_scan", lambda: events.append("rescan"))
     monkeypatch.setattr(scan, "regen_playlists", lambda: events.append("m3u") or {"aaaaaaah": 2})
-    monkeypatch.setattr(scan, "SPOTDL_DIR", tmp_path)
+    from music_fetch import store
+
+    monkeypatch.setattr(store, "STORE_DIR", tmp_path / "store")
     monkeypatch.setattr(dupes, "REPLACED", tmp_path / "replaced")
     monkeypatch.setattr(dupes, "decode", _decoder)
     monkeypatch.setattr(dupes, "pipeline_lock", contextlib.nullcontext)
@@ -526,8 +544,10 @@ def test_an_extra_merges_into_its_own_records_release_item(monkeypatch, tmp_path
     items = _album_items(tmp_path, {1: {"album_record": "A", "album_extra": "1", "spotify_ids": "S"},
                                    2: {"album_record": "A", "release": "r1"}})
     extra, track = items
-    (tmp_path / "pl.spotdl").write_text('{"songs": [{"song_id": "S", "duration": 200}]}')
     _patch_run(monkeypatch, items, tmp_path)
+    from music_fetch import store
+
+    store.Store.from_songs("pl", [{"song_id": "S", "duration": 200}]).save(store.path("pl"))
     certain, listed = dupes.run(apply=True)
     assert [sorted(i.id for i in g.items) for g in certain] == [[1, 2]] and listed == []
     assert extra.removed and not track.removed

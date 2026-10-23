@@ -37,7 +37,6 @@ class ScanMetrics:
     duration_seconds: int = 0
     quarantined_tracks: int = 0
     tracks_imported: int = 0
-    tracks_removed: int = 0
     failure_reason: str = ""
     lossless_items: int | None = None
     # Downloads the length guard rejected, per reason (#165).
@@ -55,7 +54,6 @@ class ScanMetrics:
             _gauge("music_scan_duration_seconds", self.duration_seconds),
             _gauge("music_scan_quarantined_tracks_total", self.quarantined_tracks),
             _gauge("music_scan_tracks_imported_total", self.tracks_imported),
-            _gauge("music_scan_tracks_removed_total", self.tracks_removed),
         ]
         lines.append("# TYPE music_scan_rejected_tracks_total gauge")
         lines += [f'music_scan_rejected_tracks_total{{reason="{r}"}} {n}' for r, n in sorted(self.rejected.items())]

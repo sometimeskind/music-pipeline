@@ -171,7 +171,7 @@ class ItemIndex:
         return self.match(track.song_id, track.isrc, track.name, track.artist, words)
 
     def match_song(self, song: dict, words: bool = True):
-        """Match a .spotdl song entry."""
+        """Match a playlist song entry (spotdl's song format)."""
         return self.match(
             song.get("song_id") or spotify_id(song.get("url")), song.get("isrc"),
             song.get("name", ""), (song.get("artists") or [""])[0], words,

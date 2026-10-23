@@ -61,13 +61,6 @@ clear-failures:
 clear-failures-k8s:
     kubectl exec -n music $(kubectl get pods -n music -l app=music-pipeline -o jsonpath='{.items[0].metadata.name}') -- sh -c "rm -f /root/Music/inbox/.spotdl-failures.json && echo Cleared"
 
-# One-time migration: populate spotify_url flex attr for items imported before #100 fix.
-# Pass --dry-run to preview, --playlist <name> to limit to one playlist.
-backfill-spotify-urls *args:
-    docker compose run --rm \
-        --volume {{justfile_directory()}}/scripts/backfill-spotify-urls.py:/tmp/backfill-spotify-urls.py \
-        service python3 /tmp/backfill-spotify-urls.py {{args}}
-
 # Fingerprint all beets items lacking mb_trackid via AcoustID. Requires ACOUSTID_APIKEY env var.
 # Safe to re-run: skips items that already have mb_trackid.
 mb-fingerprint:

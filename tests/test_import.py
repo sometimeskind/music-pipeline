@@ -99,12 +99,29 @@ def test_playlist_import_source_tag_applied(
 def test_playlist_import_m3u_generated(
     docker_client, volumes, fixture_audio, beets_asis_config
 ):
-    """After scan, a .m3u file exists for the playlist with a relative library path."""
+    """A playlist's .m3u lists its store's entries with relative library paths.
+
+    The fixture has no Spotify ID or ISRC for a store entry to resolve by, so
+    the store holds it as a local entry (homelab#1914), written once the first
+    scan has imported it and given it an id.
+    """
     _setup_playlist(docker_client, volumes, "test-playlist", fixture_audio)
-    run_scan(
-        docker_client, volumes,
-        binds=scan_binds_test(volumes, beets_asis_config),
+    binds = scan_binds_test(volumes, beets_asis_config)
+    run_scan(docker_client, volumes, binds=binds)
+
+    # Imported, but on no store entry: sources alone never lists a track.
+    assert not cat_in_volume(docker_client, volumes, "/root/Music/playlists/test-playlist.m3u").strip()
+
+    ids = [line.strip() for line in beet_ls(docker_client, volumes, "-f$id").splitlines() if line.strip().isdigit()]
+    assert len(ids) == 1, f"expected one imported item, got {ids}"
+    local = {"local": {"id": int(ids[0]), "path": "", "title": "7 Ghosts I", "artist": "Nine Inch Nails"}}
+    put_bytes(
+        docker_client,
+        volumes,
+        "/root/Music/inbox/spotdl/.store/test-playlist.json",
+        json.dumps({"version": 1, "playlist": "test-playlist", "entries": [local]}).encode(),
     )
+    run_scan(docker_client, volumes, binds=binds)
 
     m3u = cat_in_volume(docker_client, volumes, "/root/Music/playlists/test-playlist.m3u")
     assert m3u.strip(), "test-playlist.m3u is empty"
@@ -154,13 +171,15 @@ def test_duplicate_import_skipped(
 
 
 def _setup_playlist(client, vol_names: dict, playlist_name: str, audio_path) -> None:
-    """Create a fake spotdl playlist directory with the test track and a .spotdl file."""
+    """Create a fake spotdl playlist directory with the test track and an empty
+    playlist store, which is what gives the playlist a .m3u (homelab#1914)."""
     playlist_dir = f"/root/Music/inbox/spotdl/{playlist_name}"
     mkdir_in_volume(client, vol_names, playlist_dir)
     put_file(client, vol_names, playlist_dir, audio_path)
+    mkdir_in_volume(client, vol_names, "/root/Music/inbox/spotdl/.store")
     put_bytes(
         client,
         vol_names,
-        f"/root/Music/inbox/spotdl/{playlist_name}.spotdl",
-        json.dumps({"type": "sync", "query": [], "songs": []}).encode(),
+        f"/root/Music/inbox/spotdl/.store/{playlist_name}.json",
+        json.dumps({"version": 1, "playlist": playlist_name, "entries": []}).encode(),
     )

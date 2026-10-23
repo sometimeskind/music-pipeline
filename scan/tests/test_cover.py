@@ -77,14 +77,17 @@ def lib(tmp_path):
         yield library
 
 
-def _spotdl(tmp_path: Path, songs: list[dict]) -> Path:
-    spotdl_dir = tmp_path / "spotdl"
-    spotdl_dir.mkdir(exist_ok=True)
-    (spotdl_dir / "later.spotdl").write_text(json.dumps({"type": "sync", "songs": songs}), encoding="utf-8")
-    return spotdl_dir
+def _store(tmp_path: Path, monkeypatch, songs: list[dict], name: str = "later") -> Path:
+    """Point the playlist stores at *tmp_path* and write playlist *name*'s (homelab#1914)."""
+    from music_fetch import store
+
+    monkeypatch.setattr(store, "STORE_DIR", tmp_path / "store")
+    store.Store.from_songs(name, songs).save(store.path(name))
+    return store.STORE_DIR
 
 
-def test_flac_through_convert_loses_its_picture_and_gets_the_spotify_cover(tmp_path, ffmpeg, lib) -> None:
+def test_flac_through_convert_loses_its_picture_and_gets_the_spotify_cover(tmp_path, ffmpeg, lib,
+                                                                           monkeypatch) -> None:
     from music_scan.cover import covers_by_id, embed_covers
 
     release_art = _jpeg(tmp_path / "release.jpg", "blue")
@@ -95,7 +98,8 @@ def test_flac_through_convert_loses_its_picture_and_gets_the_spotify_cover(tmp_p
     assert _images(m4a) == []  # -vn drops the FLAC's picture: the cause of #204
 
     item = _item(lib, m4a, spotify_ids="T1")
-    covers = covers_by_id(_spotdl(tmp_path, [{"song_id": "T1", "cover_url": COVER_URL}]))
+    _store(tmp_path, monkeypatch, [{"song_id": "T1", "cover_url": COVER_URL}])
+    covers = covers_by_id()
     fetched = []
     assert embed_covers([item], covers, fetch=lambda url: fetched.append(url) or spotify_art) == 1
 
@@ -155,21 +159,25 @@ def test_failed_download_is_skipped_and_fetched_once(tmp_path, ffmpeg, lib) -> N
     assert calls == [COVER_URL]
 
 
-def test_covers_by_id_reads_song_ids_and_urls(tmp_path) -> None:
+def test_covers_by_id_reads_song_ids_and_urls_from_every_store(tmp_path, monkeypatch) -> None:
+    from music_fetch import store
     from music_scan.cover import covers_by_id
 
-    spotdl_dir = _spotdl(tmp_path, [
+    store_dir = _store(tmp_path, monkeypatch, [
         {"song_id": "T1", "cover_url": COVER_URL},
         {"url": "https://open.spotify.com/track/T2", "cover_url": COVER_URL + "2"},
         {"song_id": "T3", "cover_url": None},
         {"song_id": "T4", "cover_url": "Missing thumbnails"},
     ])
-    (spotdl_dir / "broken.spotdl").write_text("{", encoding="utf-8")
-    assert covers_by_id(spotdl_dir) == {"T1": COVER_URL, "T2": COVER_URL + "2"}
+    store.Store.from_songs("other", [{"song_id": "T5", "cover_url": COVER_URL + "5"}]).save(store.path("other"))
+    (store_dir / "broken.json").write_text("{", encoding="utf-8")
+    # homelab#1914: a .spotdl file is never read.
+    (store_dir.parent / "later.spotdl").write_text(
+        json.dumps({"songs": [{"song_id": "OLD", "cover_url": COVER_URL + "old"}]}), encoding="utf-8")
+    assert covers_by_id() == {"T1": COVER_URL, "T2": COVER_URL + "2", "T5": COVER_URL + "5"}
 
 
 def test_backfill_embeds_only_usenet_items_and_rescans(tmp_path, ffmpeg, monkeypatch) -> None:
-    from music_fetch import ingest
     from music_scan import cover, library, navidrome
     from music_scan.library import MusicLibrary
 
@@ -177,7 +185,7 @@ def test_backfill_embeds_only_usenet_items_and_rescans(tmp_path, ffmpeg, monkeyp
     with MusicLibrary(db, tmp_path) as lib:
         _item(lib, _m4a(tmp_path / "a.m4a"), spotify_ids="T1")
         _item(lib, _m4a(tmp_path / "b.m4a"), via="spotdl", spotify_ids="T1")
-    monkeypatch.setattr(ingest, "SPOTDL_DIR", _spotdl(tmp_path, [{"song_id": "T1", "cover_url": COVER_URL}]))
+    _store(tmp_path, monkeypatch, [{"song_id": "T1", "cover_url": COVER_URL}])
     monkeypatch.setattr(library, "LIBRARY_DB", db)
     monkeypatch.setattr(library, "LIBRARY_DIR", tmp_path)
     art = _jpeg(tmp_path / "c.jpg")

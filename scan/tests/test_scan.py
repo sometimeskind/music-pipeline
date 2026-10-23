@@ -1,6 +1,5 @@
 """Tests for pipeline.scan — pure-Python logic."""
 
-import json
 import logging
 import os
 from pathlib import Path
@@ -8,7 +7,13 @@ import unittest.mock as mock
 
 import pytest
 
-from music_fetch.ingest import PendingRemovals, RemovedTrack
+from music_fetch import store
+
+
+@pytest.fixture(autouse=True)
+def _store_dir(tmp_path: Path, monkeypatch):
+    """Every test gets its own, empty playlist store directory (homelab#1914)."""
+    monkeypatch.setattr(store, "STORE_DIR", tmp_path / "store")
 
 
 def _relative_path(track_path: Path, playlists_dir: Path) -> str:
@@ -85,7 +90,7 @@ def test_quarantine_leftovers(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# apply_pending_removals
+# run
 # ---------------------------------------------------------------------------
 
 
@@ -93,160 +98,10 @@ def _make_mock_lib() -> mock.MagicMock:
     mock_lib = mock.MagicMock()
     mock_lib.__enter__ = mock.MagicMock(return_value=mock_lib)
     mock_lib.__exit__ = mock.MagicMock(return_value=False)
-    mock_lib.clear_source_tag = mock.MagicMock(side_effect=lambda **kw: [{"title": kw["title"], "artist": kw["artist"]}])
     mock_lib.items_by_source = mock.MagicMock(return_value=[])
     mock_lib.items_added_since = mock.MagicMock(return_value=[])
-    mock_lib.paths_by_source = mock.MagicMock(return_value=[])
     mock_lib.item_count = mock.MagicMock(return_value=0)
     return mock_lib
-
-
-def testapply_pending_removals_clears_source_tags(tmp_path: Path) -> None:
-    """Track removals call lib.clear_source_tag with typed fields."""
-    from music_scan.scan import apply_pending_removals
-
-    pending = PendingRemovals(
-        tracks=[RemovedTrack(title="Song A", artist="Artist 1", source="my-playlist")],
-        remove_sources=[],
-    )
-    mock_lib = _make_mock_lib()
-
-    count = apply_pending_removals(pending, mock_lib)
-
-    assert count == 1
-    mock_lib.clear_source_tag.assert_called_once_with(
-        title="Song A", artist="Artist 1", source="my-playlist", spotify_id=None, isrc=None
-    )
-
-
-def test_removed_spotdl_entry_clears_that_items_source(tmp_path: Path) -> None:
-    """End to end (#169): a track dropped from the .spotdl snapshot unlinks the item
-    with its Spotify ID, not the same-titled one beside it."""
-    from beets.library import Item
-
-    from music_fetch import ingest
-    from music_fetch.metrics import IngestMetrics
-    from music_fetch.spotdl_ops import SyncResult
-    from music_scan.library import MusicLibrary
-    from music_scan.scan import apply_pending_removals
-
-    spotdl_dir = tmp_path / "spotdl"
-    spotdl_dir.mkdir()
-    live_url = "https://open.spotify.com/track/LIVE"
-    (spotdl_dir / "a.spotdl").write_text(json.dumps({
-        "type": "sync",
-        "query": ["https://open.spotify.com/playlist/X"],
-        "songs": [
-            {"url": "https://open.spotify.com/track/STUDIO", "name": "Song", "artists": ["Artist"]},
-            {"url": live_url, "name": "Song", "artists": ["Artist"]},
-        ],
-    }), encoding="utf-8")
-
-    with mock.patch.object(ingest, "SPOTDL_DIR", spotdl_dir), \
-         mock.patch.object(ingest, "CONF_PATH", tmp_path / "missing.conf"), \
-         mock.patch.object(ingest, "COOKIE_FILE", tmp_path / "cookies.txt"), \
-         mock.patch.object(ingest, "FAILURES_FILE", tmp_path / ".failures.json"), \
-         mock.patch("music_fetch.ingest.sync_playlist", return_value=SyncResult({live_url}, 0, 0, 0, 0, {})), \
-         mock.patch("music_fetch.ingest.time.sleep"):
-        pending = ingest.sync_playlists([], IngestMetrics())
-
-    lib = MusicLibrary(tmp_path / "library.db", tmp_path)
-    with lib:
-        items = {}
-        for sid in ("STUDIO", "LIVE"):
-            items[sid] = Item(title="Song", artist="Artist", sources="a", spotify_ids=sid)
-            lib._lib.add(items[sid])
-
-        assert apply_pending_removals(pending, lib) == 1
-        assert lib._lib.get_item(items["LIVE"].id).get("sources") == ""
-        assert lib._lib.get_item(items["STUDIO"].id).get("sources") == "a"
-
-
-def testapply_pending_removals_remove_sources(tmp_path: Path) -> None:
-    """Source removals call items_by_source, clear tags, and delete the .m3u."""
-    from music_scan.scan import apply_pending_removals
-
-    playlists = tmp_path / "playlists"
-    playlists.mkdir()
-    m3u = playlists / "old-playlist.m3u"
-    m3u.touch()
-
-    pending = PendingRemovals(tracks=[], remove_sources=["old-playlist"])
-    mock_item = mock.MagicMock()
-    mock_item.get = mock.MagicMock(return_value="old-playlist")
-    mock_lib = _make_mock_lib()
-    mock_lib.items_by_source = mock.MagicMock(return_value=[mock_item])
-
-    with mock.patch("music_scan.scan.PLAYLISTS", playlists):
-        count = apply_pending_removals(pending, mock_lib)
-
-    assert count == 1
-    mock_lib.items_by_source.assert_called_once_with("old-playlist")
-    mock_item.__setitem__.assert_called_once_with("sources", "")
-    mock_item.store.assert_called_once()
-    assert not m3u.exists()
-
-
-def testapply_pending_removals_strips_one_source_from_multi(tmp_path: Path) -> None:
-    """Removing a playlist strips only that name from a comma-separated sources field."""
-    from music_scan.scan import apply_pending_removals
-
-    playlists = tmp_path / "playlists"
-    playlists.mkdir()
-
-    pending = PendingRemovals(tracks=[], remove_sources=["old-playlist"])
-    mock_item = mock.MagicMock()
-    mock_item.get = mock.MagicMock(return_value="old-playlist,other-playlist")
-    mock_lib = _make_mock_lib()
-    mock_lib.items_by_source = mock.MagicMock(return_value=[mock_item])
-
-    with mock.patch("music_scan.scan.PLAYLISTS", playlists):
-        apply_pending_removals(pending, mock_lib)
-
-    mock_item.__setitem__.assert_called_once_with("sources", "other-playlist")
-
-
-def testapply_pending_removals_returns_total_count() -> None:
-    """Return value counts items modified, by tracks and sources combined."""
-    from music_scan.scan import apply_pending_removals
-
-    pending = PendingRemovals(
-        tracks=[
-            RemovedTrack(title="A", artist="X", source="pl1"),
-            RemovedTrack(title="B", artist="Y", source="pl2"),
-        ],
-        remove_sources=["gone-pl"],
-    )
-    mock_lib = _make_mock_lib()
-    mock_lib.items_by_source = mock.MagicMock(return_value=[mock.MagicMock(), mock.MagicMock()])
-
-    with mock.patch("music_scan.scan.PLAYLISTS", mock.MagicMock()):
-        count = apply_pending_removals(pending, mock_lib)
-
-    assert count == 4
-
-
-def testapply_pending_removals_logs_unlinks_and_skips_not_found(caplog) -> None:
-    """One [UNLINK] line per cleared item; an entry with no item isn't counted (#190)."""
-    from music_scan.scan import apply_pending_removals
-
-    pending = PendingRemovals(
-        tracks=[
-            RemovedTrack(title="A", artist="X", source="later", spotify_id="ID1"),
-            RemovedTrack(title="B", artist="Y", source="later"),
-        ],
-        remove_sources=[],
-    )
-    mock_lib = _make_mock_lib()
-    mock_lib.clear_source_tag = mock.MagicMock(side_effect=[[{"title": "A (Remastered)", "artist": "X"}], []])
-
-    with caplog.at_level("INFO", logger="music_scan.scan"):
-        count = apply_pending_removals(pending, mock_lib)
-
-    assert count == 1
-    assert "[UNLINK] later: A (Remastered) — X" in caplog.text
-    assert "not found in beets" in caplog.text
-    assert "on 1 item(s); 1 removed entr(ies) not found" in caplog.text
 
 
 def test_run_trigger_scan_failure_sets_success_false(tmp_path: Path) -> None:
@@ -260,7 +115,6 @@ def test_run_trigger_scan_failure_sets_success_false(tmp_path: Path) -> None:
             self.success = True
             self.failure_reason = ""
             self.tracks_imported = 0
-            self.tracks_removed = 0
             self.quarantined_tracks = 0
             self.duration_seconds = 0
             captured.append(self)
@@ -279,103 +133,11 @@ def test_run_trigger_scan_failure_sets_success_false(tmp_path: Path) -> None:
          mock.patch("music_scan.scan.ScanMetrics", FakeMetrics), \
          mock.patch("music_scan.scan.trigger_scan", side_effect=RuntimeError("connection refused")):
         with pytest.raises(RuntimeError, match="connection refused"):
-            scan.run(pending=None)
+            scan.run()
 
     assert len(captured) == 1
     assert captured[0].success is False
     assert captured[0].failure_reason == "navidrome_trigger_failed"
-
-
-def test_run_with_pending_none_skips_apply(tmp_path: Path) -> None:
-    """run(pending=None) never calls apply_pending_removals."""
-    from music_scan import scan
-
-    with mock.patch("music_scan.scan.apply_pending_removals") as mock_apply, \
-         mock.patch("music_scan.scan.MusicLibrary", return_value=_make_mock_lib()), \
-         mock.patch("music_scan.scan.run_beet_import", return_value=0), \
-         mock.patch("music_scan.scan.run_beet_update"), \
-         mock.patch("music_scan.scan._move_asis_eligible", return_value=0), \
-         mock.patch("music_scan.scan.INBOX", tmp_path), \
-         mock.patch("music_scan.scan.SPOTDL_DIR", tmp_path), \
-         mock.patch("music_scan.scan.QUARANTINE", tmp_path), \
-         mock.patch("music_scan.scan.PLAYLISTS", tmp_path), \
-         mock.patch("music_scan.scan.ScanMetrics"):
-        scan.run(pending=None)
-
-    mock_apply.assert_not_called()
-
-
-def test_run_pending_removals_failure_continues_to_import(tmp_path: Path) -> None:
-    """A failure in apply_pending_removals is logged but does not suppress import."""
-    from music_scan import scan
-    from music_fetch.ingest import PendingRemovals
-
-    pending = PendingRemovals(tracks=[], remove_sources=[])
-    import_called = []
-
-    def fake_import(*_args, **_kwargs):
-        import_called.append(True)
-
-    with mock.patch("music_scan.scan.apply_pending_removals", side_effect=RuntimeError("db error")), \
-         mock.patch("music_scan.scan.clear_pending_removals") as mock_clear, \
-         mock.patch("music_scan.scan.MusicLibrary", return_value=_make_mock_lib()), \
-         mock.patch("music_scan.scan.run_beet_import", side_effect=fake_import), \
-         mock.patch("music_scan.scan.run_beet_update"), \
-         mock.patch("music_scan.scan._move_asis_eligible", return_value=0), \
-         mock.patch("music_scan.scan.INBOX", tmp_path), \
-         mock.patch("music_scan.scan.SPOTDL_DIR", tmp_path), \
-         mock.patch("music_scan.scan.QUARANTINE", tmp_path), \
-         mock.patch("music_scan.scan.PLAYLISTS", tmp_path), \
-         mock.patch("music_scan.scan.ScanMetrics"), \
-         mock.patch("music_scan.scan.trigger_scan"):
-        scan.run(pending=pending)
-
-    assert import_called, "import should proceed even when pending-removals raises"
-    mock_clear.assert_not_called()  # the file stays for the next scan (#259)
-
-
-def test_run_clears_the_removals_it_applied(tmp_path: Path) -> None:
-    from music_fetch.ingest import PendingRemovals
-    from music_scan import scan
-
-    pending = PendingRemovals(tracks=[], remove_sources=[])
-    with mock.patch("music_scan.scan.apply_pending_removals", return_value=0), \
-         mock.patch("music_scan.scan.clear_pending_removals") as mock_clear, \
-         mock.patch("music_scan.scan.MusicLibrary", return_value=_make_mock_lib()), \
-         mock.patch("music_scan.scan.run_beet_import", return_value=0), \
-         mock.patch("music_scan.scan.run_beet_update"), \
-         mock.patch("music_scan.scan._move_asis_eligible", return_value=0), \
-         mock.patch("music_scan.scan.INBOX", tmp_path), \
-         mock.patch("music_scan.scan.SPOTDL_DIR", tmp_path), \
-         mock.patch("music_scan.scan.QUARANTINE", tmp_path), \
-         mock.patch("music_scan.scan.PLAYLISTS", tmp_path), \
-         mock.patch("music_scan.scan.ScanMetrics"), \
-         mock.patch("music_scan.scan.trigger_scan"):
-        scan.run(pending=pending)
-
-    mock_clear.assert_called_once_with(pending)
-
-
-def test_apply_pending_removals_skips_an_entry_that_raises(tmp_path: Path, caplog) -> None:
-    """One bad entry is logged and skipped; the entries after it still apply (#259)."""
-    from music_fetch.ingest import PendingRemovals, RemovedTrack
-    from music_scan.scan import apply_pending_removals
-
-    def clear(**kw):
-        if kw["title"] == "Bad":
-            raise ValueError("No closing quotation")
-        return [{"title": kw["title"], "artist": kw["artist"]}]
-
-    mock_lib = _make_mock_lib()
-    mock_lib.clear_source_tag = mock.MagicMock(side_effect=clear)
-    pending = PendingRemovals(
-        tracks=[RemovedTrack("A", "X", "keep"), RemovedTrack("Bad", "X", "keep"), RemovedTrack("C", "X", "keep")],
-        remove_sources=[],
-    )
-    with caplog.at_level("INFO", logger="music_scan.scan"):
-        assert apply_pending_removals(pending, mock_lib) == 2
-    assert mock_lib.clear_source_tag.call_count == 3
-    assert "[SKIP] keep: removing Bad by X failed" in caplog.text
 
 
 def test_run_asis_import_failure_continues_to_beet_update(tmp_path: Path) -> None:
@@ -394,7 +156,7 @@ def test_run_asis_import_failure_continues_to_beet_update(tmp_path: Path) -> Non
          mock.patch("music_scan.scan.PLAYLISTS", tmp_path), \
          mock.patch("music_scan.scan.ScanMetrics"), \
          mock.patch("music_scan.scan.trigger_scan"):
-        scan.run(pending=None)
+        scan.run()
 
     assert update_called, "beet update should proceed even when asis-import raises"
 
@@ -416,13 +178,13 @@ def test_run_beet_update_failure_continues_to_regen_playlists(tmp_path: Path) ->
          mock.patch("music_scan.scan.PLAYLISTS", tmp_path), \
          mock.patch("music_scan.scan.ScanMetrics"), \
          mock.patch("music_scan.scan.trigger_scan"):
-        scan.run(pending=None)
+        scan.run()
 
     assert regen_called, "regen_playlists should proceed even when beet update raises"
 
 
 # ---------------------------------------------------------------------------
-# regen_playlists
+# regen_playlists: each .m3u is its playlist store's view (homelab#1914)
 # ---------------------------------------------------------------------------
 
 
@@ -436,105 +198,75 @@ def _make_mock_item(title: str, artist: str, path: Path, **flex: str) -> mock.Ma
     return item
 
 
-def _write_spotdl(path: Path, songs: list[tuple[str, str]]) -> None:
-    data = {
-        "query": "https://open.spotify.com/playlist/test",
-        "songs": [
-            {"name": name, "artists": [artist], "url": f"url-{i}"}
-            for i, (name, artist) in enumerate(songs)
-        ],
-    }
-    path.write_text(json.dumps(data), encoding="utf-8")
+def _sid(name: str) -> str:
+    return f"ID-{name}"
 
 
-def _regen_lib(spotdl_dir: Path, playlists_dir: Path, items: list) -> mock.MagicMock:
+def _write_store(name: str, songs: list[tuple[str, str]]) -> None:
+    """A store of *songs* (title, artist), each with Spotify ID ``ID-<title>``."""
+    store.Store.from_songs(name, [
+        {"name": title, "artists": [artist], "url": f"https://open.spotify.com/track/{_sid(title)}",
+         "song_id": _sid(title)}
+        for title, artist in songs
+    ]).save(store.path(name))
+
+
+def _regen_lib(items: list) -> mock.MagicMock:
     mock_lib = mock.MagicMock()
     mock_lib.__enter__ = mock.MagicMock(return_value=mock_lib)
     mock_lib.__exit__ = mock.MagicMock(return_value=False)
-    mock_lib.items_by_source = mock.MagicMock(return_value=items)
+    mock_lib.all_items = mock.MagicMock(return_value=items)
+    mock_lib.items_by_source = mock.MagicMock(side_effect=AssertionError("regen never reads sources"))
     return mock_lib
 
 
-def test_regen_playlists_writes_m3u_with_relative_paths(tmp_path: Path) -> None:
+def _run_regen(tmp_path: Path, items: list, metrics=None) -> tuple[dict, Path, mock.MagicMock]:
     from music_scan.scan import regen_playlists
 
-    spotdl_dir = tmp_path / "spotdl"
-    spotdl_dir.mkdir()
-    # Empty songs list → falls back to alphabetical
-    _write_spotdl(spotdl_dir / "my-playlist.spotdl", [])
-
     playlists_dir = tmp_path / "playlists"
-    playlists_dir.mkdir()
-
-    track_path = tmp_path / "library" / "Artist" / "Album" / "01 - Song.m4a"
-    mock_lib = _regen_lib(spotdl_dir, playlists_dir, [_make_mock_item("Song", "Artist", track_path)])
-
-    with mock.patch("music_scan.scan.SPOTDL_DIR", spotdl_dir), \
+    playlists_dir.mkdir(exist_ok=True)
+    mock_lib = _regen_lib(items)
+    with mock.patch("music_scan.scan.SPOTDL_DIR", tmp_path / "spotdl"), \
          mock.patch("music_scan.scan.PLAYLISTS", playlists_dir), \
          mock.patch("music_scan.scan.LIBRARY_DB", tmp_path / "library.db"), \
          mock.patch("music_scan.scan.MusicLibrary", return_value=mock_lib):
-        regen_playlists()
+        counts = regen_playlists(metrics)
+    return counts, playlists_dir, mock_lib
+
+
+def test_regen_playlists_writes_m3u_with_relative_paths(tmp_path: Path) -> None:
+    track_path = tmp_path / "library" / "Artist" / "Album" / "01 - Song.m4a"
+    _write_store("my-playlist", [("Song", "Artist")])
+
+    counts, playlists_dir, _ = _run_regen(
+        tmp_path, [_make_mock_item("Song", "Artist", track_path, spotify_ids=_sid("Song"))])
 
     m3u = playlists_dir / "my-playlist.m3u"
-    assert m3u.exists()
-    content = m3u.read_text(encoding="utf-8")
-    expected_rel = os.path.relpath(track_path, playlists_dir)
-    assert content == expected_rel + "\n"
-    mock_lib.items_by_source.assert_called_once_with("my-playlist")
+    assert m3u.read_text(encoding="utf-8") == os.path.relpath(track_path, playlists_dir) + "\n"
+    assert counts == {"my-playlist": 1}
 
 
-def test_regen_playlists_empty_playlist_writes_empty_m3u(tmp_path: Path) -> None:
-    from music_scan.scan import regen_playlists
+def test_regen_playlists_empty_store_writes_empty_m3u(tmp_path: Path) -> None:
+    _write_store("empty-playlist", [])
 
-    spotdl_dir = tmp_path / "spotdl"
-    spotdl_dir.mkdir()
-    _write_spotdl(spotdl_dir / "empty-playlist.spotdl", [])
+    counts, playlists_dir, _ = _run_regen(tmp_path, [])
 
-    playlists_dir = tmp_path / "playlists"
-    playlists_dir.mkdir()
-
-    mock_lib = _regen_lib(spotdl_dir, playlists_dir, [])
-
-    with mock.patch("music_scan.scan.SPOTDL_DIR", spotdl_dir), \
-         mock.patch("music_scan.scan.PLAYLISTS", playlists_dir), \
-         mock.patch("music_scan.scan.LIBRARY_DB", tmp_path / "library.db"), \
-         mock.patch("music_scan.scan.MusicLibrary", return_value=mock_lib):
-        regen_playlists()
-
-    m3u = playlists_dir / "empty-playlist.m3u"
-    assert m3u.exists()
-    assert m3u.read_text(encoding="utf-8") == ""
+    assert (playlists_dir / "empty-playlist.m3u").read_text(encoding="utf-8") == ""
+    assert counts == {"empty-playlist": 0}
 
 
 def test_regen_playlists_spotify_order(tmp_path: Path) -> None:
-    """Tracks are emitted in .spotdl order when all library tracks match."""
-    from music_scan.scan import regen_playlists
-
+    """Tracks are emitted in store (Spotify) order."""
     lib_root = tmp_path / "library"
-    path_a = lib_root / "Alpha.m4a"
-    path_b = lib_root / "Bravo.m4a"
-    path_c = lib_root / "Charlie.m4a"
-
-    spotdl_dir = tmp_path / "spotdl"
-    spotdl_dir.mkdir()
-    # Spotify order: C, A, B
-    _write_spotdl(spotdl_dir / "pl.spotdl", [("Charlie", "Art"), ("Alpha", "Art"), ("Bravo", "Art")])
-
-    playlists_dir = tmp_path / "playlists"
-    playlists_dir.mkdir()
-
+    path_a, path_b, path_c = lib_root / "Alpha.m4a", lib_root / "Bravo.m4a", lib_root / "Charlie.m4a"
+    _write_store("pl", [("Charlie", "Art"), ("Alpha", "Art"), ("Bravo", "Art")])
     items = [
-        _make_mock_item("Alpha", "Art", path_a),
-        _make_mock_item("Bravo", "Art", path_b),
-        _make_mock_item("Charlie", "Art", path_c),
+        _make_mock_item("Alpha", "Art", path_a, spotify_ids=_sid("Alpha")),
+        _make_mock_item("Bravo", "Art", path_b, spotify_ids=_sid("Bravo")),
+        _make_mock_item("Charlie", "Art", path_c, spotify_ids=_sid("Charlie")),
     ]
-    mock_lib = _regen_lib(spotdl_dir, playlists_dir, items)
 
-    with mock.patch("music_scan.scan.SPOTDL_DIR", spotdl_dir), \
-         mock.patch("music_scan.scan.PLAYLISTS", playlists_dir), \
-         mock.patch("music_scan.scan.LIBRARY_DB", tmp_path / "library.db"), \
-         mock.patch("music_scan.scan.MusicLibrary", return_value=mock_lib):
-        regen_playlists()
+    _, playlists_dir, _ = _run_regen(tmp_path, items)
 
     lines = (playlists_dir / "pl.m3u").read_text(encoding="utf-8").splitlines()
     assert lines == [
@@ -544,99 +276,57 @@ def test_regen_playlists_spotify_order(tmp_path: Path) -> None:
     ]
 
 
-def test_regen_playlists_spotdl_missing_from_library_skipped(tmp_path: Path) -> None:
-    """Tracks in .spotdl but absent from the library are silently skipped."""
-    from music_scan.scan import regen_playlists
+def test_regen_playlists_store_entry_missing_from_library_skipped(tmp_path: Path) -> None:
+    """Entries no library item holds are left out (an empty slot)."""
+    from music_scan.metrics import ScanMetrics
 
+    path_a = tmp_path / "library" / "Alpha.m4a"
+    _write_store("pl", [("Alpha", "Art"), ("Bravo", "Art")])  # Bravo is NOT in the library
+    metrics = ScanMetrics()
+
+    _, playlists_dir, _ = _run_regen(tmp_path, [_make_mock_item("Alpha", "Art", path_a, spotify_ids=_sid("Alpha"))],
+                                     metrics)
+
+    assert (playlists_dir / "pl.m3u").read_text(encoding="utf-8").splitlines() == [
+        os.path.relpath(path_a, playlists_dir)]
+    assert metrics.slots_empty == {"pl": 1}
+
+
+def test_regen_playlists_never_lists_a_tagged_item_no_entry_holds(tmp_path: Path) -> None:
+    """homelab#1914 stage c: ``sources`` is provenance only.  A legacy import
+    tagged with the playlist, and a title+artist match without an ID, are not
+    on it, and the scan writes no local entry for them."""
     lib_root = tmp_path / "library"
-    path_a = lib_root / "Alpha.m4a"
-    # Bravo is in .spotdl but NOT in the library
-
-    spotdl_dir = tmp_path / "spotdl"
-    spotdl_dir.mkdir()
-    _write_spotdl(spotdl_dir / "pl.spotdl", [("Alpha", "Art"), ("Bravo", "Art")])
-
-    playlists_dir = tmp_path / "playlists"
-    playlists_dir.mkdir()
-
-    mock_lib = _regen_lib(spotdl_dir, playlists_dir, [_make_mock_item("Alpha", "Art", path_a)])
-
-    with mock.patch("music_scan.scan.SPOTDL_DIR", spotdl_dir), \
-         mock.patch("music_scan.scan.PLAYLISTS", playlists_dir), \
-         mock.patch("music_scan.scan.LIBRARY_DB", tmp_path / "library.db"), \
-         mock.patch("music_scan.scan.MusicLibrary", return_value=mock_lib):
-        regen_playlists()
-
-    lines = (playlists_dir / "pl.m3u").read_text(encoding="utf-8").splitlines()
-    assert lines == [os.path.relpath(path_a, playlists_dir)]
-
-
-def test_regen_playlists_library_extras_appended_alphabetically(tmp_path: Path) -> None:
-    """Library tracks not in .spotdl are appended after ordered tracks, sorted."""
-    from music_scan.scan import regen_playlists
-
-    lib_root = tmp_path / "library"
-    path_a = lib_root / "Alpha.m4a"
-    path_b = lib_root / "Bravo.m4a"   # in .spotdl
-    path_c = lib_root / "Charlie.m4a"  # NOT in .spotdl (legacy import)
-
-    spotdl_dir = tmp_path / "spotdl"
-    spotdl_dir.mkdir()
-    _write_spotdl(spotdl_dir / "pl.spotdl", [("Bravo", "Art"), ("Alpha", "Art")])
-
-    playlists_dir = tmp_path / "playlists"
-    playlists_dir.mkdir()
-
+    path_b, path_c, path_w = lib_root / "Bravo.m4a", lib_root / "Charlie.m4a", lib_root / "Words.m4a"
+    _write_store("pl", [("Bravo", "Art"), ("Words", "Art")])
+    before = store.load("pl").entries
     items = [
-        _make_mock_item("Alpha", "Art", path_a),
-        _make_mock_item("Bravo", "Art", path_b),
-        _make_mock_item("Charlie", "Legacy", path_c),
-    ]
-    mock_lib = _regen_lib(spotdl_dir, playlists_dir, items)
-
-    with mock.patch("music_scan.scan.SPOTDL_DIR", spotdl_dir), \
-         mock.patch("music_scan.scan.PLAYLISTS", playlists_dir), \
-         mock.patch("music_scan.scan.LIBRARY_DB", tmp_path / "library.db"), \
-         mock.patch("music_scan.scan.MusicLibrary", return_value=mock_lib):
-        regen_playlists()
-
-    lines = (playlists_dir / "pl.m3u").read_text(encoding="utf-8").splitlines()
-    assert lines == [
-        os.path.relpath(path_b, playlists_dir),  # ordered first
-        os.path.relpath(path_a, playlists_dir),  # ordered second
-        os.path.relpath(path_c, playlists_dir),  # unmatched, appended alphabetically
+        _make_mock_item("Bravo", "Art", path_b, spotify_ids=_sid("Bravo"), sources="pl"),
+        _make_mock_item("Charlie", "Legacy", path_c, sources="pl"),
+        _make_mock_item("Words", "Art", path_w, sources="pl"),
     ]
 
+    counts, playlists_dir, _ = _run_regen(tmp_path, items)
 
-def test_regen_playlists_no_spotdl_songs_falls_back_to_alphabetical(tmp_path: Path) -> None:
-    """Empty songs list in .spotdl yields alphabetical order (same as before)."""
-    from music_scan.scan import regen_playlists
+    assert (playlists_dir / "pl.m3u").read_text(encoding="utf-8").splitlines() == [
+        os.path.relpath(path_b, playlists_dir)]
+    assert counts == {"pl": 1}
+    assert store.load("pl").locals == []
+    assert store.load("pl").entries == before
 
+
+def test_regen_playlists_regenerates_every_store(tmp_path: Path) -> None:
     lib_root = tmp_path / "library"
-    path_b = lib_root / "B.m4a"
-    path_a = lib_root / "A.m4a"
+    _write_store("one", [("Alpha", "Art")])
+    _write_store("two", [("Bravo", "Art"), ("Alpha", "Art")])
+    items = [_make_mock_item("Alpha", "Art", lib_root / "Alpha.m4a", spotify_ids=_sid("Alpha")),
+             _make_mock_item("Bravo", "Art", lib_root / "Bravo.m4a", spotify_ids=_sid("Bravo"))]
 
-    spotdl_dir = tmp_path / "spotdl"
-    spotdl_dir.mkdir()
-    _write_spotdl(spotdl_dir / "pl.spotdl", [])  # no songs
+    counts, playlists_dir, _ = _run_regen(tmp_path, items)
 
-    playlists_dir = tmp_path / "playlists"
-    playlists_dir.mkdir()
-
-    items = [_make_mock_item("B", "Art", path_b), _make_mock_item("A", "Art", path_a)]
-    mock_lib = _regen_lib(spotdl_dir, playlists_dir, items)
-
-    with mock.patch("music_scan.scan.SPOTDL_DIR", spotdl_dir), \
-         mock.patch("music_scan.scan.PLAYLISTS", playlists_dir), \
-         mock.patch("music_scan.scan.LIBRARY_DB", tmp_path / "library.db"), \
-         mock.patch("music_scan.scan.MusicLibrary", return_value=mock_lib):
-        regen_playlists()
-
-    lines = (playlists_dir / "pl.m3u").read_text(encoding="utf-8").splitlines()
-    assert lines == [
-        os.path.relpath(path_a, playlists_dir),
-        os.path.relpath(path_b, playlists_dir),
-    ]
+    assert counts == {"one": 1, "two": 2}
+    assert (playlists_dir / "two.m3u").read_text(encoding="utf-8").splitlines() == [
+        "../library/Bravo.m4a", "../library/Alpha.m4a"]
 
 
 # ---------------------------------------------------------------------------
@@ -1011,40 +701,31 @@ def test_add_source_matches_by_id_and_records_it() -> None:
 
 
 def test_regen_playlists_matches_by_id_before_words(tmp_path: Path, caplog) -> None:
-    """Two releases of a title: each playlist entry gets the item it asked for,
-    not the first one with the same words (#176)."""
-    from music_scan.scan import regen_playlists
-
+    """Two releases of a title: each store entry gets the item it asked for, by
+    Spotify ID (URL or song_id) or ISRC, not the first one with the same words
+    (#176).  An entry no item holds by ID or ISRC stays empty: words never fill."""
     lib_root = tmp_path / "library"
     studio, live, remaster = lib_root / "Studio.m4a", lib_root / "Live.m4a", lib_root / "Remaster.m4a"
-    spotdl_dir = tmp_path / "spotdl"
-    spotdl_dir.mkdir()
-    (spotdl_dir / "pl.spotdl").write_text(json.dumps({"songs": [
+    store.Store.from_songs("pl", [
         {"name": "Song", "artists": ["Art"], "url": "https://open.spotify.com/track/LIVE"},
         {"name": "Song", "artists": ["Art"], "url": "u", "song_id": "X", "isrc": "GBREM0000001"},
         {"name": "Other", "artists": ["Art"], "url": "u2"},
-    ]}), encoding="utf-8")
-    playlists_dir = tmp_path / "playlists"
-    playlists_dir.mkdir()
+    ]).save(store.path("pl"))
     items = [
         _make_mock_item("Song", "Art", studio, spotify_ids="STUDIO"),
         _make_mock_item("Song", "Art", live, spotify_url="https://open.spotify.com/track/LIVE"),
         _make_mock_item("Song - 2011 Remaster", "Art", remaster, isrc="USX;GBREM0000001"),
         _make_mock_item("Other", "Art", lib_root / "Other.m4a"),
     ]
-    mock_lib = _regen_lib(spotdl_dir, playlists_dir, items)
 
-    with mock.patch("music_scan.scan.SPOTDL_DIR", spotdl_dir), \
-         mock.patch("music_scan.scan.PLAYLISTS", playlists_dir), \
-         mock.patch("music_scan.scan.LIBRARY_DB", tmp_path / "library.db"), \
-         mock.patch("music_scan.scan.MusicLibrary", return_value=mock_lib), \
-         caplog.at_level("INFO", logger="music_scan.playlists"):
-        regen_playlists()
+    with caplog.at_level("INFO", logger="music_scan.playlists"):
+        _, playlists_dir, _ = _run_regen(tmp_path, items)
 
     lines = (playlists_dir / "pl.m3u").read_text(encoding="utf-8").splitlines()
     rel = lambda p: os.path.relpath(p, playlists_dir)  # noqa: E731
-    assert lines == [rel(live), rel(remaster), rel(lib_root / "Other.m4a"), rel(studio)]
-    assert "pl: 1 of 3 track(s) matched by title+artist only" in caplog.text
+    assert lines == [rel(live), rel(remaster)]
+    assert "[SLOT] pl: 2 entr(ies) filled from the library by ID/ISRC" in caplog.text
+    assert "matched by title+artist only" not in caplog.text
 
 
 # ---------------------------------------------------------------------------
@@ -1166,21 +847,10 @@ def test_have_or_link_keeps_the_full_ladder_inside_the_playlist(real_lib) -> Non
 # ---------------------------------------------------------------------------
 
 
-def _slot_regen(tmp_path: Path, songs: list[dict], source_items: list, all_items: list, metrics=None):
-    """Run regen_playlists for one playlist ``pl`` over mocked source and library items."""
-    from music_scan.scan import regen_playlists
-
-    spotdl_dir, playlists_dir = tmp_path / "spotdl", tmp_path / "playlists"
-    spotdl_dir.mkdir()
-    playlists_dir.mkdir()
-    (spotdl_dir / "pl.spotdl").write_text(json.dumps({"songs": songs}), encoding="utf-8")
-    mock_lib = _regen_lib(spotdl_dir, playlists_dir, source_items)
-    mock_lib.all_items.return_value = all_items
-    with mock.patch("music_scan.scan.SPOTDL_DIR", spotdl_dir), \
-         mock.patch("music_scan.scan.PLAYLISTS", playlists_dir), \
-         mock.patch("music_scan.scan.LIBRARY_DB", tmp_path / "library.db"), \
-         mock.patch("music_scan.scan.MusicLibrary", return_value=mock_lib):
-        counts = regen_playlists(metrics)
+def _slot_regen(tmp_path: Path, songs: list[dict], all_items: list, metrics=None):
+    """Run regen_playlists for one playlist ``pl`` whose store holds *songs*."""
+    store.Store.from_songs("pl", songs).save(store.path("pl"))
+    counts, playlists_dir, mock_lib = _run_regen(tmp_path, all_items, metrics)
     lines = (playlists_dir / "pl.m3u").read_text(encoding="utf-8").splitlines()
     return counts, lines, mock_lib
 
@@ -1202,34 +872,75 @@ def test_regen_playlists_fills_a_slot_from_the_whole_library(tmp_path: Path, cap
     ]
     metrics = ScanMetrics()
     with caplog.at_level(logging.INFO, logger="music_scan.playlists"):
-        counts, lines, lib = _slot_regen(tmp_path, songs, [tagged], [tagged, elsewhere, by_isrc], metrics)
+        counts, lines, _ = _slot_regen(tmp_path, songs, [tagged, elsewhere, by_isrc], metrics)
 
     assert lines == ["../library/elsewhere.m4a", "../library/tagged.m4a", "../library/remaster.m4a"]
     assert counts == {"pl": 3}
     assert metrics.slots_empty == {"pl": 1}
-    assert "[SLOT] pl: 2 entr(ies) filled from the library by ID/ISRC" in caplog.text
+    # The store view resolves every entry against the whole library.
+    assert "[SLOT] pl: 3 entr(ies) filled from the library by ID/ISRC" in caplog.text
     for item in (tagged, elsewhere, by_isrc):
         item.__setitem__.assert_not_called()
         item.store.assert_not_called()
 
 
-def test_regen_playlists_keeps_every_entry_todays_path_shows(tmp_path: Path) -> None:
-    """Additive: an entry matched only by sources + title/artist words stays,
-    even when another library item carries its exact Spotify ID."""
+def test_regen_playlists_lists_the_item_with_the_entrys_id_not_a_words_match(tmp_path: Path) -> None:
+    """An item tagged with the playlist that matches an entry by title+artist
+    only is not on it; the item carrying the entry's Spotify ID is."""
     lib_root = tmp_path / "library"
     words = _make_mock_item("Song", "Art", lib_root / "words.m4a", sources="pl")
     twin = _make_mock_item("Song", "Art", lib_root / "twin.m4a", spotify_ids="S1", sources="keep")
     tail = _make_mock_item("Untracked", "Art", lib_root / "a-tail.m4a", sources="pl")
     songs = [{"name": "Song", "artists": ["Art"], "url": "u", "song_id": "S1"}]
 
-    _, lines, _ = _slot_regen(tmp_path, songs, [words, tail], [words, twin, tail])
+    _, lines, _ = _slot_regen(tmp_path, songs, [words, twin, tail])
 
-    assert lines == ["../library/words.m4a", "../library/a-tail.m4a"]
+    assert lines == ["../library/twin.m4a"]
 
 
 def test_regen_playlists_without_metrics_leaves_them_alone(tmp_path: Path) -> None:
-    counts, lines, _ = _slot_regen(tmp_path, [], [], [])
+    counts, lines, _ = _slot_regen(tmp_path, [], [])
     assert (counts, lines) == ({"pl": 0}, [])
+
+
+def test_sync_hooks_hold_quarantine_and_inbox_downloads(tmp_path: Path) -> None:
+    """The nightly's hooks: ``held`` is the spotdl URLs of the downloads in
+    quarantine and in the inbox; ``resolves`` matches by ID/ISRC without
+    tagging; ``in_library`` tags the item with the playlist (#187)."""
+    from music_scan import held, scan
+
+    quarantine, inbox = tmp_path / "quarantine", tmp_path / "inbox" / "spotdl"
+    urls = {}
+    for root, rel, url in ((quarantine, "rejected/spotdl/pl/q.m4a", "https://open.spotify.com/track/Q"),
+                           (inbox, "pl/i.m4a", "https://open.spotify.com/track/I"),
+                           (inbox, "pl/plain.m4a", None)):
+        (root / rel).parent.mkdir(parents=True, exist_ok=True)
+        (root / rel).write_bytes(b"")
+        urls[root / rel] = url
+    have = _make_mock_item("Have", "Art", tmp_path / "have.m4a", spotify_ids="H1", sources="")
+    have.data = {"sources": "", "spotify_ids": "H1"}
+    have.get.side_effect = lambda k, d=None: have.data.get(k, d)
+    have.__setitem__.side_effect = lambda k, v: have.data.__setitem__(k, v)
+
+    with mock.patch.object(held, "_read_spotify_url", side_effect=lambda p: urls[p]), \
+         mock.patch.object(scan, "QUARANTINE", quarantine), mock.patch.object(scan, "SPOTDL_DIR", inbox), \
+         mock.patch("music_scan.scan.MusicLibrary", return_value=_regen_lib([have])):
+        with scan.sync_hooks() as hooks:
+            assert hooks["held"] == {"https://open.spotify.com/track/Q", "https://open.spotify.com/track/I"}
+            song = {"name": "Have", "artists": ["Art"], "url": "https://open.spotify.com/track/H1"}
+            assert hooks["resolves"](song)
+            assert not hooks["resolves"]({"name": "Have", "artists": ["Art"], "url": "https://open.spotify.com/track/N"})
+            have.store.assert_not_called()
+            assert hooks["in_library"]("later", song)
+            assert have.data["sources"] == "later"
+            have.store.assert_called_once()
+
+
+def test_sync_hooks_default_held_dirs_are_quarantine_and_the_spotdl_inbox() -> None:
+    from music_scan import held, scan
+
+    assert held.QUARANTINE_DIR == scan.QUARANTINE
+    assert held.SPOTDL_DIR == scan.SPOTDL_DIR
 
 
 def test_missing_tracks_and_have_or_link_read_resolved_slots(real_lib) -> None:
@@ -1328,7 +1039,7 @@ def test_run_marks_a_musicbrainz_outage(tmp_path: Path) -> None:
          mock.patch("music_scan.scan.regen_playlists") as regen, \
          mock.patch("music_scan.scan.trigger_scan") as rescan:
         with pytest.raises(scan.MusicBrainzUnavailable):
-            scan.run(pending=None)
+            scan.run()
 
     assert captured[0].success is False and captured[0].failure_reason == "musicbrainz_unavailable"
     assert (inbox / "spotdl" / "keep" / "Artist - Song.m4a").exists()

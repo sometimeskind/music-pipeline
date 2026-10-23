@@ -3,8 +3,6 @@ on the playlist, and an album is whole only when the library holds it all."""
 
 from __future__ import annotations
 
-import json
-import logging
 from pathlib import Path
 from unittest import mock
 
@@ -48,21 +46,26 @@ def _release(lib) -> list:
 
 
 def _regen(tmp_path: Path, lib, songs_by_playlist: dict[str, list[dict]], album: set[str]) -> dict[str, list[str]]:
+    """Regen over playlist stores (homelab#1914): each playlist's songs are its
+    store's; an ``album`` playlist has its ``.album`` sentinel.  No ``.spotdl``."""
+    from music_fetch import store
     from music_scan.scan import regen_playlists
 
-    spotdl_dir, playlists_dir = tmp_path / "spotdl", tmp_path / "playlists"
+    spotdl_dir, playlists_dir, store_dir = tmp_path / "spotdl", tmp_path / "playlists", tmp_path / "store"
     spotdl_dir.mkdir(exist_ok=True)
-    for name, songs in songs_by_playlist.items():
-        (spotdl_dir / f"{name}.spotdl").write_text(json.dumps({"songs": songs}), encoding="utf-8")
-        if name in album:
-            (spotdl_dir / f"{name}.album").touch()
     wrapper = mock.MagicMock()
     wrapper.__enter__ = mock.MagicMock(return_value=lib)
     wrapper.__exit__ = mock.MagicMock(return_value=False)
-    with mock.patch("music_scan.scan.SPOTDL_DIR", spotdl_dir), \
+    with mock.patch.object(store, "STORE_DIR", store_dir), \
+         mock.patch("music_scan.scan.SPOTDL_DIR", spotdl_dir), \
          mock.patch("music_scan.scan.PLAYLISTS", playlists_dir), \
          mock.patch("music_scan.scan.MusicLibrary", return_value=wrapper):
+        for name, songs in songs_by_playlist.items():
+            store.Store.from_songs(name, songs).save(store.path(name))
+            if name in album:
+                (spotdl_dir / f"{name}.album").touch()
         regen_playlists()
+    assert not list(spotdl_dir.glob("*.spotdl"))
     return {name: [Path(line).name for line in (playlists_dir / f"{name}.m3u").read_text().splitlines()]
             for name in songs_by_playlist}
 
@@ -99,7 +102,8 @@ def test_a_track_canon_moved_to_another_album_is_listed_alone(tmp_path: Path, re
 
 
 def test_an_album_whose_tracks_all_left_is_not_listed(tmp_path: Path, real_lib) -> None:
-    """The items keep their tag until the scan applies the removal; the listing drops them at once."""
+    """The release's items are still in the library (and still tagged ``sources=later``), but no
+    store entry is on their album any more: the listing drops them at once."""
     _release(real_lib)
     _add(real_lib, "Other", "/lib/Other/01.m4a", album="Other", spotify_ids="O1", spotify_album_id="OTH")
     assert _regen(tmp_path, real_lib, {"later": [_song("Other", "O1", "OTH", "Other")]}, {"later"})["later"] == \
@@ -134,46 +138,6 @@ def test_the_whole_album_in_the_library_is_have(real_lib) -> None:
     assert _have(real_lib, record)
     record["playlists"]["later"].append(["Gone", "Artist", "S9", None, 1, 9])  # a playlist track still lacking
     assert not _have(real_lib, record)
-
-
-# ---------------------------------------------------------------------------
-# --albums: the before/after report
-# ---------------------------------------------------------------------------
-
-
-def test_album_audit_reports_before_and_after_and_the_records(tmp_path: Path, real_lib,
-                                                             caplog: pytest.LogCaptureFixture) -> None:
-    from music_scan.playlists import album_audit
-
-    _release(real_lib)
-    spotdl_dir, playlists_dir = tmp_path / "spotdl", tmp_path / "playlists"
-    spotdl_dir.mkdir()
-    playlists_dir.mkdir()
-    (spotdl_dir / "later.spotdl").write_text(json.dumps({"songs": [_song("One", "S1")]}), encoding="utf-8")
-    (spotdl_dir / "later.album").touch()
-    (playlists_dir / "later.m3u").write_text("../lib/Album/01.m4a\n", encoding="utf-8")
-    (spotdl_dir / ".albums.json").write_text(json.dumps({"albums": {
-        "ALB": {"status": "fallback", "fallback_from": "partial", "fallback_tracks": {"later": ["S9"]},
-                "name": "Album", "artist": "Artist", "playlists": {"later": [["One", "Artist", "S1"]]}},
-        "HAV": {"status": "have", "name": "Half", "artist": "Artist", "tracks_count": 10,
-                "playlists": {"later": [["One", "Artist", "S1"]]}},
-    }}), encoding="utf-8")
-    wrapper = mock.MagicMock()
-    wrapper.__enter__ = mock.MagicMock(return_value=real_lib)
-    wrapper.__exit__ = mock.MagicMock(return_value=False)
-    with mock.patch("music_scan.scan.SPOTDL_DIR", spotdl_dir), \
-         mock.patch("music_scan.scan.PLAYLISTS", playlists_dir), \
-         mock.patch("music_scan.library.MusicLibrary", return_value=wrapper), \
-         caplog.at_level(logging.INFO, logger="music_scan.playlists"):
-        counts = album_audit()
-
-    # Track level: the entry, then the release's other tagged items alphabetically.
-    assert counts == {"later": (1, 3, 3)}
-    assert "later: on disk 1 | track level 3 | album level 3 | 1 entries on 1 album(s), 0 album(s) with no local track yet" \
-        in caplog.text
-    assert "[SETTLE] ALB: Artist — Album: fallback (partial) → imported; 1 track(s) leave the spotdl queue" in caplog.text
-    assert "[NOTWHOLE] HAV: Artist — Half (have, 10 tracks on Spotify): kept as it is" in caplog.text
-    assert json.loads((spotdl_dir / ".albums.json").read_text())["albums"]["ALB"]["status"] == "fallback"
 
 
 def test_an_album_records_release_alone_is_the_album() -> None:

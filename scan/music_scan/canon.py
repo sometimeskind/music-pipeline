@@ -8,8 +8,8 @@ track/disc numbering from the Spotify album its playlist entry is on, and beets
 moves the file to match.  Items with no Spotify ID, or whose IDs no playlist
 entry describes (``[NOALBUM]``), are left alone.
 
-The album data comes from the playlist item pages, as the ``.spotdl`` snapshots
-store them: no Spotify calls at import.  The pages carry no disc count, so
+The album data comes from the playlist item pages, as the playlist stores
+keep them: no Spotify calls at import.  The pages carry no disc count, so
 ``disctotal`` is the highest disc number seen for the album unless an older,
 fully fetched entry has ``disc_count``.
 
@@ -17,7 +17,7 @@ Release preference, for an item whose ``spotify_ids`` are on several releases:
 its album record's Spotify album, for an item a Usenet release imported
 (:func:`record_homes`, #278); then ``album`` over ``single`` over
 ``compilation``; then a release a playlist entry names today over one known
-only from an old snapshot; then the earliest release; then the album ID, so
+only from a playlist store; then the earliest release; then the album ID, so
 every run agrees.
 
 A Usenet release stays one album (#278): an item on its record's Spotify album
@@ -177,10 +177,10 @@ def _int(value) -> int:
 
 
 def placements_from(sources: Iterable[tuple[list[dict], bool]]) -> dict[str, Placement]:
-    """``{spotify track id: Placement}`` from ``.spotdl``-format songs.
+    """``{spotify track id: Placement}`` from spotdl-format songs.
 
     *sources* are ``(songs, named)`` pairs; the first one to place a track wins,
-    so pass current playlist pages before old snapshots.
+    so pass current playlist pages before the stores.
     """
     sources = [(list(songs), named) for songs, named in sources]
     albums: dict[str, dict] = {}
@@ -219,14 +219,11 @@ def placements_from(sources: Iterable[tuple[list[dict], bool]]) -> dict[str, Pla
     return placed
 
 
-def spotdl_songs(spotdl_dir: Path) -> list[dict]:
-    songs: list[dict] = []
-    for f in sorted(spotdl_dir.glob("*.spotdl")):
-        try:
-            songs.extend(json.loads(f.read_text(encoding="utf-8")).get("songs", []))
-        except Exception:
-            continue
-    return songs
+def store_songs() -> list[dict]:
+    """Every playlist store's Spotify song records (homelab#1914)."""
+    from music_fetch import store  # noqa: PLC0415
+
+    return [song for songs in store.songs_by_playlist().values() for song in songs]
 
 
 def choose(item, placements: dict[str, Placement], homes: Iterable[str] = ()) -> Placement | None:
@@ -851,16 +848,15 @@ def _records() -> dict[str, dict]:
         return {}
 
 
-def canonicalize_items(items: list, spotdl_dir: Path | None = None, budget: int | None = IMPORT_BUDGET,
+def canonicalize_items(items: list, songs: list[dict] | None = None, budget: int | None = IMPORT_BUDGET,
                        records: dict[str, dict] | None = None) -> int:
-    """The import hook: canonicalise *items* from the ``.spotdl`` snapshots.
-    A release's items stay on their album record's album (*records*, read from
-    the album state when not given; #278)."""
-    from music_fetch import ingest  # noqa: PLC0415
-
+    """The import hook: canonicalise *items* from the playlist stores' *songs*
+    (:func:`store_songs` when not given).  A release's items stay on their
+    album record's album (*records*, read from the album state when not given;
+    #278)."""
     if not items:
         return 0
-    placements = placements_from([(spotdl_songs(spotdl_dir or ingest.SPOTDL_DIR), True)])
+    placements = placements_from([(store_songs() if songs is None else songs, True)])
     records = _records() if records is None else records
     plan = canonicalize(items, placements, Resolver(budget=budget), albums=AlbumsByIsrc(budget=IMPORT_SEARCH_BUDGET),
                         homes=record_homes(items, records), records=records)
@@ -971,7 +967,7 @@ def run(apply: bool = False, refresh: bool = False, mb_budget: int | None = None
 
     pages = read_pages(refresh)
     placements = placements_from(
-        [(songs, True) for songs in pages.values()] + [(spotdl_songs(ingest.SPOTDL_DIR), False)]
+        [(songs, True) for songs in pages.values()] + [(store_songs(), False)]
     )
     logger.info("%d Spotify track(s) placed on %d release(s)", len(placements),
                 len({p.release.album_id for p in placements.values()}))

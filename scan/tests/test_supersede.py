@@ -3,7 +3,6 @@
 Library tests generate audio with ffmpeg (skipped where it is missing; the dev image has it).
 """
 
-import json
 import os
 import subprocess
 from datetime import datetime, timedelta, timezone
@@ -83,14 +82,17 @@ def test_disc_track_on_the_album_supersedes_the_loose_copy_and_its_playlists_fol
     assert kept_item.spotify_ids == "TWIST" and "USSM10000004" in kept_item.isrc
     assert kept_item.mb_trackid == "REC-OLD"  # Navidrome keeps the loose item's plays and stars
 
-    # aaaaaah's .m3u now lists the album copy.
-    spotdl, m3u = tmp_path / "spotdl", tmp_path / "playlists"
-    spotdl.mkdir()
-    (spotdl / "aaaaaah.spotdl").write_text(json.dumps({"songs": [
-        {"name": "Simple Twist of Fate", "artists": ["Bob Dylan"], "url": "https://open.spotify.com/track/TWIST"}]}))
-    monkeypatch.setattr(scan, "SPOTDL_DIR", spotdl)
+    # aaaaaah's .m3u (its store's view, homelab#1914) now lists the album copy.
+    from music_fetch import store
+
+    m3u = tmp_path / "playlists"
+    monkeypatch.setattr(store, "STORE_DIR", tmp_path / "store")
+    store.Store.from_songs("aaaaaah", [
+        {"name": "Simple Twist of Fate", "artists": ["Bob Dylan"], "url": "https://open.spotify.com/track/TWIST"}],
+    ).save(store.path("aaaaaah"))
     monkeypatch.setattr(scan, "PLAYLISTS", m3u)
     monkeypatch.setattr(scan, "LIBRARY_DB", tmp_path / "library.db")
+    monkeypatch.setattr(scan, "SPOTDL_DIR", tmp_path / "spotdl")
     scan.regen_playlists()
     assert (m3u / "aaaaaah.m3u").read_text().strip() == os.path.relpath(os.fsdecode(kept_item.path), m3u)
 
