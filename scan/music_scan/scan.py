@@ -16,10 +16,10 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Callable, Iterator
 
-from music_fetch import store
+from music_fetch import albums, store
 from music_scan import playlists
 from music_scan.guard import guard_inbox
-from music_scan.held import held_urls
+from music_scan.held import album_held, held_urls
 from music_scan.identity import (
     ItemIndex, PlaylistTrack, add_to_list, item_isrcs, item_spotify_ids, same_base_title, spotify_id,
 )
@@ -343,7 +343,8 @@ def store_listings() -> Callable[[object], set[str]]:
 def sync_hooks() -> Iterator[dict]:
     """The nightly sync's view of the library (:func:`music_fetch.ingest.sync_playlists`):
     ``resolves`` (a library item holds the track by Spotify ID or ISRC, no
-    tagging), ``held`` (downloads waiting in the inbox or quarantine) and
+    tagging), ``held`` (downloads waiting in the inbox or quarantine, and the
+    tracks of an albums-first playlist's albums album mode will grab, #324) and
     ``in_library`` (the full ladder, tagging the item with the playlist, #187).
     The index is built once: a track downloaded earlier in the run isn't in
     the library until the scan, and is held instead."""
@@ -351,7 +352,7 @@ def sync_hooks() -> Iterator[dict]:
         index = ItemIndex(lib.all_items())
         yield {
             "resolves": lambda song: index.match_song(song, words=False)[0] is not None,
-            "held": held_urls(QUARANTINE, SPOTDL_DIR),
+            "held": held_urls(QUARANTINE, SPOTDL_DIR) | album_held(SPOTDL_DIR / albums.STATE_FILE.name),
             "in_library": lambda pl, song: link_song(index, pl, song),
         }
 

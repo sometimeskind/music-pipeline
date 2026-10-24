@@ -10,7 +10,8 @@ every store), the want list grouped by album, with the albums that hold at
 least ``--min`` wanted tracks (default 2) listed most wanted first.
 
 Backoff is not applied: a track spotdl could not find is still wanted from
-Usenet.  Read-only, and no Spotify or indexer call: the stores and the beets
+Usenet.  The tracks album mode holds for an ``albums-first`` playlist (#324)
+are left out, so on a flagged playlist the report shows what is left for spotdl.  Read-only, and no Spotify or indexer call: the stores and the beets
 library are enough.
 """
 
@@ -23,8 +24,8 @@ from pathlib import Path
 from typing import Callable
 
 from music_fetch import store
-from music_fetch.albums import album_key
-from music_scan.held import held_urls
+from music_fetch.albums import STATE_FILE, album_key
+from music_scan.held import album_held, held_urls
 from music_scan.identity import ItemIndex
 from music_scan.library import LIBRARY_DB, MusicLibrary
 
@@ -139,7 +140,7 @@ def run(playlist: str | None = None, all_stores: bool = False, minimum: int = DE
         names = spotdl_playlists(SPOTDL_DIR)
     with MusicLibrary(LIBRARY_DB) as lib:
         index = ItemIndex(lib.all_items())
-    held = held_urls(QUARANTINE, SPOTDL_DIR)
+    held = held_urls(QUARANTINE, SPOTDL_DIR) | album_held(SPOTDL_DIR / STATE_FILE.name)
     reports: list[Report] = []
     for name in names:
         playlist_store = store.load(name)
