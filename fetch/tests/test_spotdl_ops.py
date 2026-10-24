@@ -240,8 +240,9 @@ def test_outcome_ok_logged_for_successful_download(tmp_path: Path, caplog, simpl
     assert "Break Right" in caplog.text
 
 
-def test_outcome_skip_logged_for_known_track(tmp_path: Path, caplog, simple_songs) -> None:
-    """[SKIP] is logged for tracks the store holds and does not want."""
+def test_known_unwanted_track_is_counted_not_logged(tmp_path: Path, caplog, simple_songs) -> None:
+    """A track the store holds and does not want is counted in the playlist's
+    summary line; its [SKIP] line is DEBUG (#320)."""
     import logging
     output_dir, cookie_file = _setup_sync(tmp_path)
     existing = _make_mock_song("https://open.spotify.com/track/1", title="Protocol")
@@ -254,8 +255,9 @@ def test_outcome_skip_logged_for_known_track(tmp_path: Path, caplog, simple_song
          caplog.at_level(logging.INFO, logger="music_fetch.spotdl_ops"):
         _sync(output_dir=output_dir, cookie_file=cookie_file, previous=[existing.json])
 
-    assert "[SKIP]" in caplog.text
-    assert "Protocol" in caplog.text
+    assert "mypl: 1 track(s) on Spotify, 1 held or waiting, 0 wanted (0 on the playlist before, 0 new), 0 removed" in caplog.text
+    assert "[SKIP]" not in caplog.text
+    assert "Protocol" not in caplog.text
 
 
 def test_outcome_miss_logged_when_no_source_found(tmp_path: Path, caplog, simple_songs) -> None:
@@ -484,8 +486,10 @@ def test_legacy_entry_without_kind_is_miss(tmp_path: Path, simple_songs) -> None
     assert data[url]["attempts"] == 3
 
 
-def test_miss_track_in_backoff_is_skipped(tmp_path: Path, simple_songs) -> None:
-    """A [MISS] track whose retry_after is in the future is not attempted and doesn't consume budget."""
+def test_miss_track_in_backoff_is_skipped(tmp_path: Path, simple_songs, caplog) -> None:
+    """A [MISS] track whose retry_after is in the future is not attempted and doesn't
+    consume budget; backed-off tracks get one [BACK] count line, not one each (#320)."""
+    import logging
     from datetime import datetime, timedelta, timezone
 
     output_dir, cookie_file = _setup_sync(tmp_path)
@@ -504,7 +508,8 @@ def test_miss_track_in_backoff_is_skipped(tmp_path: Path, simple_songs) -> None:
     simple_songs.return_value = [backed, fresh]
     mock_spotdl.download_songs.return_value = [(fresh, Path("/tmp/fresh.m4a"))]
 
-    with mock.patch("music_fetch.spotdl_ops._make_spotdl", return_value=mock_spotdl):
+    with mock.patch("music_fetch.spotdl_ops._make_spotdl", return_value=mock_spotdl), \
+         caplog.at_level(logging.INFO, logger="music_fetch.spotdl_ops"):
         result = _sync(
             output_dir=output_dir, cookie_file=cookie_file,
             failures_file=failures_file, track_limit=10,
@@ -515,6 +520,8 @@ def test_miss_track_in_backoff_is_skipped(tmp_path: Path, simple_songs) -> None:
     assert result.downloaded == 1
     sent_to_spotdl = mock_spotdl.download_songs.call_args[0][0]
     assert all(s.url != backed_off_url for s in sent_to_spotdl)
+    assert f"[BACK] 1 track(s) backed off (miss 1), next retry {future[:10]}" in caplog.text
+    assert "Backed Off" not in caplog.text
 
 
 def test_miss_track_past_backoff_is_retried(tmp_path: Path, simple_songs) -> None:
@@ -625,8 +632,8 @@ def test_corrupt_failures_file_treated_as_empty(tmp_path: Path, simple_songs) ->
     assert result.downloaded == 1
 
 
-def test_outcome_defer_logged_for_budget_limited_tracks(tmp_path: Path, caplog, simple_songs) -> None:
-    """[DEFER] is logged for tracks not attempted due to track budget."""
+def test_budget_limited_tracks_are_counted_not_logged(tmp_path: Path, caplog, simple_songs) -> None:
+    """Tracks over the budget are counted in the budget line; their [DEFER] lines are DEBUG (#320)."""
     import logging
     output_dir, cookie_file = _setup_sync(tmp_path)
 
@@ -639,9 +646,9 @@ def test_outcome_defer_logged_for_budget_limited_tracks(tmp_path: Path, caplog, 
          caplog.at_level(logging.INFO, logger="music_fetch.spotdl_ops"):
         _sync(output_dir=output_dir, cookie_file=cookie_file, track_limit=1)
 
-    assert "[DEFER]" in caplog.text
-    assert "Track 1" in caplog.text
-    assert "Track 2" in caplog.text
+    assert "Track budget: downloading 1 of 3 new track(s) this session (2 deferred to next run)" in caplog.text
+    assert "[DEFER]" not in caplog.text
+    assert "Track 1" not in caplog.text
 
 
 def test_sync_reads_pages_only_and_keeps_known_entries(tmp_path: Path, simple_songs) -> None:
@@ -1173,7 +1180,8 @@ def test_zero_budget_checks_the_playlist_and_defers_every_download(tmp_path: Pat
     assert (result.attempted, result.downloaded, result.linked) == (0, 0, 1)
     assert result.removed_urls == {gone.url}
     assert "[HAVE] Artist - Elsewhere" in caplog.text
-    assert "[DEFER] Artist - New" in caplog.text
+    assert "Track budget: downloading 0 of 1 new track(s) this session (1 deferred to next run)" in caplog.text
+    assert "[DEFER]" not in caplog.text
     assert result.songs == [have.json, new.json]
     assert result.records == {have.url: have.json, gone.url: gone.json}  # the deferred track has none yet
 
@@ -1308,10 +1316,11 @@ def test_wants_judges_a_known_track_by_its_previous_record(tmp_path: Path, simpl
     assert (result.attempted, result.downloaded) == (1, 1)
 
 
-def test_store_want_for_a_wanted_known_track_and_skip_for_an_unwanted_one(
+def test_summary_counts_a_wanted_known_track_apart_from_a_new_one(
         tmp_path: Path, simple_songs, caplog) -> None:
     """A track the store held that it wants again (no library item holds it) is
-    downloaded and logged [STORE-WANT]; one it holds and doesn't want is [SKIP]."""
+    downloaded and counted as on the playlist before; one it holds and doesn't want
+    is counted as held; neither gets its own INFO line (#320)."""
     import logging
 
     output_dir, cookie_file = _setup_sync(tmp_path)
@@ -1328,10 +1337,9 @@ def test_store_want_for_a_wanted_known_track_and_skip_for_an_unwanted_one(
 
     spotdl.download_songs.assert_called_once_with([lost, new])
     assert result.downloaded == 2
-    assert "[SKIP] Artist - Kept" in caplog.text
-    assert "[STORE-WANT] Artist - Lost" in caplog.text
-    assert caplog.text.count("[SKIP]") == 1
-    assert caplog.text.count("[STORE-WANT]") == 1  # a brand-new track is not a [STORE-WANT]
+    assert "mypl: 3 track(s) on Spotify, 1 held or waiting, 2 wanted (1 on the playlist before, 1 new), 0 removed" in caplog.text
+    assert "[SKIP]" not in caplog.text
+    assert "[STORE-WANT]" not in caplog.text
 
 
 def test_new_track_the_store_does_not_want_is_not_downloaded(tmp_path: Path, simple_songs, caplog) -> None:
@@ -1358,7 +1366,8 @@ def test_new_track_the_store_does_not_want_is_not_downloaded(tmp_path: Path, sim
     assert asked == [new.url]
     spotdl.download_songs.assert_called_once_with([new])
     assert (result.attempted, result.downloaded, result.linked) == (1, 1, 0)
-    assert "[SKIP] Artist - Held" in caplog.text
+    assert "mypl: 2 track(s) on Spotify, 1 held or waiting, 1 wanted (0 on the playlist before, 1 new), 0 removed" in caplog.text
+    assert "[SKIP]" not in caplog.text
     assert result.songs == [held.json, new.json]
     assert result.records == {new.url: new.json}
 

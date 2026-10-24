@@ -11,6 +11,7 @@ from __future__ import annotations
 import dataclasses
 import json
 import logging
+from collections import Counter
 import os
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -400,9 +401,11 @@ def _download_batch(
     pins: Mapping[str, str] | None = None,
 ) -> _Batch:
     """Download the want list of *truly_new* in order: skip those the library has
-    ([HAVE]) or that are backed off ([BACK]), defer those over *track_limit*
-    ([DEFER]), then log each outcome and record [MISS]/[FAIL] backoff in
-    *failures_file*.  A *track_limit* of 0 checks and defers everything.
+    ([HAVE]) or that are backed off (one [BACK] count line), defer those over
+    *track_limit* (the budget line), then log each outcome and record [MISS]/[FAIL]
+    backoff in *failures_file*.  Nothing is logged per track unless the track is
+    acted on (#320); the per-track [BACK] and [DEFER] lines are DEBUG.  A
+    *track_limit* of 0 checks and defers everything.
     A pinned track (*pins*, default track-pins.conf, #247) downloads from its
     source URL instead of spotdl's search ([PIN])."""
     pins = load_pins() if pins is None else pins
@@ -416,9 +419,17 @@ def _download_batch(
             logger.info("[PIN] %s → already in the library; its pin is unused", _song_label(song))
     for url in removed_urls | linked.keys():
         failures.pop(url, None)
+    if backed_off:
+        kinds = Counter(failures[song.url].get("kind", "miss") for song in backed_off)
+        logger.info(
+            "[BACK] %d track(s) backed off (%s), next retry %s",
+            len(backed_off),
+            ", ".join(f"{kind} {n}" for kind, n in sorted(kinds.items())),
+            min(failures[song.url]["retry_after"][:10] for song in backed_off),
+        )
     for song in backed_off:
         entry = failures[song.url]
-        logger.info(
+        logger.debug(
             "[BACK] %s → %s backed off until %s",
             _song_label(song),
             entry.get("kind", "miss"),
@@ -437,7 +448,7 @@ def _download_batch(
             total_new - track_limit,
         )
         for song in deferred:
-            logger.info("[DEFER] %s", _song_label(song))
+            logger.debug("[DEFER] %s", _song_label(song))
 
     # spotdl downloads from a song's download_url when it is set, skipping its search.
     for song in truly_new:
@@ -548,8 +559,11 @@ def sync_playlist(
     Each track on the playlist that the store *wants* (no library item holds
     it by Spotify ID or ISRC, and no download of it waits in the inbox or
     quarantine) goes on the want list, judged by its *previous* record when
-    there is one: the page record may lack the ISRC an item matches by.  A
-    wanted track that was already on the playlist is logged ``[STORE-WANT]``.
+    there is one: the page record may lack the ISRC an item matches by.  One
+    summary line per playlist counts the tracks on Spotify, those held or waiting
+    (not wanted), those wanted (split into tracks on the playlist before and new
+    ones) and those removed; the per-track ``[SKIP]`` and ``[STORE-WANT]`` lines
+    are DEBUG (#320).
 
     The want list then goes through *in_library* ([HAVE]: the library holds it
     by the full identity ladder, and the callback tagged it), the backoff and
@@ -588,21 +602,26 @@ def sync_playlist(
     new_urls: set[str] = {s.url for s in new_songs}
 
     removed_urls = set(known) - new_urls
-    if removed_urls:
-        logger.info("%d track(s) removed from Spotify playlist", len(removed_urls))
 
     wanted = []
     seen: set[str] = set()
+    n_skipped = n_known = 0
     for song in new_songs:
         if song.url in seen:
             continue
         seen.add(song.url)
         if not wants(known.get(song.url) or song.json):
-            logger.info("[SKIP] %s", _song_label(song))
+            n_skipped += 1
+            logger.debug("[SKIP] %s", _song_label(song))
             continue
         if song.url in known:
-            logger.info("[STORE-WANT] %s → on the playlist, but no library item holds it", _song_label(song))
+            n_known += 1
+            logger.debug("[STORE-WANT] %s → on the playlist, but no library item holds it", _song_label(song))
         wanted.append(song)
+    logger.info(
+        "%s: %d track(s) on Spotify, %d held or waiting, %d wanted (%d on the playlist before, %d new), %d removed",
+        name, len(seen), n_skipped, len(wanted), n_known, len(wanted) - n_known, len(removed_urls),
+    )
 
     batch = _download_batch(spotdl_obj, wanted, track_limit, failures_file, in_library, removed_urls)
 
