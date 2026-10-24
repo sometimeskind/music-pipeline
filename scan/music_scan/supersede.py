@@ -30,9 +30,20 @@ record's entries) resolves it (#274):
 6. disc and track: the entry at the loose item's slot (canon numbered it
    from the album), each slot once.  Disjoint ISRCs veto it.
 
-Title words never supersede.  A loose item on the album that no rung matches
-is kept and logged ``[KEEP]`` with the reason; ``music-audit-dupes`` compares
-the pair's fingerprints.  The album item then takes the loose item's path
+A loose item on the album no ID rung matches can still be the same recording,
+numbered differently (the release numbered it 15, Spotify 16) or with no IDs on
+the release's side (#325):
+
+7. same audio: the release item at the loose item's disc and track, then the
+   release's items with its title once edition notes are dropped, the first
+   that is a *certain*-tier duplicate of it by ``music-audit-dupes``' own rule
+   (:func:`music_scan.dupes.audio_match`: an AcoustID match, BER at most
+   ``MATCH_BER``, lengths within ``LENGTH_SLACK`` and the same base title).  A
+   loose item or candidate with no fingerprint skips it.
+
+Title words alone never supersede.  A loose item on the album that no rung matches
+is kept and logged ``[KEEP]`` with the reason, the same-audio rung's included
+(each candidate's veto, or that it was skipped for a missing fingerprint).  The album item then takes the loose item's path
 when it sat beside it as a ``.1`` copy.  Loose means not ``via=usenet``: another release's item is an
 album copy too, and a manually imported item (any other ``via``) is never
 replaced (``[MANUAL]``).
@@ -150,11 +161,44 @@ class _Tracklist:
         return "which no item of the release holds"
 
 
-def plan(release: list, library: list, tracks_count: int, tracks=()) -> tuple[list[Pair], list[Kept]]:
+def _same_audio(loose, release: list, frames_of) -> tuple[object, str | None, str]:
+    """``(album item, rung, why not)`` for *loose* by its audio (#325): the
+    release item at its slot, then those with its base title."""
+    from music_scan.dupes import CERTAIN, _base_title, audio_match  # noqa: PLC0415
+
+    slot, title = _slot(loose), _base_title(loose)
+    at = sorted((i for i in release if _slot(i) == slot), key=lambda i: i.id)
+    named = sorted((i for i in release if title and _base_title(i) == title and _slot(i) != slot),
+                   key=lambda i: i.id)
+    if not at and not named:
+        return None, None, f"no release item sits at its disc/track {slot[0]}-{slot[1]} or has its title"
+    if not frames_of(loose):
+        return None, None, "it has no fingerprint, so the same-audio rung was skipped"
+    vetoes, unprinted = [], []
+    for album in [*at, *named]:
+        if not frames_of(album):
+            unprinted.append(album.id)
+            continue
+        match = audio_match(loose, album, frames_of)
+        if match and match[0] == CERTAIN:
+            return album, f"same audio, {match[1]}", ""
+        vetoes.append(f"album item {album.id}: {match[1] if match else 'the fingerprints differ'}")
+    if unprinted:
+        vetoes.append(f"album item(s) {', '.join(map(str, unprinted))} have no fingerprint, "
+                      "so the same-audio rung skipped them")
+    return None, None, f"no release item has its audio ({'; '.join(vetoes)})"
+
+
+def plan(release: list, library: list, tracks_count: int, tracks=(),
+         decoder=None) -> tuple[list[Pair], list[Kept]]:
     """``(pairs, kept)``: which *library* items each item of *release* (one
     import's usenet items) supersedes, and the loose items on its album no
     rung matched.  *tracks* are the album's tracklist entries
-    (:class:`PlaylistTrack` lists).  Leaves the items as they were."""
+    (:class:`PlaylistTrack` lists); *decoder* decodes fingerprints
+    (:func:`music_scan.dupes.decode` by default).  Leaves the items as they were."""
+    from music_scan import dupes  # noqa: PLC0415
+
+    frames_of = dupes.frames_reader(decoder or dupes.decode)
     mine = {i.id for i in release}
     tracklist = _Tracklist(release, tracks)
     album_id = _album_id(release)
@@ -181,14 +225,15 @@ def plan(release: list, library: list, tracks_count: int, tracks=()) -> tuple[li
                 match, how = numbered.pop(_slot(loose)), "disc/track"
         if match is None and on_album:
             if not item_spotify_ids(loose):
-                kept.append(Kept(loose, "it has no Spotify ID"))
-                continue
-            if not tracklist.entries:
-                kept.append(Kept(loose, "no ID matches an item of the release, and the record has no tracklist"))
-                continue
-            match, how, why = tracklist.resolve(loose)
+                why = "it has no Spotify ID"
+            elif not tracklist.entries:
+                why = "no ID matches an item of the release, and the record has no tracklist"
+            else:
+                match, how, why = tracklist.resolve(loose)
             if match is None:
-                kept.append(Kept(loose, why))
+                match, how, audio = _same_audio(loose, release, frames_of)
+                if match is None:
+                    kept.append(Kept(loose, f"{why}; {audio}"))
         if match is None:
             continue
         if (loose.get("via") or "") not in MANAGED_VIA:

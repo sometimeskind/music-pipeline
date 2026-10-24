@@ -237,3 +237,138 @@ def test_backfill_resolves_a_twin_through_the_records_tracklist(tmp_path, ffmpeg
                        "grabbed_at": GRAB.isoformat(), "imported_at": IMPORTED.isoformat()}}
     assert [(p.album.id, p.how) for p in supersede.backfill(lib, records, apply=False)] == [
         (album.id, ["tracklist isrc"])]
+
+
+# Same audio (#325): fingerprints as the fake decoder gives them.  A re-encode
+# flips about 1 bit in 32 (BER ~0.03); another track by a repetitive artist
+# about 4 (~0.12).
+def _frames(seed: int, flips: int = 0) -> list[int]:
+    import random
+
+    rng, noise = random.Random(seed), random.Random(9)
+    out = []
+    for _ in range(400):
+        f = rng.getrandbits(32)
+        for _ in range(flips):
+            f ^= 1 << noise.randrange(32)
+        out.append(f)
+    return out
+
+
+FPS = {"love": _frames(1), "love-reencode": _frames(1, flips=1), "love-lookalike": _frames(1, flips=4),
+       "other": _frames(2), "other-2": _frames(3)}
+PUMPKINS = {"album": "Rotten Apples", "albumartist": "The Smashing Pumpkins", "artist": "The Smashing Pumpkins",
+            "tracktotal": 18, "disc": 1, "disctotal": 1, "spotify_album_id": "APPLES"}
+# Spotify's tracklist: Stand Inside Your Love is 1-16, held by the loose copy's ID.
+APPLES = [["Stand Inside Your Love", "The Smashing Pumpkins", "LOVE", None, 1, 16],
+          ["Perfect", "The Smashing Pumpkins", "PERFECT", None, 1, 15]]
+
+
+def _pumpkins(tmp_path, lib, loose_fp="love-reencode", album_fp="love", **album_fields):
+    """The spotdl Stand Inside Your Love at Spotify's 1-16, and the release's
+    copy, which the release numbered 15 and tag_album_ids gave no Spotify ID
+    (item 548, 2026-10-12)."""
+    root = tmp_path / "library" / "The Smashing Pumpkins" / "Rotten Apples"
+    loose = _add(lib, root / "16 - Stand Inside Your Love.m4a", title="Stand Inside Your Love", track=16,
+                 via="spotdl", sources="aaaaaah", spotify_ids="LOVE", length=254.0,
+                 **({"acoustid_fingerprint": loose_fp} if loose_fp else {}), **PUMPKINS)
+    fields = {**PUMPKINS, "title": "Stand Inside Your Love", "track": 15, "via": "usenet", "sources": "keep",
+              "length": 253.4, **({"acoustid_fingerprint": album_fp} if album_fp else {}), **album_fields}
+    album = _add(lib, root / "15 - Stand Inside Your Love.m4a", **fields)
+    sixteen = _add(lib, root / "16 - Perfect.m4a", title="Perfect", track=16, via="usenet", sources="keep",
+                   spotify_ids="PERFECT", length=203.0, acoustid_fingerprint="other", **PUMPKINS)
+    return loose, album, sixteen
+
+
+def test_the_same_audio_numbered_differently_supersedes_the_loose_copy(tmp_path, ffmpeg, lib, caplog):
+    import logging
+
+    from music_scan import supersede
+
+    caplog.set_level(logging.INFO)
+    loose, album, sixteen = _pumpkins(tmp_path, lib)
+    pairs, kept = supersede.plan([album, sixteen], lib.all_items(), tracks_count=18, tracks=APPLES,
+                                 decoder=FPS.__getitem__)
+    assert [(p.album.id, [i.id for i in p.loose]) for p in pairs] == [(album.id, [loose.id])]
+    assert pairs[0].how[0].startswith("same audio, fingerprint ber=0.0") and kept == []
+    supersede.log(pairs, kept, apply=False)
+    assert f"[SUPERSEDE] {album.id} " in caplog.text and "(same audio, fingerprint" in caplog.text
+
+    assert supersede.apply_pairs(pairs, tmp_path / "replaced") == 1
+    assert lib.get_item(loose.id) is None
+    assert lib.get_item(album.id).spotify_ids == "LOVE"
+
+
+@pytest.mark.parametrize("loose_fp, album_fp, album_fields, why", [
+    ("love-lookalike", "love", {}, "the fingerprints differ"),  # BER ~0.12: another track
+    ("love-reencode", "love", {"length": 380.0}, "fingerprint ber=0.0"),  # an extended mix's length
+    # Wrong audio under its tags, at the loose item's slot (numbered off Spotify's count, so no disc/track rung).
+    ("love-reencode", "love", {"title": "Perfect (Live)", "track": 16, "tracktotal": 0}, "the titles differ"),
+    (None, "love", {}, "it has no fingerprint, so the same-audio rung was skipped"),
+    ("love-reencode", None, {}, "have no fingerprint, so the same-audio rung skipped them"),
+])
+def test_the_same_audio_rung_vetoes_and_skips(tmp_path, ffmpeg, lib, caplog, loose_fp, album_fp, album_fields,
+                                              why):
+    import logging
+
+    from music_scan import supersede
+
+    caplog.set_level(logging.INFO)
+    loose, album, sixteen = _pumpkins(tmp_path, lib, loose_fp, album_fp, **album_fields)
+    pairs, kept = supersede.plan([album, sixteen], lib.all_items(), tracks_count=18, tracks=APPLES,
+                                 decoder=FPS.__getitem__)
+    assert pairs == [] and [k.item.id for k in kept] == [loose.id]
+    supersede.log(pairs, kept, apply=False)
+    assert "which no item of the release holds; " in caplog.text and why in caplog.text
+
+
+SIMPLE = {"album": "Simple Things", "albumartist": "Zero 7", "artist": "Zero 7", "tracktotal": 12, "disc": 1,
+          "disctotal": 1, "spotify_album_id": "SIMPLE"}
+
+
+def test_an_extended_mix_on_the_album_stays_kept(tmp_path, ffmpeg, lib, caplog):
+    """Zero 7's Destiny - Extended Mix: the release holds the album mix, the
+    same base title and the same opening audio, minutes shorter."""
+    import logging
+
+    from music_scan import supersede
+
+    caplog.set_level(logging.INFO)
+    root = tmp_path / "library" / "Zero 7" / "Simple Things"
+    loose = _add(lib, root / "13 - Destiny - Extended Mix.m4a", title="Destiny - Extended Mix", track=13,
+                 via="spotdl", sources="aaaaaah", spotify_ids="DESTINY-EXT", length=486.0,
+                 acoustid_fingerprint="love-reencode", **SIMPLE)
+    album = _add(lib, root / "03 - Destiny.m4a", title="Destiny", track=3, via="usenet", sources="keep",
+                 spotify_ids="DESTINY", length=336.0, acoustid_fingerprint="love", **SIMPLE)
+    pairs, kept = supersede.plan([album], lib.all_items(), tracks_count=12,
+                                 tracks=[["Destiny", "Zero 7", "DESTINY", None, 1, 3],
+                                         ["Destiny - Extended Mix", "Zero 7", "DESTINY-EXT", None, 1, 13]],
+                                 decoder=FPS.__getitem__)
+    assert pairs == [] and [k.item.id for k in kept] == [loose.id]
+    supersede.log(pairs, kept, apply=False)
+    assert f"album item {album.id}: fingerprint ber=0.03 but 150s apart" in caplog.text
+
+
+def test_remixes_on_the_expanded_edition_stay_kept(tmp_path, ffmpeg, lib):
+    """Two Four Tet remixes on the album's expanded edition: the release holds
+    the originals, the same base titles and other audio."""
+    from music_scan import supersede
+
+    fields = {"album": "Expanded", "albumartist": "Somebody", "artist": "Somebody", "tracktotal": 14, "disc": 1,
+              "disctotal": 1, "spotify_album_id": "EXPANDED"}
+    root = tmp_path / "library" / "Somebody" / "Expanded"
+    one = _add(lib, root / "01 - One.m4a", title="One", track=1, via="usenet", sources="keep", spotify_ids="ONE",
+               length=240.0, acoustid_fingerprint="love", **fields)
+    two = _add(lib, root / "02 - Two.m4a", title="Two", track=2, via="usenet", sources="keep", spotify_ids="TWO",
+               length=300.0, acoustid_fingerprint="other", **fields)
+    remixes = [_add(lib, root / f"{n} - {t} (Four Tet Remix).m4a", title=f"{t} (Four Tet Remix)", track=n,
+                    via="spotdl", sources="aaaaaah", spotify_ids=f"{t.upper()}-RMX", length=length,
+                    acoustid_fingerprint=fp, **fields)
+               for n, t, length, fp in [(13, "One", 241.0, "love-lookalike"), (14, "Two", 299.0, "other-2")]]
+    tracks = [["One", "Somebody", "ONE", None, 1, 1], ["Two", "Somebody", "TWO", None, 1, 2],
+              ["One (Four Tet Remix)", "Somebody", "ONE-RMX", None, 1, 13],
+              ["Two (Four Tet Remix)", "Somebody", "TWO-RMX", None, 1, 14]]
+    pairs, kept = supersede.plan([one, two], lib.all_items(), tracks_count=14, tracks=tracks,
+                                 decoder=FPS.__getitem__)
+    assert pairs == [] and [k.item.id for k in kept] == [r.id for r in remixes]
+    assert all("the fingerprints differ" in k.why for k in kept)
