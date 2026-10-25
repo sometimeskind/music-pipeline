@@ -1,5 +1,5 @@
-"""Tests for albums-first playlists (#324): the album tick's wants feed, the
-hold, and the rules that differ for a record with ``origin: "wants"``."""
+"""Tests for Usenet first on spotdl playlists (#324): the album tick's wants
+feed, the hold, and the rules that differ for a record with ``origin: "wants"``."""
 
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -180,7 +180,7 @@ def test_an_album_playlist_takes_a_wants_record_over() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_held_tracks_are_the_waiting_and_grabbed_wants_records_tracks() -> None:
+def test_held_tracks_are_the_wanted_and_grabbed_wants_records_tracks() -> None:
     state = State(albums={
         "A": wants_record(ids=("A1", "A2")),
         "B": wants_record(albums.GRABBED, ids=("B1", "B2")),
@@ -189,7 +189,21 @@ def test_held_tracks_are_the_waiting_and_grabbed_wants_records_tracks() -> None:
         "E": wants_record(albums.FAILED, ids=("E1", "E2")),
         "W": album_record(),
     })
-    assert held_tracks(state) == {"A1", "A2", "B1", "B2"}
+    assert held_tracks(state, Settings(mode="on")) == {"A1", "A2", "B1", "B2"}
+    assert held_tracks(state, Settings(mode="dry-run")) == set()
+
+
+def test_the_hold_reaches_only_as_far_as_a_days_grab_budget() -> None:
+    """A long queue never starves spotdl: only what the next grabs reach is held."""
+    state = State(albums={
+        "W": album_record(),  # an album playlist's wanted record takes a grab first
+        "G": wants_record(albums.GRABBED, ids=("G1",)),  # grabbed: always held
+        "A": wants_record(ids=("A1",)),
+        "B": wants_record(ids=("B1",)),
+        "C": wants_record(ids=("C1",)),
+    })
+    assert held_tracks(state, Settings(mode="on", grabs_per_day=3)) == {"G1", "A1", "B1"}
+    assert held_tracks(state, Settings(mode="on", grabs_per_day=1)) == {"G1"}
 
 
 # ---------------------------------------------------------------------------
@@ -206,7 +220,7 @@ def test_a_missing_or_failed_wants_record_queues_no_fallback(status) -> None:
     assert state.albums["W"]["status"] == albums.FALLBACK
     # Nothing is read for it, and it leaves the hold.
     assert [c.args for c in album_songs.call_args_list] == [("W",)]
-    assert albums.fallback_queue(state) == 2 and held_tracks(state) == set()
+    assert albums.fallback_queue(state) == 2 and held_tracks(state, Settings(mode="on")) == set()
 
 
 def release(guid: str = "r1") -> Release:
@@ -284,7 +298,7 @@ def test_a_release_lacking_wanted_tracks_is_imported_and_they_go_back(roots, cap
     assert [pl for pl, _ in tagged] == ["disc"] and len(tagged[0][1]) == 4
     assert "[DONE] Artist — Album A (wants: disc): 4 file(s)" in caplog.text
     assert "1 of its 4 wanted track(s) not in this release go back to spotdl" in caplog.text
-    assert held_tracks(state) == set()
+    assert held_tracks(state, Settings(mode="on")) == set()
 
 
 def test_a_failed_wants_record_sends_only_its_wanted_tracks_back(roots, caplog) -> None:
@@ -308,7 +322,7 @@ def test_tick_feeds_before_the_top_up_and_pushes_the_origin(tmp_path: Path) -> N
     with patch.object(albums, "_push") as push, \
             patch.object(albums, "top_up", side_effect=lambda state, *a, **k: seen.append(list(state.albums))):
         tick([], MagicMock(), MagicMock(), MagicMock(), lambda k, r: False, Settings(mode="on"),
-             state_file=state_file, wants_first=["disc"], wants=hook({"disc": [("A", [song(1), song(2)])]}))
+             state_file=state_file, want_playlists=["disc"], wants=hook({"disc": [("A", [song(1), song(2)])]}))
     assert seen == [["W", "A"]]
     assert State.load(state_file).albums["A"]["origin"] == albums.WANTS
     body = push.call_args.args[0]
@@ -323,3 +337,13 @@ def test_tick_without_a_wants_hook_feeds_nothing(tmp_path: Path) -> None:
         tick([], MagicMock(), MagicMock(), MagicMock(), lambda k, r: False, Settings(mode="on"),
              state_file=tmp_path / ".albums.json")
     feed.assert_not_called()
+
+
+def test_want_min_zero_turns_the_feed_off_and_drops_the_waiting_records(tmp_path: Path) -> None:
+    state_file = tmp_path / ".albums.json"
+    State(albums={"A": wants_record(), "B": wants_record(albums.GRABBED)}).save(state_file)
+    calls: list = []
+    with patch.object(albums, "top_up"):
+        tick([], MagicMock(), MagicMock(), MagicMock(), lambda k, r: False, Settings(mode="on", want_min=0),
+             state_file=state_file, want_playlists=["disc"], wants=hook({"disc": [("C", [song(1, "C")])]}, calls))
+    assert calls == [] and list(State.load(state_file).albums) == ["B"]

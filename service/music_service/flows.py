@@ -513,7 +513,7 @@ def _album_mixed_hook(lib):
 
 def _album_wants_hook(lib):
     """``wants(playlist, minimum)`` over one open beets library: the albums of
-    an albums-first playlist's want list holding *minimum* wanted tracks or
+    a spotdl playlist's want list holding *minimum* wanted tracks or
     more, most wanted first (``want_albums.group``, #324).  The want list is
     the nightly's before backoff and before album mode's own hold, which it
     feeds.  Reads the library once, when first called."""
@@ -549,10 +549,11 @@ def album_tick_task(settings) -> None:
     logger = get_run_logger()
     conf = load_playlists(ingest.CONF_PATH)
     playlists = [(p.name, p.url) for p in conf if p.album]
-    # Still spotdl playlists (#324): an album or nosync playlist has no want list to feed.
-    wants_first = [p.name for p in conf if p.albums_first and not p.album and not p.nosync]
-    if not playlists and not wants_first:
-        logger.info("No playlists flagged album or albums-first in playlists.conf")
+    # Usenet first for every spotdl playlist's albums (#324); an album or nosync
+    # playlist has no nightly want list to feed.
+    want_playlists = [p.name for p in conf if not p.album and not p.nosync]
+    if not playlists and not want_playlists:
+        logger.info("No album or spotdl playlists in playlists.conf")
         return
 
     with MusicLibrary(scan.LIBRARY_DB) as lib:
@@ -567,7 +568,7 @@ def album_tick_task(settings) -> None:
             on_completion=complete,
             missing=missing,
             mixed=_album_mixed_hook(lib),
-            wants_first=wants_first,
+            want_playlists=want_playlists,
             wants=_album_wants_hook(lib),
         )
 

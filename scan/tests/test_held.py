@@ -69,7 +69,7 @@ def test_held_urls_read_real_spotdl_tags(tmp_path: Path, clip) -> None:
 
 
 def test_album_held_is_the_wants_records_tracks_only_when_on(tmp_path: Path, monkeypatch) -> None:
-    """#324: an albums-first playlist's tracks album mode is about to grab."""
+    """#324: the tracks album mode is about to grab for a spotdl playlist."""
     from music_fetch import albums
 
     state_file = tmp_path / ".albums.json"

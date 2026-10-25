@@ -41,19 +41,6 @@ def test_nosync_flag(tmp_path: Path) -> None:
     assert playlists[1].nosync is False
 
 
-def test_albums_first_flag(tmp_path: Path) -> None:
-    conf = write_conf(
-        tmp_path,
-        """
-        discoveries  https://open.spotify.com/playlist/EEE  albums-first
-        whole-pl     https://open.spotify.com/playlist/FFF  album
-        """,
-    )
-    playlists = load_playlists(conf)
-    assert playlists[0].albums_first is True and playlists[0].album is False
-    assert playlists[1].albums_first is False and playlists[1].album is True
-
-
 def test_comments_and_blank_lines(tmp_path: Path) -> None:
     conf = write_conf(
         tmp_path,

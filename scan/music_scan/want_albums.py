@@ -10,8 +10,8 @@ every store), the want list grouped by album, with the albums that hold at
 least ``--min`` wanted tracks (default 2) listed most wanted first.
 
 Backoff is not applied: a track spotdl could not find is still wanted from
-Usenet.  The tracks album mode holds for an ``albums-first`` playlist (#324)
-are left out, so on a flagged playlist the report shows what is left for spotdl.  Read-only, and no Spotify or indexer call: the stores and the beets
+Usenet.  The tracks album mode holds off spotdl (#324) are left out, so the
+report shows what is left for spotdl.  Read-only, and no Spotify or indexer call: the stores and the beets
 library are enough.
 """
 

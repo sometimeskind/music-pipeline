@@ -15,14 +15,12 @@ class PlaylistConfig:
     url: str
     nosync: bool = False
     album: bool = False
-    # Wanted tracks come from Usenet as whole albums first (#324); still a spotdl playlist.
-    albums_first: bool = False
 
 
 def load_playlists(path: Path = DEFAULT_CONF) -> list[PlaylistConfig]:
     """Parse playlists.conf and return a list of PlaylistConfig entries.
 
-    Format: one entry per line — ``name  spotify-url  [nosync|album|albums-first]``
+    Format: one entry per line — ``name  spotify-url  [nosync|album]``
     Lines starting with # and blank lines are ignored.
     """
     playlists: list[PlaylistConfig] = []
@@ -40,7 +38,6 @@ def load_playlists(path: Path = DEFAULT_CONF) -> list[PlaylistConfig]:
                 url=parts[1],
                 nosync="nosync" in parts[2:],
                 album="album" in parts[2:],
-                albums_first="albums-first" in parts[2:],
             )
         )
     names = [pl.name for pl in playlists]

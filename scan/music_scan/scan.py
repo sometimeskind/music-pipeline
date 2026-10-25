@@ -344,7 +344,7 @@ def sync_hooks() -> Iterator[dict]:
     """The nightly sync's view of the library (:func:`music_fetch.ingest.sync_playlists`):
     ``resolves`` (a library item holds the track by Spotify ID or ISRC, no
     tagging), ``held`` (downloads waiting in the inbox or quarantine, and the
-    tracks of an albums-first playlist's albums album mode will grab, #324) and
+    tracks of the albums album mode will grab next, #324) and
     ``in_library`` (the full ladder, tagging the item with the playlist, #187).
     The index is built once: a track downloaded earlier in the run isn't in
     the library until the scan, and is held instead."""
