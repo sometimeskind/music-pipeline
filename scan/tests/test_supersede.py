@@ -372,3 +372,80 @@ def test_remixes_on_the_expanded_edition_stay_kept(tmp_path, ffmpeg, lib):
                                  decoder=FPS.__getitem__)
     assert pairs == [] and [k.item.id for k in kept] == [r.id for r in remixes]
     assert all("the fingerprints differ" in k.why for k in kept)
+
+
+def _single(tmp_path, lib, **fields):
+    """The spotdl Stand Inside Your Love filed under its single (one track, an
+    album of its own in Navidrome), no ID shared with the release (#328)."""
+    root = tmp_path / "library" / "The Smashing Pumpkins" / "Stand Inside Your Love"
+    single = {"album": "Stand Inside Your Love", "albumartist": "The Smashing Pumpkins",
+              "artist": "The Smashing Pumpkins", "tracktotal": 1, "track": 1, "disc": 1, "disctotal": 1,
+              "spotify_album_id": "SINGLE", "title": "Stand Inside Your Love", "via": "spotdl",
+              "sources": "aaaaaah", "spotify_ids": "LOVE-SINGLE", "length": 254.0,
+              "acoustid_fingerprint": "love-reencode", **fields}
+    return _add(lib, root / f"{single['track']:02d} - {single['title']}.m4a", **single)
+
+
+def test_the_same_audio_filed_under_its_single_supersedes_it(tmp_path, ffmpeg, lib, caplog):
+    import logging
+
+    from music_scan import supersede
+
+    caplog.set_level(logging.INFO)
+    _, album, sixteen = _pumpkins(tmp_path, lib)
+    single = _single(tmp_path, lib)
+    pairs, kept = supersede.plan([album, sixteen], [single, album, sixteen], tracks_count=18, tracks=APPLES,
+                                 decoder=FPS.__getitem__)
+    assert [(p.album.id, [i.id for i in p.loose]) for p in pairs] == [(album.id, [single.id])]
+    assert pairs[0].how[0].startswith("same audio, fingerprint ber=0.0") and kept == []
+
+
+@pytest.mark.parametrize("fields, why", [
+    ({"acoustid_fingerprint": "love-lookalike"}, "filed under Stand Inside Your Love, but no release item has "
+                                                 "its audio (album item"),
+    ({"length": 300.0}, "but 47s apart"),
+    ({"acoustid_fingerprint": None}, "it has no fingerprint, so the same-audio rung was skipped"),
+])
+def test_an_off_album_copy_with_other_audio_is_kept_and_reported(tmp_path, ffmpeg, lib, caplog, fields, why):
+    import logging
+
+    from music_scan import supersede
+
+    caplog.set_level(logging.INFO)
+    _, album, sixteen = _pumpkins(tmp_path, lib)
+    single = _single(tmp_path, lib, **fields)
+    pairs, kept = supersede.plan([album, sixteen], [single, album, sixteen], tracks_count=18, tracks=APPLES,
+                                 decoder=FPS.__getitem__)
+    assert pairs == [] and [k.item.id for k in kept] == [single.id]
+    supersede.log(pairs, kept, apply=False)
+    assert f"[KEEP] {single.id} " in caplog.text and why in caplog.text
+
+
+@pytest.mark.parametrize("fields", [
+    {"artist": "Somebody Else", "albumartist": "Somebody Else"},  # a cover: another artist's recording
+    {"album_record": "OTHER"},  # another album's track: the album is the unit
+    {"title": "Tonight, Tonight"},  # no candidate by title: silent
+])
+def test_an_off_album_copy_without_a_candidate_is_left_alone_silently(tmp_path, ffmpeg, lib, fields):
+    from music_scan import supersede
+
+    _, album, sixteen = _pumpkins(tmp_path, lib)
+    single = _single(tmp_path, lib, **fields)
+    pairs, kept = supersede.plan([album, sixteen], [single, album, sixteen], tracks_count=18, tracks=APPLES,
+                                 decoder=FPS.__getitem__)
+    assert pairs == [] and kept == []
+
+
+def test_a_best_of_keeps_its_tracks(tmp_path, ffmpeg, lib):
+    """A best-of spotdl downloaded track by track: the same audio as the
+    release's Stand Inside Your Love, but its album has other tracks."""
+    from music_scan import supersede
+
+    _, album, sixteen = _pumpkins(tmp_path, lib)
+    best = {"album": "Greatest Hits", "albumartist": "The Smashing Pumpkins", "tracktotal": 2}
+    love = _single(tmp_path, lib, **best)
+    other = _single(tmp_path, lib, title="Tonight, Tonight", track=2, spotify_ids="TONIGHT",
+                    acoustid_fingerprint="other-2", **best)
+    pairs, kept = supersede.plan([album, sixteen], [love, other, album, sixteen], tracks_count=18,
+                                 tracks=APPLES, decoder=FPS.__getitem__)
+    assert pairs == [] and kept == []

@@ -39,7 +39,14 @@ the release's side (#325):
    that is a *certain*-tier duplicate of it by ``music-audit-dupes``' own rule
    (:func:`music_scan.dupes.audio_match`: an AcoustID match, BER at most
    ``MATCH_BER``, lengths within ``LENGTH_SLACK`` and the same base title).  A
-   loose item or candidate with no fingerprint skips it.
+   loose item or candidate with no fingerprint skips it.  A loose item filed
+   under another album (the single or compilation spotdl tagged it with,
+   #328) has only the release's items by its artist with its base title for
+   candidates, and only when it is the one item of that album in the library
+   (the one-track album Navidrome shows beside the real one): a best-of
+   spotdl downloaded track by track keeps its tracks.  Never one that belongs
+   to an album record (``album_record``: another album's track or extra, the
+   album is the unit).
 
 Title words alone never supersede.  A loose item on the album that no rung matches
 is kept and logged ``[KEEP]`` with the reason, the same-audio rung's included
@@ -77,8 +84,9 @@ class Pair:
 
 @dataclasses.dataclass
 class Kept:
-    item: object  # a loose item on the album no rung matched
+    item: object  # a loose item on the album no rung matched, or one off it a same-titled item didn't
     why: str
+    where: str = "on the album"
 
 
 def _path(item) -> str:
@@ -93,6 +101,12 @@ def _album_id(release: list) -> str | None:
 
 def _slot(item) -> tuple[int, int]:
     return item.disc or 1, item.track or 0
+
+
+def _album_key(item) -> tuple[str, str]:
+    """The album *item* is filed under, as Navidrome groups it."""
+    return (str(item.get("albumartist") or item.get("artist") or "").casefold(),
+            str(item.get("album") or "").casefold())
 
 
 def _id_rung(loose, album) -> str | None:
@@ -161,17 +175,22 @@ class _Tracklist:
         return "which no item of the release holds"
 
 
-def _same_audio(loose, release: list, frames_of) -> tuple[object, str | None, str]:
+def _same_audio(loose, release: list, titled: dict, frames_of, on_album: bool) -> tuple[object, str | None, str]:
     """``(album item, rung, why not)`` for *loose* by its audio (#325): the
-    release item at its slot, then those with its base title."""
-    from music_scan.dupes import CERTAIN, _base_title, audio_match  # noqa: PLC0415
+    release item at its slot, then those with its base title (*titled*); off
+    the album only those by its artist (#328), and no why-not without one."""
+    from music_scan.dupes import CERTAIN, _artist_key, _base_title, audio_match  # noqa: PLC0415
 
-    slot, title = _slot(loose), _base_title(loose)
-    at = sorted((i for i in release if _slot(i) == slot), key=lambda i: i.id)
-    named = sorted((i for i in release if title and _base_title(i) == title and _slot(i) != slot),
-                   key=lambda i: i.id)
+    slot = _slot(loose)
+    named = titled.get(_base_title(loose), []) if _base_title(loose) else []
+    if on_album:
+        at = sorted((i for i in release if _slot(i) == slot), key=lambda i: i.id)
+        named = [i for i in named if _slot(i) != slot]
+    else:
+        at, named = [], [i for i in named if _artist_key(i) == _artist_key(loose)]
     if not at and not named:
-        return None, None, f"no release item sits at its disc/track {slot[0]}-{slot[1]} or has its title"
+        return None, None, (f"no release item sits at its disc/track {slot[0]}-{slot[1]} or has its title"
+                            if on_album else "")
     if not frames_of(loose):
         return None, None, "it has no fingerprint, so the same-audio rung was skipped"
     vetoes, unprinted = [], []
@@ -193,12 +212,19 @@ def plan(release: list, library: list, tracks_count: int, tracks=(),
          decoder=None) -> tuple[list[Pair], list[Kept]]:
     """``(pairs, kept)``: which *library* items each item of *release* (one
     import's usenet items) supersedes, and the loose items on its album no
-    rung matched.  *tracks* are the album's tracklist entries
-    (:class:`PlaylistTrack` lists); *decoder* decodes fingerprints
+    rung matched (and those off it a same-titled release item vetoed).
+    *tracks* are the album's tracklist entries (:class:`PlaylistTrack`
+    lists); *decoder* decodes fingerprints
     (:func:`music_scan.dupes.decode` by default).  Leaves the items as they were."""
     from music_scan import dupes  # noqa: PLC0415
 
     frames_of = dupes.frames_reader(decoder or dupes.decode)
+    titled: dict[str, list] = {}
+    for album in sorted(release, key=lambda i: i.id):
+        titled.setdefault(dupes._base_title(album), []).append(album)
+    library = list(library)
+    # Off the album, only a one-track album's item is a candidate: a best-of keeps its tracks (#328).
+    albums = Counter(_album_key(i) for i in library)
     mine = {i.id for i in release}
     tracklist = _Tracklist(release, tracks)
     album_id = _album_id(release)
@@ -231,9 +257,13 @@ def plan(release: list, library: list, tracks_count: int, tracks=(),
             else:
                 match, how, why = tracklist.resolve(loose)
             if match is None:
-                match, how, audio = _same_audio(loose, release, frames_of)
+                match, how, audio = _same_audio(loose, release, titled, frames_of, on_album=True)
                 if match is None:
                     kept.append(Kept(loose, f"{why}; {audio}"))
+        elif match is None and not loose.get("album_record") and albums[_album_key(loose)] == 1:
+            match, how, audio = _same_audio(loose, release, titled, frames_of, on_album=False)
+            if match is None and audio:
+                kept.append(Kept(loose, audio, f"filed under {loose.get('album') or '-'}"))
         if match is None:
             continue
         if (loose.get("via") or "") not in MANAGED_VIA:
@@ -261,8 +291,8 @@ def log(pairs: list[Pair], kept: list[Kept], apply: bool) -> None:
             logger.info("  [MOVE] %s %s → %s: the path its loose copy held%s", p.album.id, _path(p.album), dest,
                         "" if apply else " (dry run)")
     for k in kept:
-        logger.info("  [KEEP] %s %s — %s %s: on the album, but %s; kept",
-                    k.item.id, k.item.get("artist"), k.item.get("title"), _path(k.item), k.why)
+        logger.info("  [KEEP] %s %s — %s %s: %s, but %s; kept",
+                    k.item.id, k.item.get("artist"), k.item.get("title"), _path(k.item), k.where, k.why)
 
 
 def apply_pairs(pairs: list[Pair], replaced_dir: Path | None = None) -> int:
