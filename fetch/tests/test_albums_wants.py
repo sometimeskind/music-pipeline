@@ -36,11 +36,12 @@ def song(n: int, album_id: str = "A", tracks_count: int = 10, album_type: str = 
 
 
 def hook(groups: dict[str, list[tuple[str, list[dict]]]], calls: list | None = None):
-    """A wants hook returning *groups* per playlist, as want_albums ranks them."""
-    def wants(name, minimum):
+    """A wants hook returning *groups* per playlist, every album of its want
+    list; an album's position is its index in the list."""
+    def wants(name):
         if calls is not None:
-            calls.append((name, minimum))
-        return [(k, s) for k, s in groups.get(name, []) if len(s) >= minimum]
+            calls.append(name)
+        return [(k, i, s) for i, (k, s) in enumerate(groups.get(name, []))]
     return wants
 
 
@@ -65,7 +66,7 @@ def test_feed_queues_an_album_with_its_wanted_tracks_only(caplog) -> None:
     calls: list = []
     feed_wants(state, ["disc"], hook({"disc": [("A", [song(3), song(7)])]}, calls), Settings(mode="on"))
     record = state.albums["A"]
-    assert calls == [("disc", 2)]
+    assert calls == ["disc"]
     assert record["origin"] == albums.WANTS and record["status"] == albums.WANTED
     assert record["playlists"] == {"disc": [["T3", "Artist", "A3", None, 1, 3], ["T7", "Artist", "A7", None, 1, 7]]}
     # The album's size, for the matcher, is the whole album's.
@@ -121,6 +122,40 @@ def test_feed_orders_album_playlist_records_first_then_by_rank() -> None:
     # An album on two flagged playlists holds each one's wanted tracks.
     assert [t[2] for t in state.albums["A"]["playlists"]["mix"]] == ["A4", "A5"]
     assert len(state.albums["A"]["playlists"]["disc"]) == 3
+
+
+def test_the_threshold_counts_across_playlists() -> None:
+    """One wanted track on each of two playlists is two wanted tracks of the album."""
+    state = State()
+    feed_wants(state, ["aaaaah", "disc"], hook({"aaaaah": [("A", [song(1)])], "disc": [("A", [song(2)])]}),
+               Settings())
+    record = state.albums["A"]
+    assert [t[2] for t in record["playlists"]["aaaaah"]] == ["A1"]
+    assert [t[2] for t in record["playlists"]["disc"]] == ["A2"]
+    assert held_tracks(state, Settings(mode="on")) == {"A1", "A2"}
+
+
+def test_a_track_two_playlists_want_counts_once() -> None:
+    state = State()
+    feed_wants(state, ["aaaaah", "disc"], hook({"aaaaah": [("A", [song(1)])], "disc": [("A", [song(1)])]}),
+               Settings())
+    assert state.albums == {}
+
+
+def test_the_rank_is_the_total_across_playlists() -> None:
+    # B: 2 wanted on disc; A: 1 on disc and 2 on mix, so 3 in total, and first.
+    state = State()
+    groups = {"disc": [("B", [song(1, "B"), song(2, "B")]), ("A", [song(1)])], "mix": [("A", [song(2), song(3)])]}
+    feed_wants(state, ["disc", "mix"], hook(groups), Settings())
+    assert list(state.albums) == ["A", "B"]
+
+
+def test_a_shared_album_leaves_once_its_total_falls_under_the_threshold() -> None:
+    record = wants_record(ids=("A1",))
+    record["playlists"]["mix"] = [["T2", "Artist", "A2"]]
+    state = State(albums={"A": record})
+    feed_wants(state, ["disc", "mix"], hook({"disc": [("A", [song(1)])]}), Settings())
+    assert state.albums == {}
 
 
 def test_feed_updates_a_waiting_record_but_not_a_grabbed_one() -> None:

@@ -420,10 +420,9 @@ def _save_store(name: str, songs: list[dict], previous: store.Store | None) -> N
     playlist.save(store.path(name))
 
 
-# wants(playlist, minimum): the albums of *playlist*'s want list holding at
-# least *minimum* wanted tracks, as ``(album key, wanted songs)``, most wanted
-# first, then the one whose first wanted track comes first (music_scan.want_albums).
-WantAlbums = Callable[[str, int], list[tuple[str, list[dict]]]]
+# wants(playlist): every album of *playlist*'s want list (music_scan.want_albums),
+# as ``(album key, playlist position of its first wanted track, wanted songs)``.
+WantAlbums = Callable[[str], list[tuple[str, int, list[dict]]]]
 
 
 def _wants(record: dict) -> bool:
@@ -445,52 +444,67 @@ def _back(record: dict) -> str:
     return f"; its {sum(len(t) for t in record.get('playlists', {}).values())} wanted track(s) go back to spotdl"
 
 
+def _track_id(song: dict) -> str:
+    return song.get("song_id") or song.get("url") or f"{song.get('name')}/{(song.get('artists') or [''])[0]}"
+
+
 def feed_wants(
     state: State,
     playlists: list[str],
     wants: WantAlbums,
     settings: Settings,
 ) -> None:
-    """Queue the albums of each spotdl playlist's want list (#324).
+    """Queue the albums the spotdl playlists' want lists share (#324).
 
-    Every album *wants* lists for a playlist (``want_min`` wanted tracks or
-    more) becomes or updates a record with ``origin: "wants"`` whose
-    ``playlists[<name>]`` holds the wanted tracks only.  Skipped, so their
-    tracks stay on spotdl: local keys (no Spotify album to search or tag
-    against) and albums an album playlist already wants whole.  Only a
-    record not yet grabbed is updated.  A wants record whose album is no
-    longer listed for a playlist (its tracks removed, or downloaded another
-    way, spotdl's included while it was not held), or whose playlist is no
-    longer in *playlists* (now an album or nosync playlist, or removed), leaves that playlist while
-    ``wanted``, ``dry-run``, ``missing`` or ``have``, and is deleted with its
-    last playlist.
+    The threshold counts across *playlists*: an album with ``want_min`` or
+    more distinct wanted tracks over all of them (a track two playlists list
+    counts once) becomes or updates a record with ``origin: "wants"`` whose
+    ``playlists[<name>]`` holds each playlist's wanted tracks only, one of
+    them included.  Skipped, so their tracks stay on spotdl: local keys (no
+    Spotify album to search or tag against) and albums an album playlist
+    already wants whole.  Only a record not yet grabbed is updated.  A wants
+    record whose album is no longer listed for a playlist (its tracks
+    removed, or downloaded another way, spotdl's included while it was not
+    held), or whose playlist is no longer in *playlists* (now an album or
+    nosync playlist, or removed), leaves that playlist while ``wanted``,
+    ``dry-run``, ``missing`` or ``have``, and is deleted with its last
+    playlist; so is one whose total fell under the threshold.
 
     Then the records are re-ordered, since :func:`top_up` searches them in
-    order: the album playlists' first, then the wants records in the order
-    *wants* ranked them, playlist by playlist, then the other wants records.
-    One ``[WANTS]`` line per playlist, with the tracks :func:`held_tracks`
-    holds off spotdl."""
-    ranked: list[str] = []
-    listed_on: dict[str, set[str]] = {}
-    skipped_on: dict[str, dict[str, int]] = {}
-    for name in playlists:
-        listed = listed_on[name] = set()
-        skipped = skipped_on[name] = {}
-        for key, songs in wants(name, settings.want_min):
-            album = reduce_to_albums(songs)[key]
-            record = state.albums.get(key)
-            why = "local" if not _spotify_album(key) else "album playlist" if record and not _wants(record) else ""
+    order: the album playlists' first, then the wants records most wanted
+    first, then by their first wanted track (playlists in *playlists* order,
+    then position), then the other wants records.  One ``[WANTS]`` line per
+    playlist, with the tracks :func:`held_tracks` holds off spotdl."""
+    found: dict[str, dict] = {}  # key → {"on": {playlist: songs}, "at": (playlist index, position)}
+    for index, name in enumerate(playlists):
+        for key, first, songs in wants(name):
+            found.setdefault(key, {"on": {}, "at": (index, first)})["on"][name] = songs
+
+    def total(key: str) -> int:
+        return len({_track_id(s) for songs in found[key]["on"].values() for s in songs})
+
+    ranked = sorted((k for k in found if total(k) >= settings.want_min), key=lambda k: (-total(k), found[k]["at"]))
+    listed_on: dict[str, set[str]] = {name: set() for name in playlists}
+    skipped_on: dict[str, dict[str, int]] = {name: {} for name in playlists}
+    for key in ranked:
+        on = found[key]["on"]
+        record = state.albums.get(key)
+        why = "local" if not _spotify_album(key) else "album playlist" if record and not _wants(record) else ""
+        for name in on:
             if why:
-                skipped[why] = skipped.get(why, 0) + 1
-                continue
-            listed.add(key)
-            if key not in ranked:
-                ranked.append(key)
-            if record is None:
-                record = state.albums[key] = {"status": WANTED, "blocklist": [], "origin": WANTS}
-            if record.get("status") in WAITING:
-                record.update({k: v for k, v in album.items() if k != "tracks"})
-                record.setdefault("playlists", {})[name] = album["tracks"]
+                skipped_on[name][why] = skipped_on[name].get(why, 0) + 1
+            else:
+                listed_on[name].add(key)
+        if why:
+            continue
+        if record is None:
+            record = state.albums[key] = {"status": WANTED, "blocklist": [], "origin": WANTS}
+        if record.get("status") in WAITING:
+            distinct = list({_track_id(s): s for songs in on.values() for s in songs}.values())
+            record.update({k: v for k, v in reduce_to_albums(distinct)[key].items() if k != "tracks"})
+            playlists_of = record.setdefault("playlists", {})
+            for name, songs in on.items():
+                playlists_of[name] = [track_entry(s) for s in songs]
     for key, record in list(state.albums.items()):
         if _wants(record) and record.get("status") in WAITING:
             record["playlists"] = {n: t for n, t in record.get("playlists", {}).items() if key in listed_on.get(n, ())}

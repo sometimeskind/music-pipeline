@@ -579,7 +579,7 @@ def test_album_mixed_hook_leaves_a_copy_another_playlists_store_lists():
 
 
 def test_album_wants_hook_groups_the_want_list_by_album():
-    """#324: the feed reads the nightly's want list (file holds applied), by album, most wanted first."""
+    """#324: the feed reads the nightly's want list (file holds applied), by album, with each one's first position."""
     from music_fetch import store
     from music_service import flows
 
@@ -590,9 +590,8 @@ def test_album_wants_hook_groups_the_want_list_by_album():
     with patch("music_scan.held.held_urls", return_value=frozenset({"u0"})), \
          patch.object(store, "load", return_value=MagicMock(songs=songs)):
         wants = flows._album_wants_hook(lib)
-        assert [(k, [s["url"] for s in w]) for k, w in wants("disc", 2)] == [("B", ["u3", "u4", "u5"]),
-                                                                           ("A", ["u1", "u2"])]
-        assert [k for k, _ in wants("disc", 3)] == ["B"]
+        assert [(k, first, [s["url"] for s in w]) for k, first, w in wants("disc")] == [
+            ("A", 1, ["u1", "u2"]), ("B", 3, ["u3", "u4", "u5"])]
     lib.all_items.assert_called_once()
 
 

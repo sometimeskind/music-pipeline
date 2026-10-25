@@ -512,11 +512,12 @@ def _album_mixed_hook(lib):
 
 
 def _album_wants_hook(lib):
-    """``wants(playlist, minimum)`` over one open beets library: the albums of
-    a spotdl playlist's want list holding *minimum* wanted tracks or
-    more, most wanted first (``want_albums.group``, #324).  The want list is
-    the nightly's before backoff and before album mode's own hold, which it
-    feeds.  Reads the library once, when first called."""
+    """``wants(playlist)`` over one open beets library: every album of a
+    spotdl playlist's want list (``want_albums.group``, #324), with the
+    position of its first wanted track; the feed applies the threshold
+    across playlists.  The want list is the nightly's before backoff and
+    before album mode's own hold, which it feeds.  Reads the library once,
+    when first called."""
     from music_fetch import store  # noqa: PLC0415
     from music_scan import want_albums  # noqa: PLC0415
     from music_scan.held import held_urls  # noqa: PLC0415
@@ -524,7 +525,7 @@ def _album_wants_hook(lib):
 
     cache: dict = {}
 
-    def wants(name: str, minimum: int) -> list[tuple[str, list[dict]]]:
+    def wants(name: str) -> list[tuple[str, int, list[dict]]]:
         if not cache:
             index = ItemIndex(lib.all_items())
             cache.update(resolves=lambda song: index.match_song(song, words=False)[0] is not None,
@@ -533,7 +534,7 @@ def _album_wants_hook(lib):
         if playlist is None:
             return []
         report = want_albums.group(name, playlist.songs, cache["resolves"], cache["held"])
-        return [(a.key, a.wanted) for a in report.over(minimum)]
+        return [(a.key, a.first, a.wanted) for a in report.albums]
 
     return wants
 
