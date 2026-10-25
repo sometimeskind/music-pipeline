@@ -42,8 +42,11 @@ the release's side (#325):
    loose item or candidate with no fingerprint skips it.  A loose item filed
    under another album (the single or compilation spotdl tagged it with,
    #328) has only the release's items by its artist with its base title for
-   candidates, and never one that belongs to an album record
-   (``album_record``: another album's track or extra, the album is the unit).
+   candidates, and only when it is the one item of that album in the library
+   (the one-track album Navidrome shows beside the real one): a best-of
+   spotdl downloaded track by track keeps its tracks.  Never one that belongs
+   to an album record (``album_record``: another album's track or extra, the
+   album is the unit).
 
 Title words alone never supersede.  A loose item on the album that no rung matches
 is kept and logged ``[KEEP]`` with the reason, the same-audio rung's included
@@ -98,6 +101,12 @@ def _album_id(release: list) -> str | None:
 
 def _slot(item) -> tuple[int, int]:
     return item.disc or 1, item.track or 0
+
+
+def _album_key(item) -> tuple[str, str]:
+    """The album *item* is filed under, as Navidrome groups it."""
+    return (str(item.get("albumartist") or item.get("artist") or "").casefold(),
+            str(item.get("album") or "").casefold())
 
 
 def _id_rung(loose, album) -> str | None:
@@ -213,6 +222,9 @@ def plan(release: list, library: list, tracks_count: int, tracks=(),
     titled: dict[str, list] = {}
     for album in sorted(release, key=lambda i: i.id):
         titled.setdefault(dupes._base_title(album), []).append(album)
+    library = list(library)
+    # Off the album, only a one-track album's item is a candidate: a best-of keeps its tracks (#328).
+    albums = Counter(_album_key(i) for i in library)
     mine = {i.id for i in release}
     tracklist = _Tracklist(release, tracks)
     album_id = _album_id(release)
@@ -248,7 +260,7 @@ def plan(release: list, library: list, tracks_count: int, tracks=(),
                 match, how, audio = _same_audio(loose, release, titled, frames_of, on_album=True)
                 if match is None:
                     kept.append(Kept(loose, f"{why}; {audio}"))
-        elif match is None and not loose.get("album_record"):
+        elif match is None and not loose.get("album_record") and albums[_album_key(loose)] == 1:
             match, how, audio = _same_audio(loose, release, titled, frames_of, on_album=False)
             if match is None and audio:
                 kept.append(Kept(loose, audio, f"filed under {loose.get('album') or '-'}"))

@@ -383,7 +383,7 @@ def _single(tmp_path, lib, **fields):
               "spotify_album_id": "SINGLE", "title": "Stand Inside Your Love", "via": "spotdl",
               "sources": "aaaaaah", "spotify_ids": "LOVE-SINGLE", "length": 254.0,
               "acoustid_fingerprint": "love-reencode", **fields}
-    return _add(lib, root / "01 - Stand Inside Your Love.m4a", **single)
+    return _add(lib, root / f"{single['track']:02d} - {single['title']}.m4a", **single)
 
 
 def test_the_same_audio_filed_under_its_single_supersedes_it(tmp_path, ffmpeg, lib, caplog):
@@ -433,4 +433,19 @@ def test_an_off_album_copy_without_a_candidate_is_left_alone_silently(tmp_path, 
     single = _single(tmp_path, lib, **fields)
     pairs, kept = supersede.plan([album, sixteen], [single, album, sixteen], tracks_count=18, tracks=APPLES,
                                  decoder=FPS.__getitem__)
+    assert pairs == [] and kept == []
+
+
+def test_a_best_of_keeps_its_tracks(tmp_path, ffmpeg, lib):
+    """A best-of spotdl downloaded track by track: the same audio as the
+    release's Stand Inside Your Love, but its album has other tracks."""
+    from music_scan import supersede
+
+    _, album, sixteen = _pumpkins(tmp_path, lib)
+    best = {"album": "Greatest Hits", "albumartist": "The Smashing Pumpkins", "tracktotal": 2}
+    love = _single(tmp_path, lib, **best)
+    other = _single(tmp_path, lib, title="Tonight, Tonight", track=2, spotify_ids="TONIGHT",
+                    acoustid_fingerprint="other-2", **best)
+    pairs, kept = supersede.plan([album, sixteen], [love, other, album, sixteen], tracks_count=18,
+                                 tracks=APPLES, decoder=FPS.__getitem__)
     assert pairs == [] and kept == []
