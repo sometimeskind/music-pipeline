@@ -241,6 +241,25 @@ def test_the_hold_reaches_only_as_far_as_a_days_grab_budget() -> None:
     assert held_tracks(state, Settings(mode="on", grabs_per_day=1)) == {"G1"}
 
 
+def test_the_hold_reaches_only_as_far_as_the_next_in_flight_batches() -> None:
+    """SABnzbd's queue sets the pace, so a large grab budget doesn't hold the whole queue."""
+    state = State(albums={
+        "W": album_record(),
+        "G": wants_record(albums.GRABBED, ids=("G1",)),
+        **{k: wants_record(ids=(f"{k}1",)) for k in "ABCDEF"},
+    })
+    held = held_tracks(state, Settings(mode="on", grabs_per_day=300, max_in_flight=2, hold_ahead=2))
+    assert held == {"G1", "A1", "B1", "C1"}  # 2 × 2 grabs ahead, the album playlist's first
+    assert held_tracks(state, Settings(mode="on", grabs_per_day=300, hold_ahead=0)) == {"G1"}
+
+
+def test_hold_ahead_comes_from_the_environment(monkeypatch) -> None:
+    monkeypatch.setenv("ALBUM_WANT_HOLD_AHEAD", "7")
+    assert Settings.from_env().hold_ahead == 7
+    monkeypatch.delenv("ALBUM_WANT_HOLD_AHEAD")
+    assert Settings.from_env().hold_ahead == 4
+
+
 # ---------------------------------------------------------------------------
 # Rules that differ for a wants record
 # ---------------------------------------------------------------------------
