@@ -81,17 +81,16 @@ def test_feed_holds_nothing_unless_on(caplog) -> None:
 
 def test_feed_threshold_comes_from_the_settings(monkeypatch) -> None:
     monkeypatch.setenv("ALBUM_WANT_MIN", "3")
-    monkeypatch.setenv("ALBUM_WANT_MAX_TRACKS", "12")
     settings = Settings.from_env()
-    assert (settings.want_min, settings.want_max_tracks) == (3, 12)
+    assert settings.want_min == 3
     state = State()
     feed_wants(state, ["disc"], hook({"disc": [("A", [song(1), song(2), song(3)]), ("B", [song(1, "B"), song(2, "B")])]}),
                settings)
     assert list(state.albums) == ["A"]
-    assert Settings().want_min == 2 and Settings().want_max_tracks == 20
+    assert Settings().want_min == 2
 
 
-def test_feed_skips_local_keys_compilations_and_oversized_albums(caplog) -> None:
+def test_feed_skips_local_keys_only(caplog) -> None:
     caplog.set_level("INFO")
     local = [song(1, None), song(2, None)]
     state = State()
@@ -102,8 +101,9 @@ def test_feed_skips_local_keys_compilations_and_oversized_albums(caplog) -> None
         ("U", [song(1, "U", tracks_count=0), song(2, "U", tracks_count=0)]),
         ("A", [song(1), song(2)]),
     ]}), Settings())
-    assert list(state.albums) == ["A"]
-    assert "; 1 compilation skipped; 1 local skipped; 2 oversized skipped" in caplog.text
+    # Compilations and long albums are grabbed like any other.
+    assert list(state.albums) == ["C", "B", "U", "A"]
+    assert "; 1 local skipped" in caplog.text
 
 
 def test_feed_leaves_an_album_an_album_playlist_wants_whole() -> None:

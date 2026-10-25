@@ -149,10 +149,8 @@ class Settings:
     dry_run_limit: int = 25
     # Mixed albums reset for a reimport per rolling 24h (#288); 0 turns it off.
     auto_reimports_per_day: int = 3
-    # albums-first playlists (#324): wanted tracks an album needs to be grabbed
-    # whole, and the largest album grabbed for them.
+    # albums-first playlists (#324): wanted tracks an album needs to be grabbed whole.
     want_min: int = 2
-    want_max_tracks: int = 20
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -168,7 +166,6 @@ class Settings:
             dry_run_limit=_env_int("ALBUM_DRY_RUN_LIMIT", 25),
             auto_reimports_per_day=_env_int("ALBUM_AUTO_REIMPORTS_PER_DAY", 3),
             want_min=_env_int("ALBUM_WANT_MIN", 2),
-            want_max_tracks=_env_int("ALBUM_WANT_MAX_TRACKS", 20),
         )
 
 
@@ -450,17 +447,6 @@ def _back(record: dict) -> str:
     return f"; its {sum(len(t) for t in record.get('playlists', {}).values())} wanted track(s) go back to spotdl"
 
 
-def _skip_reason(key: str, album: dict, settings: Settings) -> str:
-    """Why an album of an albums-first playlist stays on spotdl (#324), or ""."""
-    if not _spotify_album(key):
-        return "local"
-    if album.get("album_type") == "compilation":
-        return "compilation"
-    if not album["tracks_count"] or album["tracks_count"] > settings.want_max_tracks:
-        return "oversized"
-    return ""
-
-
 def feed_wants(
     state: State,
     playlists: list[str],
@@ -472,9 +458,8 @@ def feed_wants(
     Every album *wants* lists for a playlist (``want_min`` wanted tracks or
     more) becomes or updates a record with ``origin: "wants"`` whose
     ``playlists[<name>]`` holds the wanted tracks only.  Skipped, so their
-    tracks stay on spotdl: local keys, compilations, albums of more than
-    ``want_max_tracks`` tracks or of an unknown count, and albums an album
-    playlist already wants whole.  Only a record not yet grabbed is updated.
+    tracks stay on spotdl: local keys (no Spotify album to search or tag
+    against) and albums an album playlist already wants whole.  Only a record not yet grabbed is updated.
     A wants record whose album is no longer listed for a playlist (its
     tracks removed, or downloaded another way), or whose playlist is no
     longer in *playlists* (its flag removed), leaves that playlist while
@@ -493,7 +478,7 @@ def feed_wants(
         for key, songs in wants(name, settings.want_min):
             album = reduce_to_albums(songs)[key]
             record = state.albums.get(key)
-            why = _skip_reason(key, album, settings) or ("album playlist" if record and not _wants(record) else "")
+            why = "local" if not _spotify_album(key) else "album playlist" if record and not _wants(record) else ""
             if why:
                 skipped[why] = skipped.get(why, 0) + 1
                 continue
