@@ -511,6 +511,34 @@ def _album_mixed_hook(lib):
     return mixed
 
 
+def _album_wants_hook(lib):
+    """``wants(playlist)`` over one open beets library: every album of a
+    spotdl playlist's want list (``want_albums.group``, #324), with the
+    position of its first wanted track; the feed applies the threshold
+    across playlists.  The want list is the nightly's before backoff and
+    before album mode's own hold, which it feeds.  Reads the library once,
+    when first called."""
+    from music_fetch import store  # noqa: PLC0415
+    from music_scan import want_albums  # noqa: PLC0415
+    from music_scan.held import held_urls  # noqa: PLC0415
+    from music_scan.identity import ItemIndex  # noqa: PLC0415
+
+    cache: dict = {}
+
+    def wants(name: str) -> list[tuple[str, int, list[dict]]]:
+        if not cache:
+            index = ItemIndex(lib.all_items())
+            cache.update(resolves=lambda song: index.match_song(song, words=False)[0] is not None,
+                         held=held_urls(scan.QUARANTINE, scan.SPOTDL_DIR))
+        playlist = store.load(name)
+        if playlist is None:
+            return []
+        report = want_albums.group(name, playlist.songs, cache["resolves"], cache["held"])
+        return [(a.key, a.first, a.wanted) for a in report.albums]
+
+    return wants
+
+
 @task(name="album-tick", log_prints=True)
 def album_tick_task(settings) -> None:
     """Refresh album playlists, recover lost import triggers and top the Usenet queue up."""
@@ -520,9 +548,13 @@ def album_tick_task(settings) -> None:
     from music_scan.library import MusicLibrary  # noqa: PLC0415
 
     logger = get_run_logger()
-    playlists = [(p.name, p.url) for p in load_playlists(ingest.CONF_PATH) if p.album]
-    if not playlists:
-        logger.info("No playlists flagged album in playlists.conf")
+    conf = load_playlists(ingest.CONF_PATH)
+    playlists = [(p.name, p.url) for p in conf if p.album]
+    # Usenet first for every spotdl playlist's albums (#324); an album or nosync
+    # playlist has no nightly want list to feed.
+    want_playlists = [p.name for p in conf if not p.album and not p.nosync]
+    if not playlists and not want_playlists:
+        logger.info("No album or spotdl playlists in playlists.conf")
         return
 
     with MusicLibrary(scan.LIBRARY_DB) as lib:
@@ -537,6 +569,8 @@ def album_tick_task(settings) -> None:
             on_completion=complete,
             missing=missing,
             mixed=_album_mixed_hook(lib),
+            want_playlists=want_playlists,
+            wants=_album_wants_hook(lib),
         )
 
 

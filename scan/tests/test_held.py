@@ -66,3 +66,17 @@ def test_held_urls_read_real_spotdl_tags(tmp_path: Path, clip) -> None:
     clip(inbox / "pl" / "untagged.m4a", ("tone", 1), url=None)
     assert held._read_spotify_url(inbox / "pl" / "untagged.m4a") is None
     assert held.held_urls(quarantine, inbox) == {"https://open.spotify.com/track/Q", "https://open.spotify.com/track/I"}
+
+
+def test_album_held_is_the_wants_records_tracks_only_when_on(tmp_path: Path, monkeypatch) -> None:
+    """#324: the tracks album mode is about to grab for a spotdl playlist."""
+    from music_fetch import albums
+
+    state_file = tmp_path / ".albums.json"
+    albums.State(albums={"A": {"status": "wanted", "origin": "wants", "playlists": {"disc": [["T", "Artist", "ID1"]]}},
+                         "W": {"status": "wanted", "playlists": {"albums": [["T", "Artist", "ID2"]]}}}).save(state_file)
+    monkeypatch.setenv("ALBUM_MODE", "on")
+    assert held.album_held(state_file) == {"https://open.spotify.com/track/ID1"}
+    assert held.album_held(tmp_path / "missing.json") == frozenset()
+    monkeypatch.setenv("ALBUM_MODE", "dry-run")
+    assert held.album_held(state_file) == frozenset()

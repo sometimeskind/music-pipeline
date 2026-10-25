@@ -39,6 +39,15 @@ An album is on the playlist while at least one of its tracks is, and leaves it
 (its lines gone from the ``.m3u``) when none remain: removing one track of
 several does nothing.
 
+Every spotdl playlist gets its wanted tracks from Usenet first (#324):
+:func:`feed_wants` turns each album holding ``ALBUM_WANT_MIN`` (``0`` turns
+it off) or more of a playlist's wanted tracks into a record with ``origin:
+"wants"`` whose tracks are the wanted ones only.  Such a record is an album nobody asked for
+whole: a wanted track its release lacks, or every wanted track of an album
+that goes missing or fails, goes back to spotdl's want list, never a
+whole-album fallback.  While its grab is near (within a day's grab budget)
+or its import pending, its tracks are held off spotdl (:func:`held_tracks`).
+
 ``ALBUM_MODE`` is ``off`` (default), ``dry-run`` (search and log the pick, never
 grab) or ``on``.  Indexer use is capped by a rolling-24h budget counted from our
 own timestamps, because the indexer's reset window is unknown.
@@ -81,6 +90,11 @@ FALLBACK = "fallback"  # the absent tracks are left to spotdl (`fallback_tracks`
 FILLED = "filled"      # complete, with tracks from spotdl
 # fallback_from values for an imported release, before #268 stopped chasing its gaps.
 PARTIAL, GAP = "partial", "gap"
+# A record's ``origin`` (#324): absent for an album playlist's, WANTS for one
+# :func:`feed_wants` made from a spotdl playlist's want list.
+ALBUM, WANTS = "album", "wants"
+# A wants record not yet grabbed: the feed updates it, or drops it.
+WAITING = (WANTED, DRY_RUN, MISSING, HAVE)
 
 MISSING_RETRY = timedelta(days=7)
 # Releases tried per album before giving up, so an album beets can't match
@@ -133,6 +147,8 @@ class Settings:
     dry_run_limit: int = 25
     # Mixed albums reset for a reimport per rolling 24h (#288); 0 turns it off.
     auto_reimports_per_day: int = 3
+    # spotdl playlists (#324): wanted tracks an album needs to be grabbed whole; 0 turns it off.
+    want_min: int = 2
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -147,6 +163,7 @@ class Settings:
             hits_per_day=_env_int("ALBUM_HITS_PER_DAY", 90),
             dry_run_limit=_env_int("ALBUM_DRY_RUN_LIMIT", 25),
             auto_reimports_per_day=_env_int("ALBUM_AUTO_REIMPORTS_PER_DAY", 3),
+            want_min=_env_int("ALBUM_WANT_MIN", 2),
         )
 
 
@@ -378,6 +395,9 @@ def refresh_playlists(
         wanted = reduce_to_albums(songs)
         for key, album in wanted.items():
             record = state.albums.setdefault(key, {"status": WANTED, "blocklist": []})
+            if record.pop("origin", None) == WANTS:
+                # The album playlist wants it whole: its wanted tracks are no longer the point.
+                record["playlists"] = {}
             record.update({k: v for k, v in album.items() if k != "tracks"})
             record.setdefault("playlists", {})[name] = album["tracks"]
         # Albums this playlist no longer holds.
@@ -398,6 +418,139 @@ def _save_store(name: str, songs: list[dict], previous: store.Store | None) -> N
     playlist = store.Store.from_songs(name, songs, keep=previous)
     playlist.source = store.SPOTIFY
     playlist.save(store.path(name))
+
+
+# wants(playlist): every album of *playlist*'s want list (music_scan.want_albums),
+# as ``(album key, playlist position of its first wanted track, wanted songs)``.
+WantAlbums = Callable[[str], list[tuple[str, int, list[dict]]]]
+
+
+def _wants(record: dict) -> bool:
+    return record.get("origin") == WANTS
+
+
+def _label(record: dict) -> str:
+    label = f"{record['artist']} — {record['name']}"
+    if _wants(record):
+        label += f" (wants: {', '.join(record.get('playlists', {}))})"
+    return label
+
+
+def _back(record: dict) -> str:
+    """A log note for a wants record that is missing or failed: no fallback,
+    its wanted tracks go back to spotdl (#324)."""
+    if not _wants(record):
+        return ""
+    return f"; its {sum(len(t) for t in record.get('playlists', {}).values())} wanted track(s) go back to spotdl"
+
+
+def _track_id(song: dict) -> str:
+    return song.get("song_id") or song.get("url") or f"{song.get('name')}/{(song.get('artists') or [''])[0]}"
+
+
+def feed_wants(
+    state: State,
+    playlists: list[str],
+    wants: WantAlbums,
+    settings: Settings,
+) -> None:
+    """Queue the albums the spotdl playlists' want lists share (#324).
+
+    The threshold counts across *playlists*: an album with ``want_min`` or
+    more distinct wanted tracks over all of them (a track two playlists list
+    counts once) becomes or updates a record with ``origin: "wants"`` whose
+    ``playlists[<name>]`` holds each playlist's wanted tracks only, one of
+    them included.  Skipped, so their tracks stay on spotdl: local keys (no
+    Spotify album to search or tag against) and albums an album playlist
+    already wants whole.  Only a record not yet grabbed is updated.  A wants
+    record whose album is no longer listed for a playlist (its tracks
+    removed, or downloaded another way, spotdl's included while it was not
+    held), or whose playlist is no longer in *playlists* (now an album or
+    nosync playlist, or removed), leaves that playlist while ``wanted``,
+    ``dry-run``, ``missing`` or ``have``, and is deleted with its last
+    playlist; so is one whose total fell under the threshold.
+
+    Then the records are re-ordered, since :func:`top_up` searches them in
+    order: the album playlists' first, then the wants records most wanted
+    first, then by their first wanted track (playlists in *playlists* order,
+    then position), then the other wants records.  One ``[WANTS]`` line per
+    playlist, with the tracks :func:`held_tracks` holds off spotdl."""
+    found: dict[str, dict] = {}  # key → {"on": {playlist: songs}, "at": (playlist index, position)}
+    for index, name in enumerate(playlists):
+        for key, first, songs in wants(name):
+            found.setdefault(key, {"on": {}, "at": (index, first)})["on"][name] = songs
+
+    def total(key: str) -> int:
+        return len({_track_id(s) for songs in found[key]["on"].values() for s in songs})
+
+    ranked = sorted((k for k in found if total(k) >= settings.want_min), key=lambda k: (-total(k), found[k]["at"]))
+    listed_on: dict[str, set[str]] = {name: set() for name in playlists}
+    skipped_on: dict[str, dict[str, int]] = {name: {} for name in playlists}
+    for key in ranked:
+        on = found[key]["on"]
+        record = state.albums.get(key)
+        why = "local" if not _spotify_album(key) else "album playlist" if record and not _wants(record) else ""
+        for name in on:
+            if why:
+                skipped_on[name][why] = skipped_on[name].get(why, 0) + 1
+            else:
+                listed_on[name].add(key)
+        if why:
+            continue
+        if record is None:
+            record = state.albums[key] = {"status": WANTED, "blocklist": [], "origin": WANTS}
+        if record.get("status") in WAITING:
+            distinct = list({_track_id(s): s for songs in on.values() for s in songs}.values())
+            record.update({k: v for k, v in reduce_to_albums(distinct)[key].items() if k != "tracks"})
+            playlists_of = record.setdefault("playlists", {})
+            for name, songs in on.items():
+                playlists_of[name] = [track_entry(s) for s in songs]
+    for key, record in list(state.albums.items()):
+        if _wants(record) and record.get("status") in WAITING:
+            record["playlists"] = {n: t for n, t in record.get("playlists", {}).items() if key in listed_on.get(n, ())}
+            if not record["playlists"]:
+                del state.albums[key]
+    order = [k for k, r in state.albums.items() if not _wants(r)] + [k for k in ranked if k in state.albums]
+    order += [k for k in state.albums if k not in set(order)]
+    state.albums = {k: state.albums[k] for k in order}
+    held = _held(state, settings)
+    for name in playlists:
+        queued = [(k, r["playlists"].get(name, [])) for k, r in state.albums.items()
+                  if k in listed_on[name] and r.get("status") in (WANTED, DRY_RUN, GRABBED)]
+        logger.info("[WANTS] %s: %d album(s) queued (%d wanted track(s)), %d held off spotdl%s", name, len(queued),
+                    sum(len(t) for _, t in queued), sum(len(t) for k, t in queued if k in held),
+                    "".join(f"; {n} {why} skipped" for why, n in sorted(skipped_on[name].items())))
+
+
+def _held(state: State, settings: Settings) -> set[str]:
+    """The keys of the wants records whose tracks are held off spotdl (#324):
+    every one ``grabbed``, and the first ``wanted`` ones, in search order, that
+    a day's grab budget reaches after the album playlists' ``wanted`` records.
+    The rest of the queue stays on spotdl's want list until its turn nears, so
+    a long queue never starves the nightly.  Nothing in ``off`` or ``dry-run``,
+    where nothing grabs them."""
+    if settings.mode != "on":
+        return set()
+    room = settings.grabs_per_day - sum(1 for r in state.albums.values()
+                                        if not _wants(r) and r.get("status") == WANTED)
+    held = set()
+    for key, record in state.albums.items():
+        if not _wants(record):
+            continue
+        if record.get("status") == GRABBED:
+            held.add(key)
+        elif record.get("status") == WANTED and room > 0:
+            held.add(key)
+            room -= 1
+    return held
+
+
+def held_tracks(state: State, settings: Settings) -> set[str]:
+    """The Spotify track IDs of the wants records :func:`_held` holds: the
+    nightly leaves them to album mode."""
+    keys = _held(state, settings)
+    return {t[2] for k in keys for tracks in state.albums[k].get("playlists", {}).values()
+            for t in tracks if len(t) > 2 and t[2]}
 
 
 def _requery(record: dict, search: Plan) -> bool:
@@ -479,7 +632,7 @@ def top_up(
         if slots <= 0:
             logger.info("Dry-run sample complete (%d album(s), ALBUM_DRY_RUN_LIMIT) — not searching", sampled)
     for key, record in list(state.albums.items()):
-        label = f"{record['artist']} — {record['name']}"
+        label = _label(record)
         search = plan(key, record, overrides)
         if not _due(record, now(), settings.mode, search):
             continue
@@ -557,8 +710,8 @@ def top_up(
             continue
         if not ranked:
             record["status"] = MISSING
-            logger.info("[MISS] %s%s: %d result(s), none match; queries: %s",
-                        label, search.note, len(releases), ", ".join(f'"{q}"' for q in sent))
+            logger.info("[MISS] %s%s: %d result(s), none match; queries: %s%s",
+                        label, search.note, len(releases), ", ".join(f'"{q}"' for q in sent), _back(record))
             continue
 
         best: Release = ranked[0]
@@ -714,9 +867,13 @@ def fallbacks(state: State, missing: Missing, album_songs: AlbumSongs | None = N
     the reads until the next tick).  Until it is read the playlist's tracks
     stand in, and the album can't be ``filled``.  An imported release's old
     partial or gap fallback is settled (:func:`settle_imported`).  An imported
-    release sends nothing to spotdl (#279): the release is the album."""
+    release sends nothing to spotdl (#279): the release is the album.  A
+    wants record (#324) never falls back: its wanted tracks are back on the
+    playlist's own want list once it is missing or failed."""
     reads = 0
     for key, record in state.albums.items():
+        if _wants(record):
+            continue
         if settle_imported(record):
             logger.info("[SETTLED] %s — %s: the release is the album; its %s fallback is no longer chased",
                         record["artist"], record["name"], record["settled_from"])
@@ -779,12 +936,24 @@ def status_counts(state: State) -> dict[str, int]:
     return counts
 
 
+def origin_counts(state: State) -> dict[tuple[str, str], int]:
+    """Records by ``(status, origin)`` (#324): ``album`` for an album
+    playlist's, ``wants`` for a spotdl playlist's (:func:`feed_wants`)."""
+    counts = {(s, o): 0 for s in status_counts(State()) for o in (ALBUM, WANTS)}
+    for record in state.albums.values():
+        k = (record.get("status", WANTED), record.get("origin") or ALBUM)
+        counts[k] = counts.get(k, 0) + 1
+    return counts
+
+
 def push_metrics(state: State, success: bool) -> None:
     # One TYPE line per name: the Pushgateway rejects a repeated one, so the
     # labelled series are written by hand rather than through _gauge.
     now = _now()
     lines = ["# TYPE music_albums gauge"]
     lines += [f'music_albums{{status="{s}"}} {n}' for s, n in status_counts(state).items()]
+    lines.append("# TYPE music_albums_status gauge")
+    lines += [f'music_albums_status{{status="{s}",origin="{o}"}} {n}' for (s, o), n in origin_counts(state).items()]
     lines += [
         _gauge("music_albums_fallback_tracks", fallback_queue(state)),
         "# TYPE music_albums_indexer_used_24h gauge",
@@ -810,8 +979,11 @@ def tick(
     overrides_file: Path | None = None,
     missing: Missing | None = None,
     mixed: Mixed | None = None,
+    want_playlists: list[str] | None = None,
+    wants: WantAlbums | None = None,
 ) -> TickResult:
-    """One album-mode pass: refresh changed playlists, recover lost import
+    """One album-mode pass: refresh changed playlists, queue the albums of
+    the spotdl playlists *want_playlists* (*wants*, :func:`feed_wants`), recover lost import
     triggers (*on_completion*, ``on`` only), reset a few mixed albums for a
     reimport (*mixed*, :func:`auto_reimport`), top the queue up, then hand
     what Usenet can't supply to spotdl (*missing*, ``on`` only)."""
@@ -824,6 +996,9 @@ def tick(
     success = False
     try:
         refresh_playlists(state, playlists, spotify, result)
+        if wants is not None:
+            # ALBUM_WANT_MIN=0: no playlist is fed, and the waiting wants records go.
+            feed_wants(state, (want_playlists or []) if settings.want_min > 0 else [], wants, settings)
         if settings.mode == "on" and on_completion is not None:
             for completion in lost_completions(state, sabnzbd):
                 logger.info("Recovering lost import trigger for %s", completion.nzo_id)
@@ -965,7 +1140,9 @@ def complete(
       MAX_ATTEMPTS, or when no copy of that edition is left (:func:`top_up`),
       it is the album;
     - anything else is ``[DONE]``, with a note when the tracklist differs from
-      Spotify's.  Nothing is quarantined, nothing goes to spotdl.
+      Spotify's.  Nothing is quarantined, nothing goes to spotdl, except
+      for a wants record (#324): the wanted tracks the release lacks stay on
+      the playlist's want list, no longer held off spotdl.
 
     Whichever copy is kept, *retire* sends the record's other copies (earlier
     releases, legacy items) whose recording it holds to
@@ -992,7 +1169,7 @@ def complete(
         logger.info("Album import: %s is not an album-mode job — ignoring", completion.nzo_id)
         return None
     key, record = found_record
-    label = f"{record['artist']} — {record['name']}"
+    label = _label(record)
     playlists = list(record.get("playlists", {}))
     source = _inside(complete_root, completion.path)
     job_name = source.name if source else ""
@@ -1073,6 +1250,8 @@ def complete(
             else:
                 record.pop("release_files", None)
             note = f"; {total - found} of Spotify's {total} titles not in this release" if found < total else ""
+            if _wants(record) and found < total:
+                note = f"; {total - found} of its {total} wanted track(s) not in this release go back to spotdl"
             missing = (identity or {}).get("missing") or 0
             best = record.get("best_copy")
 
@@ -1132,7 +1311,8 @@ def complete(
                                     "track(s) of its own release")
     record["status"] = FAILED if record["attempts"] >= MAX_ATTEMPTS else WANTED
     if record["status"] == FAILED:
-        logger.warning("[FAIL] %s: %s — gave up after %d release(s)", label, reason, record["attempts"])
+        logger.warning("[FAIL] %s: %s — gave up after %d release(s)%s", label, reason, record["attempts"],
+                       _back(record))
     else:
         if job_name:
             for playlist in playlists:
