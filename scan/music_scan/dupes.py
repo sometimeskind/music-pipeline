@@ -174,6 +174,46 @@ def _artist_words(item) -> set[str]:
     return {w for w in words(names) if len(w) > 1 and w not in _ARTIST_STOP}
 
 
+def frames_reader(decoder: Callable[[str], list[int]] = decode) -> Callable[[object], list[int]]:
+    """A cached item → sub-fingerprints reader: empty for an item with no
+    ``acoustid_fingerprint`` or an unreadable one (logged)."""
+    frames: dict[int, list[int]] = {}
+
+    def frames_of(item) -> list[int]:
+        if item.id not in frames:
+            fp = item.get("acoustid_fingerprint")
+            try:
+                frames[item.id] = decoder(fp) if fp else []
+            except Exception as exc:  # noqa: BLE001 — one bad fingerprint must not stop the audit
+                logger.warning("  item %s: unreadable fingerprint (%s)", item.id, exc)
+                frames[item.id] = []
+        return frames[item.id]
+
+    return frames_of
+
+
+def audio_match(a, b, frames_of: Callable[[object], list[int]]) -> tuple[str, str] | None:
+    """``(tier, evidence)`` when *a* and *b* are an AcoustID match (a shared
+    ``acoustid_id``, or fingerprints within :data:`MATCH_BER`), else ``None``.
+    The tier is :data:`CERTAIN` with lengths within :data:`LENGTH_SLACK` and the
+    same base title, else :data:`UNCERTAIN`, the evidence saying which veto
+    held.  The rule ``--apply``, the extra-retire (#301) and supersede's same
+    audio rung (#325) merge on."""
+    if a.get("acoustid_id") and a.get("acoustid_id") == b.get("acoustid_id"):
+        why = f"acoustid {a.get('acoustid_id')}"
+    elif (fa := frames_of(a)) and (fb := frames_of(b)) and (ber := bit_error_rate(fa, fb)) <= MATCH_BER:
+        why = f"fingerprint ber={ber:.2f}"
+    else:
+        return None
+    gap = abs(float(a.length or 0) - float(b.length or 0))
+    if gap > LENGTH_SLACK:
+        return UNCERTAIN, f"{why} but {gap:.0f}s apart"
+    if _base_title(a) != _base_title(b):
+        return UNCERTAIN, (f"{why}, {gap:.0f}s apart, but the titles differ: "
+                           "wrong audio? (music-audit-lengths --replace)")
+    return CERTAIN, f"{why}, {gap:.0f}s apart"
+
+
 def find_dupes(items: list, decoder: Callable[[str], list[int]] = decode) -> tuple[list[Group], list[Group], int]:
     """Certain groups, uncertain groups and the number of distinct (``[SPLIT]``) pairs."""
     by_id = {item.id: item for item in items}
@@ -205,17 +245,7 @@ def find_dupes(items: list, decoder: Callable[[str], list[int]] = decode) -> tup
         if item.get("acoustid_fingerprint") or item.get("acoustid_id"):
             for w in _artist_words(item):
                 by_word[w].append(item)
-    frames: dict[int, list[int]] = {}
-
-    def frames_of(item) -> list[int]:
-        if item.id not in frames:
-            fp = item.get("acoustid_fingerprint")
-            try:
-                frames[item.id] = decoder(fp) if fp else []
-            except Exception as exc:  # noqa: BLE001 — one bad fingerprint must not stop the audit
-                logger.warning("  item %s: unreadable fingerprint (%s)", item.id, exc)
-                frames[item.id] = []
-        return frames[item.id]
+    frames_of = frames_reader(decoder)
 
     compared: set[tuple[int, int]] = set()
     for bucket in by_word.values():
@@ -224,20 +254,13 @@ def find_dupes(items: list, decoder: Callable[[str], list[int]] = decode) -> tup
             if pair in compared or certain.find(a.id) == certain.find(b.id):
                 continue
             compared.add(pair)
-            if a.get("acoustid_id") and a.get("acoustid_id") == b.get("acoustid_id"):
-                why = f"acoustid {a.get('acoustid_id')}"
-            elif (fa := frames_of(a)) and (fb := frames_of(b)) and (ber := bit_error_rate(fa, fb)) <= MATCH_BER:
-                why = f"fingerprint ber={ber:.2f}"
-            else:
+            if (match := audio_match(a, b, frames_of)) is None:
                 continue
-            gap = abs(float(a.length or 0) - float(b.length or 0))
-            if gap > LENGTH_SLACK:
-                uncertain_edges.append((a.id, b.id, f"{why} but {gap:.0f}s apart"))
-            elif _base_title(a) != _base_title(b):
-                uncertain_edges.append((a.id, b.id, f"{why}, {gap:.0f}s apart, but the titles differ: "
-                                                    "wrong audio? (music-audit-lengths --replace)"))
+            tier, why = match
+            if tier == CERTAIN:
+                join(a, b, why)
             else:
-                join(a, b, f"{why}, {gap:.0f}s apart")
+                uncertain_edges.append((a.id, b.id, why))
 
     # Title + artist.
     distinct = 0
