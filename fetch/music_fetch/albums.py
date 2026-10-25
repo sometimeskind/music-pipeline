@@ -149,6 +149,8 @@ class Settings:
     auto_reimports_per_day: int = 3
     # spotdl playlists (#324): wanted tracks an album needs to be grabbed whole; 0 turns it off.
     want_min: int = 2
+    # ...and how many grabs ahead, in ALBUM_MAX_IN_FLIGHT batches, their tracks leave spotdl.
+    hold_ahead: int = 4
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -164,6 +166,7 @@ class Settings:
             dry_run_limit=_env_int("ALBUM_DRY_RUN_LIMIT", 25),
             auto_reimports_per_day=_env_int("ALBUM_AUTO_REIMPORTS_PER_DAY", 3),
             want_min=_env_int("ALBUM_WANT_MIN", 2),
+            hold_ahead=_env_int("ALBUM_WANT_HOLD_AHEAD", 4),
         )
 
 
@@ -525,14 +528,16 @@ def feed_wants(
 def _held(state: State, settings: Settings) -> set[str]:
     """The keys of the wants records whose tracks are held off spotdl (#324):
     every one ``grabbed``, and the first ``wanted`` ones, in search order, that
-    a day's grab budget reaches after the album playlists' ``wanted`` records.
-    The rest of the queue stays on spotdl's want list until its turn nears, so
-    a long queue never starves the nightly.  Nothing in ``off`` or ``dry-run``,
-    where nothing grabs them."""
+    the next grabs reach after the album playlists' ``wanted`` records:
+    ``hold_ahead`` batches of ``max_in_flight``, and never more than a day's
+    grab budget.  SABnzbd's queue, not the budget, sets the pace, so the rest
+    of the queue stays on spotdl's want list until its turn nears, and a long
+    queue never starves the nightly.  Nothing in ``off`` or ``dry-run``, where
+    nothing grabs them."""
     if settings.mode != "on":
         return set()
-    room = settings.grabs_per_day - sum(1 for r in state.albums.values()
-                                        if not _wants(r) and r.get("status") == WANTED)
+    room = min(settings.max_in_flight * settings.hold_ahead, settings.grabs_per_day) - sum(
+        1 for r in state.albums.values() if not _wants(r) and r.get("status") == WANTED)
     held = set()
     for key, record in state.albums.items():
         if not _wants(record):
