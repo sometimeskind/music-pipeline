@@ -11,7 +11,9 @@ On each run:
    no library item holds, minus backoff) while SYNC_TRACK_LIMIT lasts.  A
    spent budget defers downloads, never the check (#228).  A track removed on
    Spotify is gone from the store, so from the playlist; its file stays in
-   the library (soft delete).
+   the library (soft delete).  A ``nosync`` playlist's store is read from
+   Spotify once and then kept, but its want list is downloaded the same way
+   until it is complete (homelab#2392).
 """
 
 from __future__ import annotations
@@ -302,18 +304,23 @@ def sync_playlists(
     for pl in playlists:
         name = pl.name
 
-        # .nosync: skip spotdl sync for frozen playlists
-        if (SPOTDL_DIR / f"{name}.nosync").exists():
-            logger.info("==> Skipping sync for static playlist: %s (.nosync present)", name)
+        # .nosync: the frozen store is never rewritten from Spotify, but its want
+        # list is downloaded until the playlist is complete (homelab#2392).
+        fallback: list[dict] | None = None
+        frozen = (SPOTDL_DIR / f"{name}.nosync").exists()
+        if frozen:
             _build_frozen(name, pl.url)
-            metrics.playlists_skipped += 1
-            metrics.playlists_total += 1
-            continue
+            playlist = store.load(name)
+            fallback = [] if playlist is None else [s for s in playlist.songs if wants(s)]
+            if not fallback:
+                logger.info("==> Skipping sync for static playlist: %s (.nosync present, nothing wanted)", name)
+                metrics.playlists_skipped += 1
+                metrics.playlists_total += 1
+                continue
 
         # .album: downloaded whole from Usenet by the album tick.  spotdl only
         # fetches the tracks album mode handed back to it, in playlist order (#205).
-        fallback: list[dict] | None = None
-        if (SPOTDL_DIR / f"{name}.album").exists():
+        elif (SPOTDL_DIR / f"{name}.album").exists():
             playlist = store.load(name)
             fallback = albums.fallback_songs(album_state, name, [] if playlist is None else playlist.songs)
             if not fallback:
@@ -349,7 +356,11 @@ def sync_playlists(
         track_limit = None if remaining is None else max(remaining, 0)
         try:
             if fallback is not None:
-                logger.info("[FALLBACK] %d track(s) album mode could not get from Usenet", len(fallback))
+                if frozen:
+                    logger.info("[FROZEN-WANT] %d track(s) on the frozen playlist no library item holds",
+                                len(fallback))
+                else:
+                    logger.info("[FALLBACK] %d track(s) album mode could not get from Usenet", len(fallback))
                 result = download_fallback(
                     fallback,
                     output_dir=output_dir,

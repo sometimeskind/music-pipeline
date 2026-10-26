@@ -520,10 +520,11 @@ def download_fallback(
     in_library: Callable[[dict], bool] | None = None,
 ) -> SyncResult:
     """Download an album playlist's fallback tracks (#205): the store's *songs*
-    album mode could not get from Usenet, in playlist order.
+    album mode could not get from Usenet, in playlist order.  A ``nosync``
+    playlist's want list goes through here too (homelab#2392).
 
     The same [HAVE] check, backoff and budget as :func:`sync_playlist`, but the
-    playlist's store is left alone: the album tick owns it.  Downloads land in
+    playlist's store is left alone: the album tick owns it, or it is frozen.  Downloads land in
     *output_dir*, the playlist's inbox, so the scan tags them with the playlist.
     """
     from spotdl.types.song import Song  # noqa: PLC0415
