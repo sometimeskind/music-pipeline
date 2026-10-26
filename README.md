@@ -131,7 +131,7 @@ liked-songs        https://open.spotify.com/playlist/37i9dQZF1DXcBWIGoYBM5M
 archived-mix       https://open.spotify.com/playlist/37i9dQZF1DXd9rLJfaAKCk  nosync
 ```
 
-The optional `nosync` flag freezes a playlist: `music-ingest` creates a `.nosync` sentinel on the PVC and skips `spotdl sync` for it. Remove the flag and run `music-ingest` again to unfreeze.
+The optional `nosync` flag freezes a playlist: `music-ingest` creates a `.nosync` sentinel on the PVC and never syncs it from Spotify again. Its store is read from Spotify once and then kept, but its want list (the frozen entries no library item holds) is still downloaded every night, in store order and from the shared budget, until the playlist is complete. Each such run logs `[FROZEN-WANT] N track(s)` (homelab#2392). Frozen means the same list, not the same files: a frozen entry may resolve to another copy of the same recording, for example one an album import superseded. A frozen entry Spotify later replaced (a split or relinked track) stays an empty slot until it is fixed by hand. Remove the flag and run `music-ingest` again to unfreeze.
 
 The optional `album` flag is for playlists that hold only whole albums. spotdl never syncs them (a `.album` sentinel). Instead, the `music-albums` flow downloads each album whole from Usenet through Prowlarr and SABnzbd. Every `ALBUM_POLL_SECONDS` it checks the playlist's Spotify `snapshot_id` and re-reads the tracks only when it has changed, so a playlist edit is picked up within one poll. Then it tops the SABnzbd queue up to `ALBUM_MAX_IN_FLIGHT` within a rolling-24h indexer budget. Its state (album status, release blocklist, indexer use) is `.albums.json` next to the `.spotdl` files. Set `ALBUM_MODE=dry-run` first: it searches and logs `[PICK]` lines but never grabs.
 
@@ -293,7 +293,7 @@ Playlist management is fully declarative: edit `config/playlists.conf` and updat
 **Freeze a playlist (stop syncing):**
 1. Add `nosync` as the third field on the playlist's line in `config/playlists.conf`.
 2. Update the `music-pipeline-playlists` ConfigMap.
-3. The next fetch run creates the `.nosync` sentinel automatically.
+3. The next fetch run creates the `.nosync` sentinel automatically. A playlist frozen before its first sync is read from Spotify once and then downloads its missing tracks over the following nights.
 
 **Remove a playlist:**
 1. Remove the entry from `config/playlists.conf`, commit and push.

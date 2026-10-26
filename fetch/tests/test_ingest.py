@@ -807,9 +807,11 @@ def song(sid: str, **extra) -> dict:
     return {"url": TRACK + sid, "song_id": sid, "name": f"Song {sid}", "artists": ["Artist"], **extra}
 
 
-def _sync(tmp_path: Path, lines: list[str], result=None, calls=None, fetched=None, sentinels=(), **kwargs):
+def _sync(tmp_path: Path, lines: list[str], result=None, calls=None, fetched=None, sentinels=(),
+          fallbacks=None, **kwargs):
     """Run sync_playlists over playlists.conf *lines* with spotdl stubbed out:
-    sync_playlist returns *result* (its kwargs go to *calls*), fetch_songs is *fetched*."""
+    sync_playlist returns *result* (its kwargs go to *calls*), fetch_songs is *fetched*,
+    and download_fallback records (its output dir name, songs) in *fallbacks*."""
     import unittest.mock as mock
     from music_fetch.metrics import IngestMetrics
 
@@ -824,6 +826,11 @@ def _sync(tmp_path: Path, lines: list[str], result=None, calls=None, fetched=Non
             calls.append(kw)
         return result
 
+    def fake_fallback(songs, output_dir, **_kw):
+        if fallbacks is not None:
+            fallbacks.append((output_dir.name, songs))
+        return SyncResult(set(), len(songs), len(songs), 0, 0, {})
+
     kwargs.setdefault("resolves", lambda song: False)
     metrics = IngestMetrics()
     with mock.patch.object(ingest, "SPOTDL_DIR", spotdl_dir), \
@@ -832,6 +839,7 @@ def _sync(tmp_path: Path, lines: list[str], result=None, calls=None, fetched=Non
          mock.patch.object(ingest, "FAILURES_FILE", tmp_path / ".failures.json"), \
          mock.patch("music_fetch.ingest.sync_playlist", side_effect=fake_sync), \
          mock.patch("music_fetch.ingest.fetch_songs", side_effect=fetched), \
+         mock.patch("music_fetch.ingest.download_fallback", side_effect=fake_fallback), \
          mock.patch("music_fetch.ingest.time.sleep"):
         ingest.sync_playlists(metrics, **kwargs)
     return metrics
@@ -908,21 +916,48 @@ def test_sync_builds_a_nosync_store_from_spotify_once(tmp_path: Path, caplog) ->
     fetched_urls: list[str] = []
     calls: list = []
     metrics = _sync(tmp_path, [f"pl  {PL_URL}  nosync"], calls=calls, sentinels=["pl.nosync"],
-                    fetched=lambda url, cookie_file: fetched_urls.append(url) or [song("A"), song("B")])
+                    fetched=lambda url, cookie_file: fetched_urls.append(url) or [song("A"), song("B")],
+                    resolves=lambda s: True)
     built = store.load("pl")
     assert fetched_urls == [PL_URL]
     assert calls == []  # never synced by spotdl
-    assert metrics.playlists_skipped == 1
+    assert metrics.playlists_skipped == 1  # complete: nothing to download
     assert built.source == store.SPOTIFY
     assert built.entries == [{"song": full_a}, {"song": song("B")}, LOCAL]
     assert "[STORE] pl: built from Spotify, 3 entries" in caplog.text
 
     # Kept from then on: no second fetch.
     caplog.clear()
-    _sync(tmp_path, [f"pl  {PL_URL}  nosync"], sentinels=["pl.nosync"], fetched=AssertionError("fetched again"))
+    _sync(tmp_path, [f"pl  {PL_URL}  nosync"], sentinels=["pl.nosync"], fetched=AssertionError("fetched again"),
+          resolves=lambda s: True)
     assert "fetched again" not in caplog.text
     assert "Could not build the store" not in caplog.text
     assert store.load("pl").entries == built.entries
+
+
+def test_sync_downloads_a_nosync_playlists_want_list_without_rewriting_it(tmp_path: Path, caplog) -> None:
+    """A frozen playlist downloads what no library item holds, minus held URLs,
+    in store order and from the shared budget; its store stays frozen (homelab#2392)."""
+    import unittest.mock as mock
+
+    caplog.set_level("INFO")
+    frozen = store.Store.from_songs("frozen", [song("A"), song("B"), song("H"), song("C")])
+    frozen.source = store.SPOTIFY
+    frozen.save(store.path("frozen"))
+    calls: list = []
+    fallbacks: list = []
+    with mock.patch.dict("os.environ", {"SYNC_TRACK_LIMIT": "10"}):
+        metrics = _sync(tmp_path, [f"frozen  {PL_URL}  nosync", f"pl  {PL_URL}2"], _result(songs=[song("Z")]),
+                        calls=calls, fallbacks=fallbacks, sentinels=["frozen.nosync"],
+                        fetched=AssertionError("fetched again"), resolves=lambda s: s["song_id"] == "B",
+                        held=frozenset({TRACK + "H"}))
+    assert fallbacks == [("frozen", [song("A"), song("C")])]
+    assert "[FROZEN-WANT] 2 track(s)" in caplog.text
+    assert "fetched again" not in caplog.text
+    assert store.load("frozen").entries == frozen.entries
+    # The next playlist gets what the frozen one left of the budget.
+    assert [(c["name"], c["track_limit"]) for c in calls] == [("pl", 8)]
+    assert metrics.playlists_skipped == 0 and metrics.tracks_downloaded == 2
 
 
 def test_sync_nosync_fetch_failure_never_fails_the_sync(tmp_path: Path, caplog) -> None:
