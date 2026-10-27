@@ -19,6 +19,10 @@ def setup_auth(app: Flask) -> None:
         # that token opens only this route.
         if request.path == "/trigger-album-import":
             token = os.environ.get("ALBUM_IMPORT_TOKEN", "")
+        # The Music MCP adapter (homelab#2412) holds only MCP_API_TOKEN, and
+        # that token opens only these routes.
+        elif request.path.startswith("/mcp-api/"):
+            token = os.environ.get("MCP_API_TOKEN", "")
         else:
             token = os.environ.get("API_BEARER_TOKEN", "")
         auth_header = request.headers.get("Authorization", "")

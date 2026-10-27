@@ -42,12 +42,18 @@ def main() -> None:
         for var in missing:
             logger.error("Required environment variable not set: %s", var)
         sys.exit(1)
+    # Set only in an MCP job's subprocess (homelab#2412): anywhere else, a CLI
+    # run from this environment would skip the locks it names.
+    if os.environ.get("MUSIC_LOCKS_HELD"):
+        logger.error("MUSIC_LOCKS_HELD must not be set in the service's environment")
+        sys.exit(1)
 
     from prefect import serve as prefect_serve
 
     from music_service.api import create_app
     from music_service.debounce import Debouncer
     from music_service.flows import album_import_flow, albums_flow, fetch_and_scan_flow, scan_flow
+    from music_service.mcp_jobs import JobQueue
     from music_service.prefect_client import ensure_concurrency_limits, trigger_scan
     import waitress
 
@@ -56,7 +62,8 @@ def main() -> None:
     debouncer = Debouncer(delay=30.0, callback=trigger_scan)
 
     # Flask API in a background daemon thread.
-    app = create_app(schedule_scan=debouncer.trigger)
+    # Loading the job records marks jobs a restart cut short as interrupted.
+    app = create_app(schedule_scan=debouncer.trigger, mcp_jobs=JobQueue())
     flask_thread = threading.Thread(
         target=lambda: waitress.serve(app, host="0.0.0.0", port=8080),
         daemon=True,

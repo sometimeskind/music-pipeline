@@ -99,15 +99,79 @@ def trigger_fetch() -> bool:
     return _direct(_run_fetch_and_scan)
 
 
-def trigger_scan() -> None:
-    """Submit a scan run. Fire-and-forget."""
+def trigger_scan() -> bool:
+    """Submit a scan run. Fire-and-forget; True if submitted/accepted."""
     if _has_server():
         try:
             asyncio.run(_submit_deployment("music-scan/music-scan"))
+            return True
         except Exception as exc:
             logger.error("Failed to submit scan: %s", exc)
-    else:
-        _direct(_run_scan)
+            return False
+    return _direct(_run_scan)
+
+
+SCAN_DEPLOYMENT = "music-scan/music-scan"
+ALBUMS_DEPLOYMENT = "music-albums/music-albums"
+
+_album_tick_lock = threading.Lock()
+
+
+async def _pending_state(deployment_name: str) -> str | None:
+    """The state of a run of *deployment_name* that is pending or running: a
+    scheduled run counts once it is due, so the next interval run doesn't."""
+    from datetime import datetime, timedelta, timezone  # noqa: PLC0415
+
+    from prefect import get_client  # noqa: PLC0415
+    from prefect.client.schemas.filters import (  # noqa: PLC0415
+        FlowRunFilter, FlowRunFilterDeploymentId, FlowRunFilterState, FlowRunFilterStateType)
+    from prefect.client.schemas.objects import StateType  # noqa: PLC0415
+
+    async with get_client() as client:
+        deployment = await client.read_deployment_by_name(deployment_name)
+        runs = await client.read_flow_runs(
+            flow_run_filter=FlowRunFilter(
+                deployment_id=FlowRunFilterDeploymentId(any_=[deployment.id]),
+                state=FlowRunFilterState(type=FlowRunFilterStateType(
+                    any_=[StateType.SCHEDULED, StateType.PENDING, StateType.RUNNING])),
+            ),
+            limit=50,
+        )
+    due = datetime.now(timezone.utc) + timedelta(seconds=5)
+    for run in runs:
+        state = run.state_type
+        if state != StateType.SCHEDULED or (run.expected_start_time and run.expected_start_time <= due):
+            return state.value
+    return None
+
+
+def pending_state(deployment_name: str) -> str | None:
+    """A pending or running run's state for *deployment_name* (the MCP's
+    triggers, homelab#2412), or None.  Direct mode: the in-process locks."""
+    if _has_server():
+        return asyncio.run(_pending_state(deployment_name))
+    lock = _lock if deployment_name == SCAN_DEPLOYMENT else _album_tick_lock
+    return "RUNNING" if lock.locked() else None
+
+
+def _run_album_tick() -> None:
+    from music_service.flows import albums_flow  # noqa: PLC0415
+    try:
+        albums_flow()
+    except Exception:
+        logger.exception("album tick failed")
+    finally:
+        _album_tick_lock.release()
+
+
+def trigger_album_tick() -> bool:
+    """Submit an album tick (``music-albums``). Returns True if submitted/accepted."""
+    if _has_server():
+        return _via_api(ALBUMS_DEPLOYMENT)
+    if not _album_tick_lock.acquire(blocking=False):
+        return True
+    threading.Thread(target=_run_album_tick, daemon=True).start()
+    return True
 
 
 def trigger_album_import(params: dict) -> bool:

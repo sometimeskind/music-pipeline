@@ -157,6 +157,12 @@ Every job logs `[MCP]` lines to the pod log: one at the start with its argv, cal
 
 A write tool's **apply** takes Prefect's `pipeline` lock (and first `albums`, for `reset_album` and `requeue_albums`) for its whole run: the fresh dry run, the comparison and the `--apply` command. The CLI subprocess gets `MUSIC_LOCKS_HELD=albums,pipeline`, so it does not wait for a lock its job already holds. Dry runs and the read-tier audits take no lock. In direct mode (no `PREFECT_API_URL`) the locks are the service's threading locks.
 
+`MUSIC_LOCKS_HELD` is set **only** in a job subprocess's environment, and only for the locks that job holds. It must never be set in the Deployment, a ConfigMap or the image: a CLI run by hand (`kubectl exec`) from that environment would silently skip its locks. The service refuses to start with it set, and a job with no locks strips it from its subprocess's environment.
+
+## Test harness
+
+`service/tests/mcp_harness.py` serves this API over a seeded beets library, album store, playlist store and quarantine, with faked CLI commands (no CLI runs): `python service/tests/mcp_harness.py --port N --dir D` (`/app/tests/mcp_harness.py` in the dev image). `MCP_API_TOKEN` defaults to `mcp-secret`. The adapter's contract test runs against it.
+
 ## Read-tier CLI dry runs (any tier)
 
 | Tool | Body | argv |
