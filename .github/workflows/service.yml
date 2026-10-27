@@ -3,10 +3,10 @@ name: CI
 on:
   push:
     branches: [main]
-    paths: ["service/**", "fetch/**", "scan/**", "scripts/**", "tests/**", "config/**", "compose.yml", "justfile", ".github/workflows/service.yml"]
+    paths: ["service/**", "fetch/**", "scan/**", "scripts/**", "tests/**", "config/**", "compose.yml", "justfile", "mcp/**", ".github/workflows/service.yml"]
   pull_request:
     branches: [main]
-    paths: ["service/**", "fetch/**", "scan/**", "scripts/**", "tests/**", "config/**", "compose.yml", "justfile", ".github/workflows/service.yml"]
+    paths: ["service/**", "fetch/**", "scan/**", "scripts/**", "tests/**", "config/**", "compose.yml", "justfile", "mcp/**", ".github/workflows/service.yml"]
 
 # A second push to a PR cancels the run it supersedes instead of billing both.
 # Pushes to main are never cancelled: those publish the image (#318).
@@ -42,6 +42,12 @@ jobs:
 
       - name: Run tests
         run: pytest --import-mode=importlib fetch/tests scan/tests service/tests scripts/tests
+
+      - name: Run MCP adapter tests (unit + contract)
+        # The adapter in its own venv (fastmcp and prefect never share one); its contract
+        # test runs the real /mcp-api/* app on this job's Python, where the service is
+        # installed above (homelab#2412).
+        run: SERVICE_PYTHON="$(which python)" MCP_VENV="$RUNNER_TEMP/mcp-venv" sh mcp/test.sh
 
   # The build plus integration tests bill 5–7 minutes a run, and every PR push ran them
   # even when only Python under test changed. On a pull request they now run only when
@@ -171,3 +177,90 @@ jobs:
         run: |
           pip install -r tests/requirements.txt
           SERVICE_IMAGE=music-pipeline:ci-local pytest tests/ -m "not auth" -v
+
+  # The Music MCP adapter image (mcp/, homelab#2412). Small and separate from the service
+  # image: built when mcp/ or this workflow changed, published on main.
+  build-mcp:
+    name: Build, Health Check & Push (music-mcp)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      - name: Decide whether the image needs building
+        id: gate
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BASE_REF: ${{ github.base_ref }}
+          BEFORE: ${{ github.event.before }}
+        run: |
+          set -euo pipefail
+          if [[ "$EVENT_NAME" == pull_request ]]; then
+            range="origin/${BASE_REF}...HEAD"
+          elif [[ -z "$BEFORE" || "$BEFORE" =~ ^0+$ ]] || ! git cat-file -e "$BEFORE" 2>/dev/null; then
+            echo "build=true" >> "$GITHUB_OUTPUT"; exit 0
+          else
+            range="$BEFORE..HEAD"
+          fi
+          if git diff --quiet "$range" -- mcp .github/workflows/service.yml; then
+            echo "mcp/ unchanged; skipping the build."
+            echo "build=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "build=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Set up Docker Buildx
+        if: steps.gate.outputs.build == 'true'
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+
+      - name: Log in to GitHub Container Registry
+        if: steps.gate.outputs.build == 'true' && github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract metadata (music-mcp)
+        if: steps.gate.outputs.build == 'true'
+        id: meta
+        uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
+        with:
+          images: ghcr.io/${{ github.repository_owner }}/music-mcp
+          tags: |
+            type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' }}
+            type=sha,format=short
+
+      - name: Build music-mcp image
+        if: steps.gate.outputs.build == 'true'
+        id: build
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: mcp
+          file: mcp/Dockerfile
+          target: prod
+          load: true
+          push: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          # Its own cache scope, so it never evicts the service image's.
+          cache-from: type=gha,scope=music-mcp
+          cache-to: type=gha,mode=max,scope=music-mcp
+
+      - name: Health check — tools register, non-root, read-only rootfs
+        if: steps.gate.outputs.build == 'true'
+        env:
+          IMAGE_ID: ${{ steps.build.outputs.imageid }}
+        run: >-
+          docker run --rm --read-only --entrypoint python "$IMAGE_ID" -c
+          "import asyncio, os; from music_mcp.server import build_server;
+          assert os.getuid() == 65532;
+          m = build_server(None, lambda: None);
+          print(sorted(t.name for t in asyncio.run(m.list_tools())))"

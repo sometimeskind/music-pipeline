@@ -1,0 +1,213 @@
+"""The adapter against the real Flask app (service/tests/mcp_harness.py), over HTTP.
+
+The pipeline runs as its own process in the service's Python environment, so the adapter's
+dependencies (fastmcp) and the service's (prefect, beets) never share one. Point
+MUSIC_MCP_CONTRACT_PYTHON at a Python with the service installed (CI: the runner's, after
+the unit tests' install). Without it these tests skip, unless MUSIC_MCP_CONTRACT_REQUIRED=1
+(CI sets it, so a broken setup fails instead of skipping silently).
+"""
+
+from __future__ import annotations
+
+import asyncio
+import os
+import socket
+import subprocess
+import time
+from pathlib import Path
+
+import pytest
+from fastmcp import Client
+from fastmcp.exceptions import ToolError
+from prometheus_client import REGISTRY
+
+from music_mcp.auth import Caller
+from music_mcp.pipeline import Pipeline
+from music_mcp.server import build_server
+
+HARNESS = Path(__file__).resolve().parents[2] / "service" / "tests" / "mcp_harness.py"
+PYTHON = os.environ.get("MUSIC_MCP_CONTRACT_PYTHON")
+TOKEN = "mcp-contract-token"
+TOM = Caller("sub-tom", "write")
+PILOT = Caller("pilot", "read")
+RUNNING = {"queued", "waiting_for_lock", "running"}
+
+if not PYTHON:
+    if os.environ.get("MUSIC_MCP_CONTRACT_REQUIRED") == "1":
+        raise RuntimeError("MUSIC_MCP_CONTRACT_REQUIRED=1 but MUSIC_MCP_CONTRACT_PYTHON is unset")
+    pytest.skip("MUSIC_MCP_CONTRACT_PYTHON unset: no service environment to run", allow_module_level=True)
+
+
+def _free_port() -> int:
+    with socket.socket() as s:
+        s.bind(("127.0.0.1", 0))
+        return s.getsockname()[1]
+
+
+@pytest.fixture(scope="module")
+def pipeline_url(tmp_path_factory):
+    port = _free_port()
+    env = os.environ | {"MCP_API_TOKEN": TOKEN, "MCP_INLINE_SECONDS": "5", "PYTHONUNBUFFERED": "1"}
+    proc = subprocess.Popen(
+        [PYTHON, str(HARNESS), "--port", str(port), "--dir", str(tmp_path_factory.mktemp("pipeline"))],
+        env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+    )
+    try:
+        deadline = time.monotonic() + 120
+        seen: list[str] = []
+        while time.monotonic() < deadline:
+            line = proc.stdout.readline()
+            if not line and proc.poll() is not None:
+                raise RuntimeError("the harness exited:\n" + "".join(seen))
+            seen.append(line)
+            if line.startswith("mcp harness on "):
+                break
+        else:
+            raise RuntimeError("the harness did not start:\n" + "".join(seen))
+        # The line comes just before waitress binds.
+        for _ in range(100):
+            with socket.socket() as s:
+                if s.connect_ex(("127.0.0.1", port)) == 0:
+                    break
+            time.sleep(0.1)
+        yield f"http://127.0.0.1:{port}"
+    finally:
+        proc.terminate()
+        try:
+            proc.wait(10)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+
+
+def server(url: str, caller: Caller, token: str = TOKEN):
+    return build_server(Pipeline(url, token), lambda: caller)
+
+
+async def finish(client: Client, record: dict) -> dict:
+    """Poll a job until it leaves the queue."""
+    deadline = time.monotonic() + 60
+    while record.get("status") in RUNNING:
+        assert time.monotonic() < deadline, record
+        await asyncio.sleep(0.2)
+        record = (await client.call_tool("get_job", {"job_id": record["job_id"]})).data
+    return record
+
+
+async def test_structured_reads(pipeline_url):
+    async with Client(server(pipeline_url, PILOT)) as c:
+        status = (await c.call_tool("library_status", {})).data
+        assert status["status"] == "ok"
+        assert status["albums"]["by_status"] == {"imported": 1, "wanted": 1, "failed": 1}
+        assert status["quarantine"] == {"unmatched": 1, "rejected": 1, "replaced": 2}
+        assert "chill" in status["playlists"]
+
+        found = (await c.call_tool("find_albums", {"query": "abbey"})).data
+        assert {a["key"] for a in found["albums"]} == {"ALB1", "ALB2"}
+
+        ambiguous = (await c.call_tool("get_album", {"query": "abbey"})).data
+        assert ambiguous["status"] == "ambiguous"
+        assert {a["key"] for a in ambiguous["candidates"]} == {"ALB1", "ALB2"}
+        assert (await c.call_tool("get_album", {"query": "zzz nothing"})).data["status"] == "not_found"
+
+        album = (await c.call_tool("get_album", {"query": "ALB1"})).data
+        assert album["status"] == "ok" and album["album"]["key"] == "ALB1"
+        assert album["items"], album
+        item_id = album["items"][0]["id"]
+        item = (await c.call_tool("get_item", {"id": item_id})).data
+        assert item["status"] == "ok" and item["item"]["id"] == item_id
+        assert (await c.call_tool("get_item", {"id": 999999})).data["status"] == "not_found"
+
+        for kind, total in [("unmatched", 1), ("rejected", 1), ("replaced", 2)]:
+            page = (await c.call_tool("list_quarantine", {"kind": kind})).data
+            assert page["status"] == "ok" and page["total"] == total, page
+            assert page["next_offset"] is None
+
+        chill = (await c.call_tool("get_playlist", {"name": "chill"})).data
+        assert chill["counts"] == {"entries": 4, "resolved": 3, "missing": 1}
+        assert (await c.call_tool("get_playlist", {"name": "nope"})).data["status"] == "not_found"
+
+        unknown = (await c.call_tool("get_job", {"job_id": "nope"})).data
+        assert unknown["status"] == "unknown"
+
+
+async def test_a_read_caller_runs_the_audits(pipeline_url):
+    async with Client(server(pipeline_url, PILOT)) as c:
+        for tool, args in [("audit_want_albums", {}), ("audit_dupes", {}), ("audit_lengths", {"silence": True}),
+                           ("audit_releases", {"replaced_query": ""})]:
+            job = await finish(c, (await c.call_tool(tool, args)).data)
+            assert job["status"] == "done", job
+            assert job["caller"] == "pilot" and job["tier"] == "read"
+            assert job["output"].startswith("ran "), job
+
+
+async def test_the_pipeline_refuses_a_read_tier_write_too(pipeline_url):
+    # The adapter refuses first; this is the pipeline's own guard behind it.
+    p = Pipeline(pipeline_url, TOKEN)
+    try:
+        with pytest.raises(ToolError, match="write tier required"):
+            await p.post(PILOT, "/run/reset_album", {"query": "pastel"})
+    finally:
+        await p.aclose()
+
+
+async def test_dry_run_then_apply(pipeline_url):
+    async with Client(server(pipeline_url, TOM)) as c:
+        refused = (await c.call_tool("reset_album", {"query": "The Beatles — Abbey Road", "apply": True})).data
+        assert refused["status"] == "refused" and refused["reason"] == "no_dry_run"
+
+        dry = await finish(c, (await c.call_tool("reset_album", {"query": "pastel", "reimport": True})).data)
+        assert dry["status"] == "done" and dry["mode"] == "dry_run"
+        assert dry["args"] == {"album": "ALB3", "reimport": True}
+        assert dry["dry_run_hash"]
+        # argv is informational: the contract is the normalised args, plus --apply only on an apply.
+        assert not any("--apply" in cmd for cmd in dry["argv"])
+
+        applied = await finish(c, (await c.call_tool(
+            "reset_album", {"query": "pastel", "reimport": True, "apply": True})).data)
+        assert applied["status"] == "done", applied
+        assert applied["args"] == dry["args"]
+        assert any("--apply" in cmd for cmd in applied["argv"]), applied["argv"]
+        assert applied["caller"] == "sub-tom" and applied["tier"] == "write"
+
+        ambiguous = (await c.call_tool("reset_album", {"query": "abbey"})).data
+        assert ambiguous["status"] == "ambiguous"
+
+
+async def test_the_other_write_tools_dry_run(pipeline_url):
+    async with Client(server(pipeline_url, TOM)) as c:
+        for tool, args, normalised in [
+            ("requeue_albums", {"ids": ["ALB3", "ALB2", "ALB3"]}, {"ids": ["ALB2", "ALB3"], "since": None}),
+            ("merge_items", {"pairs": [[1, 2]]}, {"pairs": [[1, 2]]}),
+            ("embed_covers", {}, {}),
+            ("canon_albums", {"mb_budget": 3}, {"refresh": False, "search_budget": None, "mb_budget": 3}),
+        ]:
+            job = await finish(c, (await c.call_tool(tool, args)).data)
+            assert job["status"] == "done", (tool, job)
+            assert job["args"] == normalised, (tool, job["args"])
+            assert not any("--apply" in cmd for cmd in job["argv"]), (tool, job["argv"])
+
+        # homelab#2411: any accepted form reduces to the canonical watch URL yt-dlp is given.
+        replaced = await finish(c, (await c.call_tool(
+            "replace_item", {"id": 1, "youtube_url": "https://youtu.be/dQw4w9WgXcQ?t=42"})).data)
+        assert replaced["status"] == "done", replaced
+        assert replaced["args"] == {"id": 1, "youtube_url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ"}
+        assert not any("--apply" in cmd for cmd in replaced["argv"])
+        with pytest.raises(ToolError):
+            await c.call_tool("replace_item", {"id": 1, "youtube_url": "https://evil.example/watch?v=dQw4w9WgXcQ"})
+
+
+async def test_bad_requests_reach_the_model_as_errors(pipeline_url):
+    async with Client(server(pipeline_url, TOM)) as c:
+        with pytest.raises(ToolError):
+            await c.call_tool("merge_items", {"pairs": [[1, 2], [3, 2]]})
+        with pytest.raises(ToolError):
+            await c.call_tool("requeue_albums", {"since": "not a time"})
+
+
+async def test_a_wrong_api_token_is_an_upstream_failure(pipeline_url):
+    before = REGISTRY.get_sample_value("music_mcp_upstream_failures_total", {"reason": "unauthorized"}) or 0
+    async with Client(server(pipeline_url, PILOT, token="wrong")) as c:
+        with pytest.raises(ToolError, match="token was refused"):
+            await c.call_tool("library_status", {})
+    after = REGISTRY.get_sample_value("music_mcp_upstream_failures_total", {"reason": "unauthorized"})
+    assert after == before + 1
