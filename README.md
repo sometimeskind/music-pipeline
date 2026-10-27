@@ -185,6 +185,8 @@ A `justfile` lives in the repo root. Run these from the repo directory.
 | `just fetch` | Run spotdl sync only (reconciles playlists.conf → provisions/removes) |
 | `just scan` | Run local scan only (import inbox → .m3u) |
 | `just backup` | Dump beets DB + export JSON inside container |
+| `just test-mcp` | The MCP adapter's tests, including its contract test against the real pipeline API |
+| `just build-mcp` | Build the MCP adapter image |
 
 ---
 
@@ -220,6 +222,8 @@ The canonical manifests live in the homelab repo.
 ### Architecture
 
 One long-running `Deployment` for the `music-pipeline` service, plus an optional `Deployment` for the Prefect server (for the UI and flow run history). Scheduling is handled internally by Prefect via the `FETCH_CRON` env var — no k8s CronJobs needed.
+
+The Music MCP adapter ([`mcp/`](mcp/README.md), `ghcr.io/sometimeskind/music-mcp`) is a separate `Deployment` in its own namespace that talks to this service's `/mcp-api/*` only.
 
 Without `PREFECT_API_URL` set, the service runs in direct mode: flows execute in-process and the Prefect server is not required. Use this for a simpler deployment with no UI.
 

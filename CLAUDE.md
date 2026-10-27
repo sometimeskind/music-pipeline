@@ -8,6 +8,8 @@ Spotify playlists → spotdl sync → /root/Music/inbox/spotdl/<name>/ → beets
 
 One image is pushed to GHCR (`ghcr.io/sometimeskind/music-pipeline`). It holds three packages: `music_fetch` (`fetch/`: spotdl sync, Spotify/YouTube calls), `music_scan` (`scan/`: beets import, AcoustID fingerprinting, `.m3u` generation) and `music_service` (`service/`: Prefect runner, Flask API, watchdog file watcher). Entry points are `music-pipeline` (the long-running service), `music-ingest` (one-shot fetch) and `music-scan` (one-shot scan).
 
+A second image, `ghcr.io/sometimeskind/music-mcp`, is the Music MCP adapter (`mcp/`, homelab#2412). It runs in its own pod and reaches the service only through `/mcp-api/*` (`service/MCP_API.md`). Its `guide/` is the only copy of the library's domain guide. `just test-mcp` runs its tests, including the contract test against the real Flask app.
+
 README.md covers setup, every `just` recipe, volumes, environment variables and the Kubernetes deployment. Don't duplicate it here.
 
 ## Commands

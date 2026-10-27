@@ -1,0 +1,57 @@
+# Workflow
+
+## Tiers
+
+| Tier | Who | Tools |
+|------|-----|-------|
+| Read | anyone signed in to the connector, and Claude Code's static token | the structured reads, the audits, `get_job`, `get_guide` |
+| Recoverable write | the claude.ai connector (a Pocket ID user in the `music` group) | `reset_album`, `requeue_albums`, `merge_items`, `replace_item`, `embed_covers`, `canon_albums`, `trigger_scan`, `trigger_album_tick` |
+| Irreversible | not exposed | the workstation commands below |
+
+A Claude Code session has the read tier only. It diagnoses, then hands a write over as
+"in the claude.ai Music connector: `reset_album` …".
+
+## Dry run, then apply
+
+Every write tool is a dry run unless `apply=true`:
+
+1. Run it with `apply=false` and show the user the output.
+2. When they agree, run it again with **the same arguments** and `apply=true`, within 15
+   minutes. The dry run may come from any caller.
+3. The apply first runs the dry run again. If the output changed (the library moved), it ends
+   `refused` with the new dry run as its output, and that becomes the dry run to apply. Show it
+   and ask again.
+
+Writes are recoverable: the library and pipeline state are backed up, and a merged or replaced
+file goes to `quarantine/replaced/` for 14 days. Still, apply only what the user agreed to.
+
+## Jobs
+
+The CLI tools run one at a time in a queue of depth 5. A call answers inline within about
+20 s. Otherwise it returns a job (`queued`, `waiting_for_lock`, `running`): poll `get_job` with
+its `job_id`. A sixth call gets `busy` and the queue. A job interrupted by a pod restart is
+never retried: run it again.
+
+Output comes 200 lines or 32 KB at a time. Pass `next_offset` as `offset` to `get_job` for the
+rest. Lists (`get_playlist`, `list_quarantine`) page the same way.
+
+`busy, retry` from a structured read means the beets library is locked by an import. Retry in
+a minute.
+
+## Workstation-only operations
+
+These stay on the workstation by design: most delete or rewrite for good, so they are not tools. Name the command and the reason,
+and let the operator run it. In the CLAUDE.md admin form, it is:
+`KUBECONFIG=~/.kube/admin.yaml kubectl -n music exec deploy/music-pipeline -- <command>`.
+
+| Command | What it does |
+|---------|--------------|
+| `music-album-audit-releases --replaced '<artist — album>' --apply --only-copies` | Deletes only copies for good |
+| `music-audit-dupes --apply` | Merges every certain group at once. It can't skip one, and a group can merge two takes that share an ISRC. Prefer `merge_items` for chosen pairs |
+| `music-audit-dupes --merge … --allow-manual --apply` | Drops a manually imported item too |
+| `music-audit-lengths --replace <id> --youtube <url> --force --apply` | Swaps the file in even though the length guard rejects it |
+| `music-audit-lengths --quarantine` | Also runs the length guard over quarantine's files |
+| `music-rollback-releases --apply` | The legacy cleanup: moves pre-#279 Usenet items that match no playlist entry to `quarantine/replaced/` |
+
+Groups that would take a track off an album are listed `[ALBUM]` and left alone by
+`--apply`. `merge_items` one of their pairs only if the album may lose that track.

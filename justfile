@@ -4,6 +4,15 @@ test:
     docker build --network=host --target dev -f service/Dockerfile -t music-pipeline-service:dev .
     docker run --rm music-pipeline-service:dev
 
+# Run the MCP adapter's tests, including its contract test against the real pipeline API
+test-mcp:
+    docker build --network=host --target dev -f service/Dockerfile -t music-pipeline-service:dev .
+    docker run --rm -v "$PWD":/src:ro music-pipeline-service:dev sh /src/mcp/test.sh
+
+# Build the MCP adapter image (ghcr.io/sometimeskind/music-mcp)
+build-mcp:
+    docker build --target prod -t music-mcp:local mcp/
+
 # Build the unified service image
 build:
     docker build -f service/Dockerfile -t music-pipeline:local .
