@@ -24,7 +24,7 @@ from pathlib import Path
 from typing import Callable
 
 from music_fetch import store
-from music_fetch.albums import STATE_FILE, album_key
+from music_fetch.albums import STATE_FILE, _track_id, album_key
 from music_scan.held import album_held, held_urls
 from music_scan.identity import ItemIndex
 from music_scan.library import LIBRARY_DB, MusicLibrary
@@ -116,9 +116,27 @@ def _summary(label: str, entries: int, albums: list[AlbumWants], minimum: int) -
             f"{sum(1 for a in albums if len(a.wanted) == 1)} singleton(s)")
 
 
+def merged(reports: list[Report]) -> list[AlbumWants]:
+    """The albums of *reports* merged by key, each wanted track once, as the
+    album tick counts them across playlists (``feed_wants``, homelab#2406)."""
+    albums: dict[str, AlbumWants] = {}
+    seen: dict[str, set[str]] = {}
+    for report in reports:
+        for album in report.albums:
+            into = albums.setdefault(album.key, dataclasses.replace(album, wanted=[]))
+            ids = seen.setdefault(album.key, set())
+            for song in album.wanted:
+                if _track_id(song) not in ids:
+                    ids.add(_track_id(song))
+                    into.wanted.append(song)
+    return list(albums.values())
+
+
 def log_reports(reports: list[Report], minimum: int = DEFAULT_MIN) -> None:
     """One ``[WANT]`` summary per playlist, its albums at or over *minimum*
-    (``[ALBUM]``, most wanted first), then the total across playlists."""
+    (``[ALBUM]``, most wanted first), then the total across playlists: the
+    albums merged, each wanted track counted once (:func:`merged`), and the
+    entries summed."""
     for report in reports:
         logger.info(_summary(report.playlist, report.entries, report.albums, minimum))
         for album in report.over(minimum):
@@ -126,7 +144,7 @@ def log_reports(reports: list[Report], minimum: int = DEFAULT_MIN) -> None:
             logger.info("  [ALBUM] %s: %d%s track(s) wanted, first at #%d: %s — %s (%s)",
                         report.playlist, len(album.wanted), tracks, album.first + 1, album.artist, album.name, album.key)
     if len(reports) > 1:
-        logger.info(_summary("total", sum(r.entries for r in reports), [a for r in reports for a in r.albums], minimum))
+        logger.info(_summary("total", sum(r.entries for r in reports), merged(reports), minimum))
 
 
 def run(playlist: str | None = None, all_stores: bool = False, minimum: int = DEFAULT_MIN) -> list[Report]:
