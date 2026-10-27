@@ -92,8 +92,9 @@ FILLED = "filled"      # complete, with tracks from spotdl
 # fallback_from values for an imported release, before #268 stopped chasing its gaps.
 PARTIAL, GAP = "partial", "gap"
 # A record's ``origin`` (#324): absent for an album playlist's, WANTS for one
-# :func:`feed_wants` made from a spotdl playlist's want list.
-ALBUM, WANTS = "album", "wants"
+# :func:`feed_wants` made from a spotdl playlist's want list, LIBRARY for one
+# :func:`feed_library` made from the library's and every store's tracks (homelab#2403).
+ALBUM, WANTS, LIBRARY = "album", "wants", "library"
 # A wants record not yet grabbed: the feed updates it, or drops it.
 WAITING = (WANTED, DRY_RUN, MISSING, HAVE)
 
@@ -136,6 +137,14 @@ def _env_int(name: str, default: int) -> int:
         return default
 
 
+def _env_choice(name: str, choices: tuple[str, ...]) -> str:
+    value = os.environ.get(name, choices[0]).strip().lower()
+    if value not in choices:
+        logger.error("%s must be %s, got %r — using %s", name, " or ".join(choices), value, choices[0])
+        return choices[0]
+    return value
+
+
 @dataclasses.dataclass
 class Settings:
     mode: str = "off"
@@ -152,6 +161,8 @@ class Settings:
     want_min: int = 2
     # ...and how many grabs ahead, in ALBUM_MAX_IN_FLIGHT batches, their tracks leave spotdl.
     hold_ahead: int = 4
+    # Library-wide (homelab#2403): off, dry-run (log what it would queue) or on.
+    library: str = "off"
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -168,6 +179,7 @@ class Settings:
             auto_reimports_per_day=_env_int("ALBUM_AUTO_REIMPORTS_PER_DAY", 3),
             want_min=_env_int("ALBUM_WANT_MIN", 2),
             hold_ahead=_env_int("ALBUM_WANT_HOLD_AHEAD", 4),
+            library=_env_choice("ALBUM_LIBRARY", ("off", "dry-run", "on")),
         )
 
 
@@ -399,7 +411,7 @@ def refresh_playlists(
         wanted = reduce_to_albums(songs)
         for key, album in wanted.items():
             record = state.albums.setdefault(key, {"status": WANTED, "blocklist": []})
-            if record.pop("origin", None) == WANTS:
+            if record.pop("origin", None) in (WANTS, LIBRARY):
                 # The album playlist wants it whole: its wanted tracks are no longer the point.
                 record["playlists"] = {}
             record.update({k: v for k, v in album.items() if k != "tracks"})
@@ -433,16 +445,30 @@ def _wants(record: dict) -> bool:
     return record.get("origin") == WANTS
 
 
+def _library(record: dict) -> bool:
+    return record.get("origin") == LIBRARY
+
+
+def _fed(record: dict) -> bool:
+    """A record a feed made (wants or library), not an album playlist's: it
+    never falls back, and its tracks are held off spotdl only near its turn."""
+    return _wants(record) or _library(record)
+
+
 def _label(record: dict) -> str:
     label = f"{record['artist']} — {record['name']}"
     if _wants(record):
         label += f" (wants: {', '.join(record.get('playlists', {}))})"
+    elif _library(record):
+        label += " (library)"
     return label
 
 
 def _back(record: dict) -> str:
-    """A log note for a wants record that is missing or failed: no fallback,
-    its wanted tracks go back to spotdl (#324)."""
+    """A log note for a wants or library record that is missing or failed: no
+    fallback, its wanted tracks go back to spotdl (#324)."""
+    if _library(record):
+        return "; its wanted tracks stay with spotdl"
     if not _wants(record):
         return ""
     return f"; its {sum(len(t) for t in record.get('playlists', {}).values())} wanted track(s) go back to spotdl"
@@ -493,7 +519,8 @@ def feed_wants(
     for key in ranked:
         on = found[key]["on"]
         record = state.albums.get(key)
-        why = "local" if not _spotify_album(key) else "album playlist" if record and not _wants(record) else ""
+        why = ("local" if not _spotify_album(key) else "album playlist" if record and not _fed(record)
+               else "library" if record and _library(record) and record.get("status") not in WAITING else "")
         for name in on:
             if why:
                 skipped_on[name][why] = skipped_on[name].get(why, 0) + 1
@@ -503,6 +530,10 @@ def feed_wants(
             continue
         if record is None:
             record = state.albums[key] = {"status": WANTED, "blocklist": [], "origin": WANTS}
+        elif _library(record):
+            # A waiting library record (homelab#2403): the wanted tracks take it over.
+            record.update(origin=WANTS, playlists={})
+            record.pop("references", None)
         if record.get("status") in WAITING:
             distinct = list({_track_id(s): s for songs in on.values() for s in songs}.values())
             record.update({k: v for k, v in reduce_to_albums(distinct)[key].items() if k != "tracks"})
@@ -514,7 +545,7 @@ def feed_wants(
             record["playlists"] = {n: t for n, t in record.get("playlists", {}).items() if key in listed_on.get(n, ())}
             if not record["playlists"]:
                 del state.albums[key]
-    order = [k for k, r in state.albums.items() if not _wants(r)] + [k for k in ranked if k in state.albums]
+    order = [k for k, r in state.albums.items() if not _fed(r)] + [k for k in ranked if k in state.albums]
     order += [k for k in state.albums if k not in set(order)]
     state.albums = {k: state.albums[k] for k in order}
     held = _held(state, settings)
@@ -524,6 +555,76 @@ def feed_wants(
         logger.info("[WANTS] %s: %d album(s) queued (%d wanted track(s)), %d held off spotdl%s", name, len(queued),
                     sum(len(t) for _, t in queued), sum(len(t) for k, t in queued if k in held),
                     "".join(f"; {n} {why} skipped" for why, n in sorted(skipped_on[name].items())))
+
+
+# library(): every Spotify album the library's items and the stores' tracks
+# reference (homelab#2403), as (key, references, Spotify's track count, whole,
+# {playlist: every store track on the album}); references count each recording once.
+LibraryAlbums = Callable[[], list[tuple[str, int, int, bool, dict[str, list[dict]]]]]
+
+
+def feed_library(state: State, library: LibraryAlbums, settings: Settings) -> None:
+    """Queue every album ``want_min`` or more tracks reference, held or
+    wanted, on any playlist or none (homelab#2403), as a record with
+    ``origin: "library"`` whose ``playlists`` hold every store track on the
+    album, so ``have`` and the import treat it as an album playlist's.
+
+    Skipped: albums the library holds whole (Spotify's track count, or placed
+    by a release import), local keys, albums another record has (an album
+    playlist's, or wants: :func:`feed_wants` runs first and takes a waiting
+    library record over), and albums no store lists a track of (an import
+    files the album under a playlist).  Ranked most referenced first, after
+    the album playlists' and the wants records.  A waiting library record
+    whose album no longer qualifies is dropped.
+
+    ``ALBUM_LIBRARY``: ``off`` queues nothing and drops the waiting library
+    records; ``dry-run`` only logs what ``on`` would queue; so does an
+    ``ALBUM_WANT_MIN`` of 0 turn it off.  One ``[LIBRARY]`` summary a tick."""
+    mode = settings.library if settings.want_min > 0 else "off"
+    found = library() if mode != "off" else []
+    ranked: list[tuple[str, int, int, dict[str, list[dict]]]] = []
+    skipped: dict[str, int] = {}
+    for key, refs, tracks, whole, on in found:
+        if refs < settings.want_min or whole:
+            continue
+        record = state.albums.get(key)
+        why = ("local" if not _spotify_album(key) else "no playlist track" if not on
+               else "" if record is None or _library(record) else "wants" if _wants(record) else "album playlist")
+        if why:
+            skipped[why] = skipped.get(why, 0) + 1
+            continue
+        ranked.append((key, refs, tracks, on))
+    ranked.sort(key=lambda c: (-c[1], c[0]))
+    new = [key for key, *_ in ranked if key not in state.albums]
+    if mode == "on":
+        for key, refs, tracks, on in ranked:
+            record = state.albums.setdefault(key, {"status": WANTED, "blocklist": [], "origin": LIBRARY})
+            if record.get("status") not in WAITING:
+                continue
+            distinct = list({_track_id(s): s for songs in on.values() for s in songs}.values())
+            record.update({k: v for k, v in reduce_to_albums(distinct)[key].items() if k != "tracks"})
+            record["tracks_count"] = record.get("tracks_count") or tracks
+            record["references"] = refs
+            record["playlists"] = {name: [track_entry(s) for s in songs] for name, songs in on.items()}
+    listed = {key for key, *_ in ranked}
+    for key, record in list(state.albums.items()):
+        if _library(record) and record.get("status") in WAITING and key not in listed:
+            del state.albums[key]
+    order = [k for k, r in state.albums.items() if not _fed(r)] + [k for k, r in state.albums.items() if _wants(r)]
+    order += [k for k, *_ in ranked if k in state.albums]
+    order += [k for k in state.albums if k not in set(order)]
+    state.albums = {k: state.albums[k] for k in order}
+    skips = "".join(f"; {n} {why} skipped" for why, n in sorted(skipped.items()))
+    if mode == "dry-run":
+        logger.info("[LIBRARY] dry-run: %d album(s) would be queued (%d new)%s", len(ranked), len(new), skips)
+        for key, refs, tracks, on in ranked[:10]:
+            album = reduce_to_albums([s for songs in on.values() for s in songs])[key]
+            logger.info("  [LIBRARY] would queue %s — %s (%s): %d of %d track(s) referenced",
+                        album["artist"], album["name"], key, refs, album["tracks_count"] or tracks)
+    elif mode == "on":
+        queued = sum(1 for k in listed if state.albums.get(k, {}).get("status") in (WANTED, DRY_RUN, GRABBED))
+        logger.info("[LIBRARY] %d album(s) queued (%d new), %d held off spotdl%s", queued, len(new),
+                    sum(1 for k in _held(state, settings) if k in listed), skips)
 
 
 def _held(state: State, settings: Settings) -> set[str]:
@@ -538,10 +639,10 @@ def _held(state: State, settings: Settings) -> set[str]:
     if settings.mode != "on":
         return set()
     room = min(settings.max_in_flight * settings.hold_ahead, settings.grabs_per_day) - sum(
-        1 for r in state.albums.values() if not _wants(r) and r.get("status") == WANTED)
+        1 for r in state.albums.values() if not _fed(r) and r.get("status") == WANTED)
     held = set()
     for key, record in state.albums.items():
-        if not _wants(record):
+        if not _fed(record):
             continue
         if record.get("status") == GRABBED:
             held.add(key)
@@ -878,7 +979,7 @@ def fallbacks(state: State, missing: Missing, album_songs: AlbumSongs | None = N
     playlist's own want list once it is missing or failed."""
     reads = 0
     for key, record in state.albums.items():
-        if _wants(record):
+        if _fed(record):
             continue
         if settle_imported(record):
             logger.info("[SETTLED] %s — %s: the release is the album; its %s fallback is no longer chased",
@@ -944,8 +1045,9 @@ def status_counts(state: State) -> dict[str, int]:
 
 def origin_counts(state: State) -> dict[tuple[str, str], int]:
     """Records by ``(status, origin)`` (#324): ``album`` for an album
-    playlist's, ``wants`` for a spotdl playlist's (:func:`feed_wants`)."""
-    counts = {(s, o): 0 for s in status_counts(State()) for o in (ALBUM, WANTS)}
+    playlist's, ``wants`` for a spotdl playlist's (:func:`feed_wants`),
+    ``library`` for the library-wide feed's (:func:`feed_library`)."""
+    counts = {(s, o): 0 for s in status_counts(State()) for o in (ALBUM, WANTS, LIBRARY)}
     for record in state.albums.values():
         k = (record.get("status", WANTED), record.get("origin") or ALBUM)
         counts[k] = counts.get(k, 0) + 1
@@ -987,9 +1089,11 @@ def tick(
     mixed: Mixed | None = None,
     want_playlists: list[str] | None = None,
     wants: WantAlbums | None = None,
+    library: LibraryAlbums | None = None,
 ) -> TickResult:
     """One album-mode pass: refresh changed playlists, queue the albums of
-    the spotdl playlists *want_playlists* (*wants*, :func:`feed_wants`), recover lost import
+    the spotdl playlists *want_playlists* (*wants*, :func:`feed_wants`) and the
+    library-wide ones (*library*, :func:`feed_library`), recover lost import
     triggers (*on_completion*, ``on`` only), reset a few mixed albums for a
     reimport (*mixed*, :func:`auto_reimport`), top the queue up, then hand
     what Usenet can't supply to spotdl (*missing*, ``on`` only)."""
@@ -1005,6 +1109,8 @@ def tick(
         if wants is not None:
             # ALBUM_WANT_MIN=0: no playlist is fed, and the waiting wants records go.
             feed_wants(state, (want_playlists or []) if settings.want_min > 0 else [], wants, settings)
+        if library is not None:
+            feed_library(state, library, settings)
         if settings.mode == "on" and on_completion is not None:
             for completion in lost_completions(state, sabnzbd):
                 logger.info("Recovering lost import trigger for %s", completion.nzo_id)

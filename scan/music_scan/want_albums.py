@@ -169,6 +169,8 @@ class LibraryAlbum:
     wanted: list[dict] = dataclasses.field(default_factory=list)
     record: dict | None = None
     """The album's ``.albums.json`` record, if any."""
+    on: dict[str, list[dict]] = dataclasses.field(default_factory=dict)
+    """Every store track on the album, held or wanted, by playlist (:func:`library_view`)."""
 
     @property
     def refs(self) -> int:
@@ -181,6 +183,11 @@ class LibraryAlbum:
         return [i for i in self.held if not i.get("album_record")]
 
     @property
+    def whole(self) -> bool:
+        """The library holds Spotify's track count, or a release import placed it."""
+        return bool(self.tracks and len(self.held) >= self.tracks) or len(self.loose) < len(self.held)
+
+    @property
     def bucket(self) -> str:
         """``album playlist`` (a later/keep record has it), ``whole`` (the
         library holds Spotify's track count, or a release import placed it),
@@ -188,7 +195,7 @@ class LibraryAlbum:
         with a wanted track) or ``backfill`` (2+ references, nothing wanted)."""
         if self.record and not _wants(self.record):
             return "album playlist"
-        if (self.tracks and len(self.held) >= self.tracks) or len(self.loose) < len(self.held):
+        if self.whole:
             return "whole"
         if self.record:
             return "queued"
@@ -233,6 +240,22 @@ def library_albums(items, wanted: list[AlbumWants], records: dict[str, dict]) ->
             album.tracks = want.tracks  # Spotify's own count beats a tag
         album.wanted.extend(want.wanted)
     return list(albums.values()), unplaced
+
+
+def library_view(items, stores: dict[str, list[dict]], resolves: Callable[[dict], bool],
+                 records: dict[str, dict] | None = None) -> tuple[list[LibraryAlbum], int]:
+    """:func:`library_albums` over *items* and every store's want list (no
+    tracks held back for the inbox or album mode: those are references too),
+    each album with every store track on it (:attr:`LibraryAlbum.on`).  The
+    album tick's library feed reads the same view (homelab#2403)."""
+    reports = [group(name, songs, resolves, frozenset()) for name, songs in stores.items()]
+    albums, unplaced = library_albums(items, merged(reports), records or {})
+    by_key = {a.key: a for a in albums}
+    for name, songs in stores.items():
+        for song in songs:
+            if (album := by_key.get(album_key(song))) is not None:
+                album.on.setdefault(name, []).append(song)
+    return albums, unplaced
 
 
 def _size(items) -> int:
@@ -284,18 +307,28 @@ def run_library(minimum: int = DEFAULT_MIN) -> list[LibraryAlbum]:
         records = {}
     with MusicLibrary(LIBRARY_DB) as lib:
         items = list(lib.all_items())
-        index = ItemIndex(items)
-        reports = []
-        for name in store.names():
-            playlist_store = store.load(name)
-            if playlist_store is None:
-                logger.error("[WANT] %s: no readable store", name)
-                continue
-            reports.append(group(name, playlist_store.songs,
-                                 lambda s: index.match_song(s, words=False)[0] is not None, frozenset()))
-        albums, unplaced = library_albums(items, merged(reports), records)
+        albums, unplaced = library_view(items, read_stores(), resolves_by(items), records)
         log_library(albums, unplaced, minimum)
     return albums
+
+
+def resolves_by(items) -> Callable[[dict], bool]:
+    """Whether a store song is in the library, by Spotify ID or ISRC (the nightly's test)."""
+    index = ItemIndex(items)
+    return lambda song: index.match_song(song, words=False)[0] is not None
+
+
+
+def read_stores() -> dict[str, list[dict]]:
+    """Every readable store's songs, by playlist."""
+    stores = {}
+    for name in store.names():
+        playlist_store = store.load(name)
+        if playlist_store is None:
+            logger.error("[WANT] %s: no readable store", name)
+            continue
+        stores[name] = playlist_store.songs
+    return stores
 
 
 def run(playlist: str | None = None, all_stores: bool = False, minimum: int = DEFAULT_MIN) -> list[Report]:

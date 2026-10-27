@@ -193,3 +193,16 @@ def test_log_library_summarises_the_buckets_and_lists_the_grabs(caplog) -> None:
     assert lines[2].endswith("1 album(s) of unknown size), supersedes up to 3 loose copies")
     assert lines[3:] == ["  [BACKFILL] 2 held + 0 wanted: Artist — Album A (A)",
                          "  [GRAB] 1 held + 1 wanted of 10: Artist — Album B (B)"]
+
+
+def test_library_view_puts_every_store_track_on_its_album() -> None:
+    items = [_item(1, "A", "a1"), _item(2, "Z", "z1")]
+    stores = {"pl": [_song("a1", "A"), _song("a2", "A")], "mood": [_song("a2", "A"), _song("b1", "B")]}
+    albums, unplaced = want_albums.library_view(items, stores, lambda s: s["song_id"] == "a1")
+
+    by_key = {a.key: a for a in albums}
+    assert unplaced == 0
+    assert (len(by_key["A"].held), [s["song_id"] for s in by_key["A"].wanted]) == (1, ["a2"])  # a2 counts once
+    assert {n: [s["song_id"] for s in songs] for n, songs in by_key["A"].on.items()} == {"pl": ["a1", "a2"], "mood": ["a2"]}
+    assert by_key["Z"].on == {}  # held, on no playlist
+    assert not by_key["A"].whole and want_albums.LibraryAlbum("K", "", "", 1, [items[0]]).whole

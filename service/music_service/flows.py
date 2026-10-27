@@ -539,6 +539,20 @@ def _album_wants_hook(lib):
     return wants
 
 
+def _album_library_feed_hook(lib):
+    """``library()`` over one open beets library: every Spotify album the
+    library's items and the stores' tracks reference
+    (``want_albums.library_view``, homelab#2403), for the library-wide feed."""
+    from music_scan import want_albums  # noqa: PLC0415
+
+    def library() -> list[tuple[str, int, int, bool, dict[str, list[dict]]]]:
+        items = list(lib.all_items())
+        view, _ = want_albums.library_view(items, want_albums.read_stores(), want_albums.resolves_by(items))
+        return [(a.key, a.refs, a.tracks, a.whole, a.on) for a in view]
+
+    return library
+
+
 @task(name="album-tick", log_prints=True)
 def album_tick_task(settings) -> None:
     """Refresh album playlists, recover lost import triggers and top the Usenet queue up."""
@@ -571,6 +585,7 @@ def album_tick_task(settings) -> None:
             mixed=_album_mixed_hook(lib),
             want_playlists=want_playlists,
             wants=_album_wants_hook(lib),
+            library=_album_library_feed_hook(lib),
         )
 
 
