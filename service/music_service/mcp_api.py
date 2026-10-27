@@ -14,7 +14,7 @@ from pathlib import Path
 from flask import Blueprint, g, jsonify, request
 
 from music_service import mcp_jobs, mcp_reads
-from music_service.mcp_tools import TOOLS, WRITE, Ambiguous, BadRequest, NotFound, NotImplementedYet
+from music_service.mcp_tools import TOOLS, WRITE, Ambiguous, BadRequest, NotFound
 
 logger = logging.getLogger("music_service.mcp_jobs")  # one logger for every [MCP] line
 
@@ -211,10 +211,7 @@ def make_blueprint(jobs: mcp_jobs.JobQueue) -> Blueprint:
         apply = body.pop("apply", False)
         if not isinstance(apply, bool) or (apply and tool.tier != WRITE):
             raise BadRequest("apply must be true or false, and only a write tool takes it")
-        try:
-            args = tool.normalise(body, records)
-        except NotImplementedYet as exc:
-            return jsonify({"status": "not_implemented", "error": str(exc)}), 501
+        args = tool.normalise(body, records)
 
         try:
             if apply:

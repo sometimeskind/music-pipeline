@@ -36,10 +36,6 @@ class NotFound(Exception):
         self.query = query
 
 
-class NotImplementedYet(Exception):
-    """A tool waiting on another change: a 501."""
-
-
 Albums = Callable[[], dict[str, dict]]
 
 
@@ -106,11 +102,14 @@ def utc_iso(value) -> str:
 
 
 def album_ref(query: str) -> str:
-    """The album query as the CLI reads it."""
-    # TODO(homelab#2411): music_fetch.ids.spotify_key(query, "album"), as
-    # music-album-reset's argparse does once #2411 lands: reduces an
-    # open.spotify.com/album URL to its ID and raises ValueError on other URLs.
-    return query
+    """The album argument as the CLIs read it (``albums._album_ref``, homelab#2411):
+    an ``open.spotify.com`` album URL reduced to its ID, other text as given."""
+    from music_fetch.ids import spotify_key  # noqa: PLC0415
+
+    try:
+        return spotify_key(query, "album")
+    except ValueError as exc:
+        raise BadRequest(str(exc)) from exc
 
 
 def resolve_album(query, albums: Albums) -> str:
@@ -119,10 +118,7 @@ def resolve_album(query, albums: Albums) -> str:
 
     if not isinstance(query, str) or not query.strip():
         raise BadRequest("query must be a non-empty string")
-    try:
-        query = album_ref(query.strip())
-    except ValueError as exc:
-        raise BadRequest(str(exc)) from exc
+    query = album_ref(query.strip())
     hits = find_albums(albums(), query)
     if not hits:
         raise NotFound(query)
@@ -136,10 +132,15 @@ def candidate(key: str, record: dict) -> dict:
 
 
 def youtube_url(ref) -> str:
-    """The canonical watch URL for a YouTube video ID or URL."""
-    # TODO(homelab#2411): return music_fetch.ids.youtube_url(ref), raising
-    # BadRequest on its ValueError; replace_item stays a 501 until then.
-    raise NotImplementedYet("replace_item waits for homelab#2411's YouTube ID parser")
+    """The canonical watch URL for a YouTube video ID or URL (homelab#2411), all yt-dlp is given."""
+    from music_fetch import ids  # noqa: PLC0415
+
+    if not isinstance(ref, str) or not ref.strip():
+        raise BadRequest("youtube_url must be a YouTube video ID or URL")
+    try:
+        return ids.youtube_url(ref.strip())
+    except ValueError as exc:
+        raise BadRequest(str(exc)) from exc
 
 
 # ---------------------------------------------------------------------------
@@ -203,7 +204,7 @@ def _requeue_albums(body: dict, _: Albums) -> dict:
     since = body.get("since")
     if ids is not None and (not isinstance(ids, list) or not all(isinstance(i, str) and i.strip() for i in ids)):
         raise BadRequest("ids must be a list of album IDs")
-    ids = sorted({i.strip() for i in ids or []})
+    ids = sorted({album_ref(i.strip()) for i in ids or []})
     since = None if since is None else utc_iso(since)
     if not ids and since is None:
         raise BadRequest("give ids, since, or both")

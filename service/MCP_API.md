@@ -191,7 +191,7 @@ Free-text values never parse as flags: positional values follow `--`, and the `-
 
 Validation (400): `reset_album` needs a non-empty `query`, which must name exactly one album (ambiguous and not found as above, and no job is queued); `requeue_albums` needs `ids`, `since` or both; `merge_items` needs at least one pair of two different positive integer IDs, and an ID one pair drops can't appear in another pair; budgets are non-negative integers.
 
-`replace_item` accepts only a YouTube video ID, or a youtube.com / music.youtube.com / youtu.be URL reduced to one, and passes the canonical watch URL. **Until homelab#2411's ID parser lands it returns `501 {"status": "not_implemented", "error": "…"}`.**
+`replace_item` accepts only a YouTube video ID, or a youtube.com / music.youtube.com / youtu.be URL reduced to one (`music_fetch.ids.youtube_url`, homelab#2411), and passes the canonical watch URL; anything else is a 400. An album query or a requeue ID may be an `open.spotify.com/album` URL, reduced to its ID as the CLIs do (`music_fetch.ids.spotify_key`); a Spotify URL of another kind is a 400.
 
 `merge_items` runs its pairs in order and stops at the first that fails; each pair is its own CLI run, so the pairs before it stay merged. Within a pair, beets commits each store and removal on its own (no transaction spans the merge), so a crash mid-pair can leave the keeper with the loser's IDs and the loser still in the library: rerun the pair.
 

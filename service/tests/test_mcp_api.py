@@ -231,9 +231,27 @@ def test_bad_arguments_are_400(client):
     assert client.post("/mcp-api/run/nope", json={}, headers=WRITE).status_code == 404
 
 
-def test_replace_item_waits_for_2411(client):
-    resp = client.post("/mcp-api/run/replace_item", json={"id": 1, "youtube_url": "dQw4w9WgXcQ"}, headers=WRITE)
-    assert resp.status_code == 501 and resp.json["status"] == "not_implemented"
+def test_replace_item_passes_the_canonical_watch_url(client, env):
+    resp = client.post("/mcp-api/run/replace_item",
+                       json={"id": 1, "youtube_url": "https://youtu.be/dQw4w9WgXcQ?si=abc&t=3"}, headers=WRITE)
+    assert resp.status_code == 200, resp.json
+    assert resp.json["args"] == {"id": 1, "youtube_url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ"}
+    assert env["commands"].ran[-1] == ["music-audit-lengths", "--replace", "1", "--youtube",
+                                       "https://www.youtube.com/watch?v=dQw4w9WgXcQ"]
+    for bad in ["https://evil.example/watch?v=dQw4w9WgXcQ", "https://www.youtube.com/playlist?list=PL1", "", 5]:
+        assert client.post("/mcp-api/run/replace_item", json={"id": 1, "youtube_url": bad},
+                           headers=WRITE).status_code == 400, bad
+
+
+def test_album_urls_resolve_like_the_cli(client):
+    # An album URL with no valid ID is refused, not searched for as text.
+    resp = client.post("/mcp-api/run/reset_album", json={"query": "https://open.spotify.com/album/ALB3"}, headers=WRITE)
+    assert resp.status_code == 400
+    real = "https://open.spotify.com/album/0ETFjACtuP2ADo6LFhL6HN?si=x"
+    resp = client.post("/mcp-api/run/requeue_albums", json={"ids": [real]}, headers=WRITE)
+    assert resp.json["args"]["ids"] == ["0ETFjACtuP2ADo6LFhL6HN"]
+    assert client.post("/mcp-api/run/requeue_albums", json={"ids": ["https://open.spotify.com/track/0ETFjACtuP2ADo6LFhL6HN"]},
+                       headers=WRITE).status_code == 400
 
 
 # ---------------------------------------------------------------------------
