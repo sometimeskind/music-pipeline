@@ -69,6 +69,24 @@ def test_log_reports_summary_albums_and_total(caplog) -> None:
     assert lines[5] == "[WANT] total: 9 wanted of 11 entries on 5 album(s); 3 album(s) hold 2+ (7 wanted (77%)), 2 singleton(s)"
 
 
+def test_total_merges_albums_and_counts_a_shared_track_once(caplog) -> None:
+    # s1 is on both playlists; album S has one other wanted track on each, so
+    # each playlist alone sees it under the threshold but the total doesn't.
+    soft = want_albums.group("soft", [_song("s1", "S"), _song("s2", "S"), _song("q1", "Q")], lambda s: False, frozenset())
+    fancy = want_albums.group("fancy", [_song("s1", "S"), _song("s3", "S")], lambda s: False, frozenset())
+    single = want_albums.group("one", [_song("t1", "T")], lambda s: False, frozenset())
+
+    with caplog.at_level(logging.INFO, logger="music_scan.want_albums"):
+        want_albums.log_reports([soft, fancy, single], minimum=3)
+
+    assert caplog.records[-1].getMessage() == (
+        "[WANT] total: 5 wanted of 6 entries on 3 album(s); 1 album(s) hold 3+ (3 wanted (60%)), 2 singleton(s)"
+    )
+    by_key = {a.key: a for a in want_albums.merged([soft, fancy, single])}
+    assert [s["song_id"] for s in by_key["S"].wanted] == ["s1", "s2", "s3"]
+    assert [s["song_id"] for s in soft.albums[0].wanted] == ["s1", "s2"]  # the playlist's own report is untouched
+
+
 def test_summary_of_an_album_with_unknown_track_count_omits_it(caplog) -> None:
     report = want_albums.group("pl", [_song("c1", "C", tracks=0), _song("c2", "C", tracks=0)], lambda s: False, frozenset())
     with caplog.at_level(logging.INFO, logger="music_scan.want_albums"):
