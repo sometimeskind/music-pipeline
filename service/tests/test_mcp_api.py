@@ -167,17 +167,17 @@ def test_reads_never_write_the_library(client, env):
 
 
 def test_reset_album_dry_run_then_apply(client, env):
-    env["commands"].outputs["music-album-reset ALB3"] = (["[2026-10-27T10:00:00+0000] ALB3: status failed → wanted"], 0)
+    env["commands"].outputs["music-album-reset -- ALB3"] = (["[2026-10-27T10:00:00+0000] ALB3: status failed → wanted"], 0)
     dry = client.post("/mcp-api/run/reset_album", json={"query": "pastel"}, headers=WRITE)
     assert dry.status_code == 200 and dry.json["status"] == "done" and dry.json["mode"] == "dry_run"
     assert dry.json["args"] == {"album": "ALB3", "reimport": False}
     # Another caller, another spelling of the same album.
     other = {**WRITE, "X-MCP-Caller": "sub-2"}
-    env["commands"].outputs["music-album-reset ALB3"] = (["[2026-10-27T10:05:00+0000] ALB3: status failed → wanted"], 0)
+    env["commands"].outputs["music-album-reset -- ALB3"] = (["[2026-10-27T10:05:00+0000] ALB3: status failed → wanted"], 0)
     applied = client.post("/mcp-api/run/reset_album", json={"query": "Nina Simone — Pastel Blues", "apply": True},
                           headers=other)
     assert applied.status_code == 200 and applied.json["status"] == "done", applied.json
-    assert env["commands"].ran[-1] == ["music-album-reset", "ALB3", "--apply"]
+    assert env["commands"].ran[-1] == ["music-album-reset", "--apply", "--", "ALB3"]
     assert applied.json["locks"] == ["albums", "pipeline"]
 
 
@@ -220,7 +220,7 @@ def test_requeue_normalises_since_to_utc(client, env):
     resp = client.post("/mcp-api/run/requeue_albums", json={"since": "2026-10-20T02:00:00+02:00", "ids": ["B", "A", "A"]},
                        headers=WRITE)
     assert resp.json["args"] == {"ids": ["A", "B"], "since": "2026-10-20T00:00:00+00:00"}
-    assert resp.json["argv"] == [["music-album-requeue", "A", "B", "--since", "2026-10-20T00:00:00+00:00"]]
+    assert resp.json["argv"] == [["music-album-requeue", "--since", "2026-10-20T00:00:00+00:00", "--", "A", "B"]]
     assert client.post("/mcp-api/run/requeue_albums", json={}, headers=WRITE).status_code == 400
 
 

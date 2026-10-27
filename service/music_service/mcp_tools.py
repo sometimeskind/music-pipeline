@@ -147,8 +147,11 @@ def youtube_url(ref) -> str:
 # ---------------------------------------------------------------------------
 
 
-def _apply(argv: list[str], apply: bool) -> list[str]:
-    return [*argv, "--apply"] if apply else argv
+def _apply(argv: list[str], apply: bool, *values: str) -> list[str]:
+    """*argv*, ``--apply`` with *apply*, then the free-text *values* after
+    ``--``: a value never parses as a flag (an album ID ``--apply`` would turn
+    a dry run into an apply)."""
+    return [*argv, *(["--apply"] if apply else []), *(["--", *values] if values else [])]
 
 
 def _audit_dupes(body: dict, _: Albums) -> dict:
@@ -179,7 +182,8 @@ def _audit_releases_argv(args: dict, _: bool) -> list[list[str]]:
     query = args["replaced_query"]
     if query is None:
         return [["music-album-audit-releases"]]
-    return [["music-album-audit-releases", "--replaced", query]] if query else [["music-album-audit-releases", "--replaced"]]
+    # --replaced=QUERY: a query that starts with "-" stays the option's value.
+    return [["music-album-audit-releases", f"--replaced={query}"]] if query else [["music-album-audit-releases", "--replaced"]]
 
 
 def _none(body: dict, _: Albums) -> dict:
@@ -207,10 +211,10 @@ def _requeue_albums(body: dict, _: Albums) -> dict:
 
 
 def _requeue_argv(args: dict, apply: bool) -> list[list[str]]:
-    argv = ["music-album-requeue", *args["ids"]]
+    argv = ["music-album-requeue"]
     if args["since"]:
         argv += ["--since", args["since"]]
-    return [_apply(argv, apply)]
+    return [_apply(argv, apply, *args["ids"])]
 
 
 def _merge_items(body: dict, _: Albums) -> dict:
@@ -263,8 +267,8 @@ TOOLS: dict[str, Tool] = {t.name: t for t in [
     Tool("audit_releases", READ, _audit_releases, _audit_releases_argv),
     Tool("audit_want_albums", READ, _none, lambda a, _: [["music-audit-want-albums"]]),
     Tool("reset_album", WRITE, _reset_album,
-         lambda a, apply: [_apply(["music-album-reset", a["album"], *(["--reimport"] if a["reimport"] else [])],
-                                  apply)],
+         lambda a, apply: [_apply(["music-album-reset", *(["--reimport"] if a["reimport"] else [])], apply,
+                                  a["album"])],
          ("albums", "pipeline")),
     Tool("requeue_albums", WRITE, _requeue_albums, _requeue_argv, ("albums", "pipeline")),
     Tool("merge_items", WRITE, _merge_items,

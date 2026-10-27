@@ -131,7 +131,7 @@ The CLI tools run as jobs in a **single-slot queue** of depth 5: at most 5 jobs 
 ```json
 {"job_id": "3f2a…", "tool": "reset_album", "args": {"album": "0ETF…", "reimport": false}, "mode": "dry_run",
  "status": "done", "caller": "a1b2…", "tier": "write",
- "argv": [["music-album-reset", "0ETF…"]],
+ "argv": [["music-album-reset", "--", "0ETF…"]],
  "created_at": "…", "started_at": "…", "finished_at": "…", "exit_code": 0,
  "dry_run_hash": "sha256:…", "error": null,
  "output": "…one page…", "offset": 0, "next_offset": null, "total_lines": 12}
@@ -169,7 +169,7 @@ A write tool's **apply** takes Prefect's `pipeline` lock (and first `albums`, fo
 |---|---|---|
 | `audit_dupes` | `{"fingerprint_ids": [1, 2]}` (optional; `[]` = every item without a fingerprint) | `music-audit-dupes` / `music-audit-dupes --fingerprint [ID…]` |
 | `audit_lengths` | `{"silence": false}` | `music-audit-lengths [--silence]` |
-| `audit_releases` | `{"replaced_query": "…"}` (optional; `""` lists every only copy) | `music-album-audit-releases` / `… --replaced [QUERY]` |
+| `audit_releases` | `{"replaced_query": "…"}` (optional; `""` lists every only copy) | `music-album-audit-releases` / `… --replaced` / `… --replaced=QUERY` |
 | `audit_want_albums` | `{}` | `music-audit-want-albums` |
 
 `audit_releases --replaced` takes the CLI's query as given, ambiguity included: the CLI itself refuses more than one match.
@@ -178,14 +178,16 @@ A write tool's **apply** takes Prefect's `pipeline` lock (and first `albums`, fo
 
 Every write tool's body takes `"apply": false` (the default) or `true`.
 
-| Tool | Body | argv (dry run; apply adds `--apply`) | Locks |
+| Tool | Body | argv (dry run; apply adds `--apply` before any `--`) | Locks |
 |---|---|---|---|
-| `reset_album` | `{"query": "…", "reimport": false}` | `music-album-reset <key> [--reimport]` | albums, pipeline |
-| `requeue_albums` | `{"ids": ["…"], "since": "2026-10-20T00:00:00"}` (one or both) | `music-album-requeue [ID…] [--since <UTC ISO>]` | albums, pipeline |
+| `reset_album` | `{"query": "…", "reimport": false}` | `music-album-reset [--reimport] -- <key>` | albums, pipeline |
+| `requeue_albums` | `{"ids": ["…"], "since": "2026-10-20T00:00:00"}` (one or both) | `music-album-requeue [--since <UTC ISO>] -- [ID…]` | albums, pipeline |
 | `merge_items` | `{"pairs": [[keep_id, drop_id], …]}` | `music-audit-dupes --merge <keep> <drop>`, one per pair | pipeline |
 | `replace_item` | `{"id": 10001, "youtube_url": "…"}` | `music-audit-lengths --replace <id> --youtube https://www.youtube.com/watch?v=<video id>` | pipeline |
 | `embed_covers` | `{}` | `music-embed-covers` | pipeline |
 | `canon_albums` | `{"refresh": false, "search_budget": null, "mb_budget": null}` | `music-canon-albums [--refresh] [--search-budget N] [--mb-budget N]` | pipeline |
+
+Free-text values never parse as flags: positional values follow `--`, and the `--replaced` query is passed as `--replaced=QUERY`. The argparse test checks that a dry run's argv never parses with `--apply`, whatever its arguments hold.
 
 Validation (400): `reset_album` needs a non-empty `query`, which must name exactly one album (ambiguous and not found as above, and no job is queued); `requeue_albums` needs `ids`, `since` or both; `merge_items` needs at least one pair of two different positive integer IDs, and an ID one pair drops can't appear in another pair; budgets are non-negative integers.
 
