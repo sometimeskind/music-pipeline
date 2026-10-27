@@ -12,7 +12,7 @@ YouTube video spotdl downloaded them from (the file's comment tag).
 decodes each one).  ``--quarantine`` runs the guard's checks over the files
 already in quarantine and logs what it would reject.
 
-``--replace ITEM_ID [--youtube URL] --apply`` fixes one suspect **in place**.
+``--replace ITEM_ID [--youtube ID] --apply`` fixes one suspect **in place**.
 A wrong-audio file carries the right Spotify ID and ISRC, so a re-download
 through the inbox would be merged into the old item by the duplicate hook and
 discarded.  Instead the entry is downloaded to a staging directory (pinned to
@@ -35,6 +35,7 @@ import shutil
 import tempfile
 from pathlib import Path
 
+from music_fetch.ids import youtube_url
 from music_scan import guard
 from music_scan.identity import BY_WORDS, ItemIndex, fingerprint, item_spotify_ids, spotify_id, split_list
 
@@ -232,6 +233,7 @@ def run(apply: bool = False, tolerance: float = guard.TOLERANCE, min_delta: floa
     from music_scan.library import LIBRARY_DB, MusicLibrary  # noqa: PLC0415
     from music_scan.navidrome import trigger_scan  # noqa: PLC0415
 
+    youtube = youtube_url(youtube) if youtube else None  # all yt-dlp is given (homelab#2411)
     with MusicLibrary(LIBRARY_DB) as lib:
         target = lib.get_item(replace_id) if replace_id is not None else None
         if replace_id is not None and target is None:
@@ -277,7 +279,9 @@ def main() -> None:
     parser.add_argument("--silence", action="store_true", help="also check every matched file for mid-track silence")
     parser.add_argument("--quarantine", action="store_true", help="also run the guard over the quarantine's files")
     parser.add_argument("--replace", type=int, metavar="ITEM_ID", help="re-download this item and swap it in")
-    parser.add_argument("--youtube", metavar="URL", help="with --replace: download from this YouTube video")
+    parser.add_argument("--youtube", metavar="ID", type=youtube_url,
+                        help="with --replace: download from this YouTube video (its ID, or a youtube.com, "
+                             "music.youtube.com or youtu.be URL)")
     parser.add_argument("--force", action="store_true", help="with --replace: swap in even if the guard rejects it")
     parser.add_argument("--apply", action="store_true", help="with --replace: do it (default: dry run)")
     args = parser.parse_args()

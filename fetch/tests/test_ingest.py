@@ -82,9 +82,9 @@ def test_sync_playlists_processes_in_config_order(tmp_path: Path) -> None:
     # Config order: aaaaaaah, wedding, later
     conf = tmp_path / "playlists.conf"
     conf.write_text(
-        "aaaaaaah  https://open.spotify.com/playlist/A\n"
-        "wedding   https://open.spotify.com/playlist/W\n"
-        "later     https://open.spotify.com/playlist/L\n",
+        "aaaaaaah  https://open.spotify.com/playlist/A000000000000000000000\n"
+        "wedding   https://open.spotify.com/playlist/W000000000000000000000\n"
+        "later     https://open.spotify.com/playlist/L000000000000000000000\n",
         encoding="utf-8",
     )
 
@@ -218,7 +218,7 @@ def test_reconcile_provisions_new_playlist(tmp_path: Path) -> None:
 
     spotdl_dir = tmp_path / "spotdl"
     spotdl_dir.mkdir()
-    conf = _make_conf(tmp_path, ["my-playlist  https://open.spotify.com/playlist/abc"])
+    conf = _make_conf(tmp_path, ["my-playlist  https://open.spotify.com/playlist/abc0000000000000000000"])
 
     with mock.patch.object(ingest, "CONF_PATH", conf), \
          mock.patch.object(ingest, "SPOTDL_DIR", spotdl_dir), \
@@ -238,7 +238,7 @@ def test_reconcile_leaves_an_existing_playlist_alone(tmp_path: Path) -> None:
     (spotdl_dir / "my-playlist").mkdir(parents=True)
     (spotdl_dir / "my-playlist" / "track.m4a").touch()
     store.Store.from_songs("my-playlist", [{"url": "u"}]).save(store.path("my-playlist"))
-    conf = _make_conf(tmp_path, ["my-playlist  https://open.spotify.com/playlist/abc"])
+    conf = _make_conf(tmp_path, ["my-playlist  https://open.spotify.com/playlist/abc0000000000000000000"])
 
     with mock.patch.object(ingest, "CONF_PATH", conf), mock.patch.object(ingest, "SPOTDL_DIR", spotdl_dir):
         assert reconcile_playlists() == []
@@ -254,7 +254,7 @@ def test_reconcile_creates_nosync_sentinel(tmp_path: Path) -> None:
 
     spotdl_dir = tmp_path / "spotdl"
     spotdl_dir.mkdir()
-    conf = _make_conf(tmp_path, ["frozen  https://open.spotify.com/playlist/abc  nosync"])
+    conf = _make_conf(tmp_path, ["frozen  https://open.spotify.com/playlist/abc0000000000000000000  nosync"])
 
     with mock.patch.object(ingest, "CONF_PATH", conf), \
          mock.patch.object(ingest, "SPOTDL_DIR", spotdl_dir):
@@ -271,7 +271,7 @@ def test_reconcile_removes_nosync_sentinel(tmp_path: Path) -> None:
     spotdl_dir = tmp_path / "spotdl"
     spotdl_dir.mkdir()
     (spotdl_dir / "mypl.nosync").touch()
-    conf = _make_conf(tmp_path, ["mypl  https://open.spotify.com/playlist/abc"])
+    conf = _make_conf(tmp_path, ["mypl  https://open.spotify.com/playlist/abc0000000000000000000"])
 
     with mock.patch.object(ingest, "CONF_PATH", conf), \
          mock.patch.object(ingest, "SPOTDL_DIR", spotdl_dir):
@@ -295,7 +295,7 @@ def test_reconcile_detects_removed_playlist(tmp_path: Path) -> None:
     for name in ("gone", "kept"):
         store.Store.from_songs(name, [{"url": f"u-{name}"}]).save(store.path(name))
         (playlists_dir / f"{name}.m3u").write_text("/library/x.m4a\n", encoding="utf-8")
-    conf = _make_conf(tmp_path, ["kept  https://open.spotify.com/playlist/abc"])
+    conf = _make_conf(tmp_path, ["kept  https://open.spotify.com/playlist/abc0000000000000000000"])
 
     with mock.patch.object(ingest, "CONF_PATH", conf), mock.patch.object(ingest, "SPOTDL_DIR", spotdl_dir):
         result = reconcile_playlists()
@@ -430,7 +430,7 @@ def _run_sync_playlists(tmp_path: Path, results: list, cookie_file_exists: bool 
 
     spotdl_dir = tmp_path / "spotdl"
     spotdl_dir.mkdir(exist_ok=True)
-    conf = _make_conf(tmp_path, [f"pl{i}  https://open.spotify.com/playlist/X{i}" for i in range(len(results))])
+    conf = _make_conf(tmp_path, [f"pl{i}  https://open.spotify.com/playlist/X{i:021}" for i in range(len(results))])
     cookie_file = tmp_path / "cookies.txt"
     if cookie_file_exists:
         cookie_file.touch()
@@ -567,10 +567,10 @@ def test_reconcile_album_sentinel_follows_config(tmp_path: Path) -> None:
     spotdl_dir = tmp_path / "spotdl"
     spotdl_dir.mkdir()
     with mock.patch.object(ingest, "CONF_PATH", conf), mock.patch.object(ingest, "SPOTDL_DIR", spotdl_dir):
-        conf.write_text("later https://open.spotify.com/playlist/AAA album\n")
+        conf.write_text("later https://open.spotify.com/playlist/AAA0000000000000000000 album\n")
         reconcile_playlists()
         assert (spotdl_dir / "later.album").exists()
-        conf.write_text("later https://open.spotify.com/playlist/AAA\n")
+        conf.write_text("later https://open.spotify.com/playlist/AAA0000000000000000000\n")
         reconcile_playlists()
         assert not (spotdl_dir / "later.album").exists()
 
@@ -584,7 +584,7 @@ def test_sync_playlists_asks_the_library_per_playlist(tmp_path: Path) -> None:
 
     spotdl_dir = tmp_path / "spotdl"
     spotdl_dir.mkdir()
-    conf = _make_conf(tmp_path, ["later  https://open.spotify.com/playlist/L"])
+    conf = _make_conf(tmp_path, ["later  https://open.spotify.com/playlist/L000000000000000000000"])
     asked: list[tuple[str, dict]] = []
 
     def fake_sync(in_library=None, **_kwargs):
@@ -714,10 +714,10 @@ def test_sync_playlists_fetches_album_fallback_tracks_in_playlist_order(tmp_path
     spotdl_dir.mkdir()
     conf = tmp_path / "playlists.conf"
     conf.write_text(
-        "aaaaaaah  https://open.spotify.com/playlist/A\n"
-        "later     https://open.spotify.com/playlist/L  album\n"
-        "keep      https://open.spotify.com/playlist/K  album\n"
-        "zzz       https://open.spotify.com/playlist/Z\n",
+        "aaaaaaah  https://open.spotify.com/playlist/A000000000000000000000\n"
+        "later     https://open.spotify.com/playlist/L000000000000000000000  album\n"
+        "keep      https://open.spotify.com/playlist/K000000000000000000000  album\n"
+        "zzz       https://open.spotify.com/playlist/Z000000000000000000000\n",
         encoding="utf-8",
     )
     later_songs = [{"url": f"u{i}", "song_id": f"s{i}", "name": f"T{i}", "artists": ["A"]} for i in range(3)]
@@ -769,8 +769,8 @@ def test_spent_budget_still_checks_the_later_playlists(tmp_path: Path) -> None:
     spotdl_dir = tmp_path / "spotdl"
     spotdl_dir.mkdir()
     conf = tmp_path / "playlists.conf"
-    conf.write_text("first   https://open.spotify.com/playlist/A\nsecond  https://open.spotify.com/playlist/B\n"
-                    "third   https://open.spotify.com/playlist/C\n", encoding="utf-8")
+    conf.write_text("first   https://open.spotify.com/playlist/A000000000000000000000\nsecond  https://open.spotify.com/playlist/B000000000000000000000\n"
+                    "third   https://open.spotify.com/playlist/C000000000000000000000\n", encoding="utf-8")
 
     calls: list[tuple[str, int | None]] = []
 
@@ -798,7 +798,7 @@ def test_spent_budget_still_checks_the_later_playlists(tmp_path: Path) -> None:
 # sync_playlists — the playlist store (homelab#1914 stage c)
 # ---------------------------------------------------------------------------
 
-PL_URL = "https://open.spotify.com/playlist/P"
+PL_URL = "https://open.spotify.com/playlist/P000000000000000000000"
 TRACK = "https://open.spotify.com/track/"
 LOCAL = {"local": {"id": 7, "path": "/library/local.m4a", "title": "Local", "artist": "Artist"}}
 
@@ -947,7 +947,7 @@ def test_sync_downloads_a_nosync_playlists_want_list_without_rewriting_it(tmp_pa
     calls: list = []
     fallbacks: list = []
     with mock.patch.dict("os.environ", {"SYNC_TRACK_LIMIT": "10"}):
-        metrics = _sync(tmp_path, [f"frozen  {PL_URL}  nosync", f"pl  {PL_URL}2"], _result(songs=[song("Z")]),
+        metrics = _sync(tmp_path, [f"frozen  {PL_URL}  nosync", f"pl  {PL_URL[:-1]}2"], _result(songs=[song("Z")]),
                         calls=calls, fallbacks=fallbacks, sentinels=["frozen.nosync"],
                         fetched=AssertionError("fetched again"), resolves=lambda s: s["song_id"] == "B",
                         held=frozenset({TRACK + "H"}))
@@ -962,7 +962,7 @@ def test_sync_downloads_a_nosync_playlists_want_list_without_rewriting_it(tmp_pa
 
 def test_sync_nosync_fetch_failure_never_fails_the_sync(tmp_path: Path, caplog) -> None:
     calls: list = []
-    metrics = _sync(tmp_path, [f"frozen  {PL_URL}  nosync", f"pl  {PL_URL}2"], _result(songs=[song("A")]),
+    metrics = _sync(tmp_path, [f"frozen  {PL_URL}  nosync", f"pl  {PL_URL[:-1]}2"], _result(songs=[song("A")]),
                     calls=calls, sentinels=["frozen.nosync"], fetched=RuntimeError("spotify down"))
     assert "Could not build the store of nosync playlist frozen from Spotify" in caplog.text
     assert store.load("frozen") is None
