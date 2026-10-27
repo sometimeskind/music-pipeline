@@ -31,14 +31,19 @@ def _list_dir(root: Path) -> list[dict]:
     return files
 
 
-def create_app(schedule_scan: Callable[[], None] | None = None) -> Flask:
+def create_app(schedule_scan: Callable[[], None] | None = None, mcp_jobs=None) -> Flask:
     """Application factory.
 
     *schedule_scan* is called (fire-and-forget) when a zip upload arrives, to
-    schedule a debounced scan run via the Prefect deployment.
+    schedule a debounced scan run via the Prefect deployment.  *mcp_jobs* is
+    the ``/mcp-api/*`` job queue (homelab#2412); without one the routes are
+    not registered.
     """
     app = Flask(__name__)
     setup_auth(app)
+    if mcp_jobs is not None:
+        from music_service.mcp_api import make_blueprint  # noqa: PLC0415
+        app.register_blueprint(make_blueprint(mcp_jobs))
 
     inbox = Path(os.environ.get("MUSIC_INBOX", "/root/Music/inbox"))
     quarantine = Path(os.environ.get("MUSIC_QUARANTINE", "/root/Music/quarantine"))

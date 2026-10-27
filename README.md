@@ -260,6 +260,9 @@ Mount `cookies.txt` at `/root/.config/spotdl/cookies.txt` read-only. Update by p
 | `SPOTIFY_CLIENT_ID` | Secret | — | Required |
 | `SPOTIFY_CLIENT_SECRET` | Secret | — | Required |
 | `API_BEARER_TOKEN` | Secret | — | Required |
+| `MCP_API_TOKEN` | Secret | unset | Bearer token for `/mcp-api/*` only, the Music MCP adapter's routes (homelab#2412, contract in `service/MCP_API.md`). Unset = those routes are closed |
+| `MCP_INLINE_SECONDS` | Plain value | `20` | How long an `/mcp-api/run/*` call waits for its job before returning its `job_id` |
+| `MUSIC_LOCKS_HELD` | **Never set** | — | Set only by an MCP job for its CLI subprocess, naming the Prefect locks the job holds. The service refuses to start with it set: a CLI run from that environment would skip its locks |
 | `PREFECT_API_URL` | Plain value | unset | Set to reach the Prefect server (e.g. `http://prefect-server:4200/api`). Unset = direct mode. |
 | `FETCH_CRON` | Plain value | `0 3 * * *` | Cron expression for the fetch flow |
 | `PUSHGATEWAY_URL` | Plain value | `""` | e.g. `http://prometheus-pushgateway.monitoring:9091` |

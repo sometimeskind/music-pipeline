@@ -1410,9 +1410,11 @@ def reset_record(record: dict, reimport: bool = False, keep_blocklist: bool = Fa
 
 def _state_lock(apply: bool):
     """The ``albums`` slot the tick and the import flow hold while they read and
-    write .albums.json; a dry run needs none."""
+    write .albums.json; a dry run needs none, nor a run whose MCP job already
+    holds it (``MUSIC_LOCKS_HELD``, homelab#2412)."""
     from contextlib import nullcontext  # noqa: PLC0415
-    if not (apply and os.environ.get("PREFECT_API_URL")):
+    held = "albums" in os.environ.get("MUSIC_LOCKS_HELD", "").split(",")
+    if held or not (apply and os.environ.get("PREFECT_API_URL")):
         return nullcontext()
     from prefect.concurrency.sync import concurrency  # noqa: PLC0415
     return concurrency("albums", occupy=1)

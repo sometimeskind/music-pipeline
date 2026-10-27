@@ -1,0 +1,82 @@
+"""Every MCP tool's argv is accepted by its CLI's argparse (homelab#2412).
+
+Parsing only: ``parse_args`` is wrapped so that once the real parser has
+accepted the argv, it raises before the CLI does anything.  A flag the CLI
+renames or drops fails here, not in production.
+"""
+
+from __future__ import annotations
+
+import argparse
+import sys
+from importlib.metadata import entry_points
+
+import pytest
+
+from music_service.mcp_tools import TOOLS, WRITE
+
+
+class Parsed(Exception):
+    pass
+
+
+# Normalised args per tool, every flag the builder can emit covered once.
+CASES = {
+    "audit_dupes": [{"fingerprint_ids": None}, {"fingerprint_ids": []}, {"fingerprint_ids": [3, 7]}],
+    "audit_lengths": [{"silence": False}, {"silence": True}],
+    "audit_releases": [{"replaced_query": None}, {"replaced_query": ""}, {"replaced_query": "Artist — Album"},
+                       {"replaced_query": "--apply"}],
+    "audit_want_albums": [{}],
+    "reset_album": [{"album": "0ETFjACtuP2ADo6LFhL6HN", "reimport": False},
+                    {"album": "0ETFjACtuP2ADo6LFhL6HN", "reimport": True},
+                    {"album": "-m-/le baptême", "reimport": False}],  # a local album's key
+    "requeue_albums": [{"ids": ["0ETFjACtuP2ADo6LFhL6HN"], "since": None},
+                       {"ids": [], "since": "2026-10-20T00:00:00+00:00"},
+                       {"ids": ["A", "B"], "since": "2026-10-20T00:00:00+00:00"},
+                       {"ids": ["--apply", "-x"], "since": None}],  # hostile IDs stay positional
+    "merge_items": [{"pairs": [[1, 2]]}, {"pairs": [[1, 2], [3, 4]]}],
+    "replace_item": [{"id": 10001, "youtube_url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ"}],
+    "embed_covers": [{}],
+    "canon_albums": [{"refresh": False, "search_budget": None, "mb_budget": None},
+                     {"refresh": True, "search_budget": 5, "mb_budget": 0}],
+}
+
+
+def _argvs():
+    for name, cases in CASES.items():
+        tool = TOOLS[name]
+        modes = (False, True) if tool.tier == WRITE else (False,)
+        for args in cases:
+            for apply in modes:
+                for argv in tool.commands(args, apply):
+                    yield pytest.param(argv, apply, id=" ".join(argv))
+
+
+def test_every_tool_has_cases():
+    assert set(CASES) == set(TOOLS)
+
+
+@pytest.mark.parametrize("argv,apply", list(_argvs()))
+def test_cli_parses_the_tool_argv(argv, apply, monkeypatch):
+    scripts = {ep.name: ep for ep in entry_points(group="console_scripts")}
+    assert argv[0] in scripts, f"{argv[0]} is not an installed console script"
+    real = argparse.ArgumentParser.parse_args
+
+    parsed = []
+
+    def parse_only(self, args=None, namespace=None):
+        parsed.append(real(self, args, namespace))  # exits 2 on an argv it rejects
+        raise Parsed
+
+    monkeypatch.setattr(argparse.ArgumentParser, "parse_args", parse_only)
+    monkeypatch.setattr(sys, "argv", argv)
+    main = scripts[argv[0]].load()
+    try:
+        main()
+    except SystemExit as exc:
+        pytest.fail(f"{' '.join(argv)} rejected by argparse (exit {exc.code})")
+    except Parsed:
+        # Only an apply's argv applies, whatever the arguments hold.
+        assert getattr(parsed[0], "apply", False) is apply
+        return
+    pytest.fail(f"{argv[0]} returned without parsing its arguments")

@@ -159,7 +159,13 @@ def find_song(item, songs_by_playlist: dict[str, list[dict]]) -> dict | None:
 
 @contextlib.contextmanager
 def pipeline_lock():
-    """Hold the service's ``pipeline`` lock, so no scan runs during the swap."""
+    """Hold the service's ``pipeline`` lock, so no scan runs during the swap.
+
+    Skipped when ``MUSIC_LOCKS_HELD`` names it: an MCP job (homelab#2412)
+    already holds it for this run, and the limit is not reentrant."""
+    if "pipeline" in os.environ.get("MUSIC_LOCKS_HELD", "").split(","):
+        yield
+        return
     if not os.environ.get("PREFECT_API_URL"):
         logger.warning("PREFECT_API_URL unset — replacing without the pipeline lock")
         yield
