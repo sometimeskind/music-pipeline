@@ -69,6 +69,7 @@ from pathlib import Path
 from typing import Callable, Protocol
 
 from music_fetch import store
+from music_fetch.ids import spotify_key
 from music_fetch.metrics import _gauge, _push
 from music_fetch.usenet import Release, clean_album, edition, normalise, rank, readable, words
 
@@ -1417,13 +1418,19 @@ def _state_lock(apply: bool):
     return concurrency("albums", occupy=1)
 
 
+def _album_ref(ref: str) -> str:
+    """An album argument with an ``open.spotify.com`` URL reduced to its ID (homelab#2411)."""
+    return spotify_key(ref, "album")
+
+
 def reset_main() -> None:
     import argparse  # noqa: PLC0415
 
     parser = argparse.ArgumentParser(prog="music-album-reset",
                                      description="Undo an album's last release attempt (#261); dry run unless --apply")
-    parser.add_argument("query", help="the album's Spotify ID, its 'artist — album', or a part of it that "
-                                      "matches exactly one album")
+    parser.add_argument("query", type=_album_ref,
+                        help="the album's Spotify ID or open.spotify.com URL, its 'artist — album', or a part of it "
+                             "that matches exactly one album")
     parser.add_argument("--reimport", action="store_true",
                         help="start over from one release: clear the blocklist and attempts, grab it although the "
                              "library has its tracks, and retire the copies there on import (#279)")
@@ -1490,7 +1497,8 @@ def requeue_main() -> None:
     parser = argparse.ArgumentParser(
         prog="music-album-requeue",
         description="Put albums a miss demoted to spotdl back to wanted (#263); dry run unless --apply")
-    parser.add_argument("keys", nargs="*", metavar="album_id", help="album keys to requeue")
+    parser.add_argument("keys", nargs="*", metavar="album_id", type=_album_ref,
+                        help="album keys (or open.spotify.com album URLs) to requeue")
     parser.add_argument("--since", type=datetime.fromisoformat,
                         help="requeue every fallback from a miss at or after this ISO time (UTC if no offset)")
     parser.add_argument("--apply", action="store_true", help="write .albums.json (default: dry run)")

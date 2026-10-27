@@ -6,6 +6,8 @@ import itertools
 from dataclasses import dataclass
 from pathlib import Path
 
+from music_fetch import ids
+
 DEFAULT_CONF = Path("/root/.config/music-pipeline/playlists.conf")
 
 
@@ -20,8 +22,11 @@ class PlaylistConfig:
 def load_playlists(path: Path = DEFAULT_CONF) -> list[PlaylistConfig]:
     """Parse playlists.conf and return a list of PlaylistConfig entries.
 
-    Format: one entry per line — ``name  spotify-url  [nosync|album]``
-    Lines starting with # and blank lines are ignored.
+    Format: one entry per line — ``name  spotify-id  [nosync|album]``
+    Lines starting with # and blank lines are ignored.  The playlist is a
+    Spotify ID or an ``open.spotify.com`` playlist or album URL
+    (homelab#2411), held as its canonical URL; anything else raises
+    ``ValueError``.
     """
     playlists: list[PlaylistConfig] = []
     for raw in path.read_text(encoding="utf-8").splitlines():
@@ -35,7 +40,7 @@ def load_playlists(path: Path = DEFAULT_CONF) -> list[PlaylistConfig]:
         playlists.append(
             PlaylistConfig(
                 name=parts[0],
-                url=parts[1],
+                url=_spotify_url(parts[1]),
                 nosync="nosync" in parts[2:],
                 album="album" in parts[2:],
             )
@@ -48,3 +53,10 @@ def load_playlists(path: Path = DEFAULT_CONF) -> list[PlaylistConfig]:
                 "beets substring queries would produce false positives"
             )
     return playlists
+
+
+def _spotify_url(ref: str) -> str:
+    """The canonical URL of a playlists.conf entry's Spotify ID or URL (a bare
+    ID is a playlist's)."""
+    kind, id_ = ids.spotify_ref(ref, ("playlist", "album"))
+    return ids.spotify_url(kind or "playlist", id_)
