@@ -595,6 +595,21 @@ def test_album_wants_hook_groups_the_want_list_by_album():
     lib.all_items.assert_called_once()
 
 
+def test_album_library_feed_hook_reads_every_store_and_the_library():
+    """homelab#2403: the library feed counts held items and every store's tracks, by Spotify album."""
+    from music_scan import want_albums
+    from music_service import flows
+
+    held = MagicMock(id=1, path=b"/x")
+    held.get.side_effect = lambda k, d=None: {"spotify_album_id": "A", "spotify_ids": "s0", "tracktotal": 9}.get(k, d)
+    songs = [{"url": "u1", "album_id": "A", "album_name": "X", "song_id": "s1", "tracks_count": 10}]
+    lib = MagicMock()
+    lib.all_items.return_value = [held]
+    with patch.object(want_albums, "read_stores", return_value={"disc": songs}):
+        found = flows._album_library_feed_hook(lib)()
+    assert found == [("A", 2, 10, False, {"disc": songs})]
+
+
 def test_album_tick_task_writes_no_removal_queue():
     """homelab#1914: the tick writes the album playlists' stores; a song gone from
     Spotify leaves the next store, so nothing is queued for the scan to unlink."""
@@ -618,6 +633,6 @@ def test_album_tick_task_writes_no_removal_queue():
     assert args[0] == [("keep", "https://open.spotify.com/playlist/P")]
     assert args[1:4] == (spotify.return_value, prowlarr.return_value, sabnzbd.return_value)
     assert callable(args[4]) and args[5] is settings and len(args) == 6
-    assert set(tick.call_args.kwargs) == {"on_completion", "missing", "mixed", "want_playlists", "wants"}
+    assert set(tick.call_args.kwargs) == {"on_completion", "missing", "mixed", "want_playlists", "wants", "library"}
     assert tick.call_args.kwargs["want_playlists"] == []  # an album playlist has no want list to feed
     assert [c[0] for c in mock_ingest.method_calls] == []  # no schedule_unlink, no save_pending_removals
