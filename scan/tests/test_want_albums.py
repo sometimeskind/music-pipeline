@@ -134,3 +134,62 @@ def test_run_reads_the_library_once_and_reports_the_chosen_playlists(stores: Pat
     assert one == []
     assert "[WANT] missing: no readable store" in caplog.text
     assert library.call_count == 3
+
+
+def _item(item_id: int, album: str | None, sid: str | None = None, tracktotal: int = 0, record: str | None = None):
+    fields = {"spotify_album_id": album, "spotify_ids": sid, "tracktotal": tracktotal, "album_record": record,
+              "albumartist": "Artist", "album": f"Album {album}"}
+    item = mock.MagicMock(id=item_id, path=b"/nonexistent")
+    item.get.side_effect = lambda k, d=None: fields.get(k) or d
+    return item
+
+
+def _wants(key: str, *sids: str, tracks: int = 10) -> want_albums.AlbumWants:
+    return want_albums.AlbumWants(key, "Artist", f"Album {key}", tracks, [_song(s, key, tracks=tracks) for s in sids], 0)
+
+
+def test_library_albums_count_held_recordings_once_and_add_the_wanted() -> None:
+    items = [
+        _item(1, "A", "a1", tracktotal=3), _item(2, "A", "a1"),  # two copies of one recording
+        _item(3, "B", "b1"), _item(4, None, "z1"),
+    ]
+    albums, unplaced = want_albums.library_albums(items, [_wants("B", "b2"), _wants("A", "a2", tracks=12),
+                                                          _wants("artist/local", "l1")], {})
+
+    by_key = {a.key: a for a in albums}
+    assert unplaced == 1
+    assert set(by_key) == {"A", "B"}  # the local-file key is left out
+    assert (len(by_key["A"].held), len(by_key["A"].wanted), by_key["A"].tracks) == (1, 1, 12)  # Spotify's count wins
+    assert by_key["B"].refs == 2
+
+
+def test_library_buckets() -> None:
+    def album(held, wanted=(), tracks=10, record=None):
+        return want_albums.LibraryAlbum("K", "Artist", "Album", tracks, list(held),
+                                        [_song(s, "K") for s in wanted], record)
+
+    loose = [_item(1, "K", "k1"), _item(2, "K", "k2")]
+    assert album(loose).bucket == "backfill"
+    assert album(loose[:1], ["k3"]).bucket == "grab"
+    assert album(loose, tracks=2).bucket == "whole"
+    assert album([_item(1, "K", "k1", record="K"), loose[1]]).bucket == "whole"  # a release import placed it
+    assert album(loose, record={"origin": "wants"}).bucket == "queued"
+    assert album(loose, record={"origin": "album"}).bucket == "album playlist"
+    assert album(loose).to_land == 8 and album(loose, tracks=0).to_land == 0
+
+
+def test_log_library_summarises_the_buckets_and_lists_the_grabs(caplog) -> None:
+    items = [_item(1, "A", "a1"), _item(2, "A", "a2"), _item(3, "B", "b1"), _item(4, "W", "w1", tracktotal=1),
+             _item(5, "W", "w2"), _item(6, None)]
+    albums, unplaced = want_albums.library_albums(items, [_wants("B", "b2"), _wants("C", "c1")], {})
+
+    with caplog.at_level(logging.INFO, logger="music_scan.want_albums"):
+        want_albums.log_library(albums, unplaced)
+
+    lines = [r.getMessage() for r in caplog.records]
+    assert lines[0] == "[LIBRARY] 5 recording(s) held on 4 Spotify album(s), 2 wanted; 1 item(s) with no Spotify album (not counted)"
+    assert lines[1] == "[LIBRARY] 3 album(s) with 2+ track(s): whole 1, album playlist 0, queued 0, grab 1, backfill 1"
+    assert lines[2].startswith("[LIBRARY] grabbing those 2 whole lands ~9 track(s) (~0.0 GB")
+    assert lines[2].endswith("1 album(s) of unknown size), supersedes up to 3 loose copies")
+    assert lines[3:] == ["  [BACKFILL] 2 held + 0 wanted: Artist — Album A (A)",
+                         "  [GRAB] 1 held + 1 wanted of 10: Artist — Album B (B)"]
