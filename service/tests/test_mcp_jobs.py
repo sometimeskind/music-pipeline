@@ -95,6 +95,8 @@ def test_apply_reruns_the_dry_run_under_the_locks_and_applies_on_a_match(make):
     assert locks.held[-1] == ("albums", "pipeline")
     assert locks.status_on_enter == ["waiting_for_lock"]
     assert commands.envs[-1]["MUSIC_LOCKS_HELD"] == "albums,pipeline"
+    assert commands.envs[-1]["MUSIC_EVENT_JOB"] == job["job_id"]
+    assert commands.envs[-1]["MUSIC_EVENT_CALLER"] == job["caller"]
     assert q.output(job["job_id"])[-1] == "Saved"
     assert job["argv"] == [["music-album-reset", "K", "--apply"]]
 
