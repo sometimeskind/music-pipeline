@@ -50,6 +50,7 @@ def main() -> None:
 
     from prefect import serve as prefect_serve
 
+    from music_fetch.albums import park_interrupted_imports
     from music_service.api import create_app
     from music_service.debounce import Debouncer
     from music_service.flows import album_import_flow, albums_flow, fetch_and_scan_flow, scan_flow
@@ -58,6 +59,10 @@ def main() -> None:
     import waitress
 
     fetch_cron = os.environ.get("FETCH_CRON", "0 3 * * *")
+
+    # Before anything can scan the inbox: an album import the restart cut short
+    # goes back to SABnzbd's complete dir, not into the library loose (#344).
+    park_interrupted_imports()
 
     debouncer = Debouncer(delay=30.0, callback=trigger_scan)
 

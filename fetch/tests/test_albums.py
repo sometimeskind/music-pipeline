@@ -625,6 +625,80 @@ def test_complete_missing_job_dir_grabs_again_without_an_attempt(roots, caplog) 
     assert record["blocklist"] == [] and record["attempts"] == albums.MAX_ATTEMPTS - 1
     assert "nzo_id" not in record
     assert "[LOST]" in caplog.text
+    assert record["lost"] is True
+
+
+def test_lost_record_is_searched_ahead_of_the_queue(roots) -> None:
+    """A [LOST] record doesn't wait behind the whole wanted queue (#344)."""
+    state = wanted_state(3)
+    state.albums["a2"].update(status=albums.GRABBED, nzo_id="nzo1", grabbed_at=albums._iso(NOW),
+                              candidate={"guid": "r1"})
+    run_complete(state, albums.Completion("nzo1", True, "album/Gone"), roots)
+    prowlarr, sab = fakes()
+    top_up(state, Settings(mode="on", max_in_flight=1), prowlarr, sab, never_have, albums.TickResult(),
+           now=lambda: NOW)
+    assert [k for k, r in state.albums.items() if r["status"] == albums.GRABBED] == ["a2"]
+    assert "lost" not in state.albums["a2"]
+    # Its place in the queue is the old one: only the search order put it first.
+    assert list(state.albums) == ["a0", "a1", "a2"]
+
+
+class Killed(BaseException):
+    """The pod replaced mid-import: nothing in complete() catches it."""
+
+
+def test_restart_mid_import_resumes_it_instead_of_a_loose_scan(roots) -> None:
+    """A lost import followed by a scan (#344): the files a restart left in the
+    inbox go back to the complete dir, so a scan finds nothing to import loose,
+    and the recovery imports the rest as the release, claiming from the first
+    try's start and judged on the first try's MusicBrainz match."""
+    complete_root, inbox, quarantine = roots
+    (complete_root / "album" / "Artist-Album-FLAC" / "02.flac").write_bytes(b"x")
+    state = grabbed_state()
+    record = state.albums["a0"]
+    whole = {"missing": 0, "album": "Album", "mb_albumid": "mb1"}
+
+    def killed_after_one():
+        (inbox / "later" / "Artist-Album-FLAC" / "01.flac").unlink()  # beets imported it
+        raise Killed
+
+    with pytest.raises(Killed):
+        albums.complete(
+            state, albums.Completion("nzo1", True, "album/Artist-Album-FLAC"), killed_after_one,
+            claim=_claim_all, add_source=lambda *a: None, retire=_no_retire, tag_ids=lambda *a: None,
+            identify=lambda folder: whole,
+            complete_root=complete_root, inbox_root=inbox, quarantine_root=quarantine,
+        )
+    assert (inbox / "later" / "Artist-Album-FLAC" / "02.flac").exists()
+    first_start = record["import_started"]
+
+    # Service start: the leftovers go back before anything scans the inbox.
+    assert albums.park_interrupted(state, complete_root, inbox) == 1
+    assert record["status"] == albums.GRABBED
+    assert (complete_root / "album" / "Artist-Album-FLAC" / "02.flac").exists()
+    # The scan: nothing left in the usenet inbox to import loose.
+    assert not list(inbox.rglob("*.flac"))
+    assert albums.park_interrupted(state, complete_root, inbox) == 0
+
+    # The lost-trigger recovery: the rest is imported as the release.
+    since, identified = [], []
+    status = albums.complete(
+        state, albums.Completion("nzo1", True, "album/Artist-Album-FLAC"), lambda: None,
+        claim=_claim_all, add_source=lambda *a: None, retire=_no_retire,
+        tag_ids=lambda pl, tracks, start, count: since.append(start),
+        identify=lambda folder: identified.append(folder) or {"missing": 1, "album": "Album", "mb_albumid": "mb1"},
+        complete_root=complete_root, inbox_root=inbox, quarantine_root=quarantine,
+    )
+    assert status == albums.IMPORTED and since == [first_start]
+    assert identified == [] and record["release_files"] == whole
+    assert not any(f in record for f in albums.IMPORT_FIELDS)
+
+
+def test_park_interrupted_imports_never_stops_the_service_starting(tmp_path: Path, caplog) -> None:
+    assert albums.park_interrupted_imports(tmp_path / "absent.json") == 0
+    (tmp_path / "broken.json").write_text("{", encoding="utf-8")
+    assert albums.park_interrupted_imports(tmp_path / "broken.json") == 0
+    assert "Moving interrupted album imports back failed" in caplog.text
 
 
 def test_lost_completions_only_for_stale_grabs() -> None:

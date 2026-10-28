@@ -44,8 +44,12 @@ Search the album's name in the log. The import logs `[RELEASE]`/`[NOMB]`, then o
 - `[RETRY] … (n/12)` with `musicbrainz_unavailable`: MusicBrainz is answering 503. The job
   stays grabbed and is retried once it has been grabbed for 1 h. The 13th deferral blames the
   release.
-- `[LOST]`: the completed job folder is gone (a pod replaced mid-import). It is grabbed again
-  with no blocklist entry.
+- `[RESUME]`: a pod replaced mid-import left the job's remaining files in the inbox. At start
+  the service moves them back to SABnzbd's complete dir, so no scan imports them loose, and
+  the lost-trigger recovery finishes the import as the release. No action.
+- `[LOST]`: the completed job folder is gone. The album is searched again at the next
+  top-up, ahead of the queue, with no blocklist entry. Loose items from such an import (no
+  album, no cover) are retired when the new release imports.
 
 ## 5. An album is wrong
 
