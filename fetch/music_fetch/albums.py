@@ -110,6 +110,9 @@ MAX_IMPORT_ERRORS = 3
 MAX_IMPORT_DEFERRALS = 12
 # A trigger lost for longer than this is recovered from SABnzbd history.
 LOST_TRIGGER_AFTER = timedelta(hours=1)
+# A grabbed record's fields for its import in progress: an import retried (#261)
+# or resumed after a restart (#344) keeps them, a finished or reset one drops them.
+IMPORT_FIELDS = ("import_started", "import_errors", "import_deferrals", "import_path", "import_identity")
 # Albums in a row whose searches find nothing at all before a tick stops (#263):
 # a guard against an indexer failing silently without Prowlarr's backoff.
 EMPTY_RUN_LIMIT = 3
@@ -641,7 +644,7 @@ def _held(state: State, settings: Settings) -> set[str]:
     room = min(settings.max_in_flight * settings.hold_ahead, settings.grabs_per_day) - sum(
         1 for r in state.albums.values() if not _fed(r) and r.get("status") == WANTED)
     held = set()
-    for key, record in state.albums.items():
+    for key, record in _search_order(state):
         if not _fed(record):
             continue
         if record.get("status") == GRABBED:
@@ -650,6 +653,12 @@ def _held(state: State, settings: Settings) -> set[str]:
             held.add(key)
             room -= 1
     return held
+
+
+def _search_order(state: State) -> list[tuple[str, dict]]:
+    """``state.albums`` in the order :func:`top_up` searches them: a record a
+    ``[LOST]`` import put back first (#344), then the rest in order."""
+    return sorted(state.albums.items(), key=lambda kv: not kv[1].get("lost"))
 
 
 def held_tracks(state: State, settings: Settings) -> set[str]:
@@ -738,7 +747,7 @@ def top_up(
         slots = min(settings.dry_run_per_tick, settings.dry_run_limit - sampled)
         if slots <= 0:
             logger.info("Dry-run sample complete (%d album(s), ALBUM_DRY_RUN_LIMIT) — not searching", sampled)
-    for key, record in list(state.albums.items()):
+    for key, record in _search_order(state):
         label = _label(record)
         search = plan(key, record, overrides)
         if not _due(record, now(), settings.mode, search):
@@ -755,6 +764,7 @@ def top_up(
         # A copy kept for now, or a reset to import again, isn't "have" (#279).
         if not (record.get("best_copy") or record.get("reimport")) and have(key, record):
             record["status"] = HAVE
+            record.pop("lost", None)
             continue
         if state.used("hit", now()) >= settings.hits_per_day:
             logger.info("Indexer API budget spent (%d/24h) — stopping", settings.hits_per_day)
@@ -798,6 +808,7 @@ def top_up(
                       any_album=search.any_album)
         record["searched_at"] = _iso(now())
         record["query"] = search.queries[0]
+        record.pop("lost", None)
         if settings.mode != "on":
             record["dry_run"] = True
         if record.get("edition") is not None:
@@ -1267,8 +1278,11 @@ def complete(
 
     An exception from *import_inbox* is not the release's fault (#261): the job
     dir goes back to the completed dir and the record stays ``grabbed``, so the
-    next tick's lost-trigger recovery imports it again.  A completed job whose
-    dir is gone is logged ``[LOST]`` and grabbed again, without a blocklist
+    next tick's lost-trigger recovery imports it again, judged on the first
+    try's MusicBrainz match (beets has moved the files it imported out of the
+    dir).  So does a restart mid-import, once :func:`park_interrupted` has
+    moved the job back (#344).  A completed job whose dir is gone is logged
+    ``[LOST]`` and searched again ahead of the queue, without a blocklist
     entry or an attempt.  An ``ImportDeferred`` (MusicBrainz down, #264) is
     retried the same way, under its own, longer cap.  A broken download is
     blocklisted; after MAX_ATTEMPTS the album is ``failed``, and the next tick
@@ -1300,10 +1314,15 @@ def complete(
         logger.info("[IMPT] %s: importing %s", label, job_name)
         # A retried import counts its items from the first try's start (#261).
         started = record.setdefault("import_started", time.time())
+        # Where the job came from, so a restart's leftovers go back there (#344).
+        record["import_path"] = completion.path
         identity = None
-        if identify is not None:
+        if "import_identity" in record:
+            # Judged on the first try's files: those beets imported are gone from the dir.
+            identity = record["import_identity"]
+        elif identify is not None:
             try:
-                identity = identify(dest)
+                identity = record["import_identity"] = identify(dest)
             except Exception:
                 logger.exception("[NOMB] %s: identifying %s failed; its completeness is unknown", label, job_name)
         gave_up = ""  # why a retried import now counts against the release
@@ -1336,7 +1355,7 @@ def complete(
             gave_up = f"the import crashed {MAX_IMPORT_ERRORS} times"
         # Leftovers beets doesn't import (nfo, sfv, cue, cover scans).
         shutil.rmtree(dest, ignore_errors=True)
-        for field in ("import_started", "import_errors", "import_deferrals"):
+        for field in IMPORT_FIELDS:
             record.pop(field, None)
         this = f"{guid}@{int(started)}"
         titles = claim(first, started, key, this, job_name)
@@ -1399,14 +1418,15 @@ def complete(
             record["status"] = WANTED
             return WANTED
     elif completion.ok and source is not None and not source.is_dir():
-        # Nothing says the release is bad (#261): grab again, without an attempt.
-        logger.warning("[LOST] %s: completed job dir not found: %r — not blocklisted, grabbing again",
-                       label, completion.path)
+        # Nothing says the release is bad (#261): grab again, without an attempt,
+        # and ahead of the queue (#344), which may be days long.
+        logger.warning("[LOST] %s: completed job dir not found: %r — not blocklisted; searched again at the next "
+                       "top-up, ahead of the queue", label, completion.path)
         record["status"] = WANTED
+        record["lost"] = True
         record.pop("nzo_id", None)
-        record.pop("import_started", None)
-        record.pop("import_errors", None)
-        record.pop("import_deferrals", None)
+        for field in IMPORT_FIELDS:
+            record.pop(field, None)
         return WANTED
     elif completion.ok:
         reason = f"completed job dir not usable: {completion.path!r}"
@@ -1451,6 +1471,50 @@ def lost_completions(state: State, sabnzbd, now: datetime | None = None) -> list
         )
         for nzo_id, job in found.items()
     ]
+
+
+def park_interrupted(state: State, complete_root: Path = USENET_COMPLETE, inbox_root: Path = USENET_INBOX) -> int:
+    """Move the job dir of every import a restart cut short back to SABnzbd's
+    complete dir (#344).  Returns how many.
+
+    :func:`complete` moves a job into ``inbox/usenet/<playlist>/`` before
+    beets imports it; a pod replaced mid-import leaves the rest of its files
+    there, and the next scan, any album's or the nightly's, would import them
+    loose, without the release's tagging.  Back in the complete dir, the
+    record still ``grabbed``, the lost-trigger recovery imports them as a
+    retry (#261): its items count from the first try's start, so the release
+    claims those beets imported before the restart too."""
+    parked = 0
+    for record in state.albums.values():
+        path = record.get("import_path")
+        if record.get("status") != GRABBED or not path or not record.get("playlists"):
+            continue
+        source = _inside(complete_root, path)
+        if source is None or source.exists():
+            continue
+        dest = inbox_root / next(iter(record["playlists"])) / source.name
+        if not dest.is_dir():
+            continue
+        source.parent.mkdir(parents=True, exist_ok=True)
+        shutil.move(str(dest), source)
+        parked += 1
+        logger.warning("[RESUME] %s: a restart cut the import of %s short — moved back to the complete dir; the "
+                       "lost-trigger recovery imports it again", _label(record), source.name)
+    return parked
+
+
+def park_interrupted_imports(state_file: Path = STATE_FILE) -> int:
+    """:func:`park_interrupted` over the saved state, at service start: before
+    the API, the file watcher or a flow can start a scan.  Never raises."""
+    try:
+        state = State.load(state_file)
+        parked = park_interrupted(state)
+        if parked:
+            state.save(state_file)
+        return parked
+    except Exception:
+        logger.exception("Moving interrupted album imports back failed; a scan may import their files loose")
+        return 0
 
 
 # ---------------------------------------------------------------------------
@@ -1503,7 +1567,7 @@ def reset_record(record: dict, reimport: bool = False, keep_blocklist: bool = Fa
         record["blocklist"].remove(guid)
     record["attempts"] = max(0, record.get("attempts", 0) - 1)
     record["status"] = WANTED
-    for field in ("nzo_id", "import_started", "import_errors", "import_deferrals", "fallback_from", "fallback_at",
+    for field in ("nzo_id", *IMPORT_FIELDS, "lost", "fallback_from", "fallback_at",
                   "fallback_tracks", "rejected_tracks", "best_copy", "edition"):
         record.pop(field, None)
     if reimport:
