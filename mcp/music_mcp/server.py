@@ -43,8 +43,10 @@ merge_items, replace_item, embed_covers, canon_albums) are a dry run unless appl
 apply is accepted only after a dry run with the same arguments in the last 15 minutes whose
 output still matches: show the user the dry run and apply only once they agree. If an apply
 comes back "refused", its output is the new dry run; show it and ask again. trigger_scan and
-trigger_album_tick start a run now. A read-only caller (Claude Code's static token) gets every
-write refused: hand the step over as "in the claude.ai Music connector".
+trigger_album_tick start a run now. The tier belongs to the token, not the client: the static
+read token gets every write refused, an OAuth login in the music group does not. Don't refuse a
+write yourself on a guess about the tier; when the server refuses one as read-only, hand the
+step over as "in the claude.ai Music connector".
 
 Two invariants. The album is the unit: a release whose tracklist differs from Spotify's is not
 a fault, and an album is fixed whole (reset, requeue), not track by track. Two items are one
