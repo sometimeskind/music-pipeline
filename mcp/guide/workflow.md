@@ -8,8 +8,10 @@
 | Recoverable write | the claude.ai connector (a Pocket ID user in the `music` group) | `reset_album`, `requeue_albums`, `merge_items`, `replace_item`, `embed_covers`, `canon_albums`, `trigger_scan`, `trigger_album_tick` |
 | Irreversible | not exposed | the workstation commands below |
 
-A Claude Code session has the read tier only. It diagnoses, then hands a write over as
-"in the claude.ai Music connector: `reset_album` …".
+The tier belongs to the token, not to the client: the static token is read-only, and an OAuth
+login in the `music` group writes, whichever client holds it. Don't guess the tier from what
+you are; the server enforces it. A write refused as read-only is handed over as "in the
+claude.ai Music connector: `reset_album` …".
 
 ## Dry run, then apply
 
