@@ -497,6 +497,54 @@ def test_asis_import_skips_duplicates(tmp_path: Path) -> None:
     assert "duplicate_action: skip" in seen["config"]
 
 
+def test_run_beet_update_passes_mtime_with_the_default_fields() -> None:
+    """Plain ``beet update`` never stores mtime, so it re-reads touched files every scan (#340)."""
+    from beets.library import Item
+    from music_scan.process import run_beet_update
+
+    with mock.patch("subprocess.run", return_value=mock.MagicMock(returncode=0)) as run:
+        run_beet_update()
+
+    cmd = run.call_args[0][0]
+    fields = set(cmd[3::2])
+    assert cmd[:2] == ["beet", "update"]
+    assert set(cmd[2::2]) == {"-F"}
+    assert "mtime" in fields
+    assert Item._media_fields <= fields
+
+
+def test_update_fields_stop_the_empty_composer_diff_repeating(tmp_path: Path, capsys) -> None:
+    """An empty ©wrt atom reads as [''] against the database's []: with mtime stored
+    the diff prints once, then the file is skipped until it changes again (#340)."""
+    import subprocess
+    import shutil
+
+    if not shutil.which("ffmpeg"):
+        pytest.skip("ffmpeg not installed")
+    from beets.library import Item, Library
+    from beets.ui.commands.update import update_items
+    from mutagen.mp4 import MP4
+    from music_scan.process import update_fields
+
+    path = tmp_path / "a.m4a"
+    subprocess.run(["ffmpeg", "-v", "error", "-y", "-f", "lavfi", "-i", "sine=frequency=440:duration=1",
+                    "-c:a", "aac", str(path)], check=True)
+    audio = MP4(path)
+    audio["\xa9nam"], audio["\xa9wrt"] = ["One"], [""]
+    audio.save()
+    lib = Library(str(tmp_path / "library.db"), directory=str(tmp_path))
+    lib.add(Item.from_path(str(path)))
+    os.utime(path, (os.path.getmtime(path) + 10,) * 2)  # touched outside beets
+
+    outputs = []
+    for _ in range(2):
+        update_items(lib, list(lib.items()), move=False, pretend=False, fields=update_fields())
+        outputs.append(capsys.readouterr().out)
+
+    assert "composers" in outputs[0]
+    assert outputs[1] == ""
+
+
 def test_run_beet_import_asis_flag() -> None:
     from music_scan.process import run_beet_import
     import unittest.mock as mock
