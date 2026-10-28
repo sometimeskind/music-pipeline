@@ -129,8 +129,24 @@ def run_beet_import(inbox_dir: Path, skip_limit: int | None = None, asis: bool =
     return mb_errors
 
 
+def update_fields() -> list[str]:
+    """The fields ``beet update`` stores: its default set plus ``mtime``.
+
+    With no ``-F``, beets 2.14 stores only the item's media fields, never the
+    file mtime that ``read()`` just took, so a file touched outside beets is
+    re-read on every scan and a no-op diff (an empty ``©wrt`` atom read as
+    ``['']`` against ``[]``) prints every time (#340).  ``Album.item_keys``
+    keeps the album side as wide as the default."""
+    from beets.library import Album, Item  # noqa: PLC0415
+
+    return sorted(Item._media_fields | set(Album.item_keys) | {"mtime"})
+
+
 def run_beet_update() -> None:
     """Run ``beet update`` (non-fatal on failure)."""
-    result = subprocess.run(["beet", "update"], check=False)
+    cmd = ["beet", "update"]
+    for field in update_fields():
+        cmd += ["-F", field]
+    result = subprocess.run(cmd, check=False)
     if result.returncode != 0:
         logger.warning("beet update exited with code %d (non-fatal)", result.returncode)
