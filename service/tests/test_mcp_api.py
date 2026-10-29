@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import sqlite3
 import sys
 import threading
@@ -317,3 +318,139 @@ def test_trigger_album_tick_submits(client):
 def test_trigger_reports_an_unreachable_prefect(client):
     with patch("music_service.prefect_client.pending_state", side_effect=OSError("down")):
         assert client.post("/mcp-api/trigger/scan", headers=WRITE).status_code == 503
+
+
+# ---------------------------------------------------------------------------
+# History (homelab#2413)
+# ---------------------------------------------------------------------------
+
+TEST_DB = os.environ.get("MUSIC_TEST_DATABASE_URL")
+needs_pg = pytest.mark.skipif(not TEST_DB, reason="MUSIC_TEST_DATABASE_URL is unset")
+RG = "6e0a6c2a-2d38-3d3c-9d38-4f0c2b5b7a11"
+
+
+@pytest.fixture
+def no_event_store(monkeypatch):
+    from music_fetch import db, events
+
+    monkeypatch.delenv(db.ENV, raising=False)
+    events._reset()
+
+
+@pytest.fixture
+def event_store(monkeypatch):
+    """A fresh database on the test server as MUSIC_DATABASE_URL (as fetch_tests/test_events.py)."""
+    import uuid
+
+    import psycopg
+
+    from music_fetch import db, events
+
+    name = f"music_test_{uuid.uuid4().hex[:12]}"
+    with psycopg.connect(TEST_DB, autocommit=True) as admin:
+        admin.execute(f'CREATE DATABASE "{name}"')
+    monkeypatch.setenv(db.ENV, psycopg.conninfo.make_conninfo(TEST_DB, dbname=name))
+    monkeypatch.setattr(events.metrics, "_push", lambda body, job: None)
+    events._reset()
+    yield events
+    events._reset()
+    with psycopg.connect(TEST_DB, autocommit=True) as admin:
+        admin.execute(f'DROP DATABASE "{name}" WITH (FORCE)')
+
+
+def test_album_history_without_the_event_store_is_unavailable(client, no_event_store):
+    resp = client.get("/mcp-api/album_history?query=ALB1", headers=READ)
+    assert resp.status_code == 503
+    assert resp.get_json()["status"] == "unavailable" and "MUSIC_DATABASE_URL" in resp.get_json()["error"]
+    # The album resolves before the store is read.
+    assert client.get("/mcp-api/album_history?query=abbey", headers=READ).get_json()["status"] == "ambiguous"
+    assert client.get("/mcp-api/album_history?query=ALB1&since=yesterday", headers=READ).status_code == 400
+
+
+def test_digest_summary_without_the_event_store_still_reports_the_issues(client, no_event_store):
+    resp = client.get("/mcp-api/digest_summary", headers=READ)
+    body = resp.get_json()
+    assert resp.status_code == 200 and body["status"] == "ok"
+    assert "MUSIC_DATABASE_URL" in body["history"]["error"]
+    issues = body["issues"]
+    assert issues["mixed"] == {"total": 1, "listed": [{"key": "ALB1", "album": "The Beatles — Abbey Road",
+                                                       "origin": "album"}]}
+    assert [a["key"] for a in issues["stuck"]["failed"]["listed"]] == ["ALB3"]
+    assert issues["stuck"]["missing"]["total"] == issues["stuck"]["grabbed"]["total"] == 0
+    # The seeded replaced files have no tags: nothing says the library holds them.
+    assert issues["only_copies"] == {"total": 2, "listed": ["replaced/3-three.m4a", "replaced/4-four.m4a"]}
+    assert issues["path_clashes"] == {"total": 0, "listed": []}
+    assert issues["empty_slots"]["playlists"] == {"chill": {"total": 1, "entries": ["Someone — Absent"]}}
+    assert issues["rejects"] == {"total": 1, "listed": ["rejected/chill/two.m4a"]}
+    assert body["requests"] == {"missing": {"total": 0, "listed": []}, "failed": {"total": 0, "listed": []}}
+    assert body["since"].endswith("Z") and body["until"].endswith("Z")
+
+
+def test_digest_summary_lists_path_clashes(env, client, no_event_store):
+    with sqlite3.connect(env["db"]) as conn:
+        conn.execute("INSERT INTO item_attributes (entity_id, key, value) VALUES (?, 'canon_clash', '1')",
+                     (env["items"][0].id,))
+    clashes = client.get("/mcp-api/digest_summary", headers=READ).get_json()["issues"]["path_clashes"]
+    assert clashes["total"] == 1 and clashes["listed"][0]["id"] == env["items"][0].id
+    assert clashes["listed"][0]["path"] == "The Beatles/Abbey Road/01 - Come Together.m4a"
+
+
+@needs_pg
+def test_album_history_reads_an_albums_events_newest_first(env, client, event_store, monkeypatch):
+    import json as _json
+
+    from music_fetch import albums
+
+    state = _json.loads(albums.STATE_FILE.read_text())
+    state["albums"]["ALB1"]["release_files"] = {"mb": {"mb_releasegroupid": RG}}
+    albums.STATE_FILE.write_text(_json.dumps(state))
+    event_store.record("grab", "[GRAB] one", source="albums", spotify_album_id="ALB1")
+    event_store.record("retire", "[RETIRE] two", source="release", release_group=RG, item_id=7)
+    event_store.record("grab", "[GRAB] other album", source="albums", spotify_album_id="ALB2")
+    event_store.record("import_done", "[DONE] three", source="albums", spotify_album_id="ALB1", release_group=RG)
+
+    body = client.get("/mcp-api/album_history?query=ALB1", headers=READ).get_json()
+    assert body["status"] == "ok" and body["album"]["release_group"] == RG
+    assert [e["message"] for e in body["events"]] == ["[DONE] three", "[RETIRE] two", "[GRAB] one"]
+    assert body["total"] == 3 and body["next_offset"] is None
+    assert body["events"][1]["item_id"] == 7 and body["events"][0]["at"].endswith("Z")
+    future = client.get("/mcp-api/album_history?query=ALB1&since=2999-01-01T00:00:00Z", headers=READ).get_json()
+    assert future["total"] == 0 and future["since"] == "2999-01-01T00:00:00Z"
+
+
+@needs_pg
+def test_digest_summary_counts_and_lists_the_windows_events(client, event_store):
+    for n in range(30):
+        event_store.record("retire", f"[RETIRE] {n}", source="release", item_id=n)
+    event_store.record("failure", "[FAIL] gave up", source="albums", data={"gave_up": True})
+    history = client.get("/mcp-api/digest_summary", headers=READ).get_json()["history"]
+    assert history["counts"] == {"failure": 1, "retire": 30}
+    retired = [e["message"] for e in history["events"]["retire"]]
+    assert retired == [f"[RETIRE] {n}" for n in range(5, 30)]  # the latest 25, oldest first
+    assert history["events"]["failure"] == [{"at": history["events"]["failure"][0]["at"],
+                                             "message": "[FAIL] gave up", "gave_up": True}]
+    later = client.get("/mcp-api/digest_summary?since=2999-01-01T00:00:00Z", headers=READ).get_json()
+    assert later["history"] == {"counts": {}, "events": {}}
+
+
+def test_stuck_names_stale_grabs_and_fallbacks_only():
+    from datetime import datetime, timezone
+
+    from music_service import mcp_history
+
+    now = datetime(2026, 10, 29, 5, tzinfo=timezone.utc)
+    records = {
+        "G1": {"artist": "A", "name": "Old grab", "status": "grabbed", "grabbed_at": "2026-10-26T00:00:00+00:00"},
+        "G2": {"artist": "A", "name": "New grab", "status": "grabbed", "grabbed_at": "2026-10-28T12:00:00+00:00"},
+        "F1": {"artist": "B", "name": "Old fallback", "status": "fallback", "fallback_at": "2026-10-01T00:00:00+00:00",
+               "fallback_tracks": {"later": ["s1", "s2"]}},
+        "F2": {"artist": "B", "name": "New fallback", "status": "fallback", "fallback_at": "2026-10-25T00:00:00+00:00"},
+        "M1": {"artist": "C", "name": "Missing", "status": "missing", "origin": "wants"},
+        "W1": {"artist": "D", "name": "Wanted", "status": "wanted"},
+    }
+    out = mcp_history.stuck(records, now)
+    assert [a["key"] for a in out["grabbed"]["listed"]] == ["G1"]
+    assert out["fallback"]["listed"] == [{"key": "F1", "album": "B — Old fallback", "origin": "album",
+                                          "fallback_at": "2026-10-01T00:00:00+00:00", "tracks": 2}]
+    assert out["missing"]["listed"][0]["origin"] == "wants"
+    assert out["failed"] == {"total": 0, "listed": []}

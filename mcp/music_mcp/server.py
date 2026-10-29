@@ -157,6 +157,28 @@ def build_server(
         return await call("get_job", lambda c: pipeline.get(c, f"/jobs/{seg(job_id)}", offset=offset))
 
     @mcp.tool(annotations={"readOnlyHint": True})
+    async def album_history(
+        query: AlbumQuery,
+        since: Annotated[str | None, Field(description="ISO 8601 time; default: all kept history")] = None,
+        offset: Offset = 0,
+    ) -> dict:
+        """One album's events, newest first: grabs, imports (done, wrong, incomplete, lost),
+        failures, fallbacks, automatic resets, and its items retired, merged or kept as
+        local-only extras. History is kept 90 days, and each album's latest 20 events longer."""
+        return await call("album_history",
+                          lambda c: pipeline.get(c, "/album_history", query=query, since=since, offset=offset))
+
+    @mcp.tool(annotations={"readOnlyHint": True})
+    async def digest_summary(
+        since: Annotated[str | None, Field(description="ISO 8601 time; default: the last 24 hours")] = None,
+    ) -> dict:
+        """What happened since `since` (event counts by kind, each kind's latest events) and
+        the library issues standing now for the operator to decide on: mixed albums, stuck
+        albums (failed, missing, stale grabs and fallbacks), only copies in quarantine/replaced,
+        path clashes, empty playlist slots and length-guard rejects."""
+        return await call("digest_summary", lambda c: pipeline.get(c, "/digest_summary", since=since))
+
+    @mcp.tool(annotations={"readOnlyHint": True})
     async def get_guide(
         topic: Annotated[str, Field(description="a topic name; 'index' lists them and routes symptoms")] = "index",
     ) -> dict:

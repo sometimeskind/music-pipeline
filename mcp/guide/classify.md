@@ -2,9 +2,10 @@
 
 Find the facts yourself before proposing a fix. The structured reads (`library_status`,
 `find_albums`, `get_album`, `get_item`, `get_playlist`, `list_quarantine`) and the audits
-answer most questions. Log lines (the `[TAG]`s below) are in Loki: a Claude Code session can
-read them through the Grafana MCP, and from claude.ai ask the user to paste them. A job's own
-output is returned by the tool and by `get_job`.
+answer most questions. Most `[TAG]`s below are also recorded as events: `album_history` shows
+an album's, and `digest_summary` the last day's. The full log lines are in Loki: a Claude Code
+session can read them through the Grafana MCP, and from claude.ai ask the user to paste them. A
+job's own output is returned by the tool and by `get_job`.
 
 More than one row can apply. A reimport that ends `[DONE]` and moves old copies aside also
 creates new only copies.
@@ -17,7 +18,7 @@ creates new only copies.
 | An album **mixed** from several releases | `audit_releases`, `[AUTORESET]`, `[MIXED]` | Nothing while the tick resets 3 a day automatically. A held album stays mixed for good. By hand: `reset_album` with `reimport=true` for the album `audit_releases` names |
 | **Only copies** in `quarantine/replaced/` (`MusicReplacedOnlyCopiesWaiting`) | `list_quarantine` with `kind=replaced`; `audit_releases` with `replaced_query='<artist — album>'` | The user decides per album. Deleting them (`--apply --only-copies`) is irreversible and runs on the workstation only (see `workflow`) |
 | **Wrong release** imported (wrong edition, wrong album) | `get_album` (record, blocklist), `[RELEASE]`/`[NOMB]`, `[DONE]`/`[WRONG]` | `reset_album` with `reimport=true`. A hand-curated album: a `hold` line instead (below) |
-| Album stuck `wanted` / `fallback` / `failed` | `get_album` (status, attempts), `library_status`, `[MISS]`/`[FALLBACK]`/`[ERR]` | Fell back during an indexer outage: `requeue_albums` with `since`. A name of glyphs only (`[NOWORDS]`): a search override line. `failed`: `reset_album` |
+| Album stuck `wanted` / `fallback` / `failed` | `get_album` (status, attempts), `album_history` (what was tried), `library_status`, `[MISS]`/`[FALLBACK]`/`[ERR]` | Fell back during an indexer outage: `requeue_albums` with `since`. A name of glyphs only (`[NOWORDS]`): a search override line. `failed`: `reset_album` |
 | **Wrong take or length** (demo, radio edit, silence) | `audit_lengths` (`silence=true` for padding), `list_quarantine` with `kind=rejected`, `[WOULD-REJECT]` | `replace_item` with the item ID and a YouTube video the user picked. A fingerprint mismatch `audit_dupes` reports is fixed the same way. Re-downloading through the inbox doesn't work: the duplicate hook merges it back into the old item |
 | **Missing cover** | `[NOART]`; `get_item` (`via`) | `embed_covers` (Usenet items). An album split in two, one without a cover: `canon_albums` |
 | **Playlist drift** (the `.m3u` lacks or has extra tracks against Spotify) | `get_playlist` (entries with `item_id: null`), `[SLOT]`, `[STORE-TAIL]` | No tool: the store is the truth, and a Spotify edit reaches the `.m3u` at the next nightly. A lasting gap is an entry no item holds by Spotify ID or ISRC: get the track in (a download, `replace_item`, a Usenet album) |

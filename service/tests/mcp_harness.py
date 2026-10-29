@@ -69,7 +69,11 @@ def seed(root: Path) -> dict:
     stores = spotdl / ".store"
     stores.mkdir(parents=True, exist_ok=True)
     state = spotdl / ".albums.json"
-    state.write_text(json.dumps({"albums": ALBUMS}))
+    # Abbey Road was mixed at the last album tick; the last scan left one empty slot on chill.
+    state.write_text(json.dumps({"albums": ALBUMS, "mixed": ["ALB1"]}))
+    (spotdl / ".empty-slots.json").write_text(json.dumps({
+        "at": "2026-10-29T03:40:00+00:00",
+        "playlists": {"chill": {"total": 1, "entries": ["Someone — Absent"]}, "other": {"total": 0, "entries": []}}}))
     (stores / "chill.json").write_text(json.dumps({
         "playlist": "chill", "updated": "2026-10-27T03:10:00Z", "source": "spotify", "entries": [
             {"song": {"name": "Come Together", "artists": ["The Beatles"], "album_name": "Abbey Road",

@@ -7,12 +7,14 @@ No Spotify or YouTube calls.
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 import shutil
 import tempfile
 import time
 from contextlib import contextmanager
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable, Iterator
 
@@ -41,6 +43,10 @@ PLAYLISTS = Path("/root/Music/playlists")
 INBOX = Path("/root/Music/inbox")
 LIBRARY = Path("/root/Music/library")
 LIBRARY_DB = Path("/root/.config/beets/library.db")
+# The last scan's empty playlist slots, by name, beside the album store (SPOTDL_DIR):
+# the Music MCP's digest_summary reports them (homelab#2413).
+EMPTY_SLOTS_NAME = ".empty-slots.json"
+EMPTY_SLOTS_LISTED = 25
 
 
 def _snapshot_inbox(inbox: Path) -> list[str]:
@@ -364,8 +370,9 @@ def regen_playlists(metrics: ScanMetrics | None = None) -> dict[str, int]:
     local entries (:func:`_local_tail`): each entry resolved to any library
     item by Spotify ID or ISRC, so a track imported by any route reaches every
     playlist that lists it at the next scan, with no download and no tag
-    write (#228).  *metrics*, when given, takes the empty-slot count per
-    playlist.
+    write (#228).  *metrics*, when given (the scan), takes the empty-slot
+    count per playlist, and :data:`EMPTY_SLOTS_NAME` the first
+    :data:`EMPTY_SLOTS_LISTED` empty entries of each.
 
     An ``album`` playlist lists every local track of every album on it instead
     (#268, :func:`playlists.album_paths`).  A playlist whose store fails is
@@ -380,6 +387,7 @@ def regen_playlists(metrics: ScanMetrics | None = None) -> dict[str, int]:
 
     counts: dict[str, int] = {}
     empty: dict[str, int] = {}
+    missing: dict[str, list[str]] = {}
     with MusicLibrary(LIBRARY_DB) as lib:
         all_items = lib.all_items()
         library = ItemIndex(all_items)
@@ -399,10 +407,26 @@ def regen_playlists(metrics: ScanMetrics | None = None) -> dict[str, int]:
             (PLAYLISTS / f"{name}.m3u").write_text("\n".join(lines) + ("\n" if lines else ""), encoding="utf-8")
             counts[name] = len(lines)
             empty[name] = playlists.empty_slots(slots)
+            missing[name] = [f"{s.entry.artist} — {s.entry.name}" for s in slots if s.item is None]
 
     if metrics is not None:
         metrics.slots_empty = empty
+        _save_empty_slots(empty, missing)
     return counts
+
+
+def _save_empty_slots(empty: dict[str, int], missing: dict[str, list[str]]) -> None:
+    """Best-effort: a playlist's slots are only ever reported, never acted on."""
+    report = {"at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+              "playlists": {name: {"total": n, "entries": missing.get(name, [])[:EMPTY_SLOTS_LISTED]}
+                            for name, n in sorted(empty.items())}}
+    path = SPOTDL_DIR / EMPTY_SLOTS_NAME
+    try:
+        tmp = path.with_suffix(".tmp")
+        tmp.write_text(json.dumps(report, ensure_ascii=False), encoding="utf-8")
+        tmp.replace(path)
+    except OSError as exc:
+        logger.warning("Could not save the empty slots to %s: %s", path, exc)
 
 
 def add_source(lib: MusicLibrary, have_source: str, new_source: str, tracks: list[list]) -> int:

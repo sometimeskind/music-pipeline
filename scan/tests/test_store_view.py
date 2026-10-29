@@ -253,6 +253,10 @@ def test_regen_records_the_empty_slots(env) -> None:
     regen_playlists(metrics)
     # pl: W1 (a words-only match) and N1 are empty.
     assert metrics.slots_empty == {"full": 0, "pl": 2}
+    spotdl_dir, _, _ = env
+    report = json.loads((spotdl_dir / ".empty-slots.json").read_text())
+    assert report["playlists"]["full"] == {"total": 0, "entries": []}
+    assert report["playlists"]["pl"]["total"] == 2 and len(report["playlists"]["pl"]["entries"]) == 2
 
 
 # ---------------------------------------------------------------------------
