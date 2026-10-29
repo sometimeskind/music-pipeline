@@ -275,7 +275,7 @@ def make_blueprint(jobs: mcp_jobs.JobQueue) -> Blueprint:
                 found = overrides.listing(conn, statedb.load_albums(conn), kind)
         except (statedb.Unavailable, psycopg.Error) as exc:
             logger.warning("[MCP] reading the overrides failed: %s", exc)
-            return jsonify({"status": "unavailable", "error": f"the music database: {exc}"}), 503
+            return jsonify({"status": "unavailable", "error": f"the music database: {type(exc).__name__}"}), 503
         shown, next_offset = mcp_reads.page(found, offset)
         return jsonify({"status": "ok", "kind": kind, "total": len(found), "offset": offset,
                         "next_offset": next_offset, "overrides": shown})

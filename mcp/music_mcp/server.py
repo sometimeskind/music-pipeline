@@ -344,7 +344,7 @@ def build_server(
     @mcp.tool(annotations={"destructiveHint": False})
     async def pin_track(
         track: Track,
-        url: Annotated[str, Field(description="the https source URL, e.g. a music.youtube.com video", min_length=1)],
+        url: Annotated[str, Field(description="a YouTube or YouTube Music video ID or URL", min_length=1)],
         label: Annotated[str, Field(description="a short label, e.g. the track number", max_length=500)] = "",
         reason: Reason = "",
         apply: Apply = False,

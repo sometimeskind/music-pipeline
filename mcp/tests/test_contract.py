@@ -240,7 +240,10 @@ async def test_the_override_tools(pipeline_url):
         for tool, args in [("hold_album", {"album": "ALB3", "reason": " "}),
                            ("set_search_override", {"album": "ALB3", "words": "〠 ♫"}),
                            ("pin_track", {"track": "ALB3", "url": "https://music.youtube.com/watch?v=x"}),
-                           ("pin_track", {"track": "68ozhSrI4eLbnUgih1SlOT", "url": "http://example.com/x"})]:
+                           ("pin_track", {"track": "68ozhSrI4eLbnUgih1SlOT",
+                                          "url": "https://evil.example/watch?v=29Sh3yEaBP8"}),
+                           ("pin_track", {"track": "68ozhSrI4eLbnUgih1SlOT",
+                                          "url": "https://music.youtube.com/playlist?list=OLAK5uy_l7iC3z"})]:
             with pytest.raises(ToolError):
                 await c.call_tool(tool, args)
     async with Client(server(pipeline_url, PILOT)) as c:

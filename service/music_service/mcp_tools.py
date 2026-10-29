@@ -289,11 +289,15 @@ def track_ref(value) -> str:
 
 
 def pin_url(value) -> str:
-    from music_fetch.overrides import source_url  # noqa: PLC0415
+    """A YouTube or YouTube Music video's canonical URL (``overrides.pin_source``): nothing else reaches yt-dlp."""
+    from music_fetch.overrides import pin_source  # noqa: PLC0415
 
-    if not isinstance(value, str) or not value.strip().startswith("https://") or any(c.isspace() for c in value.strip()):
-        raise BadRequest("url must be an https:// source URL")
-    return source_url(value.strip())
+    if not isinstance(value, str) or not value.strip():
+        raise BadRequest("url must be a YouTube or YouTube Music video URL")
+    try:
+        return pin_source(value)
+    except ValueError as exc:
+        raise BadRequest(str(exc)) from exc
 
 
 def _set_search(body: dict, albums: Albums) -> dict:
