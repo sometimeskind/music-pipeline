@@ -110,8 +110,8 @@ def test_keyed_finds_a_record_by_row_then_by_ref():
              "spotify_album_ids": [], "names": []},
     })
     search, holds = overrides.keyed([
+        AlbumOverride(SEARCH, ["sp2"], "merged-away words", album_id=99),  # sp1's own one wins
         AlbumOverride(SEARCH, ["gone"], "row words", album_id=7),
-        AlbumOverride(SEARCH, ["sp2"], "second words"),  # sp1 has one already: the first wins
         AlbumOverride(HOLD, ["Local/Album"]),
         AlbumOverride(HOLD, [RG]),
         AlbumOverride(HOLD, ["nobody"]),

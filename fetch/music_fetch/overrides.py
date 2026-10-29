@@ -213,22 +213,24 @@ def keyed(overrides: Iterable[AlbumOverride], rows: statedb.AlbumRows) -> tuple[
     """*overrides* by the album key of the record each names in *rows*: (search
     words by key, held keys).  A row ID finds its record; failing that, a ref
     does (a file entry, or a row merged away in this tick and not saved yet).
-    Two search overrides on one record: the first wins, logged."""
+    A record's own override wins over one found by ref, as
+    :func:`state.attach_overrides` decides at the save."""
     by_id = {r["_id"]: k for k, r in rows.albums.items() if r.get("_id") is not None}
     by_ref = rows.by_ref()
     by_group = {r["release_group"]: k for k, r in rows.albums.items() if r.get("release_group")}
+
+    def by_refs(o: AlbumOverride) -> str | None:
+        return next((k for ref in o.refs
+                     if (k := by_ref.get(ref) or by_group.get(ref) or (ref if ref in rows.albums else None))), None)
+
     search: dict[str, str] = {}
     holds: set[str] = set()
-    for o in overrides:
-        key = by_id.get(o.album_id) or next(
-            (k for ref in o.refs if (k := by_ref.get(ref) or by_group.get(ref) or (ref if ref in rows.albums else None))),
-            None)
+    own = [(o, by_id.get(o.album_id)) for o in overrides]
+    for o, key in [*((o, k) for o, k in own if k), *((o, by_refs(o)) for o, k in own if not k)]:
         if key is None:
             continue
         if o.kind == HOLD:
             holds.add(key)
-        elif key in search and search[key] != o.words:
-            logger.warning("[OVERRIDE] %s has two search overrides (%r, %r); the first wins", key, search[key], o.words)
         else:
             search.setdefault(key, o.words or "")
     return search, holds
