@@ -46,6 +46,7 @@ import contextlib
 import dataclasses
 import json
 import logging
+import os
 from collections.abc import Iterable, Iterator, Mapping
 from datetime import datetime, timezone
 from pathlib import Path
@@ -92,8 +93,10 @@ class Unavailable(RuntimeError):
 
 
 def in_db() -> bool:
-    """Whether the database, not the JSON files, holds the state."""
-    return SWITCH.exists()
+    """Whether the database, not the JSON files, holds the state.  An unreadable
+    path reads as not switched (``os.path.exists``): the tests run as a user who
+    can't see /root, and the pod runs as root, which owns pipeline-state."""
+    return os.path.exists(SWITCH)
 
 
 @contextlib.contextmanager
