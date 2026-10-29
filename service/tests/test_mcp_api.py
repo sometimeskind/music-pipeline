@@ -429,6 +429,9 @@ def test_digest_summary_counts_and_lists_the_windows_events(client, event_store)
     assert retired == [f"[RETIRE] {n}" for n in range(5, 30)]  # the latest 25, oldest first
     assert history["events"]["failure"] == [{"at": history["events"]["failure"][0]["at"],
                                              "message": "[FAIL] gave up", "gave_up": True}]
+    event_store.record("merge", "[SAME] x", source="import", item_id=9, data={"why": "same recording at import"})
+    merged = client.get("/mcp-api/digest_summary", headers=READ).get_json()["history"]["events"]["merge"]
+    assert merged[0]["item_id"] == 9 and merged[0]["data"] == {"why": "same recording at import"}
     later = client.get("/mcp-api/digest_summary?since=2999-01-01T00:00:00Z", headers=READ).get_json()
     assert later["history"] == {"counts": {}, "events": {}}
 

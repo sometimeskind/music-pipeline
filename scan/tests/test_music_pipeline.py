@@ -50,7 +50,8 @@ def _item(path: str | bytes, sources: str = "", via: str = "", title: str = "") 
 
 def _dup(via: str = "spotdl", sources: str = "", spotify_ids: str = "") -> MagicMock:
     """Mock a library Item used as a duplicate (not a beets_library.Album)."""
-    d = MagicMock(spec=["get", "__setitem__", "store"])  # spec=[] prevents hasattr from matching Album
+    d = MagicMock(spec=["get", "__setitem__", "store", "id"])  # spec=[] prevents hasattr from matching Album
+    d.id = 0  # a library item always has one; a merge's event names it
     data = {"via": via, "sources": sources, "spotify_ids": spotify_ids}
     d.get = lambda k, default="": data.get(k, default)
     def _setitem(k, v):
@@ -753,7 +754,11 @@ def test_handle_duplicates_merges_a_retitled_release_by_isrc() -> None:
     assert existing._data["isrc"] == "USX9;GBX1"
 
 
-def test_handle_duplicates_merges_by_musicbrainz_recording_id() -> None:
+def test_handle_duplicates_merges_by_musicbrainz_recording_id(monkeypatch) -> None:
+    from music_fetch import events
+
+    recorded = []
+    monkeypatch.setattr(events, "record", lambda kind, message, **kw: recorded.append((kind, message, kw)))
     plugin, item, task = _incoming(SpotdlTags(URL_X, "GBNEW"))
     task.chosen_info.return_value = {"track_id": "mb-rec-1", "isrc": None}
     existing = _lib_dup(7, isrc="USOLD", mb_trackid="mb-rec-1")
@@ -768,6 +773,11 @@ def test_handle_duplicates_merges_by_musicbrainz_recording_id() -> None:
     same = [c for c in plugin._log.warning.call_args_list if "[SAME]" in c.args[0]]
     assert len(same) == 1
     assert "playlist-b" in same[0].args
+    # And one merge event (homelab#2413), which the digest checks for a wrong merge.
+    (kind, message, kw), = recorded
+    assert kind == "merge" and message.startswith("[SAME] ") and "(playlist playlist-b)" in message
+    assert kw["item_id"] == 7 and kw["source"] == "import" and kw["data"]["why"] == "same recording at import"
+    assert kw["data"]["incoming"]["playlist"] == "playlist-b"
 
 
 def test_handle_duplicates_splits_a_different_recording() -> None:

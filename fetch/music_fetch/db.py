@@ -65,6 +65,9 @@ EVENT_KINDS = (
     # (music-backfill-ids --apply's [WRONG]).
     "filled",
     "wrong_version",
+    # Migration 3: an item canon moved from one album to another (a changed
+    # spotify_album_id), which the digest checks for a move between unrelated albums.
+    "moved",
     # Requests and the Later queue (homelab#2478), nothing emits them yet: an
     # album requested, added to or removed from Later, and a Spotify ID resolved
     # for a release group.
@@ -111,6 +114,16 @@ MIGRATIONS: list[str] = [
         'grab', 'autoreset', 'fallback', 'failure', 'reject', 'mcp_job',
         'album_requested', 'later_added', 'later_removed', 'spotify_id_resolved',
         'filled', 'wrong_version'));
+    """,
+    # 3: the moved kind (a wider CHECK again).
+    """
+    ALTER TABLE events DROP CONSTRAINT events_kind_check;
+    ALTER TABLE events ADD CONSTRAINT events_kind_check CHECK (kind IN (
+        'import_done', 'import_wrong', 'import_incomplete', 'import_lost',
+        'retire', 'local', 'merge', 'clash', 'mixed',
+        'grab', 'autoreset', 'fallback', 'failure', 'reject', 'mcp_job',
+        'album_requested', 'later_added', 'later_removed', 'spotify_id_resolved',
+        'filled', 'wrong_version', 'moved'));
     """,
 ]
 

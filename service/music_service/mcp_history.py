@@ -23,6 +23,10 @@ LISTED = 25
 STALE_GRAB = timedelta(days=2)
 STALE_FALLBACK = timedelta(days=14)
 
+# The kinds whose events digest_summary lists with their item and data: the digest
+# judges them (a merge or move between unrelated recordings or albums, an extra left by hand).
+WITH_DATA = ("merge", "moved", "local")
+
 _FIELDS = "id, at, kind, source, spotify_album_id, release_group::text, item_id, caller, job_id, message, data"
 
 
@@ -100,6 +104,8 @@ def history(conn, since: str) -> dict:
         brief = {"at": view["at"], "message": view["message"]}
         if view["kind"] in ("failure", "import_done") and "gave_up" in view["data"]:
             brief["gave_up"] = view["data"]["gave_up"]
+        if view["kind"] in WITH_DATA:
+            brief.update(item_id=view["item_id"], data=view["data"])
         events.setdefault(view["kind"], []).append(brief)
     return {"counts": counts, "events": events}
 

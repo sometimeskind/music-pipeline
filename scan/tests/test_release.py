@@ -510,6 +510,16 @@ def test_retire_held_leaves_an_extra_two_release_items_hold_the_audio_of(quarant
     assert release.retire_held(FakeLib([track, twin, extra]), decoder=lambda fp: []) == 0
     assert not extra.removed
 
+
+def test_an_extra_left_to_music_audit_dupes_is_recorded_once_a_day(quarantined, recorded) -> None:
+    track, extra = _stay_positive()
+    twin = _Audio(3806, "Lord, I'm Discouraged", length=231.0, album_record="SP", release="r@2",
+                  isrc="USVR10800006")
+    release.retire_held(FakeLib([track, twin, extra]), decoder=lambda fp: [])
+    (kind, message, kw), = recorded
+    assert kind == "local" and message.endswith("left to music-audit-dupes") and kw["once_hours"] == 24
+    assert kw["item_id"] == extra.id and kw["data"]["left_to_dupes"] is True
+
 def test_mixed_reasons_a_whole_import_with_a_loose_spotdl_copy_is_not_mixed() -> None:
     """Zero 7 Simple Things (#295): imported whole since #279 after a reset by
     hand, plus one spotdl copy another playlist's store also lists, which retire

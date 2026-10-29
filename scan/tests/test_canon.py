@@ -1020,3 +1020,27 @@ def test_an_album_records_item_whose_path_is_taken_is_tagged_in_place(tmp_path, 
         cover.download = monkey_download
     item = lib.get_item(track.id)
     assert Path(os.fsdecode(item.path)) == album_dir / "02 - Tonight, Tonight.m4a" and not item.get("canon_clash")
+
+
+def test_a_move_between_spotify_albums_is_a_moved_event(monkeypatch):
+    """homelab#2413: the digest checks each move for one between unrelated albums."""
+    from music_scan import canon
+
+    recorded = []
+    monkeypatch.setattr(canon.events, "record", lambda kind, message, **kw: recorded.append((kind, message, kw)))
+    item = {"artist": "A", "title": "T", "album": "New", "path": b"/l/x.m4a", "mb_releasegroupid": ""}
+
+    class _Item(dict):
+        id = 7
+
+    def change(diff):
+        return canon.Change(_Item(item), None, diff, "/l/x.m4a", False, True, "/l/old.m4a")
+
+    canon._moved_event(change({"spotify_album_id": (None, "NEW")}))  # a first tag, not a move
+    canon._moved_event(change({"album": ("Old", "New")}))
+    canon._moved_event(change({"spotify_album_id": ("OLD", "NEW"), "album": ("Old", "New")}))
+    (kind, message, kw), = recorded
+    assert kind == "moved" and message == "[RETAG] 7 /l/old.m4a: album 'Old'→'New', spotify_album_id 'OLD'→'NEW'"
+    assert kw["spotify_album_id"] == "NEW" and kw["item_id"] == 7
+    assert kw["data"]["from"] == {"album": "Old", "spotify_album_id": "OLD"}
+    assert kw["data"]["to"] == {"album": "New", "spotify_album_id": "NEW"}

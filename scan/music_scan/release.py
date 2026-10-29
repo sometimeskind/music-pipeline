@@ -275,10 +275,12 @@ def _release_group(items) -> str | None:
     return groups.most_common(1)[0][0] if groups else None
 
 
-def _event(kind: str, item, key: str | None, release_group: str | None, message: str, **data) -> None:
+def _event(kind: str, item, key: str | None, release_group: str | None, message: str,
+           once_hours: int | None = None, **data) -> None:
     """Record an item's event in the event store (homelab#2413); *message* is its log line."""
     events.record(kind, message, source="release", spotify_album_id=events.spotify_album(key),
-                  release_group=release_group, item_id=item.id, data={**events.item_fields(item), **data})
+                  release_group=release_group, item_id=item.id, data={**events.item_fields(item), **data},
+                  once_hours=once_hours)
 
 
 def retire(lib, key: str, record: dict, keep: str | None, drop: str | None, listed) -> int:
@@ -385,6 +387,12 @@ def retire_held(lib, decoder=None) -> int:
                     logger.info("  [LOCAL] %s %s — %s [%s]: the same audio as %d of the release's items; "
                                 "left to music-audit-dupes", item.id, item.get("artist"), item.get("title"),
                                 item.get("album"), len(mine))
+                    # It stands until someone merges it by hand, and every scan sees it: once a day.
+                    _event("local", item, key, _release_group(kept[key]),
+                           f"[LOCAL] {item.id} {item.get('artist')} — {item.get('title')} [{item.get('album')}]: "
+                           f"the same audio as {len(mine)} of the release's items; left to music-audit-dupes",
+                           once_hours=24, origin="extra, same audio", left_to_dupes=True,
+                           release_items=sorted(i.id for i in mine))
                 continue
             keeper = mine[0]
             evidence = "; ".join(f"{a}~{b} {why}" for a, b, why in group.evidence)

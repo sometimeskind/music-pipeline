@@ -151,7 +151,7 @@ What happened since `since` (default: 24 hours ago), and the library issues stan
  "requests": {"missing": {"total": 0, "listed": []}, "failed": {"total": 0, "listed": []}}}
 ```
 
-- `history.events` holds each kind's latest 25 in the window, oldest first; `counts` every kind's total. With the event store unavailable, `history` is `{"error": "…"}` and the rest still answers.
+- `history.events` holds each kind's latest 25 in the window, oldest first; `counts` every kind's total. A `merge`, `moved` or `local` event also carries its `item_id` and `data`, which the digest judges: a merge or a move between unrelated recordings or albums, an extra left to `music-audit-dupes`. With the event store unavailable, `history` is `{"error": "…"}` and the rest still answers.
 - `issues.stuck`: `failed` and `missing` albums (a feed's, which never fall back), grabs SABnzbd hasn't finished in 2 days, and fallbacks spotdl hasn't filled in 14.
 - `issues.mixed` is the last album tick's; `only_copies` are the files in `quarantine/replaced/` holding a recording the library doesn't; `path_clashes` the items canon tagged in place (`canon_clash`); `empty_slots` the last scan's (`inbox/spotdl/.empty-slots.json`), playlists with none left out; `rejects` the length guard's files still in `quarantine/rejected/`.
 - `requests` (homelab#2478) are the requests that ended `missing` or `failed`; none exist yet, so both are empty.
