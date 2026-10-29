@@ -52,8 +52,16 @@ or its import pending, its tracks are held off spotdl (:func:`held_tracks`).
 grab) or ``on``.  Indexer use is capped by a rolling-24h budget counted from our
 own timestamps, because the indexer's reset window is unknown.
 
-State lives in one JSON file next to the playlist stores (on the persistent
-pipeline-state volume): losing it would forget blocklists and the grab budget.
+State lives in the music database once ``music-state-import`` has moved it
+there (homelab#2410, :mod:`music_fetch.state`), and in one JSON file next to
+the playlist stores (on the persistent pipeline-state volume) before that:
+losing it would forget blocklists and the grab budget.  In the database the
+album rows are keyed by MusicBrainz release group, and two Spotify editions of
+one release group are one record (:mod:`music_fetch.resolve`, run every tick).
+A record's key here stays its primary Spotify album ID (else its release
+group, else a local album's ``artist/name``); a Spotify album ID from a song
+finds its record through :meth:`State.refs`, and an override or hold names any
+of the record's Spotify IDs.
 """
 
 from __future__ import annotations
@@ -68,7 +76,8 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Callable, Protocol
 
-from music_fetch import events, store
+from music_fetch import events, resolve, store
+from music_fetch import state as statedb
 from music_fetch.ids import spotify_key
 from music_fetch.metrics import _gauge, _push
 from music_fetch.usenet import Release, clean_album, edition, normalise, rank, readable, words
@@ -291,8 +300,10 @@ def plan(key: str, record: dict, overrides: dict[str, str]) -> Plan:
     """The searches for an album (#197).  An override wins; a title with no
     readable words searches the artist alone and matches any of their releases
     on size; with neither, there is nothing to search (``queries`` empty)."""
-    if key in overrides:
-        return Plan([overrides[key]], album=overrides[key], note=" (override)")
+    # Keyed by Spotify album ID until homelab#2484: any of the record's IDs (homelab#2410).
+    words = next((overrides[ref] for ref in _refs(key, record) if ref in overrides), None)
+    if words:
+        return Plan([words], album=words, note=" (override)")
     artist = record["artist"] if readable(record["artist"]) else ""
     name = clean_album(record["name"])
     if readable(name):
@@ -319,31 +330,47 @@ def _iso(t: datetime) -> str:
 
 
 @dataclasses.dataclass
-class State:
-    playlists: dict[str, dict] = dataclasses.field(default_factory=dict)
-    albums: dict[str, dict] = dataclasses.field(default_factory=dict)
-    # [{"t": iso, "kind": "hit" | "grab" | "reimport"}], pruned to the last WINDOW.
-    # "reimport" counts automatic reimports (#288), not indexer use.
-    indexer: list[dict] = dataclasses.field(default_factory=list)
-    # Keys of the imported albums mixed from several releases at the last tick (#288).
-    mixed: list[str] = dataclasses.field(default_factory=list)
+class State(statedb.AlbumRows):
+    """The album store (:class:`state.AlbumRows`): ``indexer`` holds
+    ``{"t": iso, "kind": "hit" | "grab" | "reimport"}``, pruned to the last
+    WINDOW ("reimport" counts automatic reimports, #288, not indexer use), and
+    ``mixed`` the keys of the imported albums mixed from several releases at
+    the last tick.  *in_db*: loaded from the music database, and saved there."""
+
+    in_db: bool = False
 
     @classmethod
     def load(cls, path: Path = STATE_FILE) -> "State":
+        """The album store: the music database's once the state is there (raises
+        :class:`state.Unavailable` when it is down), else *path*'s JSON."""
+        with statedb.session() as conn:
+            if conn is not None:
+                rows = statedb.load_albums(conn)
+                return cls(**{f.name: getattr(rows, f.name) for f in dataclasses.fields(rows)}, in_db=True)
         if not path.exists():
             return cls()
-        data = json.loads(path.read_text(encoding="utf-8"))
-        return cls(
-            playlists=data.get("playlists", {}),
-            albums=data.get("albums", {}),
-            indexer=data.get("indexer", []),
-            mixed=data.get("mixed", []),
-        )
+        rows = statedb.rows_from_json(json.loads(path.read_text(encoding="utf-8")))
+        return cls(**{f.name: getattr(rows, f.name) for f in dataclasses.fields(rows)})
 
     def save(self, path: Path = STATE_FILE) -> None:
+        if self.in_db:
+            with statedb.session() as conn:
+                if conn is None:
+                    raise statedb.Unavailable("the state left the database while a tick held it")
+                statedb.save_albums(conn, self)
+            return
         tmp = path.with_suffix(".tmp")
-        tmp.write_text(json.dumps(dataclasses.asdict(self), indent=2, ensure_ascii=False), encoding="utf-8")
+        tmp.write_text(json.dumps(statedb.rows_to_json(self), indent=2, ensure_ascii=False), encoding="utf-8")
         tmp.replace(path)
+
+    def refs(self) -> dict[str, str]:
+        """Every Spotify album ID (and local name) of a record → that record's key."""
+        return self.by_ref()
+
+    def find(self, ref: str) -> tuple[str, dict] | None:
+        """The record a key, Spotify album ID or local name names."""
+        key = ref if ref in self.albums else self.refs().get(ref)
+        return None if key is None else (key, self.albums[key])
 
     def used(self, kind: str, now: datetime) -> int:
         cutoff = now - WINDOW
@@ -412,16 +439,24 @@ def refresh_playlists(
         _save_store(name, songs, previous)
 
         wanted = reduce_to_albums(songs)
-        for key, album in wanted.items():
-            record = state.albums.setdefault(key, {"status": WANTED, "blocklist": []})
+        # Two Spotify editions of one release group are one record (homelab#2410):
+        # its tracks on this playlist are both editions', its fields its primary's.
+        refs = state.refs()
+        held: set[str] = set()
+        for album_id, album in wanted.items():
+            key = refs.get(album_id, album_id)
+            record = state.albums.setdefault(key, statedb.new_record(key, status=WANTED, blocklist=[]))
             if record.pop("origin", None) in (WANTS, LIBRARY):
                 # The album playlist wants it whole: its wanted tracks are no longer the point.
                 record["playlists"] = {}
-            record.update({k: v for k, v in album.items() if k != "tracks"})
-            record.setdefault("playlists", {})[name] = album["tracks"]
+            if album_id == key or key not in wanted:
+                record.update({k: v for k, v in album.items() if k != "tracks"})
+            tracks = record.setdefault("playlists", {})
+            tracks[name] = [*tracks[name], *album["tracks"]] if key in held else album["tracks"]
+            held.add(key)
         # Albums this playlist no longer holds.
         for key, record in list(state.albums.items()):
-            if key not in wanted and name in record.get("playlists", {}):
+            if key not in held and name in record.get("playlists", {}):
                 del record["playlists"][name]
                 if not record["playlists"] and record.get("status") in (WANTED, DRY_RUN, MISSING, HAVE, IMPORTED, FAILED, FALLBACK, FILLED):
                     del state.albums[key]
@@ -478,13 +513,15 @@ def _back(record: dict) -> str:
 
 
 def _release_group(record: dict) -> str | None:
-    """The album's MusicBrainz release group, once an import identified its release."""
-    return ((record.get("release_files") or {}).get("mb") or {}).get("mb_releasegroupid")
+    """The album's MusicBrainz release group: its key in the database (homelab#2410),
+    else the one an import identified its release by."""
+    return record.get("release_group") or ((record.get("release_files") or {}).get("mb") or {}).get("mb_releasegroupid")
 
 
 def _event(kind: str, key: str, record: dict, message: str, **data) -> None:
     """Record an album's event in the event store (homelab#2413); *message* is its log line."""
-    events.record(kind, message, source="albums", spotify_album_id=key if _spotify_album(key) else None,
+    primary = next(iter(record.get("spotify_album_ids") or ()), None) or (key if _spotify_album(key) else None)
+    events.record(kind, message, source="albums", spotify_album_id=primary,
                   release_group=_release_group(record),
                   data={"album": f"{record.get('artist')} — {record.get('name')}", "key": key,
                         "origin": record.get("origin") or "album", **data})
@@ -521,10 +558,14 @@ def feed_wants(
     first, then by their first wanted track (playlists in *playlists* order,
     then position), then the other wants records.  One ``[WANTS]`` line per
     playlist, with the tracks :func:`held_tracks` holds off spotdl."""
-    found: dict[str, dict] = {}  # key → {"on": {playlist: songs}, "at": (playlist index, position)}
+    # key → {"on": {playlist: songs}, "at": (playlist index, position), "id": the album ID its songs carry}
+    found: dict[str, dict] = {}
+    refs = state.refs()  # another edition's Spotify album ID → its record (homelab#2410)
     for index, name in enumerate(playlists):
-        for key, first, songs in wants(name):
-            found.setdefault(key, {"on": {}, "at": (index, first)})["on"][name] = songs
+        for album_id, first, songs in wants(name):
+            key = refs.get(album_id, album_id)
+            entry = found.setdefault(key, {"on": {}, "at": (index, first), "id": album_id})
+            entry["on"][name] = [*entry["on"].get(name, []), *songs]
 
     def total(key: str) -> int:
         return len({_track_id(s) for songs in found[key]["on"].values() for s in songs})
@@ -545,14 +586,14 @@ def feed_wants(
         if why:
             continue
         if record is None:
-            record = state.albums[key] = {"status": WANTED, "blocklist": [], "origin": WANTS}
+            record = state.albums[key] = statedb.new_record(key, status=WANTED, blocklist=[], origin=WANTS)
         elif _library(record):
             # A waiting library record (homelab#2403): the wanted tracks take it over.
             record.update(origin=WANTS, playlists={})
             record.pop("references", None)
         if record.get("status") in WAITING:
             distinct = list({_track_id(s): s for songs in on.values() for s in songs}.values())
-            record.update({k: v for k, v in reduce_to_albums(distinct)[key].items() if k != "tracks"})
+            record.update({k: v for k, v in reduce_to_albums(distinct)[found[key]["id"]].items() if k != "tracks"})
             playlists_of = record.setdefault("playlists", {})
             for name, songs in on.items():
                 playlists_of[name] = [track_entry(s) for s in songs]
@@ -600,25 +641,32 @@ def feed_library(state: State, library: LibraryAlbums, settings: Settings) -> No
     found = library() if mode != "off" else []
     ranked: list[tuple[str, int, int, dict[str, list[dict]]]] = []
     skipped: dict[str, int] = {}
-    for key, refs, tracks, whole, on in found:
+    album_ids: dict[str, str] = {}  # key → the album ID its songs carry (another edition's, homelab#2410)
+    by_ref = state.refs()
+    for album_id, refs, tracks, whole, on in found:
         if refs < settings.want_min or whole:
             continue
+        key = by_ref.get(album_id, album_id)
         record = state.albums.get(key)
         why = ("local" if not _spotify_album(key) else "no playlist track" if not on
                else "" if record is None or _library(record) else "wants" if _wants(record) else "album playlist")
         if why:
             skipped[why] = skipped.get(why, 0) + 1
             continue
+        if key in album_ids:
+            continue  # the record's other edition, already ranked
+        album_ids[key] = album_id
         ranked.append((key, refs, tracks, on))
     ranked.sort(key=lambda c: (-c[1], c[0]))
     new = [key for key, *_ in ranked if key not in state.albums]
     if mode == "on":
         for key, refs, tracks, on in ranked:
-            record = state.albums.setdefault(key, {"status": WANTED, "blocklist": [], "origin": LIBRARY})
+            record = state.albums.setdefault(
+                key, statedb.new_record(key, status=WANTED, blocklist=[], origin=LIBRARY))
             if record.get("status") not in WAITING:
                 continue
             distinct = list({_track_id(s): s for songs in on.values() for s in songs}.values())
-            record.update({k: v for k, v in reduce_to_albums(distinct)[key].items() if k != "tracks"})
+            record.update({k: v for k, v in reduce_to_albums(distinct)[album_ids[key]].items() if k != "tracks"})
             record["tracks_count"] = record.get("tracks_count") or tracks
             record["references"] = refs
             record["playlists"] = {name: [track_entry(s) for s in songs] for name, songs in on.items()}
@@ -634,7 +682,7 @@ def feed_library(state: State, library: LibraryAlbums, settings: Settings) -> No
     if mode == "dry-run":
         logger.info("[LIBRARY] dry-run: %d album(s) would be queued (%d new)%s", len(ranked), len(new), skips)
         for key, refs, tracks, on in ranked[:10]:
-            album = reduce_to_albums([s for songs in on.values() for s in songs])[key]
+            album = reduce_to_albums([s for songs in on.values() for s in songs])[album_ids[key]]
             logger.info("  [LIBRARY] would queue %s — %s (%s): %d of %d track(s) referenced",
                         album["artist"], album["name"], key, refs, album["tracks_count"] or tracks)
     elif mode == "on":
@@ -928,7 +976,7 @@ def auto_reimport(
         return
     for key in state.mixed:
         record = state.albums[key]
-        if key in holds or record.get("auto_reimported_at"):
+        if not holds.isdisjoint(_refs(key, record)) or record.get("auto_reimported_at"):
             continue
         if state.used("reimport", now()) >= settings.auto_reimports_per_day:
             logger.info("Automatic reimports spent (%d/24h, ALBUM_AUTO_REIMPORTS_PER_DAY)",
@@ -958,9 +1006,15 @@ Missing = Callable[[str, list[list]], list[list]]
 AlbumSongs = Callable[[str], list[dict]]
 
 
+def _refs(key: str, record: dict) -> tuple[str, ...]:
+    """The album IDs an override, a hold or an operator's argument may name a record by:
+    its key and every Spotify album ID it has (two editions of one release group, homelab#2410)."""
+    return (key, *(record.get("spotify_album_ids") or ()))
+
+
 def _spotify_album(key: str) -> bool:
-    """Whether *key* is a Spotify album ID (not a local files' artist/name key)."""
-    return bool(key) and "/" not in key
+    """Whether *key* is a Spotify album ID (not a local files' artist/name key, nor a release group)."""
+    return statedb.is_spotify_album(key)
 
 
 def _fallback_tracks(record: dict, missing: Missing) -> dict[str, list[str]]:
@@ -1112,6 +1166,27 @@ def push_metrics(state: State, success: bool) -> None:
     _push("\n".join(lines), "music_albums")
 
 
+def resolve_keys(state: State, overrides_file: Path | None = None,
+                 library_db: Path = resolve.LIBRARY_DB) -> resolve.Report | None:
+    """Key the records the database can't key yet by release group, and merge
+    two editions of one (homelab#2410, :mod:`music_fetch.resolve`): a new
+    album, or one an import has just identified.  In the database only; a
+    failure leaves the records as they are for the next tick."""
+    if not state.in_db:
+        return None
+    try:
+        with statedb.session() as conn:
+            cache = statedb.get_all(conn, statedb.MB_RELEASES) if conn is not None else {}
+        library = resolve.library_groups(library_db) if library_db.is_file() else {}
+        report = resolve.resolve(state, cache, library, load_overrides(overrides_file))
+    except Exception:
+        logger.exception("Resolving the album keys failed; the next tick tries again")
+        return None
+    if report.rekeyed or report.merged or report.conflicts:
+        report.log()
+    return report
+
+
 def tick(
     playlists: list[tuple[str, str]],
     spotify: SpotifySource,
@@ -1138,7 +1213,16 @@ def tick(
     result = TickResult()
     if settings.mode == "off":
         return result
-    state = State.load(state_file)
+    try:
+        state = State.load(state_file)
+    except statedb.Unavailable as exc:
+        # Never run on the stale JSON (homelab#2410): skip, and let
+        # MusicAlbumTickFailing say so once the outage outlasts 2h.
+        logger.warning("[DB-DOWN] Album tick skipped — the music database is down: %s", exc)
+        _push("\n".join([_gauge("music_albums_last_tick_success", 0),
+                         _gauge("music_albums_last_tick_timestamp_seconds", int(_now().timestamp()))]),
+              "music_albums")
+        return result
     start = time.monotonic()
     success = False
     try:
@@ -1148,6 +1232,7 @@ def tick(
             feed_wants(state, (want_playlists or []) if settings.want_min > 0 else [], wants, settings)
         if library is not None:
             feed_library(state, library, settings)
+        resolve_keys(state, overrides_file)
         if settings.mode == "on" and on_completion is not None:
             for completion in lost_completions(state, sabnzbd):
                 logger.info("Recovering lost import trigger for %s", completion.nzo_id)
@@ -1571,12 +1656,16 @@ def park_interrupted_imports(state_file: Path = STATE_FILE) -> int:
 
 def find_albums(albums: dict[str, dict], query: str) -> list[tuple[str, dict]]:
     """The records *query* names, from the most exact tier that has any (#289): the record whose key
-    (Spotify album ID) it is; else those whose ``artist — name`` it equals
+    (its primary Spotify album ID) it is, or another of its Spotify album IDs or its release
+    group (homelab#2410); else those whose ``artist — name`` it equals
     (case-insensitive); else those whose ``artist — name`` contains it.  An
     exact name wins over the longer names that contain it (an album and its
     ``(2018 Deluxe Remaster)``)."""
     if query in albums:
         return [(query, albums[query])]
+    by_ref = [(k, r) for k, r in albums.items() if query in _refs(k, r) or query == r.get("release_group")]
+    if by_ref:
+        return by_ref
     q = query.lower()
     named = [(k, r, f"{r.get('artist', '')} — {r.get('name', '')}".lower()) for k, r in albums.items()]
     return [(k, r) for k, r, n in named if n == q] or [(k, r) for k, r, n in named if q in n]
@@ -1688,7 +1777,8 @@ def requeue(state: State, since: datetime | None = None, keys: list[str] | None 
     fetched stay in the library, and beets skips them as duplicates when the
     album is imported.  Returns ``(key, before)`` per requeued album; a key in
     *keys* that isn't such a record is logged and skipped."""
-    keys = set(keys or [])
+    refs = state.refs()  # another edition's Spotify album ID names its record (homelab#2410)
+    keys = {refs.get(k, k) for k in keys or []}
 
     def demoted(record: dict | None) -> bool:
         return record is not None and record.get("status") == FALLBACK and record.get("fallback_from") == MISSING

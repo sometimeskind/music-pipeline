@@ -214,6 +214,8 @@ def library_albums(items, wanted: list[AlbumWants], records: dict[str, dict]) ->
     albums: dict[str, LibraryAlbum] = {}
     seen: dict[str, set[str]] = {}
     unplaced = 0
+    # A record by any of its Spotify album IDs: two editions of one release group are one (homelab#2410).
+    records = {ref: r for k, r in records.items() for ref in (k, *(r.get("spotify_album_ids") or ()))}
     for item in items:
         key = item.get("spotify_album_id")
         if not key:

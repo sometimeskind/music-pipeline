@@ -51,12 +51,13 @@ def inbox(tmp_path) -> Path:
 
 def test_plan_rekeys_merges_and_flags(inbox, tmp_path):
     p = state_import.plan(inbox, tmp_path / "no-library.db")
-    assert list(p.rows.albums) == [RG, "sp3", "local/files"]
-    assert p.rows.albums[RG]["spotify_album_ids"] == ["sp1", "sp2"]
-    assert p.rows.albums[RG]["blocklist"] == ["r9"]
+    assert list(p.rows.albums) == ["sp1", "sp3", "local/files"]
+    assert p.rows.albums["sp1"]["release_group"] == RG
+    assert p.rows.albums["sp1"]["spotify_album_ids"] == ["sp1", "sp2"]
+    assert p.rows.albums["sp1"]["blocklist"] == ["r9"]
     assert p.rows.albums["sp3"]["unresolved"] == state.NO_MATCH
     assert p.rows.albums["local/files"]["names"] == ["local/files"]
-    assert p.rows.mixed == [RG]
+    assert p.rows.mixed == ["sp1"]
     assert p.report.summary() == "1 rekeyed, 2 flagged (1 no-match, 1 pending), 1 merged into 1 album(s), 0 conflict(s)"
     assert set(p.kv) == {state.MB_RELEASES, state.SPOTIFY_LIMIT}
     assert list(p.stores) == ["later"] and p.failures == {"u9": {"attempts": 2}}
@@ -68,9 +69,9 @@ def test_write_imports_everything_once(inbox, tmp_path, pg_url):
     with state.connect() as conn:
         state_import.write(conn, p)
         rows = state.load_albums(conn)
-        assert list(rows.albums) == [RG, "sp3", "local/files"]
-        assert rows.by_ref()["sp2"] == RG
-        assert rows.mixed == [RG]
+        assert list(rows.albums) == ["sp1", "sp3", "local/files"]
+        assert rows.by_ref()["sp2"] == "sp1"
+        assert rows.mixed == ["sp1"]
         assert rows.indexer == [{"t": "2026-10-29T10:00:00+00:00", "kind": "grab"}]
         assert state.load_store(conn, "later")["updated"] == "2026-10-29T09:00:00Z"
         assert state.load_failures(conn) == {"u9": {"attempts": 2}}

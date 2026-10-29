@@ -24,9 +24,11 @@ In memory an album record is the dict album mode always used, plus:
 - ``names``: its ``artist/name`` refs, for an album with no Spotify ID;
 - ``_id``: its row, absent until it is first saved.
 
-:func:`album_key` is the record's key in :attr:`AlbumRows.albums`: its release
-group, else its primary Spotify album ID, else its name.  It names the album,
-the row ``id`` identifies it, so a resolved album changes key without moving.
+:func:`album_key` is the record's key in :attr:`AlbumRows.albums`, the album
+key album mode and the Music MCP have always used: its primary Spotify album
+ID, else its release group (an album with no Spotify ID, homelab#2478), else
+its name.  It is a handle in memory; the row is keyed by release group, and its
+``id`` identifies it, so a record keeps its row whatever its key.
 
 Which copy is the state: the JSON files until ``music-state-import --apply``
 has written the database, then the database.  The switch is the dot file
@@ -47,6 +49,7 @@ import dataclasses
 import json
 import logging
 import os
+import re
 from collections.abc import Iterable, Iterator, Mapping
 from datetime import datetime, timezone
 from pathlib import Path
@@ -59,6 +62,7 @@ from music_fetch import db
 
 logger = logging.getLogger(__name__)
 
+_UUID = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
 # Serialises album saves; the migration lock is db._MIGRATION_LOCK.
 _SAVE_LOCK = 2410
 
@@ -97,6 +101,13 @@ def in_db() -> bool:
     path reads as not switched (``os.path.exists``): the tests run as a user who
     can't see /root, and the pod runs as root, which owns pipeline-state."""
     return os.path.exists(SWITCH)
+
+
+def check() -> None:
+    """Raise :class:`Unavailable` when the state is in the database and the
+    database is down: a run that needs the state skips (homelab#2410)."""
+    with session():
+        pass
 
 
 @contextlib.contextmanager
@@ -138,8 +149,8 @@ def _iso(t: datetime) -> str:
 
 
 def album_key(record: Mapping) -> str:
-    """The record's key: its release group, else its primary Spotify album ID, else its name."""
-    key = record.get("release_group") or next(iter(record.get("spotify_album_ids") or ()), None) \
+    """The record's key: its primary Spotify album ID, else its release group, else its name."""
+    key = next(iter(record.get("spotify_album_ids") or ()), None) or record.get("release_group") \
         or next(iter(record.get("names") or ()), None)
     if not key:
         raise ValueError("an album record needs a release group, a Spotify album ID or a name")
@@ -167,6 +178,38 @@ class AlbumRows:
             for ref in (*(record.get("spotify_album_ids") or ()), *(record.get("names") or ())):
                 out[ref] = key
         return out
+
+
+def is_spotify_album(key: str | None) -> bool:
+    """Whether album key *key* is a Spotify album ID: not a local album's
+    ``artist/name``, nor a release group's UUID."""
+    return bool(key) and "/" not in key and not _UUID.fullmatch(key)
+
+
+def new_record(key: str, **fields: Any) -> dict:
+    """A new album record whose key is *key*: a Spotify album ID, or a local album's ``artist/name``."""
+    spotify = is_spotify_album(key)
+    return {**fields, "release_group": None, "unresolved": PENDING,
+            "spotify_album_ids": [key] if spotify else [], "names": [] if spotify else [key]}
+
+
+# The fields album mode's JSON never held: written to the database, stripped from the JSON.
+DB_FIELDS = ("_id", "release_group", "unresolved", "spotify_album_ids", "names")
+
+
+def rows_from_json(data: Mapping) -> AlbumRows:
+    """``.albums.json``'s content as album rows: each record unresolved, its key its Spotify album ID (or name)."""
+    albums = {key: {**record, **new_record(key)} for key, record in (data.get("albums") or {}).items()}
+    return AlbumRows(playlists=dict(data.get("playlists") or {}), albums=albums,
+                     indexer=list(data.get("indexer") or []), mixed=list(data.get("mixed") or []))
+
+
+def rows_to_json(rows: AlbumRows) -> dict:
+    """*rows* as ``.albums.json`` held them, for the previous image (the rollback) to read."""
+    return {"playlists": rows.playlists,
+            "albums": {key: {k: v for k, v in record.items() if k not in DB_FIELDS}
+                       for key, record in rows.albums.items()},
+            "indexer": rows.indexer, "mixed": rows.mixed}
 
 
 def _fingerprint(record: Mapping, mixed: bool) -> str:
