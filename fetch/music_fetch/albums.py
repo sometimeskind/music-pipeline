@@ -899,7 +899,8 @@ def top_up(
             logger.info("[WAIT] %s: %s is in flight for another album — searching again after its import",
                         label, best.title)
             continue
-        record["candidate"] = best.as_dict()
+        # Not its download_url: that carries Prowlarr's API key, and the record is shown (#343).
+        record["candidate"] = {k: v for k, v in best.as_dict().items() if k != "download_url"}
         if settings.mode != "on":
             record["status"] = DRY_RUN
             logger.info("[PICK] %s%s → %s (%.0f MB, %d grabs, %d other match(es))",

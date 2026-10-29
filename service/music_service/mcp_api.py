@@ -12,8 +12,9 @@ import os
 from datetime import datetime, timezone
 from pathlib import Path
 
-from flask import Blueprint, g, jsonify, request
+from flask import Blueprint, current_app, g, jsonify, request
 
+from music_fetch import redact
 from music_service import mcp_history, mcp_jobs, mcp_reads
 from music_service.mcp_tools import TOOLS, WRITE, Ambiguous, BadRequest, NotFound, utc_iso
 
@@ -69,6 +70,18 @@ def make_blueprint(jobs: mcp_jobs.JobQueue) -> Blueprint:
             return jsonify({"error": "X-MCP-Tier must be read or write"}), 400
         g.caller, g.tier = caller, tier or "read"
         return None
+
+    @bp.after_request
+    def without_credentials(response):
+        # Every route's JSON passes here: records, events and job output all can carry a
+        # download link and its API key (#343).
+        if not response.is_json:
+            return response
+        body, changed = redact.redact(response.get_json())
+        if changed:
+            logger.info("[MCP] redacted %d credential(s) from %s %s", changed, request.method, request.path)
+            response.set_data(current_app.json.dumps(body))
+        return response
 
     def write_tier(view):
         @functools.wraps(view)

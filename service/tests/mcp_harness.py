@@ -19,8 +19,13 @@ import json
 import os
 from pathlib import Path
 
+# A credential the store holds and no read may return (#343): Prowlarr's download link carries its API key.
+SECRET = "prowlarr-apikey-0123456789abcdef"
 ALBUMS = {
-    "ALB1": {"artist": "The Beatles", "name": "Abbey Road", "status": "imported", "playlists": {"albums": []}},
+    "ALB1": {"artist": "The Beatles", "name": "Abbey Road", "status": "imported", "playlists": {"albums": []},
+             "candidate": {"guid": "https://indexer/details/9", "title": "The.Beatles-Abbey.Road-FLAC",
+                           "download_url": f"http://prowlarr:9696/1/download?apikey={SECRET}&link=x"},
+             "blocklist": [f"https://indexer/api?t=get&id=8&apikey={SECRET}"]},
     "ALB2": {"artist": "The Beatles", "name": "Abbey Road (Remastered)", "status": "wanted", "playlists": {}},
     "ALB3": {"artist": "Nina Simone", "name": "Pastel Blues", "status": "failed", "playlists": {}},
 }

@@ -17,6 +17,8 @@ import unicodedata
 
 import requests
 
+from music_fetch.redact import redact_text
+
 logger = logging.getLogger(__name__)
 
 AUDIO_CATEGORY = 3000
@@ -315,7 +317,11 @@ class Prowlarr:
 
     def nzb_location(self, release: Release) -> str:
         """The indexer URL behind a release's download link.  Prowlarr counts this as a grab."""
-        resp = requests.get(release.download_url, allow_redirects=False, timeout=self.timeout)
+        try:
+            resp = requests.get(release.download_url, allow_redirects=False, timeout=self.timeout)
+        except requests.RequestException as exc:
+            # requests names the URL, API key and all; the caller logs this (#343).
+            raise RuntimeError(redact_text(f"Prowlarr download link for {release.title}: {exc}")) from None
         location = resp.headers.get("Location", "")
         if resp.status_code not in (301, 302, 303, 307, 308) or not location:
             raise RuntimeError(f"Prowlarr answered {resp.status_code} without a redirect for {release.title}")
