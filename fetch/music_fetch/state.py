@@ -66,7 +66,10 @@ CANON_ISRC = "canon-isrc"            # .canon-isrc.json, keyed by ISRC
 CANON_PAGES = "canon-pages"          # .canon-pages.json, one document
 SPOTIFY_LIMIT = "spotify-rate-limit"  # .spotify-rate-limit.json, one document
 EMPTY_SLOTS = "empty-slots"          # .empty-slots.json, one document
-KV_NAMES = (MB_RELEASES, CANON_ISRC, CANON_PAGES, SPOTIFY_LIMIT, EMPTY_SLOTS)
+# Written by music-state-import --apply with the state it imports: from then on
+# the pipeline reads and writes the database, and the JSON is the rollback copy.
+IMPORTED = "state-imported"
+KV_NAMES = (MB_RELEASES, CANON_ISRC, CANON_PAGES, SPOTIFY_LIMIT, EMPTY_SLOTS, IMPORTED)
 
 
 class Unavailable(RuntimeError):
