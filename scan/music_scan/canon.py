@@ -249,10 +249,11 @@ def record_homes(items: Iterable, records: dict[str, dict], by_time: bool = Fals
     have renamed it to another album, which the name no longer claims (3092,
     *1979*, moved to a best-of).  Imports run one at a time, so two releases'
     items don't interleave."""
-    from music_scan.rollback import _claims  # noqa: PLC0415
+    from music_scan.rollback import claimants  # noqa: PLC0415
 
     usenet = [i for i in items if i.get("via") == "usenet"]
-    claimed = {i.id: frozenset(k for k, r in records.items() if _claims(r, i)) for i in usenet}
+    claiming = claimants(records)
+    claimed = {i.id: frozenset(claiming(i)) for i in usenet}
     times: dict[str, list[float]] = {}
     if by_time:
         for i in usenet:

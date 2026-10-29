@@ -33,6 +33,7 @@ from __future__ import annotations
 import argparse
 import logging
 import shutil
+from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
 
@@ -94,14 +95,42 @@ def _timestamp(iso: str | None) -> float | None:
     return datetime.fromisoformat(iso).timestamp() if iso else None
 
 
+def _record_words(record: dict) -> tuple[set[str], set[str]]:
+    """*record*'s album words (edition suffixes dropped) and artist words."""
+    return set(words(clean_album(record.get("name") or ""))), set(words(record.get("artist") or ""))
+
+
+def _item_words(item) -> tuple[set[str], set[str]]:
+    """*item*'s album words and its album artist's and artist's words."""
+    return (set(words(item.get("album") or "")),
+            set(words(f"{item.get('albumartist') or ''} {item.get('artist') or ''}")))
+
+
 def _claims(record: dict, item) -> bool:
     """True when *item* looks like a track of *record*'s album: every word of
     the album name (edition suffixes dropped) and of the artist is on the item."""
-    album = set(words(clean_album(record.get("name") or "")))
-    artist = set(words(record.get("artist") or ""))
-    item_album = set(words(item.get("album") or ""))
-    item_artist = set(words(f"{item.get('albumartist') or ''} {item.get('artist') or ''}"))
+    (album, artist), (item_album, item_artist) = _record_words(record), _item_words(item)
     return bool(album) and album <= item_album and artist <= item_artist
+
+
+def claimants(records: dict[str, dict]) -> Callable[[object], list[str]]:
+    """``item → the keys of the records that claim it`` (:func:`_claims`).
+
+    Each record's words are worked out once, and a record is filed under one of
+    its album words, which every item it claims carries: the scan's canon step
+    asks this of hundreds of items against every record (homelab#2491)."""
+    by_word: dict[str, list[tuple[str, set[str], set[str]]]] = {}
+    for key, record in records.items():
+        album, artist = _record_words(record)
+        if album:
+            by_word.setdefault(min(album), []).append((key, album, artist))
+
+    def claiming(item) -> list[str]:
+        item_album, item_artist = _item_words(item)
+        return [key for word in item_album for key, album, artist in by_word.get(word, ())
+                if album <= item_album and artist <= item_artist]
+
+    return claiming
 
 
 def _from_success(record: dict, added: float) -> bool:
@@ -117,8 +146,9 @@ def failed_release_items(items, records: dict[str, dict]) -> tuple[list, list, l
     """Split unmatched usenet *items* into (from a failed release, from a
     successful one, unattributed)."""
     failed, kept, unknown = [], [], []
+    claiming = claimants(records)
     for item in items:
-        claimed = [r for r in records.values() if _claims(r, item)]
+        claimed = [records[k] for k in claiming(item)]
         if not claimed:
             unknown.append(item)
         elif any(_from_success(r, item.added or 0) for r in claimed):
