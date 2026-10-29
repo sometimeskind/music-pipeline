@@ -269,6 +269,8 @@ Mount `cookies.txt` at `/root/.config/spotdl/cookies.txt` read-only. Update by p
 | `MCP_API_TOKEN` | Secret | unset | Bearer token for `/mcp-api/*` only, the Music MCP adapter's routes (homelab#2412, contract in `service/MCP_API.md`). Unset = those routes are closed |
 | `MCP_INLINE_SECONDS` | Plain value | `20` | How long an `/mcp-api/run/*` call waits for its job before returning its `job_id` |
 | `MUSIC_LOCKS_HELD` | **Never set** | — | Set only by an MCP job for its CLI subprocess, naming the Prefect locks the job holds. The service refuses to start with it set: a CLI run from that environment would skip its locks |
+| `MUSIC_DATABASE_URL` | Secret | unset | libpq URL of the pipeline's Postgres database `music`, the event store (homelab#2413; `fetch/music_fetch/db.py`, `events.py`). The pipeline creates and migrates its tables. Writes are best-effort: a failed one logs `[EVENT] not recorded` and stamps `music_events_write_failure_timestamp_seconds` on the Pushgateway. Unset = no events are recorded |
+| `MUSIC_EVENT_CALLER` / `MUSIC_EVENT_JOB` | **Never set** | — | Set only by an MCP job for its CLI subprocess, so the events it records name the job's caller and ID |
 | `PREFECT_API_URL` | Plain value | unset | Set to reach the Prefect server (e.g. `http://prefect-server:4200/api`). Unset = direct mode. |
 | `FETCH_CRON` | Plain value | `0 3 * * *` | Cron expression for the fetch flow |
 | `PUSHGATEWAY_URL` | Plain value | `""` | e.g. `http://prometheus-pushgateway.monitoring:9091` |

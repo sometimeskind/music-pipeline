@@ -302,6 +302,9 @@ class JobQueue:
             # MUSIC_LOCKS_HELD is only ever set here, for the locks this job holds.
             env = {k: v for k, v in os.environ.items() if k != "MUSIC_LOCKS_HELD"}
             env["PYTHONUNBUFFERED"] = "1"
+            # The events the CLI records name this job and its caller (homelab#2413).
+            env["MUSIC_EVENT_CALLER"] = job["caller"]
+            env["MUSIC_EVENT_JOB"] = job_id
             if locks:
                 env["MUSIC_LOCKS_HELD"] = ",".join(locks)
 
