@@ -43,6 +43,7 @@ https://open.spotify.com/track/66i52Sbv3xAYXv5IlGbko6?si=x  https://music.youtub
 
 5sKY9vib0WClIKDr0qkaWH  https://music.youtube.com/watch?v=yxh6HEkWtvI
 not-a-pin
+58DVO497p71nqDTNOm7ZYA  https://evil.example/watch?v=njXRPPotTPo
 """
 
 
@@ -94,6 +95,10 @@ def test_a_pin_block_covers_the_run_of_entries_below_it(tmp_path: Path, caplog):
         ("5sKY9vib0WClIKDr0qkaWH", "https://music.youtube.com/watch?v=yxh6HEkWtvI", "", ""),
     ]
     assert "ignoring 'not-a-pin'" in caplog.text
+    assert "ignoring '58DVO497p71nqDTNOm7ZYA https://evil.example" in caplog.text  # yt-dlp fetches YouTube only
+    assert overrides.pin_source("https://youtu.be/njXRPPotTPo?si=x") == "https://www.youtube.com/watch?v=njXRPPotTPo"
+    with pytest.raises(ValueError):
+        overrides.pin_source("https://music.youtube.com/playlist?list=OLAK5uy_l7iC3zWrsZbNvuTSvO")
     assert spotdl_ops.load_pins()["https://open.spotify.com/track/66i52Sbv3xAYXv5IlGbko6"].endswith("aVqJbrkkdYk")
 
 

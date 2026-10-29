@@ -255,7 +255,7 @@ def _parser() -> argparse.ArgumentParser:
     p.add_argument("--label", default="")
     p.add_argument("--reason", default="")
     p.add_argument("track", help="Spotify track ID or open.spotify.com track URL")
-    p.add_argument("url", help="the https source URL (a YouTube link's tracking parameters are dropped)")
+    p.add_argument("url", help="a YouTube or YouTube Music video URL (other sites are refused)")
     p = write("unpin", "remove a track's pin")
     p.add_argument("track")
     p = write("import", "import album-overrides.conf and track-pins.conf (once; entries held already are skipped)")
@@ -338,9 +338,10 @@ def run(args: argparse.Namespace) -> None:
             track = _track(args.track)
             url = None
             if args.command == "pin":
-                if not args.url.startswith("https://"):
-                    raise ov.Refused("the source URL must be https://")
-                url = ov.source_url(args.url)
+                try:
+                    url = ov.pin_source(args.url)
+                except ValueError as exc:
+                    raise ov.Refused(str(exc)) from exc
             pin, title, lines, had = pin_dry_run(conn, track, url, args.label if url else "",
                                                  args.reason if url else "")
             for line in lines:

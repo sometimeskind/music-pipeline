@@ -41,7 +41,7 @@ from pathlib import Path
 
 import psycopg
 
-from music_fetch import events
+from music_fetch import events, ids
 from music_fetch import state as statedb
 
 logger = logging.getLogger(__name__)
@@ -130,14 +130,18 @@ def parse_albums(path: Path) -> list[AlbumOverride]:
 
 
 def parse_pins(path: Path) -> list[Pin]:
-    """track-pins.conf: ``<spotify track id or URL>  <https source url>  [label…]``."""
+    """track-pins.conf: ``<spotify track id or URL>  <youtube url>  [label…]``."""
     out = []
     for words, comment, block in _entries(path):
-        if len(words) < 2 or not words[1].startswith("https://"):
-            logger.warning("[PIN] ignoring %r in %s: want <spotify track id> <https source url>",
+        try:
+            if len(words) < 2:
+                raise ValueError("no URL")
+            url = pin_source(words[1])
+        except ValueError:
+            logger.warning("[PIN] ignoring %r in %s: want <spotify track id> <youtube video url>",
                            " ".join(words), path.name)
             continue
-        out.append(Pin(track_id(words[0]), source_url(words[1]), label=" ".join(words[2:]),
+        out.append(Pin(track_id(words[0]), url, label=" ".join(words[2:]),
                        reason="; ".join(r for r in (block, comment) if r), set_by="track-pins.conf"))
     return out
 
@@ -147,17 +151,16 @@ def track_id(ref: str) -> str:
     return ref.split("?")[0].rstrip("/").rsplit("/", 1)[-1]
 
 
-def source_url(url: str) -> str:
-    """A YouTube share link without its tracking parameters (``si`` and the
-    like): ``https://<host>/watch?v=<id>``, the form spotdl's own search
-    returns.  Any other URL is kept as it is."""
-    from urllib.parse import parse_qs, urlsplit  # noqa: PLC0415
+def pin_source(ref: str) -> str:
+    """The URL a pin downloads from: a YouTube or YouTube Music video, as its
+    canonical watch URL (homelab#2411), on music.youtube.com when *ref* was a
+    YouTube Music link.  Anything else (another site, a playlist) raises
+    ValueError: a pin's URL reaches yt-dlp, which must fetch only YouTube."""
+    from urllib.parse import urlsplit  # noqa: PLC0415
 
-    parts = urlsplit(url)
-    video = parse_qs(parts.query).get("v")
-    if parts.netloc.endswith("youtube.com") and parts.path == "/watch" and video:
-        return f"https://{parts.netloc}/watch?v={video[0]}"
-    return url
+    video = ids.youtube_id(ref)
+    music = (urlsplit(ref.strip()).hostname or "").lower() == "music.youtube.com"
+    return f"https://music.youtube.com/watch?v={video}" if music else ids.YOUTUBE_WATCH_URL + video
 
 
 # ---------------------------------------------------------------------------
