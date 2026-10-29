@@ -70,7 +70,7 @@ One album: ambiguous or not found as above, otherwise:
  "items": [{"id": 10001, "title": "Come Together", "artist": "The Beatles", "track": 1, "path": "The Beatles/Abbey Road/01 - Come Together.m4a", "via": "usenet"}]}
 ```
 
-`key` is the album-store key, which is the Spotify album ID; `record` is the `.albums.json` record as stored; the items are those whose `spotify_album_id` is the key.
+`key` is the album-store key, which is the Spotify album ID; `record` is the album record as the album store holds it (the `music` database once switched, homelab#2410; `.albums.json` before), with `release_group` and `unresolved`; the items are those whose `spotify_album_id` is the key.
 
 ### `GET /mcp-api/items/<id>` (`get_item`)
 
