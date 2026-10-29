@@ -63,9 +63,9 @@ def test_no_match_only_when_every_id_was_looked_up():
 def test_rekey_keeps_order_and_mixed():
     rows = state.AlbumRows(albums={"sp0": _rec("sp0"), "sp1": _rec("sp1"), "sp2": _rec("sp2")}, mixed=["sp1"])
     report = resolve.resolve(rows, {"sp1": _cached(RG)}, {})
-    assert list(rows.albums) == ["sp0", RG, "sp2"]
-    assert rows.albums[RG]["release_group"] == RG and rows.albums[RG]["unresolved"] is None
-    assert rows.mixed == [RG]
+    assert list(rows.albums) == ["sp0", "sp1", "sp2"]  # the key stays the primary Spotify ID
+    assert rows.albums["sp1"]["release_group"] == RG and rows.albums["sp1"]["unresolved"] is None
+    assert rows.mixed == ["sp1"]
     assert len(report.rekeyed) == 1 and len(report.flagged[state.PENDING]) == 2
 
 
@@ -76,9 +76,9 @@ def test_two_editions_merge_into_the_one_further_along():
                 playlists={"later": [["a", "x", "s1", None, 1, 1], ["b", "x", "s2", None, 1, 2]]})
     rows = state.AlbumRows(albums={"sp1": wanted, "sp2": held})
     report = resolve.resolve(rows, {"sp1": _cached(RG), "sp2": _cached(RG, "upc")}, {})
-    assert list(rows.albums) == [RG]
-    merged = rows.albums[RG]
-    assert merged["status"] == "imported"
+    assert list(rows.albums) == ["sp2"]
+    merged = rows.albums["sp2"]
+    assert merged["status"] == "imported" and merged["release_group"] == RG
     assert merged["spotify_album_ids"] == ["sp2", "sp1"]
     assert "origin" not in merged  # the album playlist's origin is the strongest
     assert merged["blocklist"] == ["r2", "r1"]
@@ -91,30 +91,36 @@ def test_two_editions_merge_into_the_one_further_along():
 
 def test_a_newcomer_merges_into_the_row_already_keyed():
     keyed = {**_rec("sp1", status="missing"), "release_group": RG, "unresolved": None}
-    rows = state.AlbumRows(albums={RG: keyed, "sp2": _rec("sp2", status="imported")})
+    rows = state.AlbumRows(albums={"sp1": keyed, "sp2": _rec("sp2", status="imported")})
     report = resolve.resolve(rows, {"sp2": _cached(RG)}, {})
-    assert list(rows.albums) == [RG]
-    assert rows.albums[RG]["spotify_album_ids"] == ["sp1", "sp2"]
-    assert rows.albums[RG]["status"] == "missing"  # the keyed row survives
+    assert list(rows.albums) == ["sp1"]
+    assert rows.albums["sp1"]["spotify_album_ids"] == ["sp1", "sp2"]
+    assert rows.albums["sp1"]["status"] == "missing"  # the keyed row survives
     assert report.rekeyed == []
 
 
 def test_no_merge_mid_import():
     keyed = {**_rec("sp1", status="grabbed"), "release_group": RG, "unresolved": None}
-    rows = state.AlbumRows(albums={RG: keyed, "sp2": _rec("sp2")})
+    rows = state.AlbumRows(albums={"sp1": keyed, "sp2": _rec("sp2")})
     report = resolve.resolve(rows, {"sp2": _cached(RG)}, {})
-    assert set(rows.albums) == {RG, "sp2"}
+    assert set(rows.albums) == {"sp1", "sp2"}
     assert rows.albums["sp2"]["unresolved"] == state.IN_FLIGHT
     assert len(report.flagged[state.IN_FLIGHT]) == 1
     # Once the import is done, a second pass merges them.
     keyed["status"] = "imported"
     resolve.resolve(rows, {"sp2": _cached(RG)}, {})
-    assert list(rows.albums) == [RG]
+    assert list(rows.albums) == ["sp1"]
 
 
 def test_a_lone_album_mid_import_is_still_rekeyed():
     rows = state.AlbumRows(albums={"sp1": _rec("sp1", status="grabbed", import_started="t")})
     resolve.resolve(rows, {"sp1": _cached(RG)}, {})
+    assert rows.albums["sp1"]["release_group"] == RG
+
+
+def test_a_name_only_album_takes_its_release_group_as_key():
+    rows = state.AlbumRows(albums={"a/b": {**_rec(), "names": ["a/b"], **_imported(RG)}})
+    resolve.resolve(rows, {}, {})
     assert list(rows.albums) == [RG]
 
 

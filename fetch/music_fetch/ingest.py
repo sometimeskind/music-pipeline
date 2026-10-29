@@ -29,7 +29,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable, Iterator
 
-from music_fetch import albums, store
+from music_fetch import albums, state, store
 from music_fetch.config import load_playlists
 from music_fetch.metrics import IngestMetrics
 from music_fetch.spotdl_ops import _load_failures, download_fallback, fetch_songs, sync_playlist
@@ -81,6 +81,12 @@ def preflight() -> str | None:
     if not os.environ.get("SPOTIFY_CLIENT_ID") or not os.environ.get("SPOTIFY_CLIENT_SECRET"):
         logger.error("Error: SPOTIFY_CLIENT_ID and SPOTIFY_CLIENT_SECRET must be set")
         return "auth_spotify"
+
+    try:
+        state.check()
+    except state.Unavailable as exc:
+        logger.error("[DB-DOWN] The pipeline's state is in the music database, which is down: %s", exc)
+        return "state_unavailable"
 
     usage = shutil.disk_usage(Path.home() / "Music")
     free_gb = usage.free / 1024**3

@@ -34,7 +34,7 @@ from typing import Any
 import psycopg
 from psycopg.types.json import Jsonb
 
-from music_fetch import db, metrics
+from music_fetch import db, metrics, state
 
 logger = logging.getLogger(__name__)
 
@@ -91,8 +91,9 @@ class _Unavailable(Exception):
 
 def spotify_album(key: Any) -> str | None:
     """*key* when it is a Spotify album ID: an album store key can also be a
-    local files' ``artist/album``, and beets stores a missing ID as ""."""
-    return str(key) if key and "/" not in str(key) else None
+    local files' ``artist/album`` or a release group (homelab#2410), and beets
+    stores a missing ID as ""."""
+    return str(key) if key and state.is_spotify_album(str(key)) else None
 
 
 def item_fields(item) -> dict[str, Any]:

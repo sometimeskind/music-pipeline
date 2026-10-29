@@ -41,6 +41,7 @@ import logging
 import sqlite3
 from collections.abc import Mapping
 from pathlib import Path
+from typing import Any
 
 from music_fetch import state
 
@@ -52,6 +53,8 @@ STATUS_RANK = {"imported": 0, "filled": 0, "have": 0, "fallback": 1, "failed": 2
                "dry-run": 4, "wanted": 5, "grabbed": 6}
 # A record's origin, strongest first; absent means an album playlist's.
 ORIGIN_RANK = {state.ALBUM: 0, "wants": 1, "library": 2}
+# beets' library, read for the library evidence (music_scan.library.LIBRARY_DB).
+LIBRARY_DB = Path("/root/.config/beets/library.db")
 # A grabbed record's import in progress (albums.IMPORT_FIELDS, not imported here: albums imports state).
 _IMPORT_FIELDS = ("import_started", "import_errors", "import_deferrals", "import_path", "import_identity")
 
@@ -172,9 +175,10 @@ def merge_into(survivor: dict, other: Mapping) -> None:
         survivor["origin"] = origin
 
 
-def resolve(rows: state.AlbumRows, cache: Mapping[str, dict], library: Mapping[str, set[str]],
+def resolve(rows: Any, cache: Mapping[str, dict], library: Mapping[str, set[str]],
             overrides: Mapping[str, str] | None = None) -> Report:
-    """Resolve and merge *rows*' unresolved records in place; returns what changed."""
+    """Resolve and merge the unresolved records of *rows* (a :class:`state.AlbumRows`,
+    or album mode's ``State``) in place; returns what changed."""
     overrides = overrides or {}
     report = Report()
     targets: dict[str, list[str]] = {}
@@ -189,10 +193,10 @@ def resolve(rows: state.AlbumRows, cache: Mapping[str, dict], library: Mapping[s
         else:
             record["unresolved"] = verdict.unresolved
             report.flagged.setdefault(verdict.unresolved, []).append(label(key, record))
-    rename: dict[str, str] = {}  # old key → new key
+    keyed = {r["release_group"]: k for k, r in rows.albums.items() if r.get("release_group")}
     absorbed: set[str] = set()
     for group, keys in targets.items():
-        existing = group if group in rows.albums else None  # a row already keyed by it
+        existing = keyed.get(group)  # the row that has the release group already
         members = ([existing] if existing else []) + keys
         if len(members) > 1 and any(in_flight(rows.albums[k]) for k in members):
             for k in keys:
@@ -216,9 +220,10 @@ def resolve(rows: state.AlbumRows, cache: Mapping[str, dict], library: Mapping[s
                                         " the primary Spotify ID's wins")
         if not existing:
             record["release_group"], record["unresolved"] = group, None
-            rename[survivor] = group
             report.rekeyed.append(f"{label(survivor, record)} → {group}")
-    if rename or absorbed:
-        rows.albums = {rename.get(k, k): r for k, r in rows.albums.items() if k not in absorbed}
-        rows.mixed = list(dict.fromkeys(rename.get(k, k) for k in rows.mixed if k not in absorbed))
+    # A merge can change a record's key (a name-only album that gained a release group).
+    rename = {k: state.album_key(r) for k, r in rows.albums.items() if k not in absorbed}
+    if absorbed or any(k != v for k, v in rename.items()):
+        rows.albums = {rename[k]: r for k, r in rows.albums.items() if k not in absorbed}
+        rows.mixed = list(dict.fromkeys(rename[k] for k in rows.mixed if k in rename))
     return report

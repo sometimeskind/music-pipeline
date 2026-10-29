@@ -28,7 +28,7 @@ RG2 = "0b4a7c4e-5d2f-4a51-8b1e-9a3c2d1e0f42"
 
 def _records() -> dict[str, dict]:
     return {
-        RG: {"status": "imported", "release_group": RG, "unresolved": None,
+        "sp1": {"status": "imported", "release_group": RG, "unresolved": None,
              "spotify_album_ids": ["sp1", "sp2"], "names": [], "name": "Album", "artist": "Artist",
              "blocklist": ["r1"], "playlists": {"later": [["t", "a", "s1", "ISRC1", 1, 1]]}},
         "sp3": {"status": "wanted", "release_group": None, "unresolved": "no-match",
@@ -46,10 +46,25 @@ def _strip(rows: state.AlbumRows) -> dict[str, dict]:
 # --- no database ---
 
 
-def test_album_key_prefers_release_group_then_spotify_then_name():
-    assert state.album_key({"release_group": RG, "spotify_album_ids": ["sp"]}) == RG
-    assert state.album_key({"release_group": None, "spotify_album_ids": ["sp", "sq"], "names": ["n"]}) == "sp"
+def test_album_key_prefers_spotify_then_release_group_then_name():
+    assert state.album_key({"release_group": RG, "spotify_album_ids": ["sp", "sq"]}) == "sp"
+    assert state.album_key({"release_group": RG, "spotify_album_ids": [], "names": ["a/b"]}) == RG
     assert state.album_key({"spotify_album_ids": [], "names": ["a/b"]}) == "a/b"
+
+
+def test_is_spotify_album():
+    assert state.is_spotify_album("0ETFjACtuP2ADo6LFhL6HN")
+    assert not state.is_spotify_album(RG)
+    assert not state.is_spotify_album("artist/album")
+    assert not state.is_spotify_album("")
+
+
+def test_json_round_trip_strips_the_database_fields():
+    data = {"playlists": {"p": {"snapshot_id": "s"}}, "albums": {"sp1": {"status": "wanted"}, "a/b": {"status": "have"}},
+            "indexer": [], "mixed": ["sp1"]}
+    rows = state.rows_from_json(data)
+    assert rows.albums["sp1"]["spotify_album_ids"] == ["sp1"] and rows.albums["a/b"]["names"] == ["a/b"]
+    assert state.rows_to_json(rows) == data
     with pytest.raises(ValueError):
         state.album_key({"status": "wanted"})
 
@@ -99,7 +114,7 @@ def test_albums_round_trip(pg_url):
         albums=_records(),
         indexer=[{"t": "2026-10-29T10:00:00+00:00", "kind": "hit"},
                  {"t": "2026-10-29T11:00:00+00:00", "kind": "grab"}],
-        mixed=[RG],
+        mixed=["sp1"],
     )
     with state.connect() as conn:
         assert state.save_albums(conn, rows) == 3
@@ -111,10 +126,10 @@ def test_albums_round_trip(pg_url):
     assert list(loaded.albums) == list(_records())  # insertion order survives
     assert loaded.playlists == rows.playlists
     assert loaded.indexer == rows.indexer
-    assert loaded.mixed == [RG]
+    assert loaded.mixed == ["sp1"]
     assert refs == [("local/files", "name"), ("sp1", "spotify"), ("sp2", "spotify"), ("sp3", "spotify")]
     assert primary == ("sp1",)
-    assert loaded.by_ref() == {"sp1": RG, "sp2": RG, "sp3": "sp3", "local/files": "local/files"}
+    assert loaded.by_ref() == {"sp1": "sp1", "sp2": "sp1", "sp3": "sp3", "local/files": "local/files"}
 
 
 @needs_pg
@@ -130,24 +145,23 @@ def test_save_writes_only_changed_rows_and_leaves_others_alone(pg_url):
         del mine.albums["local/files"]
         assert state.save_albums(conn, mine) == 2
         loaded = state.load_albums(conn)
-    assert set(loaded.albums) == {RG, "sp3", "sp9"}
+    assert set(loaded.albums) == {"sp1", "sp3", "sp9"}
     assert loaded.albums["sp3"]["status"] == "missing"
 
 
 @needs_pg
-def test_resolving_rekeys_in_place_and_clears_the_flag(pg_url):
+def test_resolving_keeps_the_row_and_clears_the_flag(pg_url):
     with state.connect() as conn:
         state.save_albums(conn, state.AlbumRows(albums=_records()))
         rows = state.load_albums(conn)
-        record = rows.albums.pop("sp3")
+        record = rows.albums["sp3"]
         row_id = record["_id"]
         record["release_group"] = RG2  # unresolved left set: the save clears it
-        rows.albums[RG2] = record
         state.save_albums(conn, rows)
         stored = conn.execute("SELECT id, unresolved FROM albums WHERE release_group = %s", (RG2,)).fetchone()
         loaded = state.load_albums(conn)
     assert stored == (row_id, None)
-    assert loaded.albums[RG2]["spotify_album_ids"] == ["sp3"]
+    assert loaded.albums["sp3"]["release_group"] == RG2
 
 
 @needs_pg
@@ -156,11 +170,11 @@ def test_a_merge_moves_a_ref_between_rows(pg_url):
         state.save_albums(conn, state.AlbumRows(albums=_records()))
         rows = state.load_albums(conn)
         gone = rows.albums.pop("sp3")
-        rows.albums[RG]["spotify_album_ids"].extend(gone["spotify_album_ids"])
+        rows.albums["sp1"]["spotify_album_ids"].extend(gone["spotify_album_ids"])
         state.save_albums(conn, rows)
         loaded = state.load_albums(conn)
         count = conn.execute("SELECT count(*) FROM albums").fetchone()
-    assert loaded.albums[RG]["spotify_album_ids"] == ["sp1", "sp2", "sp3"]
+    assert loaded.albums["sp1"]["spotify_album_ids"] == ["sp1", "sp2", "sp3"]
     assert count == (2,)
 
 

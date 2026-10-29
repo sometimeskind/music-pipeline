@@ -346,7 +346,16 @@ def fetch_and_scan_flow() -> None:
 @flow(name="music-scan", log_prints=True)
 def scan_flow() -> None:
     """Scan: import inbox, regenerate playlists."""
+    from music_fetch import state  # noqa: PLC0415
+
     logger = get_run_logger()
+    try:
+        state.check()
+    except state.Unavailable as exc:
+        # The playlist stores and the album records are in the database (homelab#2410):
+        # the inbox waits for the next scan rather than import against no state.
+        logger.warning("[DB-DOWN] Scan skipped — the music database is down: %s", exc)
+        return
     try:
         with concurrency("pipeline", occupy=1, timeout_seconds=SKIP_IF_BUSY_SECONDS):
             _run_scan_tasks()

@@ -7,7 +7,8 @@ stores, backoff entries and kv documents.  A dry run unless ``--apply``.
 
 ``--apply`` holds the ``albums`` and ``pipeline`` locks, reads the files again
 and writes everything in one transaction with the :data:`state.IMPORTED`
-marker, which switches the pipeline to the database.  It refuses a database
+marker, then writes the switch (:data:`state.SWITCH`): from then on the
+pipeline reads and writes the database.  It refuses a database
 that has state already, unless ``--replace`` (which empties the state tables
 first, never the events).  The JSON files are left as they are: the rollback
 is the previous image, which reads them.  Back them up before ``--apply``.
@@ -23,16 +24,17 @@ import contextlib
 import dataclasses
 import json
 import logging
+import os
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from music_fetch import events, resolve, state
+from music_fetch import resolve, state
 
 logger = logging.getLogger(__name__)
 
 SPOTDL_DIR = Path("/root/Music/inbox/spotdl")
-LIBRARY_DB = Path("/root/.config/beets/library.db")
+LIBRARY_DB = resolve.LIBRARY_DB
 # kv document → its dot file in SPOTDL_DIR, and whether the file maps keys to entries.
 KV_FILES = {
     state.MB_RELEASES: (".mb-releases.json", True),
@@ -52,17 +54,6 @@ def _read(path: Path) -> Any:
         return None
 
 
-def to_rows(data: dict) -> state.AlbumRows:
-    """``.albums.json``'s content as unresolved album rows, each keyed by its Spotify album ID (or name) for now."""
-    albums: dict[str, dict] = {}
-    for key, record in (data.get("albums") or {}).items():
-        spotify = events.spotify_album(key)
-        albums[key] = {**record, "release_group": None, "unresolved": state.PENDING,
-                       "spotify_album_ids": [spotify] if spotify else [], "names": [] if spotify else [key]}
-    return state.AlbumRows(playlists=data.get("playlists") or {}, albums=albums,
-                           indexer=data.get("indexer") or [], mixed=list(data.get("mixed") or []))
-
-
 @dataclasses.dataclass
 class Plan:
     rows: state.AlbumRows
@@ -75,7 +66,7 @@ class Plan:
 def plan(spotdl_dir: Path = SPOTDL_DIR, library_db: Path = LIBRARY_DB,
          overrides: dict[str, str] | None = None) -> Plan:
     """Everything the import would write, read from *spotdl_dir*'s dot files."""
-    rows = to_rows(_read(spotdl_dir / ".albums.json") or {})
+    rows = state.rows_from_json(_read(spotdl_dir / ".albums.json") or {})
     kv: dict[str, dict[str, Any]] = {}
     for name, (filename, keyed) in KV_FILES.items():
         value = _read(spotdl_dir / filename)
@@ -86,7 +77,7 @@ def plan(spotdl_dir: Path = SPOTDL_DIR, library_db: Path = LIBRARY_DB,
         data = _read(path) or {}
         stores[data.get("playlist") or path.stem] = data
     failures = _read(spotdl_dir.parent / ".spotdl-failures.json") or {}
-    if library_db.is_file():
+    if os.path.isfile(library_db):  # an unreadable path (CI runs as non-root) reads as absent
         library = resolve.library_groups(library_db)
     else:
         logger.warning("No beets library at %s: no library evidence", library_db)
@@ -166,7 +157,10 @@ def import_main() -> None:
             return
         with state.connect() as conn:
             write(conn, p, replace=args.replace)
-    logger.info("Imported; the pipeline now reads the music database, and the JSON files are the rollback copy")
+        # After the commit: from here on every process reads and writes the database.
+        state.SWITCH.touch()
+    logger.info("Imported; the pipeline now reads the music database (%s), and the JSON files are the rollback copy",
+                state.SWITCH)
 
 
 def resolve_main() -> None:
@@ -183,7 +177,7 @@ def resolve_main() -> None:
         if state.get(conn, state.IMPORTED) is None:
             raise SystemExit("The state is not imported yet: run music-state-import")
         rows = state.load_albums(conn)
-        library = resolve.library_groups(LIBRARY_DB) if LIBRARY_DB.is_file() else {}
+        library = resolve.library_groups(LIBRARY_DB) if os.path.isfile(LIBRARY_DB) else {}
         report = resolve.resolve(rows, state.get_all(conn, state.MB_RELEASES), library, load_overrides())
         report.log(verbose=args.verbose)
         if args.apply:
