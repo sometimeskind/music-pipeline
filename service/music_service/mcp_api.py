@@ -253,6 +253,33 @@ def make_blueprint(jobs: mcp_jobs.JobQueue) -> Blueprint:
         return jsonify({"status": "ok", "since": _z(since), "until": _z(now.isoformat(timespec="seconds")),
                         "history": history, "issues": issues, "requests": requests})
 
+    @bp.get("/overrides")
+    def list_overrides():
+        import psycopg  # noqa: PLC0415
+
+        from music_fetch import overrides  # noqa: PLC0415
+        from music_fetch import state as statedb  # noqa: PLC0415
+        from music_service.mcp_tools import BadRequest  # noqa: PLC0415
+
+        kind = request.args.get("kind") or None
+        if kind not in (None, *overrides.KINDS):
+            raise BadRequest(f"kind must be one of {', '.join(overrides.KINDS)}")
+        offset = _offset()
+        read("list_overrides", kind=kind)
+        try:
+            with statedb.session() as conn:
+                if not overrides.imported(conn):
+                    return jsonify({"status": "unavailable", "error": "the overrides are not imported yet: "
+                                    "album-overrides.conf and track-pins.conf hold them (music-overrides import)"}), 503
+                assert conn is not None
+                found = overrides.listing(conn, statedb.load_albums(conn), kind)
+        except (statedb.Unavailable, psycopg.Error) as exc:
+            logger.warning("[MCP] reading the overrides failed: %s", exc)
+            return jsonify({"status": "unavailable", "error": f"the music database: {exc}"}), 503
+        shown, next_offset = mcp_reads.page(found, offset)
+        return jsonify({"status": "ok", "kind": kind, "total": len(found), "offset": offset,
+                        "next_offset": next_offset, "overrides": shown})
+
     # ------------------------------------------------------------------
     # Jobs
     # ------------------------------------------------------------------

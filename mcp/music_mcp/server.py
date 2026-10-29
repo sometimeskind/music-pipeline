@@ -31,15 +31,19 @@ index routes a symptom to the tools that show and fix it, and says how to verify
 
 IDs. An album key is the Spotify album ID (22 characters, e.g. 0ETFjACtuP2ADo6LFhL6HN), the
 key of the album store; requeue_albums takes these. An album query (find_albums, get_album,
-reset_album) is the key, the exact "artist — album", or a part matching one album; a query
-matching several returns "ambiguous" with the candidates and does nothing. An item ID is a
+reset_album, the override and hold tools) is the key, any of the album's Spotify IDs, its
+release group, the exact "artist — album", or a part matching one album; a query matching
+several returns "ambiguous" with the candidates and does nothing. A track (pin_track,
+unpin_track) is a Spotify track ID or URL. An item ID is a
 beets item (an integer: get_item, merge_items pairs, replace_item, audit_dupes fingerprint_ids);
 get_album also shows beets album IDs, which no tool takes. A playlist entry resolves to an item
 by Spotify track ID (song_id) or ISRC. replace_item takes a YouTube video ID or URL. A tool run
 that outlasts the inline wait returns a job_id: poll get_job.
 
 Tiers. Read tools anyone signed in may use. Write tools (reset_album, requeue_albums,
-merge_items, replace_item, embed_covers, canon_albums) are a dry run unless apply=true, and
+merge_items, replace_item, embed_covers, canon_albums, set_search_override,
+clear_search_override, hold_album, release_album, pin_track, unpin_track) are a dry run unless
+apply=true, and
 apply is accepted only after a dry run with the same arguments in the last 15 minutes whose
 output still matches: show the user the dry run and apply only once they agree. If an apply
 comes back "refused", its output is the new dry run; show it and ask again. trigger_scan and
@@ -68,8 +72,11 @@ Apply = Annotated[
 ]
 Offset = Annotated[int, Field(description="page start, from a previous next_offset", ge=0)]
 AlbumQuery = Annotated[
-    str, Field(description="Spotify album ID, exact 'artist — album', or a part matching one album", min_length=1)
+    str, Field(description="Spotify album ID or URL, release group, exact 'artist — album', or a part matching one album",
+               min_length=1)
 ]
+Reason = Annotated[str, Field(description="why, kept with it and shown by list_overrides", max_length=500)]
+Track = Annotated[str, Field(description="a Spotify track ID or open.spotify.com track URL", min_length=1)]
 
 
 def build_server(
@@ -186,6 +193,20 @@ def build_server(
         when a fix shows. Start with 'index'."""
         return await call("get_guide", lambda c: _async(guide.get(topic)))
 
+    @mcp.tool(annotations={"readOnlyHint": True})
+    async def list_overrides(
+        kind: Annotated[
+            Literal["search", "hold", "pin"] | None,
+            Field(description="search: albums' search words; hold: albums kept out of automatic "
+                              "reimports; pin: tracks' source URLs. Default: all three"),
+        ] = None,
+        offset: Offset = 0,
+    ) -> dict:
+        """The search overrides, holds and track pins, each with its album or track, its reason,
+        and who set it when. A detached one lost its album (it left its playlists): it returns
+        to the album when the album does. Each change is in album_history too."""
+        return await call("list_overrides", lambda c: pipeline.get(c, "/overrides", kind=kind, offset=offset))
+
     # ---- read-tier CLI dry runs ----
 
     @mcp.tool(annotations={"readOnlyHint": True})
@@ -286,6 +307,58 @@ def build_server(
         canonical album identity."""
         body = {"refresh": refresh, "search_budget": search_budget, "mb_budget": mb_budget, "apply": apply}
         return await run("canon_albums", body, write=True)
+
+    # ---- search overrides, holds and pins: dry run, then apply ----
+
+    @mcp.tool(annotations={"destructiveHint": False})
+    async def set_search_override(
+        album: AlbumQuery,
+        words: Annotated[str, Field(description="the Usenet search words; a release title must hold them all, "
+                                                "and edition words steer which edition is picked", min_length=1)],
+        reason: Reason = "",
+        apply: Apply = False,
+    ) -> dict:
+        """Search an album by these words from the next tick on, for a name no normalisation
+        reaches ([NOWORDS]) or to pick an edition. The dry run shows the query before and after,
+        and when the album is searched again."""
+        body = {"album": album, "words": words, "reason": reason, "apply": apply}
+        return await run("set_search_override", body, write=True)
+
+    @mcp.tool(annotations={"destructiveHint": False})
+    async def clear_search_override(album: AlbumQuery, apply: Apply = False) -> dict:
+        """Search an album by its own artist and name again."""
+        return await run("clear_search_override", {"album": album, "apply": apply}, write=True)
+
+    @mcp.tool(annotations={"destructiveHint": False})
+    async def hold_album(album: AlbumQuery, reason: Reason, apply: Apply = False) -> dict:
+        """Keep an album out of the album tick's automatic reimports, e.g. one mixed from
+        several releases on purpose. reset_album still works on it."""
+        return await run("hold_album", {"album": album, "reason": reason, "apply": apply}, write=True)
+
+    @mcp.tool(annotations={"destructiveHint": False})
+    async def release_album(album: AlbumQuery, apply: Apply = False) -> dict:
+        """Release an album's hold: if it is mixed and was never reset automatically, the tick
+        may reset it for a reimport."""
+        return await run("release_album", {"album": album, "apply": apply}, write=True)
+
+    @mcp.tool(annotations={"destructiveHint": False})
+    async def pin_track(
+        track: Track,
+        url: Annotated[str, Field(description="the https source URL, e.g. a music.youtube.com video", min_length=1)],
+        label: Annotated[str, Field(description="a short label, e.g. the track number", max_length=500)] = "",
+        reason: Reason = "",
+        apply: Apply = False,
+    ) -> dict:
+        """Have the nightly download a track from this URL instead of searching for it, for a
+        [MISS] that never resolves. The dry run says whether the library holds the track
+        already (then the pin is skipped: use replace_item to change an item's audio)."""
+        body = {"track": track, "url": url, "label": label, "reason": reason, "apply": apply}
+        return await run("pin_track", body, write=True)
+
+    @mcp.tool(annotations={"destructiveHint": False})
+    async def unpin_track(track: Track, apply: Apply = False) -> dict:
+        """Remove a track's pin."""
+        return await run("unpin_track", {"track": track, "apply": apply}, write=True)
 
     # ---- triggers: no dry run, a no-op if already pending ----
 

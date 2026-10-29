@@ -20,9 +20,10 @@ PILOT = Caller("pilot", "read")
 
 READS = {"library_status", "find_albums", "get_album", "get_item", "list_quarantine", "get_playlist",
          "get_job", "get_guide", "audit_dupes", "audit_lengths", "audit_releases", "audit_want_albums",
-         "album_history", "digest_summary"}
+         "album_history", "digest_summary", "list_overrides"}
 WRITES = {"reset_album", "requeue_albums", "merge_items", "replace_item", "embed_covers", "canon_albums",
-          "trigger_scan", "trigger_album_tick"}
+          "trigger_scan", "trigger_album_tick", "set_search_override", "clear_search_override", "hold_album",
+          "release_album", "pin_track", "unpin_track"}
 # One minimal call per write tool.
 WRITE_CALLS = {
     "reset_album": {"query": "abbey road"},
@@ -33,6 +34,12 @@ WRITE_CALLS = {
     "canon_albums": {},
     "trigger_scan": {},
     "trigger_album_tick": {},
+    "set_search_override": {"album": "ALB1", "words": "four tet"},
+    "clear_search_override": {"album": "ALB1"},
+    "hold_album": {"album": "ALB1", "reason": "curated"},
+    "release_album": {"album": "ALB1"},
+    "pin_track": {"track": "68ozhSrI4eLbnUgih1SlOT", "url": "https://music.youtube.com/watch?v=29Sh3yEaBP8"},
+    "unpin_track": {"track": "68ozhSrI4eLbnUgih1SlOT"},
 }
 # Never exposed (homelab#2412: irreversible, workstation-only).
 IRREVERSIBLE = {"only_copies", "rollback", "force", "allow_manual", "quarantine"}
@@ -70,6 +77,8 @@ async def test_tool_surface_is_the_v1_list_and_nothing_irreversible(pipeline):
     ("digest_summary", {}, "GET", "/mcp-api/digest_summary", {}),
     ("digest_summary", {"since": "2026-10-28T05:00:00Z"}, "GET", "/mcp-api/digest_summary",
      {"since": "2026-10-28T05:00:00Z"}),
+    ("list_overrides", {}, "GET", "/mcp-api/overrides", {"offset": "0"}),
+    ("list_overrides", {"kind": "pin", "offset": 200}, "GET", "/mcp-api/overrides", {"kind": "pin", "offset": "200"}),
 ])
 async def test_reads_route_to_the_contract(pipeline, fake, tool, args, method, path, params):
     async with Client(build_server(pipeline, lambda: PILOT)) as client:
@@ -101,6 +110,18 @@ async def test_reads_route_to_the_contract(pipeline, fake, tool, args, method, p
      {"refresh": True, "search_budget": None, "mb_budget": 5, "apply": False}),
     ("trigger_scan", {}, "/mcp-api/trigger/scan", {}),
     ("trigger_album_tick", {}, "/mcp-api/trigger/album_tick", {}),
+    ("set_search_override", {"album": "ALB1", "words": "four tet"}, "/mcp-api/run/set_search_override",
+     {"album": "ALB1", "words": "four tet", "reason": "", "apply": False}),
+    ("clear_search_override", {"album": "ALB1", "apply": True}, "/mcp-api/run/clear_search_override",
+     {"album": "ALB1", "apply": True}),
+    ("hold_album", {"album": "ALB1", "reason": "curated"}, "/mcp-api/run/hold_album",
+     {"album": "ALB1", "reason": "curated", "apply": False}),
+    ("release_album", {"album": "ALB1"}, "/mcp-api/run/release_album", {"album": "ALB1", "apply": False}),
+    ("pin_track", {"track": "68ozhSrI4eLbnUgih1SlOT", "url": "https://music.youtube.com/watch?v=x", "label": "1"},
+     "/mcp-api/run/pin_track", {"track": "68ozhSrI4eLbnUgih1SlOT", "url": "https://music.youtube.com/watch?v=x",
+                                "label": "1", "reason": "", "apply": False}),
+    ("unpin_track", {"track": "68ozhSrI4eLbnUgih1SlOT"}, "/mcp-api/run/unpin_track",
+     {"track": "68ozhSrI4eLbnUgih1SlOT", "apply": False}),
 ])
 async def test_runs_post_the_contract_body(pipeline, fake, tool, args, path, body):
     async with Client(build_server(pipeline, lambda: TOM)) as client:

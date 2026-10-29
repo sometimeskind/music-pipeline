@@ -156,6 +156,24 @@ What happened since `since` (default: 24 hours ago), and the library issues stan
 - `issues.mixed` is the last album tick's; `only_copies` are the files in `quarantine/replaced/` holding a recording the library doesn't; `path_clashes` the items canon tagged in place (`canon_clash`); `empty_slots` the last scan's (`inbox/spotdl/.empty-slots.json`), playlists with none left out; `rejects` the length guard's files still in `quarantine/rejected/`.
 - `requests` (homelab#2478) are the requests that ended `missing` or `failed`; none exist yet, so both are empty.
 
+## Overrides (any tier, homelab#2484)
+
+### `GET /mcp-api/overrides[?kind=K][&offset=N]` (`list_overrides`)
+
+The search overrides, holds and track pins in the `music` database (`music_fetch.overrides`), oldest first; `kind` is `search`, `hold` or `pin` (default: all three). An override or hold is on an album row: `album` is that row's record, or `null` with `detached: true` when the row is gone (the album left its playlists, or a merge's survivor has one of its own); `refs` are the album IDs, names and release group it re-attaches by.
+
+```json
+{"status": "ok", "kind": null, "total": 3, "offset": 0, "next_offset": null,
+ "overrides": [{"kind": "search", "album": {"key": "6Ox…", "artist": "Four Tet", "name": "…", "status": "missing", "release_group": null},
+                "detached": false, "refs": ["6Ox…"], "words": "wingdings four tet", "reason": "…",
+                "set_by": "album-overrides.conf", "set_at": "2026-10-29T15:00:00Z"},
+               {"kind": "hold", "album": null, "detached": true, "refs": ["3Sp…"], "reason": "…", "set_by": "sub-…", "set_at": "…"},
+               {"kind": "pin", "spotify_track_id": "68oz…", "isrc": "GB…", "track": "Four Tet — …",
+                "url": "https://music.youtube.com/watch?v=…", "label": "track 1", "reason": "…", "set_by": "…", "set_at": "…"}]}
+```
+
+Before `music-overrides import` has run, or with the database down: `503 {"status": "unavailable", "error": "…"}`.
+
 ## Jobs
 
 The CLI tools run as jobs in a **single-slot queue** of depth 5: at most 5 jobs are queued or running at once. A 6th call returns `503 {"status": "busy", "queue": [<job summary>…]}`. Jobs run one at a time, in order, each one a subprocess of the CLI (`argv` below).
@@ -227,12 +245,20 @@ Every write tool's body takes `"apply": false` (the default) or `true`.
 | `replace_item` | `{"id": 10001, "youtube_url": "…"}` | `music-audit-lengths --replace <id> --youtube https://www.youtube.com/watch?v=<video id>` | pipeline |
 | `embed_covers` | `{}` | `music-embed-covers` | pipeline |
 | `canon_albums` | `{"refresh": false, "search_budget": null, "mb_budget": null}` | `music-canon-albums [--refresh] [--search-budget N] [--mb-budget N]` | pipeline |
+| `set_search_override` | `{"album": "…", "words": "…", "reason": ""}` | `music-overrides search [--reason=R] -- <key> <words>` | none |
+| `clear_search_override` | `{"album": "…"}` | `music-overrides clear-search -- <key>` | none |
+| `hold_album` | `{"album": "…", "reason": "…"}` | `music-overrides hold --reason=R -- <key>` | none |
+| `release_album` | `{"album": "…"}` | `music-overrides release -- <key>` | none |
+| `pin_track` | `{"track": "…", "url": "https://…", "label": "", "reason": ""}` | `music-overrides pin [--label=L] [--reason=R] -- <track id> <url>` | none |
+| `unpin_track` | `{"track": "…"}` | `music-overrides unpin -- <track id>` | none |
 
 Free-text values never parse as flags: positional values follow `--`, and the `--replaced` query is passed as `--replaced=QUERY`. The argparse test checks that a dry run's argv never parses with `--apply`, whatever its arguments hold.
 
 Validation (400): `reset_album` needs a non-empty `query`, which must name exactly one album (ambiguous and not found as above, and no job is queued); `requeue_albums` needs `ids`, `since` or both; `merge_items` needs at least one pair of two different positive integer IDs, and an ID one pair drops can't appear in another pair; budgets are non-negative integers.
 
 `replace_item` accepts only a YouTube video ID, or a youtube.com / music.youtube.com / youtu.be URL reduced to one (`music_fetch.ids.youtube_url`, homelab#2411), and passes the canonical watch URL; anything else is a 400. An album query or a requeue ID may be an `open.spotify.com/album` URL, reduced to its ID as the CLIs do (`music_fetch.ids.spotify_key`); a Spotify URL of another kind is a 400.
+
+The override tools (homelab#2484) write rows of their own tables, which the tick and the nightly read at their start, so they take no lock. `album` is an album query as for `reset_album` (resolved to the key; ambiguous and not found as above). `words` are normalised as the tick searches (`usenet.normalise`) and must keep a readable word; `reason` and `label` are whitespace-collapsed, at most 500 characters, and `hold_album` needs a reason. `track` is a Spotify track ID or `open.spotify.com/track` URL, reduced to the ID; `url` must be `https://`, a YouTube link losing its tracking parameters. Each apply records an `override_set` or `override_cleared` event with the caller, in the same transaction as the row. Until `music-overrides import --apply` has run, every write fails (exit 1): the tick still reads the ConfigMap's files.
 
 `merge_items` runs its pairs in order and stops at the first that fails; each pair is its own CLI run, so the pairs before it stay merged. Within a pair, beets commits each store and removal on its own (no transaction spans the merge), so a crash mid-pair can leave the keeper with the loser's IDs and the loser still in the library: rerun the pair.
 

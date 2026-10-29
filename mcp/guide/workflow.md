@@ -5,7 +5,7 @@
 | Tier | Who | Tools |
 |------|-----|-------|
 | Read | anyone signed in to the connector, and Claude Code's static token | the structured reads, the audits, `get_job`, `get_guide` |
-| Recoverable write | the claude.ai connector (a Pocket ID user in the `music` group) | `reset_album`, `requeue_albums`, `merge_items`, `replace_item`, `embed_covers`, `canon_albums`, `trigger_scan`, `trigger_album_tick` |
+| Recoverable write | the claude.ai connector (a Pocket ID user in the `music` group) | `reset_album`, `requeue_albums`, `merge_items`, `replace_item`, `embed_covers`, `canon_albums`, `set_search_override`, `clear_search_override`, `hold_album`, `release_album`, `pin_track`, `unpin_track`, `trigger_scan`, `trigger_album_tick` |
 | Irreversible | not exposed | the workstation commands below |
 
 The tier belongs to the token, not to the client: the static token is read-only, and an OAuth

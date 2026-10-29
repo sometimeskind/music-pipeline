@@ -39,6 +39,16 @@ CASES = {
     "embed_covers": [{}],
     "canon_albums": [{"refresh": False, "search_budget": None, "mb_budget": None},
                      {"refresh": True, "search_budget": 5, "mb_budget": 0}],
+    "set_search_override": [{"album": "0ETFjACtuP2ADo6LFhL6HN", "words": "four tet", "reason": ""},
+                            {"album": "-m-/le baptême", "words": "--apply", "reason": "-x --apply"}],
+    "clear_search_override": [{"album": "--apply"}],
+    "hold_album": [{"album": "0ETFjACtuP2ADo6LFhL6HN", "reason": "--apply curated"}],
+    "release_album": [{"album": "0ETFjACtuP2ADo6LFhL6HN"}],
+    "pin_track": [{"track": "68ozhSrI4eLbnUgih1SlOT", "url": "https://music.youtube.com/watch?v=29Sh3yEaBP8",
+                   "label": "", "reason": ""},
+                  {"track": "68ozhSrI4eLbnUgih1SlOT", "url": "https://music.youtube.com/watch?v=29Sh3yEaBP8",
+                   "label": "-x", "reason": "--apply"}],
+    "unpin_track": [{"track": "68ozhSrI4eLbnUgih1SlOT"}],
 }
 
 
