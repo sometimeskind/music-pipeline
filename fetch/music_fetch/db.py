@@ -1,9 +1,10 @@
 """The pipeline's Postgres database, ``music`` (homelab#2413).
 
 One database for all of the pipeline's own state: the event store
-(:mod:`music_fetch.events`) now, and later the album and playlist stores
-(homelab#2410) and the request and Later tables (homelab#2478).  beets' library
-stays SQLite: beets has no Postgres backend.
+(:mod:`music_fetch.events`), the album and playlist stores and the other former
+JSON dot files (:mod:`music_fetch.state`, homelab#2410), and later the request
+and Later tables (homelab#2478).  beets' library stays SQLite: beets has no
+Postgres backend.
 
 ``MUSIC_DATABASE_URL`` names it (a libpq URL).  Unset, :func:`configured` is
 false and the event store records nothing, which is how tests, ``just fetch``
@@ -124,6 +125,65 @@ MIGRATIONS: list[str] = [
         'grab', 'autoreset', 'fallback', 'failure', 'reject', 'mcp_job',
         'album_requested', 'later_added', 'later_removed', 'spotify_id_resolved',
         'filled', 'wrong_version', 'moved'));
+    """,
+    # 4: the pipeline's own state, moved off the JSON dot files (homelab#2410,
+    # read and written through music_fetch.state).  An album row is keyed by its
+    # MusicBrainz release group; a row whose release group is not known yet has
+    # none, and ``unresolved`` says why (a flag, not a provisional key).
+    # album_refs maps every Spotify album ID (and a local album's
+    # ``artist/name``) to its row: two Spotify editions of one release group are
+    # one row with two refs.
+    """
+    CREATE TABLE albums (
+        id               bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+        release_group    uuid UNIQUE,
+        unresolved       text CONSTRAINT albums_unresolved_check CHECK (unresolved IN (
+                             'pending', 'no-match', 'conflict', 'in-flight')),
+        spotify_album_id text,
+        status           text NOT NULL CONSTRAINT albums_status_check CHECK (status IN (
+                             'wanted', 'dry-run', 'grabbed', 'missing', 'have', 'imported',
+                             'failed', 'fallback', 'filled')),
+        origin           text NOT NULL DEFAULT 'album' CONSTRAINT albums_origin_check CHECK (origin IN (
+                             'album', 'wants', 'library')),
+        mixed            boolean NOT NULL DEFAULT false,
+        data             jsonb NOT NULL DEFAULT '{}'::jsonb,
+        updated_at       timestamptz NOT NULL DEFAULT now(),
+        CONSTRAINT albums_resolved_check CHECK ((release_group IS NULL) = (unresolved IS NOT NULL))
+    );
+    CREATE INDEX albums_status ON albums (status);
+    CREATE INDEX albums_unresolved ON albums (unresolved) WHERE unresolved IS NOT NULL;
+    CREATE TABLE album_refs (
+        ref      text PRIMARY KEY,
+        album_id bigint NOT NULL REFERENCES albums (id) ON DELETE CASCADE,
+        kind     text NOT NULL CONSTRAINT album_refs_kind_check CHECK (kind IN ('spotify', 'name'))
+    );
+    CREATE INDEX album_refs_album ON album_refs (album_id);
+    CREATE TABLE album_playlists (
+        playlist text PRIMARY KEY,
+        data     jsonb NOT NULL DEFAULT '{}'::jsonb
+    );
+    CREATE TABLE indexer_use (
+        at   timestamptz NOT NULL,
+        kind text NOT NULL CONSTRAINT indexer_use_kind_check CHECK (kind IN ('hit', 'grab', 'reimport'))
+    );
+    CREATE INDEX indexer_use_at ON indexer_use (at);
+    CREATE TABLE playlist_stores (
+        playlist   text PRIMARY KEY,
+        source     text NOT NULL DEFAULT '',
+        updated_at timestamptz NOT NULL DEFAULT now(),
+        entries    jsonb NOT NULL
+    );
+    CREATE TABLE spotdl_failures (
+        url   text PRIMARY KEY,
+        entry jsonb NOT NULL
+    );
+    CREATE TABLE kv (
+        name       text NOT NULL,
+        key        text NOT NULL DEFAULT '',
+        value      jsonb NOT NULL,
+        updated_at timestamptz NOT NULL DEFAULT now(),
+        PRIMARY KEY (name, key)
+    );
     """,
 ]
 

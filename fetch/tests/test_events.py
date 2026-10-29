@@ -12,12 +12,16 @@ from __future__ import annotations
 
 import os
 import re
-import uuid
+import sys
+from pathlib import Path
 
 import psycopg
 import pytest
 
 from music_fetch import db, events
+
+sys.path.insert(0, str(Path(__file__).parent))  # importable however pytest imports this file
+from pg_fixture import pg_url  # noqa: E402, F401 — a fixture
 
 TEST_URL = os.environ.get("MUSIC_TEST_DATABASE_URL")
 needs_pg = pytest.mark.skipif(not TEST_URL, reason="MUSIC_TEST_DATABASE_URL is unset")
@@ -34,20 +38,6 @@ def _fresh(monkeypatch):
     events._reset()
     yield pushes
     events._reset()
-
-
-@pytest.fixture
-def pg_url(monkeypatch):
-    """A fresh, empty database on the test server, set as MUSIC_DATABASE_URL."""
-    name = f"music_test_{uuid.uuid4().hex[:12]}"
-    with psycopg.connect(TEST_URL, autocommit=True) as admin:
-        admin.execute(f'CREATE DATABASE "{name}"')
-    url = psycopg.conninfo.make_conninfo(TEST_URL, dbname=name)
-    monkeypatch.setenv(db.ENV, url)
-    yield url
-    events._reset()
-    with psycopg.connect(TEST_URL, autocommit=True) as admin:
-        admin.execute(f'DROP DATABASE "{name}" WITH (FORCE)')
 
 
 def _rows(url, sql="SELECT kind, source, spotify_album_id, release_group::text, item_id, caller, job_id, "
