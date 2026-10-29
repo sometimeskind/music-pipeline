@@ -82,14 +82,21 @@ def dirs(tmp_path: Path, monkeypatch) -> tuple[Path, Path]:
     return inbox, rejected
 
 
-def test_guard_rejects_into_playlist_dir_with_reason(dirs, clip) -> None:
+def test_guard_rejects_into_playlist_dir_with_reason(dirs, clip, monkeypatch) -> None:
+    from music_fetch import events
+
     inbox, rejected = dirs
     _store("wedding", 30)
     clip(inbox / "wedding" / "Artist - Song.m4a", ("tone", 20))
+    recorded = []
+    monkeypatch.setattr(events, "record", lambda kind, message, **kw: recorded.append((kind, message, kw)))
 
     counts = guard_inbox(inbox, rejected, AUDIO_EXTS, mode="on")
 
     assert counts == {"duration": 1, "silence": 0}
+    (kind, message, kw), = recorded
+    assert kind == "reject" and message.startswith("[REJECT] wedding: Artist - Song.m4a — duration: ")
+    assert kw["data"]["playlist"] == "wedding" and kw["data"]["reason"] == "duration"
     assert not (inbox / "wedding" / "Artist - Song.m4a").exists()
     moved = rejected / "wedding" / "Artist - Song.m4a"
     assert moved.exists()

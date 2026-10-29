@@ -68,7 +68,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Callable, Protocol
 
-from music_fetch import store
+from music_fetch import events, store
 from music_fetch.ids import spotify_key
 from music_fetch.metrics import _gauge, _push
 from music_fetch.usenet import Release, clean_album, edition, normalise, rank, readable, words
@@ -477,6 +477,19 @@ def _back(record: dict) -> str:
     return f"; its {sum(len(t) for t in record.get('playlists', {}).values())} wanted track(s) go back to spotdl"
 
 
+def _release_group(record: dict) -> str | None:
+    """The album's MusicBrainz release group, once an import identified its release."""
+    return ((record.get("release_files") or {}).get("mb") or {}).get("mb_releasegroupid")
+
+
+def _event(kind: str, key: str, record: dict, message: str, **data) -> None:
+    """Record an album's event in the event store (homelab#2413); *message* is its log line."""
+    events.record(kind, message, source="albums", spotify_album_id=key if _spotify_album(key) else None,
+                  release_group=_release_group(record),
+                  data={"album": f"{record.get('artist')} — {record.get('name')}", "key": key,
+                        "origin": record.get("origin") or "album", **data})
+
+
 def _track_id(song: dict) -> str:
     return song.get("song_id") or song.get("url") or f"{song.get('name')}/{(song.get('artists') or [''])[0]}"
 
@@ -816,7 +829,7 @@ def top_up(
             ranked = [r for r in ranked if sorted(edition(r.title)) == record["edition"]]
             if not ranked and record.get("best_copy"):
                 best_copy = record["best_copy"]
-                _done(record, label, f": no other copy of {best_copy['title']}'s edition; it is the album, "
+                _done(key, record, label, f": no other copy of {best_copy['title']}'s edition; it is the album, "
                                      f"lacking {best_copy['missing']} track(s) of its own release")
                 continue
         if not ranked and record.get("reimport"):
@@ -867,6 +880,8 @@ def top_up(
         result.grabbed += 1
         slots -= 1
         logger.info("[GRAB] %s%s → %s (%.0f MB)", label, search.note, best.title, best.size / 1e6)
+        _event("grab", key, record, f"[GRAB] {label}{search.note} → {best.title} ({best.size / 1e6:.0f} MB)",
+               release=best.title, size=best.size, guid=best.guid, reimport=bool(record.get("reimport")))
 
 
 # ---------------------------------------------------------------------------
@@ -897,12 +912,18 @@ def auto_reimport(
     (``auto_reimported_at``): if its reimport left it mixed, the operator
     decides (``music-album-audit-releases`` lists it).  One ``[AUTORESET]``
     line per reset."""
+    before = set(state.mixed)
     state.mixed = []
     reasons: dict[str, list[str]] = {}
     for key, record in state.albums.items():
         if why := mixed(key, record):
             state.mixed.append(key)
             reasons[key] = why
+            if key not in before:
+                # An event when an album turns mixed, not at every tick it stays so.
+                _event("mixed", key, record,
+                       f"[MIXED] {record.get('artist')} — {record.get('name')} ({key}): {'; '.join(why)}",
+                       reasons=why)
     if settings.mode != "on" or settings.auto_reimports_per_day <= 0:
         return
     for key in state.mixed:
@@ -923,6 +944,8 @@ def auto_reimport(
         result.reimported += 1
         logger.info("[AUTORESET] %s — %s (%s): %s; reimporting", record.get("artist"), record.get("name"), key,
                     "; ".join(reasons[key]))
+        _event("autoreset", key, record, f"[AUTORESET] {record.get('artist')} — {record.get('name')} ({key}): "
+                                         f"{'; '.join(reasons[key])}; reimporting", reasons=reasons[key])
 
 
 # ---------------------------------------------------------------------------
@@ -951,12 +974,14 @@ def _fallback_tracks(record: dict, missing: Missing) -> dict[str, list[str]]:
     return {playlists[0]: ids} if ids else {}
 
 
-def _queue_fallback(record: dict, missing: Missing, source: str) -> None:
+def _queue_fallback(key: str, record: dict, missing: Missing, source: str) -> None:
     """Leave the album's absent tracks to spotdl; *source* is the status it leaves."""
     record.update(status=FALLBACK, fallback_from=source, fallback_at=_iso(_now()),
                   fallback_tracks=_fallback_tracks(record, missing))
     n = sum(len(ids) for ids in record["fallback_tracks"].values())
     logger.info("[FALLBACK] %s — %s: %d track(s) left to spotdl (%s)", record["artist"], record["name"], n, source)
+    _event("fallback", key, record, f"[FALLBACK] {record['artist']} — {record['name']}: {n} track(s) left to "
+                                    f"spotdl ({source})", tracks=n, left=source)
 
 
 def settle_imported(record: dict) -> bool:
@@ -1009,12 +1034,13 @@ def fallbacks(state: State, missing: Missing, album_songs: AlbumSongs | None = N
                                record["artist"], record["name"], exc)
                 reads = TRACKLISTS_PER_TICK
         if status in (MISSING, FAILED):
-            _queue_fallback(record, missing, status)
+            _queue_fallback(key, record, missing, status)
         known = "album_songs" in record or not _spotify_album(key)
         record["fallback_tracks"] = _fallback_tracks(record, missing)
         if known and not record["fallback_tracks"]:
             record.update(status=FILLED, filled_at=_iso(_now()), fallback_tracks={})
             logger.info("[FILLED] %s — %s", record["artist"], record["name"])
+            _event("filled", key, record, f"[FILLED] {record['artist']} — {record['name']}")
 
 
 def _spotdl_tracks(record: dict) -> dict[str, list[str]]:
@@ -1220,12 +1246,13 @@ def wrong_album(found: int, total: int) -> bool:
     return total >= WRONG_ALBUM_MIN_TRACKS and found * 2 < total
 
 
-def _done(record: dict, label: str, note: str) -> str:
+def _done(key: str, record: dict, label: str, note: str) -> str:
     record["status"] = IMPORTED
     record["imported_at"] = _iso(_now())
     for field in ("best_copy", "edition", "reimport", "gaps", "rejected_tracks"):
         record.pop(field, None)
     logger.info("[DONE] %s%s", label, note)
+    _event("import_done", key, record, f"[DONE] {label}{note}")
     return IMPORTED
 
 
@@ -1367,6 +1394,9 @@ def complete(
         elif wrong_album(found, total):
             reason = f"another album: {found} of the album's {total} titles in it"
             logger.warning("[WRONG] %s: %s is %s", label, job_name, reason)
+            # Not the album's release group: identity is the other album's.
+            _event("import_wrong", key, record, f"[WRONG] {label}: {job_name} is {reason}", release=title,
+                   found=found, total=total, items=len(titles))
         else:
             imported = titles
         if imported is None and titles:
@@ -1396,23 +1426,31 @@ def complete(
                 n = retire(key, record, this, None)
                 tag()
                 retired = f"; {n} item(s) of other copies → quarantine/replaced/" if n else ""
-                return _done(record, label, f": {len(titles)} file(s) from {title}{note}{retired}")
+                return _done(key, record, label, f": {len(titles)} file(s) from {title}{note}{retired}")
             mine = {"guid": guid, "release": this, "title": title, "missing": missing}
             if best and best["missing"] <= missing:
                 retire(key, record, best.get("release", best["guid"]), None)
                 logger.info("[INCOMPLETE] %s: %s lacks %d track(s) of its own release; %s (%d) stays",
                             label, title, missing, best["title"], best["missing"])
+                _event("import_incomplete", key, record,
+                       f"[INCOMPLETE] {label}: {title} lacks {missing} track(s) of its own release; "
+                       f"{best['title']} ({best['missing']}) stays",
+                       release=title, missing=missing, kept=best["title"])
             else:
                 retire(key, record, this, None)
                 tag()
                 record["best_copy"] = best = mine
                 logger.info("[INCOMPLETE] %s: %s lacks %d track(s) of its own release (%s); kept for now",
                             label, title, missing, identity.get("album") or identity.get("mb_albumid"))
+                _event("import_incomplete", key, record,
+                       f"[INCOMPLETE] {label}: {title} lacks {missing} track(s) of its own release "
+                       f"({identity.get('album') or identity.get('mb_albumid')}); kept for now",
+                       release=title, missing=missing, kept=title)
             if guid and guid not in record["blocklist"]:
                 record["blocklist"].append(guid)
             record["attempts"] = record.get("attempts", 0) + 1
             if record["attempts"] >= MAX_ATTEMPTS:
-                return _done(record, label, f": the most complete copy, {best['title']}, lacks {best['missing']} "
+                return _done(key, record, label, f": the most complete copy, {best['title']}, lacks {best['missing']} "
                                             f"track(s) of its own release{note}")
             record["edition"] = sorted(edition(title))
             record["status"] = WANTED
@@ -1422,6 +1460,8 @@ def complete(
         # and ahead of the queue (#344), which may be days long.
         logger.warning("[LOST] %s: completed job dir not found: %r — not blocklisted; searched again at the next "
                        "top-up, ahead of the queue", label, completion.path)
+        _event("import_lost", key, record, f"[LOST] {label}: completed job dir not found: {completion.path!r}",
+               path=completion.path)
         record["status"] = WANTED
         record["lost"] = True
         record.pop("nzo_id", None)
@@ -1439,17 +1479,24 @@ def complete(
     best = record.get("best_copy")
     if record["attempts"] >= MAX_ATTEMPTS and best:
         logger.warning("[FAIL] %s: %s — gave up after %d release(s)", label, reason, record["attempts"])
-        return _done(record, label, f": the most complete copy, {best['title']}, lacks {best['missing']} "
+        _event("failure", key, record, f"[FAIL] {label}: {reason} — gave up after {record['attempts']} release(s)",
+               reason=reason, attempts=record["attempts"], gave_up=True)
+        return _done(key, record, label, f": the most complete copy, {best['title']}, lacks {best['missing']} "
                                     "track(s) of its own release")
     record["status"] = FAILED if record["attempts"] >= MAX_ATTEMPTS else WANTED
     if record["status"] == FAILED:
         logger.warning("[FAIL] %s: %s — gave up after %d release(s)%s", label, reason, record["attempts"],
                        _back(record))
+        _event("failure", key, record,
+               f"[FAIL] {label}: {reason} — gave up after {record['attempts']} release(s){_back(record)}",
+               reason=reason, attempts=record["attempts"], gave_up=True)
     else:
         if job_name:
             for playlist in playlists:
                 shutil.rmtree(quarantine_root / playlist / job_name, ignore_errors=True)
         logger.warning("[FAIL] %s: %s — blocklisted, will try the next release", label, reason)
+        _event("failure", key, record, f"[FAIL] {label}: {reason} — blocklisted, will try the next release",
+               reason=reason, attempts=record["attempts"], gave_up=False)
     return record["status"]
 
 

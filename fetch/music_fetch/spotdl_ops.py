@@ -18,7 +18,7 @@ from pathlib import Path
 from typing import Callable, Mapping
 from urllib.parse import parse_qs, urlsplit
 
-from music_fetch import spotify_limit
+from music_fetch import events, spotify_limit
 from music_fetch.names import SPOTDL_NAME_BYTES, truncate_utf8
 
 logger = logging.getLogger(__name__)
@@ -504,6 +504,10 @@ def _download_batch(
                 days,
                 attempts,
             )
+            events.record("failure", f"[FAIL] {_song_label(song)} → {reason}; backing off {days} days "
+                          f"(attempt {attempts})", source="spotdl", spotify_album_id=song.json.get("album_id"),
+                          data={"track": _song_label(song), "url": song.url, "reason": reason,
+                                "attempts": attempts, "days": days})
 
     if failures_file is not None:
         _save_failures(failures_file, failures)

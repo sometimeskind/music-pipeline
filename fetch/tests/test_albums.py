@@ -1564,3 +1564,103 @@ def test_tick_grabs_even_when_the_mixed_hook_fails(tmp_path: Path) -> None:
         tick([], FakeSpotify("s", []), prowlarr, sab, never_have, Settings(mode="on"),
              state_file=state_file, mixed=broken)
     top.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
+# Events (homelab#2413)
+# ---------------------------------------------------------------------------
+
+RG = "6e0a6c2a-2d38-3d3c-9d38-4f0c2b5b7a11"
+
+
+@pytest.fixture
+def recorded(monkeypatch):
+    """The events albums records: ``(kind, message, kwargs)``."""
+    calls = []
+    monkeypatch.setattr(albums.events, "record", lambda kind, message, **kw: calls.append((kind, message, kw)))
+    return calls
+
+
+def test_grab_records_an_event(recorded) -> None:
+    state = wanted_state()
+    prowlarr, sab = fakes()
+    top_up(state, Settings(mode="on"), prowlarr, sab, never_have, albums.TickResult(), now=lambda: NOW)
+    (kind, message, kw), = recorded
+    assert kind == "grab" and message == "[GRAB] Artist — Album → Artist-Album-WEB-FLAC-2020 (60 MB)"
+    assert kw["source"] == "albums" and kw["spotify_album_id"] == "a0" and kw["release_group"] is None
+    assert kw["data"]["album"] == "Artist — Album" and kw["data"]["guid"] == "r1"
+
+
+def test_import_done_carries_the_release_group_identify_found(roots, recorded) -> None:
+    state = grabbed_state()
+    identity = {"missing": 0, "album": "Album", "mb_albumid": "mb1", "mb": {"mb_releasegroupid": RG}}
+    run_complete(state, albums.Completion("nzo1", True, "album/Artist-Album-FLAC"), roots, identity=identity)
+    (kind, message, kw), = recorded
+    assert kind == "import_done" and message.startswith("[DONE] Artist — Album: 2 file(s) from ")
+    assert kw["release_group"] == RG and kw["spotify_album_id"] == "a0"
+
+
+def test_wrong_release_records_import_wrong_and_a_failure(roots, recorded) -> None:
+    state = grabbed_state(playlists={"later": [[t, "Artist"] for t in ("One", "Two", "Three", "Four")]})
+    state.albums["a0"]["tracks_count"] = 4
+    run_complete(state, albums.Completion("nzo1", True, "album/Artist-Album-FLAC"), roots,
+                 titles=["Else"], identity={"missing": 0, "mb": {"mb_releasegroupid": RG}})
+    kinds = [k for k, _, _ in recorded]
+    assert kinds == ["import_wrong", "failure"]
+    # The other album's release group is not this album's.
+    assert all(kw["release_group"] is None for _, _, kw in recorded)
+    assert recorded[1][2]["data"]["gave_up"] is False
+
+
+def test_incomplete_copy_records_import_incomplete(roots, recorded) -> None:
+    identity = {"missing": 1, "album": "Album", "mb_albumid": "mb1", "mb": {"mb_releasegroupid": RG}}
+    run_complete(grabbed_state(), albums.Completion("nzo1", True, "album/Artist-Album-FLAC"), roots,
+                 identity=identity)
+    (kind, message, kw), = recorded
+    assert kind == "import_incomplete" and "kept for now" in message and kw["release_group"] == RG
+
+
+def test_lost_job_records_import_lost(roots, recorded) -> None:
+    run_complete(grabbed_state(), albums.Completion("nzo1", True, "album/Gone"), roots)
+    assert [k for k, _, _ in recorded] == ["import_lost"]
+
+
+def test_giving_up_records_a_final_failure(roots, recorded) -> None:
+    state = grabbed_state()
+    state.albums["a0"]["attempts"] = albums.MAX_ATTEMPTS - 1
+    run_complete(state, albums.Completion("nzo1", False, "album/Artist-Album-FLAC"), roots, have_result=False)
+    (kind, message, kw), = recorded
+    assert kind == "failure" and "gave up after" in message and kw["data"]["gave_up"] is True
+
+
+def test_fallback_and_filled_record_events(recorded) -> None:
+    state = fallback_state(albums.MISSING, {"later": [["T1", "Artist", "s1"]]})
+    library: set[str] = set()
+    missing = lambda pl, ts: [t for t in ts if t[2] not in library]  # noqa: E731
+    albums.fallbacks(state, missing, lambda key: [album_song(1)])
+    library.add("s1")
+    albums.fallbacks(state, missing, lambda key: [album_song(1)])
+    assert [k for k, _, _ in recorded] == ["fallback", "filled"]
+    assert recorded[0][1] == "[FALLBACK] Artist — Album: 1 track(s) left to spotdl (missing)"
+
+
+def test_mixed_is_recorded_when_an_album_turns_mixed_not_every_tick(recorded) -> None:
+    state = _mixed_state(2)
+    state.mixed = ["K0"]  # mixed at the last tick already
+    albums.auto_reimport(state, Settings(mode="off"), _all_mixed, set(), albums.TickResult(), now=lambda: NOW)
+    assert [(k, kw["spotify_album_id"]) for k, _, kw in recorded] == [("mixed", "K1")]
+
+
+def test_autoreset_records_an_event(recorded) -> None:
+    state = _mixed_state(1)
+    state.mixed = ["K0"]
+    albums.auto_reimport(state, Settings(mode="on"), _all_mixed, set(), albums.TickResult(), now=lambda: NOW)
+    (kind, message, kw), = recorded
+    assert kind == "autoreset"
+    assert message == "[AUTORESET] Artist — Album 0 (K0): 1 spotdl track(s) on the album; reimporting"
+
+
+def test_a_local_files_album_key_is_no_spotify_id(recorded) -> None:
+    albums._event("grab", "Artist/Album", {"artist": "Artist", "name": "Album"}, "m")
+    (_, _, kw), = recorded
+    assert kw["spotify_album_id"] is None and kw["data"]["key"] == "Artist/Album"

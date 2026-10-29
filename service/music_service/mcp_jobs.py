@@ -29,6 +29,8 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Callable, Iterator
 
+from music_fetch import events
+
 logger = logging.getLogger(__name__)
 # The service's root logger may sit at WARNING under Prefect's logging config;
 # the [MCP] lines must reach the pod log (and Loki) all the same.
@@ -168,6 +170,7 @@ class JobQueue:
             job.update(status=INTERRUPTED, finished_at=now(), error="the service restarted")
             logger.info("[MCP] job=%s interrupted by a restart (tool=%s caller=%s)",
                         job["job_id"], job.get("tool"), job.get("caller"))
+            _record_end(job)
         if lost:
             self._save(jobs)
         return jobs
@@ -276,6 +279,7 @@ class JobQueue:
                 job = self.jobs.get(job_id)
                 if job is not None:
                     self._update(job, status=FAILED, finished_at=now(), error=f"{type(exc).__name__}: {exc}")
+                    _record_end(job)
             finally:
                 with self._mu:
                     self._live.pop(job_id, None)
@@ -349,6 +353,16 @@ class JobQueue:
         self._update(job, status=status, exit_code=code, finished_at=now(), seq=seq, **fields)
         logger.info("[MCP] job=%s end status=%s exit=%s tool=%s caller=%s", job["job_id"], status, code,
                     job["tool"], job["caller"])
+        _record_end(job)
+
+
+def _record_end(job: dict) -> None:
+    """The job's ``mcp_job`` event (homelab#2413)."""
+    events.record("mcp_job", f"[MCP] job={job['job_id']} end status={job.get('status')} "
+                             f"exit={job.get('exit_code')} tool={job.get('tool')} caller={job.get('caller')}",
+                  source="mcp", caller=job.get("caller"), job_id=job["job_id"],
+                  data={k: job.get(k) for k in ("tool", "args", "mode", "tier", "status", "exit_code", "error",
+                                                "created_at", "started_at", "finished_at")})
 
 
 def summary(job: dict) -> dict:

@@ -125,6 +125,21 @@ def test_release_group_id(value, expected):
     assert events.release_group_id(value) == expected
 
 
+@pytest.mark.parametrize(("key", "expected"), [
+    ("0ETFjACtuP2ADo6LFhL6HN", "0ETFjACtuP2ADo6LFhL6HN"),
+    ("Artist/Album", None),
+    ("", None),
+    (None, None),
+])
+def test_spotify_album(key, expected):
+    assert events.spotify_album(key) == expected
+
+
+def test_item_fields_decodes_a_bytes_path():
+    item = {"artist": "A", "title": "T", "album": "Al", "path": b"/music/A/Al/01 T.m4a"}
+    assert events.item_fields(item) == {"artist": "A", "title": "T", "album": "Al", "path": "/music/A/Al/01 T.m4a"}
+
+
 def test_every_kind_is_in_a_migration():
     allowed = set(re.findall(r"'([a-z_]+)'", "".join(db.MIGRATIONS)))
     assert set(db.EVENT_KINDS) <= allowed
@@ -201,3 +216,25 @@ def test_prune_keeps_recent_events_and_each_albums_latest(pg_url):
     # A keeps its latest 20 (the recent one and a0..a18); B keeps all 3; the old album-less one goes.
     assert deleted == 7
     assert left == [f"a{i}" for i in range(19)] + ["b0", "b1", "b2", "recent, no album", "a recent"]
+
+
+@needs_pg
+def test_explicit_caller_and_job_win_over_the_environment(pg_url, monkeypatch):
+    monkeypatch.setenv("MUSIC_EVENT_CALLER", "env")
+    assert events.record("mcp_job", "end", source="mcp", caller="pilot", job_id="j1")
+    assert [(c, j) for *_, c, j, _, _ in _rows(pg_url)] == [("pilot", "j1")]
+
+
+@needs_pg
+def test_once_hours_records_a_standing_condition_once(pg_url):
+    for _ in range(3):
+        assert events.record("clash", "[CLASH] a → b", source="canon", item_id=7, release_group=RG,
+                             data={"dest": "b"}, once_hours=24)
+    assert events.record("clash", "[CLASH] c → d", source="canon", once_hours=24)
+    rows = _rows(pg_url)
+    assert [r[7] for r in rows] == ["[CLASH] a → b", "[CLASH] c → d"]
+    assert rows[0][3] == RG and rows[0][4] == 7 and rows[0][8] == {"dest": "b"}
+    with psycopg.connect(pg_url, autocommit=True) as conn:
+        conn.execute("UPDATE events SET at = now() - interval '25 hours'")
+    assert events.record("clash", "[CLASH] a → b", source="canon", once_hours=24)
+    assert len(_rows(pg_url)) == 3

@@ -52,6 +52,16 @@ INSERT INTO events (kind, source, spotify_album_id, release_group, item_id, call
 VALUES (%(kind)s, %(source)s, %(spotify_album_id)s, %(release_group)s, %(item_id)s, %(caller)s, %(job_id)s,
         %(message)s, %(data)s)
 """
+# The same row, unless one of its kind with its message was recorded in the last
+# %(once)s hours: a standing condition each scan sees again (a path clash).
+_INSERT_ONCE = """
+INSERT INTO events (kind, source, spotify_album_id, release_group, item_id, caller, job_id, message, data)
+SELECT %(kind)s::text, %(source)s::text, %(spotify_album_id)s::text, %(release_group)s::uuid, %(item_id)s::integer,
+       %(caller)s::text, %(job_id)s::text, %(message)s::text, %(data)s
+ WHERE NOT EXISTS (SELECT 1 FROM events
+                    WHERE kind = %(kind)s::text AND message = %(message)s::text
+                      AND at > now() - make_interval(hours => %(once)s))
+"""
 
 # An album's key for retention: its release group once known, else its Spotify ID.
 _ALBUM_KEY = "coalesce(release_group::text, spotify_album_id)"
@@ -79,6 +89,21 @@ class _Unavailable(Exception):
     """The database failed within the last RETRY_SECONDS; not tried again yet."""
 
 
+def spotify_album(key: Any) -> str | None:
+    """*key* when it is a Spotify album ID: an album store key can also be a
+    local files' ``artist/album``, and beets stores a missing ID as ""."""
+    return str(key) if key and "/" not in str(key) else None
+
+
+def item_fields(item) -> dict[str, Any]:
+    """A beets item's identity for an event's *data*: what it was, and where."""
+    path = item.get("path")
+    if isinstance(path, bytes):
+        path = os.fsdecode(path)
+    return {"artist": item.get("artist"), "title": item.get("title"), "album": item.get("album"),
+            "path": path}
+
+
 def release_group_id(value: Any) -> str | None:
     """*value* as a release-group MBID, or None (beets stores a missing one as "")."""
     if not value:
@@ -92,12 +117,16 @@ def release_group_id(value: Any) -> str | None:
 
 def record(kind: str, message: str, *, source: str, spotify_album_id: str | None = None,
            release_group: str | None = None, item_id: int | None = None,
-           data: dict[str, Any] | None = None) -> bool:
+           data: dict[str, Any] | None = None, caller: str | None = None, job_id: str | None = None,
+           once_hours: int | None = None) -> bool:
     """Record one event; True when it was written.  Never raises.
 
     *source* is the component that saw it (``albums``, ``scan``, ``canon``,
     ``dupes``, ``mcp``); *message* is the human line, usually the log line's
     text; *data* holds whatever else the event carries (reason, paths, counts).
+    *caller* and *job_id* default to ``MUSIC_EVENT_CALLER``/``MUSIC_EVENT_JOB``.
+    With *once_hours*, an event of the same kind and message recorded in the
+    last *once_hours* hours stands for this one (True, nothing written).
     """
     global failures
     if not db.configured():
@@ -115,14 +144,15 @@ def record(kind: str, message: str, *, source: str, spotify_album_id: str | None
         "spotify_album_id": spotify_album_id or None,
         "release_group": release_group_id(release_group),
         "item_id": item_id,
-        "caller": os.environ.get("MUSIC_EVENT_CALLER") or None,
-        "job_id": os.environ.get("MUSIC_EVENT_JOB") or None,
+        "caller": caller or os.environ.get("MUSIC_EVENT_CALLER") or None,
+        "job_id": job_id or os.environ.get("MUSIC_EVENT_JOB") or None,
         "message": message,
         "data": Jsonb(data or {}),
+        "once": once_hours,
     }
     try:
         with _lock:
-            _connection().execute(_INSERT, row)
+            _connection().execute(_INSERT if once_hours is None else _INSERT_ONCE, row)
         return True
     except Exception as exc:
         failures += 1

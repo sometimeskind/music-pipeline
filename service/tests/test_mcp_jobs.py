@@ -77,6 +77,20 @@ def test_dry_run_records_its_output_and_hash(make, tmp_path):
     assert (tmp_path / ".mcp-jobs" / f"{job['job_id']}.log").exists()
 
 
+def test_a_finished_job_records_an_mcp_job_event(make, monkeypatch):
+    from music_service import mcp_jobs
+
+    recorded = []
+    monkeypatch.setattr(mcp_jobs.events, "record", lambda kind, message, **kw: recorded.append((kind, message, kw)))
+    q, _, _ = make({"music-embed-covers": (["boom"], 1)})
+    job = run(q)
+    (kind, message, kw), = recorded
+    assert kind == "mcp_job" and message == f"[MCP] job={job['job_id']} end status=failed exit=1 " \
+                                            "tool=embed_covers caller=sub-1"
+    assert kw["caller"] == "sub-1" and kw["job_id"] == job["job_id"] and kw["source"] == "mcp"
+    assert kw["data"]["tool"] == "embed_covers" and kw["data"]["status"] == "failed"
+
+
 def test_failed_command_fails_the_job_and_sets_no_hash(make):
     q, _, _ = make({"music-embed-covers": (["boom"], 1)})
     job = run(q)

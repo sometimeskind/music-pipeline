@@ -39,6 +39,7 @@ import urllib.parse
 import urllib.request
 from collections.abc import Callable
 
+from music_fetch import events
 from music_scan.identity import (
     BY_ISRC,
     BY_WORDS,
@@ -256,6 +257,14 @@ def run(apply: bool = False, redownload: int = 0) -> Plan:
                 continue
             unlink_wrong(plan, wrong)
             logger.info("[REDL] %s: %s — downloaded to %s", wrong.playlist, _label(wrong.song), path)
+            item = wrong.item
+            events.record("wrong_version", f"[WRONG] {wrong.playlist}: {_label(wrong.song)} ({_song_id(wrong.song)}, "
+                          f"ISRC {wrong.song.get('isrc')}) is held by {events.item_fields(item)['path']} "
+                          f"(ISRC {item.get('isrc')}); downloaded to {path}", source="backfill",
+                          spotify_album_id=events.spotify_album(wrong.song.get("album_id")), item_id=item.id,
+                          data={**events.item_fields(item), "playlist": wrong.playlist,
+                                "song_id": _song_id(wrong.song), "song_isrc": wrong.song.get("isrc"),
+                                "downloaded": str(path)})
         for item in plan.changed.values():
             item.store()
         logger.info("Wrote %d item(s)", len(plan.changed))

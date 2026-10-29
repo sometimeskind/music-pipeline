@@ -108,6 +108,7 @@ from collections.abc import Callable, Iterable
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+from music_fetch import events
 from music_scan.identity import item_spotify_ids, spotify_id
 from music_scan.mb_release import MB_ALBUM_FIELDS, Resolver, SpotifyAlbum
 
@@ -698,6 +699,16 @@ def _plan_record_item(item, key: str, record: dict, releases: dict[str, Release]
     _plan_fields(item, p, fields, plan, dests, in_place=True)
 
 
+def _clash_event(item, dest: str, message: str, in_place: bool) -> None:
+    """A clash stands until someone fixes it, and every scan sees it again: one
+    event a day per clash (homelab#2413)."""
+    events.record("clash", message, source="canon",
+                  spotify_album_id=events.spotify_album(item.get("album_record") or item.get("spotify_album_id")),
+                  release_group=item.get("mb_releasegroupid"), item_id=item.id,
+                  data={**events.item_fields(item), "path": _path(item), "dest": dest, "in_place": in_place},
+                  once_hours=24)
+
+
 def _plan_fields(item, p: Placement, fields: dict, plan: Plan, dests: dict, in_place: bool = False) -> None:
     """Add the change *fields* make to *item* to *plan*, unless it changes
     nothing.  One that would move onto another file is left out, or with
@@ -730,10 +741,14 @@ def _plan_fields(item, p: Placement, fields: dict, plan: Plan, dests: dict, in_p
             # Moving would overwrite another file: leave this item as it is (a duplicate, #210).
             logger.warning("  [CLASH] %s → %s: another item already has that path; left as it is",
                            _path(item), dest)
+            _clash_event(item, dest, f"[CLASH] {_path(item)} → {dest}: another item already has that path; "
+                                     "left as it is", in_place=False)
             return
         # The release's track stays on its album, where it is; the next scan tries the move again.
         logger.warning("  [CLASH] %s %s → %s: another item already has that path; tagged in place",
                        item.id, _path(item), dest)
+        _clash_event(item, dest, f"[CLASH] {item.id} {_path(item)} → {dest}: another item already has that path; "
+                                 "tagged in place", in_place=True)
         fields[CLASH] = "1"
         diff = {k: (item.get(k), v) for k, v in fields.items() if item.get(k) != v}
         if not diff and not art:

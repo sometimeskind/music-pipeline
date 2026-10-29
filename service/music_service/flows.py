@@ -219,6 +219,23 @@ def purge_replaced_task(metrics: ScanMetrics) -> None:
     metrics.replaced = counts
 
 
+@task(name="prune-events", log_prints=True)
+def prune_events_task() -> None:
+    """Delete events past their retention (homelab#2413).  Best-effort: the
+    nightly never fails on the event store."""
+    logger = get_run_logger()
+    from music_fetch import db, events  # noqa: PLC0415
+    if not db.configured():
+        return
+    try:
+        n = events.prune()
+    except Exception:
+        logger.exception("[EVENT] pruning the event store failed; the next nightly retries it")
+        return
+    logger.info("Event store: pruned %d event(s) past %d days (each album keeps its latest %d)", n,
+                events.KEEP_DAYS, events.KEEP_PER_ALBUM)
+
+
 @task(name="beet-update", log_prints=True)
 def beet_update_task() -> None:
     """Refresh beets library metadata."""
@@ -320,7 +337,10 @@ def fetch_and_scan_flow() -> None:
             preflight_task(metrics)
             reconcile_playlists_task(metrics)
             spotdl_sync_task(metrics)
-        _run_scan_tasks()
+        try:
+            _run_scan_tasks()
+        finally:
+            prune_events_task()
 
 
 @flow(name="music-scan", log_prints=True)

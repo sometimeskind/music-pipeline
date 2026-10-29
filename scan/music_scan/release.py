@@ -99,6 +99,8 @@ import time
 from collections import Counter
 from pathlib import Path
 
+from music_fetch import events
+
 logger = logging.getLogger(__name__)
 
 # A best match further than this (beets' medium recommendation) identifies nothing.
@@ -267,6 +269,18 @@ def _origin(item) -> str:
     return "spotdl" if item.get("via") == "spotdl" else "legacy"
 
 
+def _release_group(items) -> str | None:
+    """The release group most of *items* (an album's kept release) are tagged with."""
+    groups = Counter(i.get("mb_releasegroupid") for i in items if i.get("mb_releasegroupid"))
+    return groups.most_common(1)[0][0] if groups else None
+
+
+def _event(kind: str, item, key: str | None, release_group: str | None, message: str, **data) -> None:
+    """Record an item's event in the event store (homelab#2413); *message* is its log line."""
+    events.record(kind, message, source="release", spotify_album_id=events.spotify_album(key),
+                  release_group=release_group, item_id=item.id, data={**events.item_fields(item), **data})
+
+
 def retire(lib, key: str, record: dict, keep: str | None, drop: str | None, listed) -> int:
     """Quarantine the :func:`copies` whose recording release *keep* holds to
     ``quarantine/replaced/``, and keep the others on the album as local-only
@@ -278,12 +292,18 @@ def retire(lib, key: str, record: dict, keep: str | None, drop: str | None, list
     items = list(lib.all_items())
     others = copies(items, key, record, keep, drop, listed)
     gone, extras = (others, []) if drop is not None else superseded(items, key, keep, others)
+    group = _release_group(i for i in items if i.get("album_record") == key and i.get("release") == keep)
     for item in gone:
         logger.info("  [RETIRE] %s %s — %s [%s] (%s)", item.id, item.get("artist"), item.get("title"),
                     item.get("album"), _origin(item))
+        _event("retire", item, key, group, f"[RETIRE] {item.id} {item.get('artist')} — {item.get('title')} "
+                                           f"[{item.get('album')}] ({_origin(item)})", origin=_origin(item))
     for item in extras:
         logger.info("  [LOCAL] %s %s — %s [%s] (%s): the kept release lacks its recording; stays on the album",
                     item.id, item.get("artist"), item.get("title"), item.get("album"), _origin(item))
+        _event("local", item, key, group, f"[LOCAL] {item.id} {item.get('artist')} — {item.get('title')} "
+                                          f"[{item.get('album')}] ({_origin(item)}): the kept release lacks its "
+                                          "recording; stays on the album", origin=_origin(item))
         if item.get("album_record") != key or not item.get(EXTRA):
             item["album_record"] = key
             item[EXTRA] = "1"
@@ -340,6 +360,9 @@ def retire_held(lib, decoder=None) -> int:
     for item in gone:
         logger.info("  [RETIRE] %s %s — %s [%s] (extra, now held)", item.id, item.get("artist"), item.get("title"),
                     item.get("album"))
+        key = item.get("album_record")
+        _event("retire", item, key, _release_group(kept[key]), f"[RETIRE] {item.id} {item.get('artist')} — "
+               f"{item.get('title')} [{item.get('album')}] (extra, now held)", origin="extra, now held")
     quarantine(gone)
 
     gone_ids = {i.id for i in gone}
@@ -369,7 +392,7 @@ def retire_held(lib, decoder=None) -> int:
                 logger.info("  [RETIRE] %s %s — %s [%s] (extra, same audio): merged into %s: %s", item.id,
                             item.get("artist"), item.get("title"), item.get("album"), keeper.id, evidence)
             keeper[WAIT] = "1"  # the next canon files it on the path the extra held
-            dupes.merge(keeper, losers)
+            dupes.merge(keeper, losers, why="extra, same audio")
             merged += len(losers)
             merged_ids.update(i.id for i in losers)
     _flag_twins([i for i in items if i.id not in gone_ids | merged_ids])
