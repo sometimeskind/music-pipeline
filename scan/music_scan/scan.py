@@ -7,7 +7,6 @@ No Spotify or YouTube calls.
 
 from __future__ import annotations
 
-import json
 import logging
 import os
 import shutil
@@ -18,7 +17,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable, Iterator
 
-from music_fetch import albums, store
+from music_fetch import albums, state, store
 from music_scan import playlists
 from music_scan.guard import guard_inbox
 from music_scan.held import album_held, held_urls
@@ -304,7 +303,7 @@ def _local_tail(name: str, paths: list[Path], library: ItemIndex) -> list[Path]:
     dropped = [e for e in playlist.entries if resolved(e)]
     if dropped:
         playlist.entries = [e for e in playlist.entries if not resolved(e)]
-        playlist.save(store.path(name))
+        store.save(playlist)
     logger.info("  [STORE-TAIL] %s: %d local entr%s, %d resolved", name, len(playlist.locals),
                 "y" if len(playlist.locals) == 1 else "ies", len(dropped))
     out: list[Path] = []
@@ -422,10 +421,8 @@ def _save_empty_slots(empty: dict[str, int], missing: dict[str, list[str]]) -> N
                             for name, n in sorted(empty.items())}}
     path = SPOTDL_DIR / EMPTY_SLOTS_NAME
     try:
-        tmp = path.with_suffix(".tmp")
-        tmp.write_text(json.dumps(report, ensure_ascii=False), encoding="utf-8")
-        tmp.replace(path)
-    except OSError as exc:
+        state.save_doc(state.EMPTY_SLOTS, path, report)
+    except (OSError, state.Unavailable) as exc:
         logger.warning("Could not save the empty slots to %s: %s", path, exc)
 
 

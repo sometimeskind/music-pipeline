@@ -436,7 +436,7 @@ def _save_store(name: str, songs: list[dict], previous: store.Store | None) -> N
     is recorded, so the next tick re-reads the playlist."""
     playlist = store.Store.from_songs(name, songs, keep=previous)
     playlist.source = store.SPOTIFY
-    playlist.save(store.path(name))
+    store.save(playlist)
 
 
 # wants(playlist): every album of *playlist*'s want list (music_scan.want_albums),

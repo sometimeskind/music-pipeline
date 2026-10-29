@@ -17,6 +17,11 @@ unlinked.  The beets ``sources`` field records where an item came from and is
 never read as membership.
 
 ``.spotdl`` files, the unlink queue and ``reconcile`` were retired in stage c.
+
+Once the state is in the music database (homelab#2410, :func:`state.in_db`),
+the stores are rows of ``playlist_stores`` and the files in :data:`STORE_DIR`
+are left as the rollback copy; :func:`load`, :func:`names`, :func:`remove`,
+:func:`songs_by_playlist` and :func:`save` go to whichever holds the state.
 """
 
 from __future__ import annotations
@@ -27,6 +32,8 @@ import logging
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable
+
+from music_fetch import state
 
 logger = logging.getLogger(__name__)
 
@@ -49,21 +56,44 @@ def path(name: str) -> Path:
 
 def load(name: str) -> "Store | None":
     """Playlist *name*'s store, or None."""
-    return Store.load(path(name))
+    with state.session() as conn:
+        if conn is None:
+            return Store.load(path(name))
+        data = state.load_store(conn, name)
+    return None if data is None else Store.from_data(data, name)
 
 
 def names() -> list[str]:
     """The playlists that have a store, sorted."""
-    return sorted(p.stem for p in STORE_DIR.glob("*.json"))
+    with state.session() as conn:
+        if conn is None:
+            return sorted(p.stem for p in STORE_DIR.glob("*.json"))
+        return state.store_names(conn)
 
 
 def remove(name: str) -> None:
     """Delete playlist *name*'s store: the playlist left ``playlists.conf``."""
-    path(name).unlink(missing_ok=True)
+    with state.session() as conn:
+        if conn is None:
+            path(name).unlink(missing_ok=True)
+        else:
+            state.remove_store(conn, name)
+
+
+def save(playlist: "Store") -> None:
+    """Write *playlist*'s store."""
+    with state.session() as conn:
+        if conn is None:
+            playlist.save(path(playlist.name))
+        else:
+            playlist.updated = state.save_store(conn, playlist.name, playlist.entries, playlist.source)
 
 
 def songs_by_playlist() -> dict[str, list[dict]]:
     """Every store's Spotify song records, by playlist."""
+    with state.session() as conn:
+        if conn is not None:
+            return {name: Store.from_data(data, name).songs for name, data in state.load_stores(conn).items()}
     out: dict[str, list[dict]] = {}
     for name in names():
         playlist = load(name)
@@ -120,7 +150,12 @@ class Store:
         except Exception:
             logger.warning("Could not read the playlist store %s", path, exc_info=True)
             return None
-        return cls(data.get("playlist") or path.stem, data.get("entries") or [], data.get("updated") or "",
+        return cls.from_data(data, path.stem)
+
+    @classmethod
+    def from_data(cls, data: dict, name: str) -> "Store":
+        """A store from its file's (or row's) fields."""
+        return cls(data.get("playlist") or name, data.get("entries") or [], data.get("updated") or "",
                    data.get("source") or "")
 
     def save(self, path: Path) -> None:

@@ -8,7 +8,6 @@ the database is down: only its ``history`` section then holds an error.
 
 from __future__ import annotations
 
-import json
 import logging
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -176,12 +175,15 @@ def path_clashes(lib: mcp_reads.Library) -> dict:
 
 def empty_slots(path: Path) -> dict:
     """The last scan's empty playlist slots (``scan.EMPTY_SLOTS_NAME``), playlists with none left out."""
+    from music_fetch import state  # noqa: PLC0415
+
     try:
-        report = json.loads(path.read_text(encoding="utf-8"))
-    except FileNotFoundError:
+        report = state.load_doc(state.EMPTY_SLOTS, path)
+    except state.Unavailable:
+        logger.warning("Could not read the empty slots", exc_info=True)
+        return {"error": "the music database is unavailable"}
+    if report is None:
         return {"at": None, "playlists": {}}
-    except (OSError, ValueError) as exc:
-        return {"error": f"{path.name} is unreadable: {exc}"}
     return {"at": report.get("at"),
             "playlists": {n: p for n, p in (report.get("playlists") or {}).items() if p.get("total")}}
 

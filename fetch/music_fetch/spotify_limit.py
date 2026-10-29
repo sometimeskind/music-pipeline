@@ -25,6 +25,7 @@ from pathlib import Path
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
+from music_fetch import state
 from music_fetch.metrics import _gauge, _push
 
 logger = logging.getLogger(__name__)
@@ -49,10 +50,20 @@ class SpotifyRateLimited(RuntimeError):
 
 
 def _load(state_file: Path) -> tuple[datetime, int] | None:
+    """The recorded limit: the music database's once the state is there (homelab#2410), else *state_file*'s."""
     try:
-        data = json.loads(state_file.read_text(encoding="utf-8"))
+        with state.session() as conn:
+            if conn is not None:
+                data = state.get(conn, state.SPOTIFY_LIMIT)
+                if data is None:
+                    return None
+            else:
+                data = json.loads(state_file.read_text(encoding="utf-8"))
         return datetime.fromisoformat(data["until"]), int(data["retry_after"])
     except FileNotFoundError:
+        return None
+    except state.Unavailable as exc:
+        logger.warning("Could not read the recorded Spotify rate limit: %s", exc)
         return None
     except (ValueError, KeyError, TypeError):
         logger.warning("Ignoring unreadable Spotify rate-limit state %s", state_file)
@@ -72,11 +83,14 @@ def trip(retry_after: float) -> SpotifyRateLimited:
     seconds = int(retry_after)
     until = (datetime.now(timezone.utc) + timedelta(seconds=seconds)).replace(microsecond=0)
     _limit = (until, seconds)
+    record = {"until": until.isoformat(), "retry_after": seconds}
     try:
-        state_file.write_text(
-            json.dumps({"until": until.isoformat(), "retry_after": seconds}), encoding="utf-8"
-        )
-    except OSError as exc:
+        with state.session() as conn:
+            if conn is not None:
+                state.put(conn, state.SPOTIFY_LIMIT, record)
+            else:
+                state_file.write_text(json.dumps(record), encoding="utf-8")
+    except (OSError, state.Unavailable) as exc:
         logger.warning("Could not record the Spotify rate limit in %s: %s", state_file, exc)
     _push(_gauge("music_spotify_rate_limited_until_seconds", int(until.timestamp())), "music_spotify")
     exc = SpotifyRateLimited(until, seconds)

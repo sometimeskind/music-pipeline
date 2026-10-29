@@ -32,6 +32,7 @@ from collections.abc import Callable, Iterable
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+from music_fetch import state
 from music_scan.backfill import MB_INTERVAL, MB_USER_AGENT
 
 logger = logging.getLogger(__name__)
@@ -221,24 +222,15 @@ class Resolver:
         self.budget = budget
         self.mb = mb or MusicBrainz()
         self.upc_of = upc_of
-        self.cache: dict[str, dict] = {}
         self.looked_up = 0
         self.rungs: dict[str, int] = {}
-        if cache_file is not None:
-            try:
-                self.cache = json.loads(cache_file.read_text(encoding="utf-8"))
-            except FileNotFoundError:
-                pass
-            except (OSError, ValueError):
-                logger.warning("Ignoring unreadable MusicBrainz release cache %s", cache_file)
+        # The music database's mb-releases document once the state is there (homelab#2410).
+        self._store = None if cache_file is None else state.KeyedCache(state.MB_RELEASES, cache_file)
+        self.cache: dict[str, dict] = {} if self._store is None else self._store.load()
 
     def save(self) -> None:
-        if self.cache_file is None:
-            return
-        try:
-            self.cache_file.write_text(json.dumps(self.cache, indent=1, sort_keys=True), encoding="utf-8")
-        except OSError as exc:
-            logger.warning("Could not save the MusicBrainz release cache %s: %s", self.cache_file, exc)
+        if self._store is not None:
+            self._store.save(self.cache)
 
     def _due(self, entry: dict | None, album: SpotifyAlbum) -> bool:
         if entry is None:
