@@ -24,6 +24,7 @@ import contextlib
 import dataclasses
 import json
 import logging
+import os
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -76,7 +77,7 @@ def plan(spotdl_dir: Path = SPOTDL_DIR, library_db: Path = LIBRARY_DB,
         data = _read(path) or {}
         stores[data.get("playlist") or path.stem] = data
     failures = _read(spotdl_dir.parent / ".spotdl-failures.json") or {}
-    if library_db.is_file():
+    if os.path.isfile(library_db):  # an unreadable path (CI runs as non-root) reads as absent
         library = resolve.library_groups(library_db)
     else:
         logger.warning("No beets library at %s: no library evidence", library_db)
@@ -176,7 +177,7 @@ def resolve_main() -> None:
         if state.get(conn, state.IMPORTED) is None:
             raise SystemExit("The state is not imported yet: run music-state-import")
         rows = state.load_albums(conn)
-        library = resolve.library_groups(LIBRARY_DB) if LIBRARY_DB.is_file() else {}
+        library = resolve.library_groups(LIBRARY_DB) if os.path.isfile(LIBRARY_DB) else {}
         report = resolve.resolve(rows, state.get_all(conn, state.MB_RELEASES), library, load_overrides())
         report.log(verbose=args.verbose)
         if args.apply:

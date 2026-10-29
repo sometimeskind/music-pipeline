@@ -1177,7 +1177,7 @@ def resolve_keys(state: State, overrides_file: Path | None = None,
     try:
         with statedb.session() as conn:
             cache = statedb.get_all(conn, statedb.MB_RELEASES) if conn is not None else {}
-        library = resolve.library_groups(library_db) if library_db.is_file() else {}
+        library = resolve.library_groups(library_db) if os.path.isfile(library_db) else {}
         report = resolve.resolve(state, cache, library, load_overrides(overrides_file))
     except Exception:
         logger.exception("Resolving the album keys failed; the next tick tries again")
