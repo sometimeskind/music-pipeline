@@ -131,6 +131,34 @@ def test_cleanup_lists_but_keeps_items_no_album_claims() -> None:
     assert failed_release_items([stray], records) == ([], [], [stray])
 
 
+def test_claimants_agree_with_claims_record_by_record() -> None:
+    """homelab#2491: the indexed lookup the scan's canon step uses finds exactly
+    the records :func:`_claims` does, edition suffixes, featured artists, a
+    shared album word and a record with no album name included."""
+    from music_scan.rollback import _claims, claimants
+
+    records = {
+        "light": record("imported"),
+        "light-live": record("imported", name="Remain in Light (Live)"),
+        "fear": record("imported", name="Fear of Music"),
+        "care": record("fallback", name="Take Care (Deluxe)", artist="Drake"),
+        "nameless": record("wanted", name="", artist="Talking Heads"),
+        "light-other": record("wanted", name="Light", artist="Someone Else"),
+    }
+    items = [
+        item(1, "Once", album="Remain in Light (Expanded)"),
+        item(2, "Life", album="Fear of Music"),
+        item(3, "HYFR", artist="Drake feat. Lil Wayne", album="Take Care", albumartist="Drake"),
+        item(4, "Live", album="Remain in Light (Live)"),
+        item(5, "Stray", artist="CFCF", album="Something Else"),
+        item(6, "Empty", album=""),
+    ]
+    claiming = claimants(records)
+    for i in items:
+        assert sorted(claiming(i)) == sorted(k for k, r in records.items() if _claims(r, i)), i.title
+    assert sorted(claiming(items[3])) == ["light", "light-live"]
+
+
 # --- linking instead of quarantining (#240) -----------------------------------
 
 
