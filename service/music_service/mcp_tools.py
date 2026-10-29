@@ -10,6 +10,7 @@ test runs every one of them through its CLI's parser.
 from __future__ import annotations
 
 import dataclasses
+import re
 from datetime import datetime, timezone
 from typing import Callable
 
@@ -244,6 +245,99 @@ def _replace_item(body: dict, _: Albums) -> dict:
     return {"id": item, "youtube_url": youtube_url(body.get("youtube_url"))}
 
 
+# ---- search overrides, holds and pins (homelab#2484): music-overrides ----
+
+MAX_TEXT = 500
+
+
+def _text(body: dict, name: str, required: bool = False) -> str:
+    value = body.get(name, "")
+    if value is None:
+        value = ""
+    if not isinstance(value, str):
+        raise BadRequest(f"{name} must be a string")
+    value = " ".join(value.split())
+    if required and not value:
+        raise BadRequest(f"{name} must be a non-empty string")
+    if len(value) > MAX_TEXT:
+        raise BadRequest(f"{name} is over {MAX_TEXT} characters")
+    return value
+
+
+def search_words(value) -> str:
+    """The search words as the tick searches them (``usenet.normalise``)."""
+    from music_fetch.usenet import normalise  # noqa: PLC0415
+
+    if not isinstance(value, str) or not (words := normalise(value)):
+        raise BadRequest("words must hold readable search words")
+    return words
+
+
+def track_ref(value) -> str:
+    """A Spotify track ID, from an ID or an ``open.spotify.com/track`` URL."""
+    from music_fetch.ids import spotify_key  # noqa: PLC0415
+
+    if not isinstance(value, str) or not value.strip():
+        raise BadRequest("track must be a Spotify track ID or URL")
+    try:
+        track = spotify_key(value.strip(), "track")
+    except ValueError as exc:
+        raise BadRequest(str(exc)) from exc
+    if not re.fullmatch(r"[0-9A-Za-z]{22}", track):
+        raise BadRequest(f"{value!r} is not a Spotify track ID or URL")
+    return track
+
+
+def pin_url(value) -> str:
+    """A YouTube or YouTube Music video's canonical URL (``overrides.pin_source``): nothing else reaches yt-dlp."""
+    from music_fetch.overrides import pin_source  # noqa: PLC0415
+
+    if not isinstance(value, str) or not value.strip():
+        raise BadRequest("url must be a YouTube or YouTube Music video URL")
+    try:
+        return pin_source(value)
+    except ValueError as exc:
+        raise BadRequest(str(exc)) from exc
+
+
+def _set_search(body: dict, albums: Albums) -> dict:
+    _only(body, "album", "words", "reason")
+    return {"album": resolve_album(body.get("album"), albums), "words": search_words(body.get("words")),
+            "reason": _text(body, "reason")}
+
+
+def _album_only(body: dict, albums: Albums) -> dict:
+    _only(body, "album")
+    return {"album": resolve_album(body.get("album"), albums)}
+
+
+def _hold(body: dict, albums: Albums) -> dict:
+    _only(body, "album", "reason")
+    return {"album": resolve_album(body.get("album"), albums), "reason": _text(body, "reason", required=True)}
+
+
+def _pin(body: dict, _: Albums) -> dict:
+    _only(body, "track", "url", "label", "reason")
+    return {"track": track_ref(body.get("track")), "url": pin_url(body.get("url")), "label": _text(body, "label"),
+            "reason": _text(body, "reason")}
+
+
+def _track_only(body: dict, _: Albums) -> dict:
+    _only(body, "track")
+    return {"track": track_ref(body.get("track"))}
+
+
+def _overrides(command: str, *flags: str) -> Callable[[dict, bool], list[list[str]]]:
+    """``music-overrides <command>`` with *flags* (``--name=value`` from the args), then the positional args."""
+    positional = {"search": ("album", "words"), "clear-search": ("album",), "hold": ("album",),
+                  "release": ("album",), "pin": ("track", "url"), "unpin": ("track",)}[command]
+
+    def argv(args: dict, apply: bool) -> list[list[str]]:
+        options = [f"--{flag}={args[flag]}" for flag in flags if args.get(flag)]
+        return [_apply(["music-overrides", command, *options], apply, *(args[p] for p in positional))]
+    return argv
+
+
 def _canon_albums(body: dict, _: Albums) -> dict:
     _only(body, "refresh", "search_budget", "mb_budget")
     return {"refresh": _bool(body, "refresh"), "search_budget": _budget(body, "search_budget"),
@@ -281,4 +375,11 @@ TOOLS: dict[str, Tool] = {t.name: t for t in [
          ("pipeline",)),
     Tool("embed_covers", WRITE, _none, lambda a, apply: [_apply(["music-embed-covers"], apply)], ("pipeline",)),
     Tool("canon_albums", WRITE, _canon_albums, _canon_argv, ("pipeline",)),
+    # Rows of their own tables, which the tick reads at its start: no lock.
+    Tool("set_search_override", WRITE, _set_search, _overrides("search", "reason")),
+    Tool("clear_search_override", WRITE, _album_only, _overrides("clear-search")),
+    Tool("hold_album", WRITE, _hold, _overrides("hold", "reason")),
+    Tool("release_album", WRITE, _album_only, _overrides("release")),
+    Tool("pin_track", WRITE, _pin, _overrides("pin", "label", "reason")),
+    Tool("unpin_track", WRITE, _track_only, _overrides("unpin")),
 ]}

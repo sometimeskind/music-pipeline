@@ -13,6 +13,11 @@ Say what should change and when, and offer to check then.
 - **A write's own effect** shows in its job output at once: `merge_items` (`[MERGE] keep …`),
   `replace_item`, `embed_covers`. Check the item afterwards with `get_item`, or the album with
   `get_album`.
+- **Overrides, holds and pins** apply from the next run that reads them: a search override at
+  the next tick (`get_album`'s `query` changes once it searches; a `missing` album is searched
+  again at once), a hold from the next tick's reimport pass, a pin at the next nightly
+  (`[PIN] … → downloading from …`, then the item in `get_playlist`). `list_overrides` shows the
+  row at once, and `album_history` the event.
 - **Playlists** catch up with Spotify at the next nightly (album playlists: the next tick after
   a Spotify edit). `get_playlist` shows an entry's `item_id` once an item holds it.
 - **Metrics** move on the next push: `music_albums*` each tick, `music_scan_*` each scan.

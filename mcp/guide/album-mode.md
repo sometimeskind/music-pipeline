@@ -55,8 +55,8 @@ Search the album's name in the log. The import logs `[RELEASE]`/`[NOMB]`, then o
 
 - **Start one album over** from a single release: `reset_album` with `reimport=true`. The next
   tick grabs it, and old copies are retired on import.
-- **Keep a hand-curated album out** of automatic reimports: a `hold <spotify album id>` line in
-  `album-overrides.conf`, through a homelab PR. Not an MCP tool.
+- **Keep a hand-curated album out** of automatic reimports: `hold_album` with the reason
+  (`release_album` undoes it). `reset_album` still works on a held album.
 - **Old copies:** `audit_releases` with `replaced_query='<artist — album>'` lists the album's
   files in `quarantine/replaced/` as `[REPLACED]` (the library holds the recording) or
   `[ONLYCOPY]`. Superseded copies are purged automatically after 14 days. Only copies never
@@ -85,4 +85,7 @@ Search the album's name in the log. The import logs `[RELEASE]`/`[NOMB]`, then o
 `get_album`: a `wanted` album with no attempts hasn't been searched yet. The tick searches a
 few per run, and `audit_want_albums` shows what is still wanted, grouped by album. A
 `fallback` album went to spotdl after its releases failed. A name of glyphs only
-(`[NOWORDS]`) needs a search override line (a homelab PR).
+(`[NOWORDS]`), or one whose `[MISS]` queries the indexer can't match, needs
+`set_search_override`: words a release title holds, which also steer the edition picked. Its
+dry run shows the query before and after, and when the album is searched again (a `missing`
+album at the next tick).

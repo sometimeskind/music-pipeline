@@ -213,6 +213,45 @@ async def test_the_other_write_tools_dry_run(pipeline_url):
             await c.call_tool("replace_item", {"id": 1, "youtube_url": "https://evil.example/watch?v=dQw4w9WgXcQ"})
 
 
+async def test_the_override_tools(pipeline_url):
+    """homelab#2484: the album selector and the track and URL forms normalise as the CLI takes them."""
+    async with Client(server(pipeline_url, TOM)) as c:
+        for tool, args, normalised in [
+            ("set_search_override", {"album": "pastel", "words": "Nina  Simone: Pastel Blues!", "reason": "edition"},
+             {"album": "ALB3", "words": "nina simone pastel blues", "reason": "edition"}),
+            ("clear_search_override", {"album": "ALB3"}, {"album": "ALB3"}),
+            ("hold_album", {"album": "pastel", "reason": " curated\n mix "}, {"album": "ALB3", "reason": "curated mix"}),
+            ("release_album", {"album": "pastel"}, {"album": "ALB3"}),
+            ("pin_track", {"track": "https://open.spotify.com/track/68ozhSrI4eLbnUgih1SlOT?si=1",
+                           "url": "https://music.youtube.com/watch?v=29Sh3yEaBP8&si=abc", "label": "track 1"},
+             {"track": "68ozhSrI4eLbnUgih1SlOT", "url": "https://music.youtube.com/watch?v=29Sh3yEaBP8",
+              "label": "track 1", "reason": ""}),
+            ("unpin_track", {"track": "68ozhSrI4eLbnUgih1SlOT"}, {"track": "68ozhSrI4eLbnUgih1SlOT"}),
+        ]:
+            job = await finish(c, (await c.call_tool(tool, args)).data)
+            assert job["status"] == "done", (tool, job)
+            assert job["args"] == normalised, (tool, job["args"])
+            assert job["argv"][0][:2] == ["music-overrides", job["argv"][0][1]]
+            assert not any("--apply" in cmd for cmd in job["argv"]), (tool, job["argv"])
+        applied = await finish(c, (await c.call_tool(
+            "hold_album", {"album": "pastel", "reason": "curated mix", "apply": True})).data)
+        assert applied["status"] == "done" and any("--apply" in cmd for cmd in applied["argv"]), applied
+        assert (await c.call_tool("hold_album", {"album": "abbey", "reason": "x"})).data["status"] == "ambiguous"
+        for tool, args in [("hold_album", {"album": "ALB3", "reason": " "}),
+                           ("set_search_override", {"album": "ALB3", "words": "〠 ♫"}),
+                           ("pin_track", {"track": "ALB3", "url": "https://music.youtube.com/watch?v=x"}),
+                           ("pin_track", {"track": "68ozhSrI4eLbnUgih1SlOT",
+                                          "url": "https://evil.example/watch?v=29Sh3yEaBP8"}),
+                           ("pin_track", {"track": "68ozhSrI4eLbnUgih1SlOT",
+                                          "url": "https://music.youtube.com/playlist?list=OLAK5uy_l7iC3z"})]:
+            with pytest.raises(ToolError):
+                await c.call_tool(tool, args)
+    async with Client(server(pipeline_url, PILOT)) as c:
+        # No music database here: the read says so.
+        listed = (await c.call_tool("list_overrides", {})).data
+        assert listed["status"] == "unavailable" and listed["error"]
+
+
 async def test_bad_requests_reach_the_model_as_errors(pipeline_url):
     async with Client(server(pipeline_url, TOM)) as c:
         with pytest.raises(ToolError):
