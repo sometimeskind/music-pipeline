@@ -264,7 +264,8 @@ def playlist_paths(slots: list[Slot]) -> list[Path]:
     return ordered
 
 
-def store_view(name: str, library: ItemIndex, by_album) -> tuple[list[Path], list[Slot]] | None:
+def store_view(name: str, library: ItemIndex, by_album,
+               stamps: dict[str, str] | None = None) -> tuple[list[Path], list[Slot]] | None:
     """The ``.m3u`` paths playlist *name* gets from its store (homelab#1914),
     and the slots behind them: its entries resolved by Spotify ID or ISRC only,
     against the whole library, each file once and in store order; an ``album``
@@ -277,7 +278,7 @@ def store_view(name: str, library: ItemIndex, by_album) -> tuple[list[Path], lis
         return None
     none = ItemIndex([])
     if (SPOTDL_DIR / f"{name}.album").exists():
-        paths, slots, n_albums = playlists.album_paths(playlist.songs, none, library, by_album)
+        paths, slots, n_albums = playlists.album_paths(playlist.songs, none, library, by_album, stamps)
         logger.info("  %s: %d album(s), %d track(s) (album level)", name, n_albums, len(paths))
         return paths, slots
     slots = playlists.resolve([Entry.from_song(s) for s in playlist.songs], none, library)
@@ -362,6 +363,13 @@ def sync_hooks() -> Iterator[dict]:
         }
 
 
+def _album_records() -> dict[str, dict]:
+    """The album records, for the stamps on their releases' items; none when unreadable."""
+    from music_scan.canon import _records  # noqa: PLC0415
+
+    return _records()
+
+
 def regen_playlists(metrics: ScanMetrics | None = None) -> dict[str, int]:
     """Regenerate the .m3u file of every playlist with a store. Returns {name: track_count}.
 
@@ -391,9 +399,10 @@ def regen_playlists(metrics: ScanMetrics | None = None) -> dict[str, int]:
         all_items = lib.all_items()
         library = ItemIndex(all_items)
         by_album = playlists.by_album_id(all_items)
+        stamps = playlists.record_stamps(_album_records())
         for name in names:
             try:
-                view = store_view(name, library, by_album)
+                view = store_view(name, library, by_album, stamps)
                 if view is None:
                     continue
                 paths, slots = view
@@ -504,7 +513,7 @@ def have_album(indexes, library: ItemIndex, by_album: dict[str, list], key: str,
         slots += _album_slots(indexes(playlist), tracks, library)
     if not slots or any(slot.item is None for slot in slots):
         return False
-    have = len(playlists.album_items(key, record.get("name", ""), slots, by_album))
+    have = len(playlists.album_items(state.primary_spotify(record), record.get("name", ""), slots, by_album, key))
     return have >= (record.get("tracks_count") or 0)
 
 

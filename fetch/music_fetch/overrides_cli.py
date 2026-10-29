@@ -201,7 +201,8 @@ def import_write(conn, out_albums, out_pins) -> None:
             what = f'search override "{o.words}"' if o.kind == ov.SEARCH else "hold"
             album = describe(key, record) if record else f"{o.refs[0]} (no album row yet)"
             events.insert(conn, "override_set", f"[OVERRIDE] {album}: {what} imported from {o.set_by}",
-                          source="overrides", spotify_album_id=events.spotify_album(key or o.refs[0]),
+                          source="overrides",
+                          spotify_album_id=statedb.primary_spotify(record) if record else events.spotify_album(o.refs[0]),
                           release_group=(record or {}).get("release_group"),
                           data={"kind": o.kind, "key": key, "refs": o.refs, "words": o.words, "reason": o.reason})
         for p in out_pins:

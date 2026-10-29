@@ -29,8 +29,10 @@ Diagnoses and fixes the household's music library (music-pipeline: Spotify playl
 downloaded by spotdl or from Usenet, imported and tagged by beets). Start with get_guide: its
 index routes a symptom to the tools that show and fix it, and says how to verify a fix.
 
-IDs. An album key is the Spotify album ID (22 characters, e.g. 0ETFjACtuP2ADo6LFhL6HN), the
-key of the album store; requeue_albums takes these. An album query (find_albums, get_album,
+IDs. An album key is the album's row in the album store, an integer such as 1734 (before the
+operator's one-time rekey, homelab#2478, it was the Spotify album ID); find_albums and get_album
+show it, requeue_albums takes it or any of the album's Spotify album IDs, and it is never a
+Spotify ID itself. An album query (find_albums, get_album,
 reset_album, the override and hold tools) is the key, any of the album's Spotify IDs, its
 release group, the exact "artist — album", or a part matching one album; a query matching
 several returns "ambiguous" with the candidates and does nothing. A track (pin_track,
@@ -126,8 +128,8 @@ def build_server(
 
     @mcp.tool(annotations={"readOnlyHint": True})
     async def get_album(query: AlbumQuery) -> dict:
-        """One album: its key (Spotify album ID), the stored record (status, attempts,
-        blocklist…), its beets album and item IDs, and its items. Ambiguous: the candidates."""
+        """One album: its key, its primary Spotify album ID, the stored record (status,
+        attempts, blocklist…), its beets album and item IDs, and its items. Ambiguous: the candidates."""
         return await call("get_album", lambda c: pipeline.get(c, "/album", query=query))
 
     @mcp.tool(annotations={"readOnlyHint": True})
@@ -254,7 +256,7 @@ def build_server(
 
     @mcp.tool(annotations={"destructiveHint": True})
     async def requeue_albums(
-        ids: Annotated[list[str] | None, Field(description="album keys (Spotify album IDs)")] = None,
+        ids: Annotated[list[str] | None, Field(description="album keys (from find_albums or get_album) or Spotify album IDs")] = None,
         since: Annotated[str | None, Field(description="ISO 8601; UTC without an offset")] = None,
         apply: Apply = False,
     ) -> dict:

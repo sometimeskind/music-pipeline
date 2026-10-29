@@ -86,6 +86,7 @@ def wanted_state(n: int = 1) -> State:
         state.albums[f"a{i}"] = {
             "status": albums.WANTED, "blocklist": [], "name": "Album", "artist": "Artist",
             "tracks_count": 2, "playlists": {"later": [["One", "Artist"], ["Two", "Artist"]]},
+            "spotify_album_ids": [f"a{i}"],
         }
     return state
 
@@ -941,7 +942,7 @@ def test_reset_clears_the_rejected_tracks() -> None:
 def fallback_state(status: str, playlists: dict) -> State:
     state = State()
     state.albums["a0"] = {"status": status, "blocklist": [], "name": "Album", "artist": "Artist",
-                          "tracks_count": 2, "playlists": playlists}
+                          "tracks_count": 2, "playlists": playlists, "spotify_album_ids": ["a0"]}
     return state
 
 
@@ -993,7 +994,7 @@ def test_fallbacks_read_a_capped_number_of_tracklists_per_tick() -> None:
     state = State()
     for i in range(albums.TRACKLISTS_PER_TICK + 2):
         state.albums[f"a{i}"] = {"status": albums.MISSING, "name": "Album", "artist": "Artist",
-                                 "playlists": {"later": [["T1", "Artist", f"x{i}"]]}}
+                                 "playlists": {"later": [["T1", "Artist", f"x{i}"]]}, "spotify_album_ids": [f"a{i}"]}
     reads = []
     albums.fallbacks(state, lambda pl, ts: ts, lambda album_id: reads.append(album_id) or [])
     assert len(reads) == albums.TRACKLISTS_PER_TICK
@@ -1417,7 +1418,7 @@ def _mixed_state(n: int) -> State:
     for i in range(n):
         state.albums[f"K{i}"] = {"artist": "Artist", "name": f"Album {i}", "status": albums.IMPORTED,
                                  "blocklist": ["old"], "attempts": 2, "playlists": {"keep": []},
-                                 "candidate": {"guid": "old"}}
+                                 "candidate": {"guid": "old"}, "spotify_album_ids": [f"K{i}"]}
     return state
 
 

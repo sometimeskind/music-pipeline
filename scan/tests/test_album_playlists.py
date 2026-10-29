@@ -153,3 +153,19 @@ def test_an_album_records_release_alone_is_the_album() -> None:
     first = item("/m/a/1.m4a", 1, 1, album_record="K")
     stray = item("/m/b/1.m4a", 1, 1)
     assert album_items("K", "Album", [], {"K": [second, stray, first]}) == [first, second]
+
+
+def test_a_release_stamped_with_a_row_id_is_its_spotify_albums() -> None:
+    """homelab#2478: the stamp is the record's row id, the album its primary Spotify album."""
+    from types import SimpleNamespace
+
+    from music_scan.playlists import album_items, record_stamps
+
+    def item(path, track, **f):
+        return SimpleNamespace(path=path, disc=1, track=track, album="Album", get=lambda k, d=None: f.get(k, d))
+
+    mine = item("/m/a/1.m4a", 1, album_record="17")
+    stray = item("/m/b/1.m4a", 1, album_record="K")  # an old stamp: not this record's
+    stamps = record_stamps({"17": {"spotify_album_ids": ["K", "K2"]}, "18": {"names": ["a/b"]}})
+    assert stamps == {"K": "17"}
+    assert album_items("K", "Album", [], {"K": [stray, mine]}, stamps["K"]) == [mine]

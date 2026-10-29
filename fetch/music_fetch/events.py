@@ -89,11 +89,13 @@ class _Unavailable(Exception):
     """The database failed within the last RETRY_SECONDS; not tried again yet."""
 
 
-def spotify_album(key: Any) -> str | None:
-    """*key* when it is a Spotify album ID: an album store key can also be a
-    local files' ``artist/album`` or a release group (homelab#2410), and beets
-    stores a missing ID as ""."""
-    return str(key) if key and state.is_spotify_album(str(key)) else None
+def spotify_album(ref: Any) -> str | None:
+    """*ref* when it is a Spotify album ID: a song's album ref can also be a
+    local files' ``artist/album``, and beets stores a missing ID as "".  Never
+    pass an album record's key or an item's ``album_record``: since
+    homelab#2478 that is a row id, which reads as a Spotify ID here; pass
+    :func:`state.primary_spotify` of the record instead."""
+    return str(ref) if ref and state.is_spotify_album(str(ref)) else None
 
 
 def item_fields(item) -> dict[str, Any]:

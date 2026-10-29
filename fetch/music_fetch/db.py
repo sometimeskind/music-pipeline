@@ -230,6 +230,18 @@ MIGRATIONS: list[str] = [
         CONSTRAINT track_pins_track_check CHECK (spotify_track_id IS NOT NULL OR isrc IS NOT NULL)
     );
     """,
+    # 6: the refs of every deleted album row (homelab#2478).  Once an album's
+    # key is its row id, beets stamps that id on its imported items
+    # (``album_record``); when the row goes (a merge's loser, an album that
+    # left its playlists) its items still carry the id, and find the row that
+    # holds one of these refs now (music_scan.restamp), as an override does.
+    """
+    CREATE TABLE album_rows_gone (
+        id      bigint PRIMARY KEY,
+        refs    text[] NOT NULL,
+        gone_at timestamptz NOT NULL DEFAULT now()
+    );
+    """,
 ]
 
 

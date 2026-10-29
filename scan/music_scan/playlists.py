@@ -104,6 +104,13 @@ def by_album_id(items) -> dict[str, list]:
     return out
 
 
+def record_stamps(records: dict[str, dict]) -> dict[str, str]:
+    """Each album record's primary Spotify album ID → its key (homelab#2478)."""
+    from music_fetch.state import primary_spotify  # noqa: PLC0415
+
+    return {sid: key for key, record in records.items() if (sid := primary_spotify(record))}
+
+
 def album_groups(songs: list[dict]) -> dict[str, list[dict]]:
     """The playlist's *songs* per album (``albums.album_key``), albums in
     playlist order."""
@@ -115,28 +122,32 @@ def album_groups(songs: list[dict]) -> dict[str, list[dict]]:
     return groups
 
 
-def album_items(key: str, name: str, slots: list[Slot], by_album: dict[str, list]) -> list:
-    """The local tracks of the album *key* (Spotify album ID) named *name*,
-    whose playlist entries resolved to *slots*: the items they resolve to, and
-    every item canon filed on the album.  That is *key*, plus the album a
+def album_items(album_id: str | None, name: str, slots: list[Slot], by_album: dict[str, list],
+                stamp: str | None = None) -> list:
+    """The local tracks of the Spotify album *album_id* named *name*, whose
+    playlist entries resolved to *slots*: the items they resolve to, and
+    every item canon filed on the album.  That is *album_id*, plus the album a
     resolved item sits on under the same name (a #214 twin's representative).
     A resolved item canon moved to another album (a single's track filed on
     its standard album) is listed alone, not with that album.  The release's
     local-only extras are on its album by #245.  In disc/track order.
 
     An album record's release is the album (#279): once its items carry
-    ``album_record``, they alone are listed, whatever the slots resolve to
-    (a same recording kept on another album stays there)."""
+    ``album_record`` *stamp* (the key of the record whose primary Spotify album
+    *album_id* is; *album_id* itself when not given, as before homelab#2478),
+    they alone are listed, whatever the slots resolve to (a same recording
+    kept on another album stays there)."""
     from music_scan.scan import _item_path  # noqa: PLC0415
 
     def ordered(items) -> list:
         return sorted(items, key=lambda i: (i.disc or 1, i.track or 0, str(_item_path(i))))
 
-    release = [i for i in by_album.get(key, []) if i.get("album_record") == key]
+    stamp = stamp or album_id
+    release = [i for i in by_album.get(album_id, []) if i.get("album_record") == stamp] if album_id else []
     if release:
         return ordered(release)
     found = [s.item for s in slots if s.item is not None]
-    ids = {key} | {i.get("spotify_album_id") for i in found
+    ids = ({album_id} if album_id else set()) | {i.get("spotify_album_id") for i in found
                    if i.get("spotify_album_id") and _norm(i.album) == _norm(name)}
     items: dict = {}
     for item in [*found, *(i for album_id in sorted(ids) for i in by_album.get(album_id, []))]:
@@ -145,11 +156,14 @@ def album_items(key: str, name: str, slots: list[Slot], by_album: dict[str, list
 
 
 def album_paths(songs: list[dict], source: ItemIndex, library: ItemIndex,
-                by_album: dict[str, list]) -> tuple[list[Path], list[Slot], int]:
+                by_album: dict[str, list], stamps: dict[str, str] | None = None
+                ) -> tuple[list[Path], list[Slot], int]:
     """An album playlist's ``.m3u`` lines (#268): ``(paths, slots, albums)``.
     Every album at least one of *songs* is on, in playlist order, lists its
     :func:`album_items`, each file once.  An album with no local track yet
-    lists nothing.  *slots* are the entries' slots, for the empty count."""
+    lists nothing.  *slots* are the entries' slots, for the empty count.
+    *stamps*: each album record's primary Spotify album ID → its key, the
+    ``album_record`` its release's items carry (:func:`record_stamps`)."""
     from music_scan.scan import _item_path  # noqa: PLC0415
 
     paths: list[Path] = []
@@ -159,7 +173,7 @@ def album_paths(songs: list[dict], source: ItemIndex, library: ItemIndex,
     for key, group in groups.items():
         slots = resolve([Entry.from_song(s) for s in group], source, library)
         all_slots += slots
-        for item in album_items(key, group[0].get("album_name", ""), slots, by_album):
+        for item in album_items(key, group[0].get("album_name", ""), slots, by_album, (stamps or {}).get(key)):
             p = _item_path(item)
             if p not in seen:
                 seen.add(p)

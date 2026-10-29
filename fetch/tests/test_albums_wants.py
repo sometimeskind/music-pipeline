@@ -267,7 +267,7 @@ def test_hold_ahead_comes_from_the_environment(monkeypatch) -> None:
 
 @pytest.mark.parametrize("status", [albums.MISSING, albums.FAILED])
 def test_a_missing_or_failed_wants_record_queues_no_fallback(status) -> None:
-    state = State(albums={"A": wants_record(status), "W": album_record(status)})
+    state = State(albums={"A": wants_record(status), "W": {**album_record(status), "spotify_album_ids": ["W"]}})
     album_songs = MagicMock(return_value=[])
     albums.fallbacks(state, lambda pl, tracks: tracks, album_songs)
     assert state.albums["A"]["status"] == status and "fallback_tracks" not in state.albums["A"]

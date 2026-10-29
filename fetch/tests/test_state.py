@@ -178,6 +178,52 @@ def test_a_merge_moves_a_ref_between_rows(pg_url):
     assert count == (2,)
 
 
+def test_album_key_by_row_is_the_row_id_once_saved():
+    record = {"release_group": RG, "spotify_album_ids": ["sp"]}
+    assert state.album_key(record, by_row=True) == "sp"  # not saved yet: the old scheme
+    assert state.album_key({**record, "_id": 17}, by_row=True) == "17"
+    assert state.album_key({**record, "_id": 17}) == "sp"
+    assert state.primary_spotify(record) == "sp" and state.primary_spotify({"names": ["a/b"]}) is None
+
+
+@needs_pg
+def test_keyed_by_row_once_the_marker_is_set(pg_url):
+    """homelab#2478: the keys are row ids once music-album-rekey --apply wrote
+    the marker; a record not saved yet keeps the old key until its save."""
+    with state.connect() as conn:
+        state.save_albums(conn, state.AlbumRows(albums=_records(), mixed=["sp1"]))
+        assert not state.keyed_by_row(conn)
+        state.put(conn, state.ALBUM_KEYS, {"by": "row"})
+        rows = state.load_albums(conn)
+        ids = {r["spotify_album_ids"][0] if r["spotify_album_ids"] else r["names"][0]: k
+               for k, r in rows.albums.items()}
+        rows.albums["sp9"] = state.new_record("sp9", status="wanted", name="New", artist="X")
+        rows.mixed.append("sp9")
+        assert "sp9" in rows.albums
+        state.save_albums(conn, rows)
+        new_id = next(k for k, r in rows.albums.items() if r.get("name") == "New")
+        reloaded = state.load_albums(conn)
+    assert rows.by_row and all(k.isdigit() for k in rows.albums)
+    assert ids["sp1"] == str(rows.albums[ids["sp1"]]["_id"])
+    assert "sp9" not in rows.albums and new_id in rows.albums and rows.mixed == [ids["sp1"], new_id]
+    assert list(reloaded.albums) == list(rows.albums) and reloaded.mixed == rows.mixed
+    assert reloaded.by_ref()["sp2"] == ids["sp1"]
+
+
+@needs_pg
+def test_a_deleted_row_leaves_its_refs(pg_url):
+    """A merge's loser and an album that left its playlists are deleted; their
+    refs stay in album_rows_gone, for the items stamped with their row ids."""
+    with state.connect() as conn:
+        state.save_albums(conn, state.AlbumRows(albums=_records()))
+        rows = state.load_albums(conn)
+        sp3, local = rows.albums.pop("sp3"), rows.albums.pop("local/files")
+        rows.albums["sp1"]["spotify_album_ids"].extend(sp3["spotify_album_ids"])
+        state.save_albums(conn, rows)
+        gone = state.gone_rows(conn)
+    assert gone == {str(sp3["_id"]): ["sp3"], str(local["_id"]): ["local/files"]}
+
+
 @needs_pg
 def test_playlist_stores(pg_url):
     with state.connect() as conn:

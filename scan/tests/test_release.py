@@ -128,7 +128,7 @@ def test_claim_stamps_this_imports_usenet_items() -> None:
     assert not leftover.get("album_record")
 
 
-RTD = {"name": "Ready to Die (The Remaster)", "artist": "The Notorious B.I.G."}
+RTD = {"name": "Ready to Die (The Remaster)", "artist": "The Notorious B.I.G.", "spotify_album_ids": ["RTD"]}
 
 
 def _listed(by_id: dict | None = None):
@@ -158,7 +158,8 @@ def test_copies_takes_every_other_copy_and_the_legacy_items_of_the_album() -> No
 
 
 def test_mixed_reasons_name_what_the_track_rules_did() -> None:
-    record = {"status": "imported", "blocklist": ["r0"], "rejected_tracks": {"keep": ["s3"]}, "gaps": ["s3"]}
+    record = {"status": "imported", "blocklist": ["r0"], "rejected_tracks": {"keep": ["s3"]}, "gaps": ["s3"],
+              "spotify_album_ids": ["RTD"]}
     items = [FakeItem(1, via="usenet", spotify_album_id="RTD"), FakeItem(2, via="spotdl", spotify_album_id="RTD")]
     reasons = release.mixed_reasons("RTD", record, items, _listed())
     assert len(reasons) == 4 and "1 spotdl track(s) on the album" in reasons
@@ -254,7 +255,8 @@ def quarantined(monkeypatch):
     return gone
 
 
-BOYS = {"name": "Boys and Girls in America", "artist": "The Hold Steady", "playlists": {"keep": []}}
+BOYS = {"name": "Boys and Girls in America", "artist": "The Hold Steady", "playlists": {"keep": []},
+        "spotify_album_ids": ["BOYS"]}
 
 
 def _cd(release_id, n, **f):
@@ -288,7 +290,8 @@ def test_retire_keeps_the_recordings_a_smaller_edition_lacks_as_extras(quarantin
     # Canon keeps them on the album, and the album is no longer mixed.
     for item in [*cd, *extras]:
         item["spotify_album_id"] = "BOYS"
-    assert release.mixed_reasons("BOYS", {"status": "imported", "blocklist": ["x"]}, [*cd, *extras], listed) == []
+    assert release.mixed_reasons("BOYS", {"status": "imported", "blocklist": ["x"], "spotify_album_ids": ["BOYS"]},
+                                 [*cd, *extras], listed) == []
 
 
 def test_retire_takes_every_copy_a_same_edition_reimport_holds(quarantined) -> None:
@@ -525,7 +528,7 @@ def test_mixed_reasons_a_whole_import_with_a_loose_spotdl_copy_is_not_mixed() ->
     hand, plus one spotdl copy another playlist's store also lists, which retire
     leaves on purpose.  A reimport would grab the same release again."""
     record = {"name": "Simple Things", "artist": "Zero 7", "status": "imported", "blocklist": ["r0"],
-              "playlists": {"keep": []}}
+              "playlists": {"keep": []}, "spotify_album_ids": ["Z7"]}
     release_items = [FakeItem(n, via="usenet", spotify_album_id="Z7", album_record="Z7", release="v@1")
                      for n in range(1, 12)]
     loose = FakeItem(20, via="spotdl", spotify_album_id="Z7")
@@ -540,7 +543,7 @@ def test_mixed_reasons_a_whole_import_with_a_loose_spotdl_copy_is_not_mixed() ->
 def test_mixed_reasons_before_279_ignores_loose_copies_but_not_top_ups() -> None:
     """A pre-#279 album still counts spotdl's top-ups (a reimport retires them),
     not a copy another playlist lists, and keeps its history's reasons."""
-    record = {"status": "imported", "playlists": {"keep": []}}
+    record = {"status": "imported", "playlists": {"keep": []}, "spotify_album_ids": ["RTD"]}
     legacy = FakeItem(1, via="usenet", spotify_album_id="RTD")
     loose = FakeItem(2, via="spotdl", spotify_album_id="RTD")
     topup = FakeItem(3, via="spotdl", spotify_album_id="RTD")

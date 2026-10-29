@@ -24,11 +24,20 @@ In memory an album record is the dict album mode always used, plus:
 - ``names``: its ``artist/name`` refs, for an album with no Spotify ID;
 - ``_id``: its row, absent until it is first saved.
 
-:func:`album_key` is the record's key in :attr:`AlbumRows.albums`, the album
-key album mode and the Music MCP have always used: its primary Spotify album
-ID, else its release group (an album with no Spotify ID, homelab#2478), else
-its name.  It is a handle in memory; the row is keyed by release group, and its
-``id`` identifies it, so a record keeps its row whatever its key.
+:func:`album_key` is the record's key in :attr:`AlbumRows.albums`, in the
+Music MCP and in the ``album_record`` beets stamps on its imported items.  Once
+``music-album-rekey --apply`` has moved every stamp (homelab#2478, the
+:data:`ALBUM_KEYS` document) it is the album's row ``id``: opaque, and the
+same whether or not the release group is known yet, so an album that resolves
+keeps its key.  Before that it is the scheme album mode always used: the
+primary Spotify album ID, else the release group, else the name.  A record not
+saved yet has no row: its key is the old scheme's until :func:`save_albums`
+gives it one.  Never read a key's format for what it is; a Spotify album ID is
+:func:`primary_spotify` or one of ``spotify_album_ids``.
+
+A deleted row (a merge's loser, an album that left its playlists) leaves its
+refs in ``album_rows_gone``, so an item still stamped with its id finds the
+record that holds one of them now (:func:`gone_rows`, ``music_scan.restamp``).
 
 Which copy is the state: the JSON files until ``music-state-import --apply``
 has written the database, then the database.  The switch is the dot file
@@ -87,7 +96,11 @@ IMPORTED = "state-imported"
 # Written by music-overrides import --apply (homelab#2484): from then on the
 # overrides, holds and pins are the tables', and the ConfigMap's files are ignored.
 OVERRIDES_IMPORTED = "overrides-imported"
-KV_NAMES = (MB_RELEASES, CANON_ISRC, CANON_PAGES, SPOTIFY_LIMIT, EMPTY_SLOTS, IMPORTED, OVERRIDES_IMPORTED)
+# Written by music-album-rekey --apply (homelab#2478) before it restamps the
+# items: from then on an album's key is its row id.  Deleted by --revert.
+ALBUM_KEYS = "album-keys"
+KV_NAMES = (MB_RELEASES, CANON_ISRC, CANON_PAGES, SPOTIFY_LIMIT, EMPTY_SLOTS, IMPORTED, OVERRIDES_IMPORTED,
+            ALBUM_KEYS)
 
 
 # Present once music-state-import --apply has moved the state into the
@@ -151,13 +164,21 @@ def _iso(t: datetime) -> str:
 # ---------------------------------------------------------------------------
 
 
-def album_key(record: Mapping) -> str:
-    """The record's key: its primary Spotify album ID, else its release group, else its name."""
-    key = next(iter(record.get("spotify_album_ids") or ()), None) or record.get("release_group") \
-        or next(iter(record.get("names") or ()), None)
+def album_key(record: Mapping, by_row: bool = False) -> str:
+    """The record's key: *by_row*, its row id once it has one; else its primary
+    Spotify album ID, else its release group, else its name."""
+    if by_row and record.get("_id") is not None:
+        return str(record["_id"])
+    key = primary_spotify(record) or record.get("release_group") or next(iter(record.get("names") or ()), None)
     if not key:
         raise ValueError("an album record needs a release group, a Spotify album ID or a name")
     return key
+
+
+def primary_spotify(record: Mapping) -> str | None:
+    """The record's primary Spotify album ID (its fallback tracklist's, its
+    events'), or None for a local album."""
+    return next(iter(record.get("spotify_album_ids") or ()), None)
 
 
 @dataclasses.dataclass
@@ -166,13 +187,24 @@ class AlbumRows:
     playlists' snapshots, the records by :func:`album_key`, the indexer
     budget's timestamps and the keys of the mixed albums.  *snapshot* is what
     each row held when loaded or last saved, so a save writes only the rows
-    that changed."""
+    that changed.  *by_row*: the keys are row ids (:data:`ALBUM_KEYS`)."""
 
     playlists: dict[str, dict] = dataclasses.field(default_factory=dict)
     albums: dict[str, dict] = dataclasses.field(default_factory=dict)
     indexer: list[dict] = dataclasses.field(default_factory=list)
     mixed: list[str] = dataclasses.field(default_factory=list)
     snapshot: dict[int, str] = dataclasses.field(default_factory=dict)
+    by_row: bool = False
+
+    def key(self, record: Mapping) -> str:
+        return album_key(record, self.by_row)
+
+    def rekey(self) -> None:
+        """Key every record by :meth:`key` again: a saved record gets its row id."""
+        rename = {k: self.key(r) for k, r in self.albums.items()}
+        if any(k != v for k, v in rename.items()):
+            self.albums = {rename[k]: r for k, r in self.albums.items()}
+            self.mixed = list(dict.fromkeys(rename.get(k, k) for k in self.mixed))
 
     def by_ref(self) -> dict[str, str]:
         """Every Spotify album ID and name ref → its record's key."""
@@ -219,8 +251,13 @@ def _fingerprint(record: Mapping, mixed: bool) -> str:
     return _dumps({**{k: v for k, v in record.items() if k != "_id"}, "_mixed": mixed})
 
 
+def keyed_by_row(conn: psycopg.Connection) -> bool:
+    """Whether album keys are row ids: ``music-album-rekey --apply`` has run (homelab#2478)."""
+    return get(conn, ALBUM_KEYS) is not None
+
+
 def load_albums(conn: psycopg.Connection) -> AlbumRows:
-    rows = AlbumRows()
+    rows = AlbumRows(by_row=keyed_by_row(conn))
     refs: dict[int, list[tuple[str, str]]] = {}
     for album_id, ref, kind in conn.execute("SELECT album_id, ref, kind FROM album_refs ORDER BY album_id, ref"):
         refs.setdefault(album_id, []).append((ref, kind))
@@ -234,12 +271,12 @@ def load_albums(conn: psycopg.Connection) -> AlbumRows:
                   "spotify_album_ids": spotify, "names": [r for r, k in refs.get(album_id, []) if k == NAME]}
         if origin != ALBUM:
             record["origin"] = origin
-        key = album_key(record)
+        rows.snapshot[album_id] = _fingerprint(record, mixed)
+        record["_id"] = album_id
+        key = rows.key(record)
         rows.albums[key] = record
         if mixed:
             rows.mixed.append(key)
-        rows.snapshot[album_id] = _fingerprint(record, mixed)
-        record["_id"] = album_id
     rows.playlists = {name: data for name, data in conn.execute(
         "SELECT playlist, data FROM album_playlists ORDER BY playlist")}
     rows.indexer = [{"t": at.astimezone(timezone.utc).isoformat(timespec="seconds"), "kind": kind} for at, kind in conn.execute(
@@ -265,7 +302,9 @@ def save_albums(conn: psycopg.Connection, rows: AlbumRows) -> int:
     """Write *rows* in one transaction: insert the new records (setting their
     ``_id``), update the changed ones, delete the ones loaded and since
     removed.  Rows another process added meanwhile are left alone.  Returns
-    the count of rows written or deleted."""
+    the count of rows written or deleted.  A deleted row's refs go to
+    ``album_rows_gone``; keyed by row (*rows.by_row*), the new records take
+    their row ids as keys afterwards."""
     mixed = set(rows.mixed)
     changed: list[tuple[dict, bool]] = []
     for key, record in rows.albums.items():
@@ -277,6 +316,10 @@ def save_albums(conn: psycopg.Connection, rows: AlbumRows) -> int:
     with conn.transaction():
         conn.execute("SELECT pg_advisory_xact_lock(%s)", (_SAVE_LOCK,))
         if gone:
+            # Before the delete cascades their refs away: an item stamped with a
+            # gone row's id finds whichever row holds one of them later.
+            conn.execute(f"INSERT INTO album_rows_gone (id, refs) SELECT id, refs FROM ({_ROW_REFS}) r (id, refs) "
+                         "ON CONFLICT (id) DO UPDATE SET refs = EXCLUDED.refs, gone_at = now()", (gone,))
             conn.execute("DELETE FROM albums WHERE id = ANY(%s)", (gone,))
         # A ref may move between two changed rows (a merge): free them all before re-adding any.
         updated = [r["_id"] for r, _ in changed if r.get("_id") is not None]
@@ -318,7 +361,14 @@ def save_albums(conn: psycopg.Connection, rows: AlbumRows) -> int:
         del rows.snapshot[i]
     for record, is_mixed in changed:
         rows.snapshot[record["_id"]] = _fingerprint(record, is_mixed)
+    rows.rekey()
     return len(changed) + len(gone)
+
+
+def gone_rows(conn: psycopg.Connection) -> dict[str, list[str]]:
+    """Every deleted album row's id → the refs (Spotify album IDs, names,
+    release group) it had when it went."""
+    return {str(i): list(refs) for i, refs in conn.execute("SELECT id, refs FROM album_rows_gone ORDER BY id")}
 
 
 _ROW_REFS = """
