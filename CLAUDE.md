@@ -32,7 +32,7 @@ just fetch && just scan  # or `just sync`
 
 ## Design Decisions to Preserve
 
-- **The playlist store is the only playlist state** (homelab#1914): one JSON file per playlist in `inbox/spotdl/.store/` (`music_fetch.store`), its entries in Spotify order. Every `.m3u` is resolved from it against the whole library by Spotify ID or ISRC; "downloaded" is never recorded. `.spotdl` files, the unlink queue and `reconcile` are retired: don't reintroduce a second copy of membership.
+- **The playlist store is the only playlist state** (homelab#1914): one per playlist (`music_fetch.store`), its entries in Spotify order: a `playlist_stores` row in the `music` database once switched (README, State), else a JSON file in `inbox/spotdl/.store/`. Every `.m3u` is resolved from it against the whole library by Spotify ID or ISRC; "downloaded" is never recorded. `.spotdl` files, the unlink queue and `reconcile` are retired: don't reintroduce a second copy of membership.
 - **`sources=<playlist>` is provenance only**: the playlists a track was imported or linked for, never cleared. Never read it to decide what a playlist lists or whether a copy is still wanted; use the store (`scan.store_listings()`).
 - **Soft deletes**: a track removed on Spotify leaves the next store, and so the `.m3u`. Its file stays in the library.
 - **Strict MusicBrainz threshold** (`strong_rec_thresh: 0.10` in `config/beets/config.yaml`): low-confidence matches go to `/root/Music/quarantine/` for manual review, after a second `--asis` pass for files with sufficient embedded tags.

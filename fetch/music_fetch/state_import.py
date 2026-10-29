@@ -11,7 +11,9 @@ marker, then writes the switch (:data:`state.SWITCH`): from then on the
 pipeline reads and writes the database.  It refuses a database
 that has state already, unless ``--replace`` (which empties the state tables
 first, never the events).  The JSON files are left as they are: the rollback
-is the previous image, which reads them.  Back them up before ``--apply``.
+is removing the switch and restarting, which puts any image back on them
+(homelab docs/media/runbook-music-state-cutover.md).  Back them up before
+``--apply``.
 
 ``music-album-resolve`` reruns the resolve pass against the database once the
 MusicBrainz cache or the library knows more.
