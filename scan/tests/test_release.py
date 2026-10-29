@@ -642,3 +642,37 @@ def test_list_twins_gives_each_pair_its_merge_command(caplog) -> None:
     # The keeper is the release item, though the extra is the Spotify-length copy: the album is the unit (#311).
     assert "2555 Psycho Killer - Live (268s, legacy) ~ 3730 (258s): music-audit-dupes --merge 3730 2555" in caplog.text
     assert "1 album(s) with local-only extras sharing a title" in caplog.text
+
+
+@pytest.fixture
+def recorded(monkeypatch):
+    """The events the release check records (homelab#2413): ``(kind, message, kwargs)``."""
+    from music_fetch import events
+
+    calls: list = []
+    monkeypatch.setattr(events, "record", lambda kind, message, **kw: calls.append((kind, message, kw)))
+    return calls
+
+
+RG = "6e0a6c2a-2d38-3d3c-9d38-4f0c2b5b7a11"
+
+
+def test_retire_records_retire_and_local_events_under_the_kept_releases_group(quarantined, recorded) -> None:
+    old = [_cd("deluxe@1", n) for n in range(1, 13)]
+    new = [_cd("cd@2", n, mb_releasegroupid=RG) for n in range(1, 12)]
+    release.retire(FakeLib([*old, *new]), "BOYS", BOYS, "cd@2", None, _listed())
+    kinds = [k for k, _, _ in recorded]
+    assert kinds == ["retire"] * 11 + ["local"]
+    _, message, kw = recorded[0]
+    assert message == "[RETIRE] 1 None — Track 1 [None] (release deluxe@1)"
+    assert kw["release_group"] == RG and kw["spotify_album_id"] == "BOYS" and kw["item_id"] == 1
+    assert kw["source"] == "release"
+
+
+def test_retire_held_same_audio_is_one_merge_event(quarantined, recorded) -> None:
+    track, extra = _stay_positive(spotify_ids="sp-old")
+    other = _Audio(3790, "Navy Sheets", album_record="SP", release="r@2", acoustid_id="aid-8")
+    release.retire_held(FakeLib([track, other, extra]), decoder=lambda fp: [])
+    (kind, _, kw), = recorded
+    assert kind == "merge" and kw["item_id"] == track.id and kw["data"]["why"] == "extra, same audio"
+    assert kw["data"]["merged"] == extra.id

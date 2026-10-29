@@ -60,6 +60,11 @@ EVENT_KINDS = (
     "reject",
     # A Music MCP job (homelab#2412) ending: tool, mode, caller, status.
     "mcp_job",
+    # Migration 2: a fallback album the library now completes ([FILLED]), and a
+    # playlist entry's ID taken off an item that is another version of the song
+    # (music-backfill-ids --apply's [WRONG]).
+    "filled",
+    "wrong_version",
     # Requests and the Later queue (homelab#2478), nothing emits them yet: an
     # album requested, added to or removed from Later, and a Spotify ID resolved
     # for a release group.
@@ -96,6 +101,16 @@ MIGRATIONS: list[str] = [
     CREATE INDEX events_kind_at ON events (kind, at);
     CREATE INDEX events_spotify_album_at ON events (spotify_album_id, at) WHERE spotify_album_id IS NOT NULL;
     CREATE INDEX events_release_group_at ON events (release_group, at) WHERE release_group IS NOT NULL;
+    """,
+    # 2: two more kinds, filled and wrong_version (a wider CHECK, so the previous image still writes).
+    """
+    ALTER TABLE events DROP CONSTRAINT events_kind_check;
+    ALTER TABLE events ADD CONSTRAINT events_kind_check CHECK (kind IN (
+        'import_done', 'import_wrong', 'import_incomplete', 'import_lost',
+        'retire', 'local', 'merge', 'clash', 'mixed',
+        'grab', 'autoreset', 'fallback', 'failure', 'reject', 'mcp_job',
+        'album_requested', 'later_added', 'later_removed', 'spotify_id_resolved',
+        'filled', 'wrong_version'));
     """,
 ]
 

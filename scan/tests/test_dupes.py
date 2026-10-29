@@ -245,12 +245,19 @@ def _on_disk(tmp_path: Path, item: FakeItem) -> FakeItem:
     return item
 
 
-def test_merge_moves_ids_and_playlists_and_quarantines_the_file(tmp_path) -> None:
+def test_merge_moves_ids_and_playlists_and_quarantines_the_file(tmp_path, monkeypatch) -> None:
+    from music_fetch import events
+
+    recorded = []
+    monkeypatch.setattr(events, "record", lambda kind, message, **kw: recorded.append((kind, message, kw)))
     keeper = _on_disk(tmp_path, FakeItem(1, "Song", spotify_ids="A", isrc="GB1", sources="keep"))
     loser = _on_disk(tmp_path, FakeItem(2, "Song", spotify_url="https://open.spotify.com/track/B",
                                         isrc="GB1;US2", mb_trackid="rec", sources="keep,later"))
     old = Path(loser.path.decode())
     moved = merge(keeper, [loser], tmp_path / "replaced")
+    (kind, message, kw), = recorded
+    assert kind == "merge" and message == f"[MERGE] keep 1 ← 2; old file → {moved[0]}"
+    assert kw["item_id"] == 1 and kw["data"]["merged"] == 2 and kw["data"]["why"] == "duplicate"
     assert keeper.get("spotify_ids") == "A,B"
     assert keeper.get("isrc") == "GB1;US2"
     assert keeper.get("sources") == "keep,later"

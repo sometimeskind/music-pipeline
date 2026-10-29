@@ -76,6 +76,7 @@ from collections.abc import Callable
 from itertools import combinations
 from pathlib import Path
 
+from music_fetch import events
 from music_fetch.usenet import clean_album, normalise, words
 from music_scan.audit import LIBRARY, REPLACED, item_path, pipeline_lock
 from music_scan.identity import (
@@ -438,8 +439,9 @@ def _free(path: Path) -> Path:
     return candidate
 
 
-def merge(keeper, losers: list, replaced_dir: Path = REPLACED) -> list[Path]:
+def merge(keeper, losers: list, replaced_dir: Path = REPLACED, why: str = "duplicate") -> list[Path]:
     """Merge *losers* onto *keeper*; their files go to *replaced_dir*.  Returns where they went.
+    *why* names the merge in its ``merge`` events (homelab#2413).
 
     The keeper records their names in :data:`MERGED_FILES`: the merge is the
     decision that it holds their recording, which their own tags may not say
@@ -469,8 +471,15 @@ def merge(keeper, losers: list, replaced_dir: Path = REPLACED) -> list[Path]:
             moved.append(backup)
             add_merged_file(keeper, backup.name)
             logger.info("[MERGE] keep %s ← %s; old file → %s", keeper.id, loser.id, backup)
+            message = f"[MERGE] keep {keeper.id} ← {loser.id}; old file → {backup}"
         else:
             logger.warning("[MERGE] keep %s ← %s; its file %s was already gone", keeper.id, loser.id, old)
+            message = f"[MERGE] keep {keeper.id} ← {loser.id}; its file {old} was already gone"
+        events.record("merge", message, source="dupes",
+                      spotify_album_id=events.spotify_album(keeper.get("album_record") or keeper.get("spotify_album_id")),
+                      release_group=keeper.get("mb_releasegroupid"), item_id=keeper.id,
+                      data={**events.item_fields(keeper), "why": why, "merged": loser.id,
+                            "merged_item": events.item_fields(loser)})
         loser.remove(delete=False)
     if moved:
         keeper.store()
@@ -507,7 +516,7 @@ def merge_chosen(items: list, ids: list[int], apply: bool, allow_manual: bool,
     if not apply:
         logger.info("Dry run — nothing merged. Re-run with --apply.")
         return []
-    return merge(keeper, drops, replaced_dir)
+    return merge(keeper, drops, replaced_dir, why="chosen")
 
 
 def fingerprint_missing(items: list, apply: bool, ids: list[int] | None = None) -> int:

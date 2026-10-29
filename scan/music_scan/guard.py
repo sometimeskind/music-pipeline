@@ -35,6 +35,8 @@ from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
 
+from music_fetch import events
+
 logger = logging.getLogger(__name__)
 
 TOLERANCE = 0.10
@@ -181,4 +183,7 @@ def guard_inbox(inbox: Path, rejected_dir: Path, audio_exts: set[str], mode: str
         dest = reject(f, rejection, inbox, rejected_dir)
         rejected[rejection.reason] += 1
         logger.warning("  [REJECT] %s: %s — %s: %s → %s", playlist, f.name, rejection.reason, rejection.detail, dest)
+        events.record("reject", f"[REJECT] {playlist}: {f.name} — {rejection.reason}: {rejection.detail} → {dest}",
+                      source="guard", data={"playlist": playlist, "file": f.name, "reason": rejection.reason,
+                                            "detail": rejection.detail, "dest": str(dest)})
     return rejected

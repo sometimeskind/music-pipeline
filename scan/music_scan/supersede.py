@@ -309,7 +309,7 @@ def apply_pairs(pairs: list[Pair], replaced_dir: Path | None = None) -> int:
         if retag:
             p.album["mb_trackid"] = mbid
         freed = _freed(p)
-        merge(p.album, p.loose, replaced_dir or REPLACED)
+        merge(p.album, p.loose, replaced_dir or REPLACED, why="superseded")
         if retag:
             p.album.try_write()
         # The loose file is in replaced/ now: the album item leaves its .1 path (#274).
