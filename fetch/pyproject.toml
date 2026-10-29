@@ -12,6 +12,8 @@ dependencies = []
 music-ingest = "music_fetch.cli:main"
 music-album-reset = "music_fetch.albums:reset_main"
 music-album-requeue = "music_fetch.albums:requeue_main"
+music-state-import = "music_fetch.state_import:import_main"
+music-album-resolve = "music_fetch.state_import:resolve_main"
 
 [tool.setuptools.packages.find]
 where = ["."]
