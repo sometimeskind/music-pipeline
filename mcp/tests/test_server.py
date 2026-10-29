@@ -19,7 +19,8 @@ TOM = Caller("sub-tom", "write")
 PILOT = Caller("pilot", "read")
 
 READS = {"library_status", "find_albums", "get_album", "get_item", "list_quarantine", "get_playlist",
-         "get_job", "get_guide", "audit_dupes", "audit_lengths", "audit_releases", "audit_want_albums"}
+         "get_job", "get_guide", "audit_dupes", "audit_lengths", "audit_releases", "audit_want_albums",
+         "album_history", "digest_summary"}
 WRITES = {"reset_album", "requeue_albums", "merge_items", "replace_item", "embed_covers", "canon_albums",
           "trigger_scan", "trigger_album_tick"}
 # One minimal call per write tool.
@@ -63,6 +64,12 @@ async def test_tool_surface_is_the_v1_list_and_nothing_irreversible(pipeline):
     ("list_quarantine", {"kind": "replaced"}, "GET", "/mcp-api/quarantine", {"kind": "replaced", "offset": "0"}),
     ("get_playlist", {"name": "chill/../x"}, "GET", "/mcp-api/playlists/chill%2F..%2Fx", {"offset": "0"}),
     ("get_job", {"job_id": "3f2a", "offset": 200}, "GET", "/mcp-api/jobs/3f2a", {"offset": "200"}),
+    ("album_history", {"query": "abbey road"}, "GET", "/mcp-api/album_history", {"query": "abbey road", "offset": "0"}),
+    ("album_history", {"query": "ALB1", "since": "2026-10-01T00:00:00Z", "offset": 200}, "GET",
+     "/mcp-api/album_history", {"query": "ALB1", "since": "2026-10-01T00:00:00Z", "offset": "200"}),
+    ("digest_summary", {}, "GET", "/mcp-api/digest_summary", {}),
+    ("digest_summary", {"since": "2026-10-28T05:00:00Z"}, "GET", "/mcp-api/digest_summary",
+     {"since": "2026-10-28T05:00:00Z"}),
 ])
 async def test_reads_route_to_the_contract(pipeline, fake, tool, args, method, path, params):
     async with Client(build_server(pipeline, lambda: PILOT)) as client:

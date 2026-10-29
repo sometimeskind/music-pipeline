@@ -9,12 +9,13 @@ from __future__ import annotations
 import functools
 import logging
 import os
+from datetime import datetime, timezone
 from pathlib import Path
 
 from flask import Blueprint, g, jsonify, request
 
-from music_service import mcp_jobs, mcp_reads
-from music_service.mcp_tools import TOOLS, WRITE, Ambiguous, BadRequest, NotFound
+from music_service import mcp_history, mcp_jobs, mcp_reads
+from music_service.mcp_tools import TOOLS, WRITE, Ambiguous, BadRequest, NotFound, utc_iso
 
 logger = logging.getLogger("music_service.mcp_jobs")  # one logger for every [MCP] line
 
@@ -33,6 +34,16 @@ def _offset() -> int:
         return max(0, int(request.args.get("offset", 0)))
     except ValueError:
         raise BadRequest("offset must be a non-negative integer") from None
+
+
+def _since() -> str | None:
+    """The ``since`` argument as UTC ISO 8601, or None when it isn't given."""
+    since = request.args.get("since")
+    return None if since is None else utc_iso(since)
+
+
+def _z(iso: str | None) -> str | None:
+    return iso.replace("+00:00", "Z") if iso else iso
 
 
 def make_blueprint(jobs: mcp_jobs.JobQueue) -> Blueprint:
@@ -176,6 +187,71 @@ def make_blueprint(jobs: mcp_jobs.JobQueue) -> Blueprint:
                         "source": playlist.source or None,
                         "counts": {"entries": len(entries), "resolved": resolved, "missing": len(entries) - resolved},
                         "offset": offset, "next_offset": next_offset, "entries": shown})
+
+    # ------------------------------------------------------------------
+    # History (homelab#2413)
+    # ------------------------------------------------------------------
+
+    def unavailable(exc: Exception) -> str:
+        if isinstance(exc, mcp_history.Unavailable):
+            return str(exc)
+        logger.warning("[MCP] reading the event store failed: %s", exc)
+        return f"reading the event store failed: {type(exc).__name__}"
+
+    @bp.get("/album_history")
+    def album_history():
+        import psycopg  # noqa: PLC0415
+
+        from music_service.mcp_tools import resolve_album  # noqa: PLC0415
+
+        query = request.args.get("query", "")
+        since = _since()
+        offset = _offset()
+        read("album_history", query=query, since=since)
+        albums = records()
+        key = resolve_album(query, lambda: albums)
+        record = albums[key]
+        group = mcp_history.album_group(record)
+        try:
+            with mcp_history.connect() as conn:
+                found = mcp_history.album_history(conn, key, group, since)
+        except (mcp_history.Unavailable, psycopg.Error) as exc:
+            return jsonify({"status": "unavailable", "error": unavailable(exc)}), 503
+        shown, next_offset = mcp_reads.page(found, offset)
+        return jsonify({"status": "ok", "query": query.strip(),
+                        "album": {"key": key, "artist": record.get("artist"), "name": record.get("name"),
+                                  "status": record.get("status"), "release_group": group},
+                        "since": _z(since), "total": len(found), "offset": offset, "next_offset": next_offset,
+                        "events": shown})
+
+    @bp.get("/digest_summary")
+    def digest_summary():
+        import psycopg  # noqa: PLC0415
+
+        from music_scan.scan import EMPTY_SLOTS_NAME  # noqa: PLC0415
+
+        now = datetime.now(timezone.utc)
+        since = _since() or mcp_history.since_default(now)
+        read("digest_summary", since=since)
+        try:
+            with mcp_history.connect() as conn:
+                history = mcp_history.history(conn, since)
+        except (mcp_history.Unavailable, psycopg.Error) as exc:
+            history = {"error": unavailable(exc)}
+        state = State.load(STATE_FILE)
+        with library() as lib:
+            issues = {
+                "mixed": mcp_history.mixed(state),
+                "stuck": mcp_history.stuck(state.albums, now),
+                "only_copies": mcp_history.only_copies(lib, quarantine / "replaced"),
+                "path_clashes": mcp_history.path_clashes(lib),
+                "empty_slots": mcp_history.empty_slots(STATE_FILE.parent / EMPTY_SLOTS_NAME),
+                "rejects": mcp_history.rejects(quarantine),
+            }
+        # Requests (homelab#2478) that ended missing or failed: none exist yet.
+        requests = {"missing": mcp_history.listed([]), "failed": mcp_history.listed([])}
+        return jsonify({"status": "ok", "since": _z(since), "until": _z(now.isoformat(timespec="seconds")),
+                        "history": history, "issues": issues, "requests": requests})
 
     # ------------------------------------------------------------------
     # Jobs

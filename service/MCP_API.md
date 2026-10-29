@@ -115,6 +115,47 @@ A job record (below) with one page of its output. An unknown ID returns `404 {"s
 
 `get_guide` is served by the adapter from `mcp/guide/`, not by this API.
 
+## History (any tier, homelab#2413)
+
+History comes from the event store (`music_fetch.events`, the `music` database's `events` table). Each tag the pipeline logs for an album or item (`[GRAB]`, `[DONE]`, `[RETIRE]`, `[CLASH]`…) is also recorded as an event: `kind`, `message` (the log line), `source` (the component that saw it), the album's `spotify_album_id` and `release_group` (once an import identified its release), the `item_id`, the MCP `caller` and `job_id` that caused it, and `data`. A path clash is recorded once a day while it stands. Events are kept 90 days, and each album's latest 20 longer. Event writes are best-effort: a lost one stamps `music_events_write_failure_timestamp_seconds`, which homelab alerts on.
+
+When the event store can't be read (unset, or the database is down): `503 {"status": "unavailable", "error": "…"}`.
+
+### `GET /mcp-api/album_history?query=Q[&since=T][&offset=N]` (`album_history`)
+
+One album's events, newest first. The query resolves as for `get_album` (ambiguous, not found). Events match by the album's Spotify ID, by its release group once known, or for a local files' album by its store key. `since` (ISO 8601) is optional: without it, all kept history.
+
+```json
+{"status": "ok", "query": "abbey road",
+ "album": {"key": "0ETF…", "artist": "The Beatles", "name": "Abbey Road", "status": "imported", "release_group": "9162580e-…"},
+ "since": null, "total": 3, "offset": 0, "next_offset": null,
+ "events": [{"at": "2026-10-28T03:12:40Z", "kind": "import_done", "source": "albums", "spotify_album_id": "0ETF…",
+             "release_group": "9162580e-…", "item_id": null, "caller": null, "job_id": null,
+             "message": "[DONE] The Beatles — Abbey Road: 17 file(s) from …", "data": {"album": "…", "key": "0ETF…", "origin": "album"}}]}
+```
+
+### `GET /mcp-api/digest_summary[?since=T]` (`digest_summary`)
+
+What happened since `since` (default: 24 hours ago), and the library issues standing now, for the nightly digest. Every list is `{"total": n, "listed": [first 25]}`.
+
+```json
+{"status": "ok", "since": "2026-10-28T05:00:00Z", "until": "2026-10-29T05:00:00Z",
+ "history": {"counts": {"grab": 2, "import_done": 1, "retire": 14},
+             "events": {"grab": [{"at": "…", "message": "[GRAB] …"}], "failure": [{"at": "…", "message": "[FAIL] …", "gave_up": true}]}},
+ "issues": {"mixed": {"total": 1, "listed": [{"key": "…", "album": "Artist — Album", "origin": "album"}]},
+            "stuck": {"failed": {…}, "missing": {…}, "grabbed": {…}, "fallback": {…}},
+            "only_copies": {"total": 2, "listed": ["replaced/3-three.m4a"]},
+            "path_clashes": {"total": 1, "listed": [{"id": 10001, "path": "…", "album": "…"}]},
+            "empty_slots": {"at": "2026-10-29T03:40:00+00:00", "playlists": {"chill": {"total": 1, "entries": ["Someone — Absent"]}}},
+            "rejects": {"total": 1, "listed": ["rejected/chill/two.m4a"]}},
+ "requests": {"missing": {"total": 0, "listed": []}, "failed": {"total": 0, "listed": []}}}
+```
+
+- `history.events` holds each kind's latest 25 in the window, oldest first; `counts` every kind's total. A `merge`, `moved` or `local` event also carries its `item_id` and `data`, which the digest judges: a merge or a move between unrelated recordings or albums, an extra left to `music-audit-dupes`. With the event store unavailable, `history` is `{"error": "…"}` and the rest still answers.
+- `issues.stuck`: `failed` and `missing` albums (a feed's, which never fall back), grabs SABnzbd hasn't finished in 2 days, and fallbacks spotdl hasn't filled in 14.
+- `issues.mixed` is the last album tick's; `only_copies` are the files in `quarantine/replaced/` holding a recording the library doesn't; `path_clashes` the items canon tagged in place (`canon_clash`); `empty_slots` the last scan's (`inbox/spotdl/.empty-slots.json`), playlists with none left out; `rejects` the length guard's files still in `quarantine/rejected/`.
+- `requests` (homelab#2478) are the requests that ended `missing` or `failed`; none exist yet, so both are empty.
+
 ## Jobs
 
 The CLI tools run as jobs in a **single-slot queue** of depth 5: at most 5 jobs are queued or running at once. A 6th call returns `503 {"status": "busy", "queue": [<job summary>…]}`. Jobs run one at a time, in order, each one a subprocess of the CLI (`argv` below).

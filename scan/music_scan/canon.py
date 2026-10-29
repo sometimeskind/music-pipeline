@@ -781,6 +781,22 @@ def log_change(change: Change, apply: bool) -> None:
                 where, db_only, "" if apply else " (dry run)")
 
 
+def _moved_event(change: Change) -> None:
+    """A ``moved`` event when canon moved an item off one Spotify album onto
+    another (homelab#2413): the digest flags a move between unrelated albums."""
+    old_sid, new_sid = change.diff.get("spotify_album_id", (None, None))
+    if not old_sid or old_sid == new_sid:
+        return
+    item = change.item
+    old_album, new_album = change.diff.get("album", (item.get("album"), item.get("album")))
+    events.record("moved", f"[RETAG] {item.id} {change.source or _path(item)}: "
+                           f"album {old_album!r}→{new_album!r}, spotify_album_id {old_sid!r}→{new_sid!r}",
+                  source="canon", spotify_album_id=events.spotify_album(new_sid),
+                  release_group=item.get("mb_releasegroupid"), item_id=item.id,
+                  data={**events.item_fields(item), "from": {"album": old_album, "spotify_album_id": old_sid},
+                        "to": {"album": new_album, "spotify_album_id": new_sid}})
+
+
 def apply_change(change: Change, images: dict[str, bytes | None], fetch: Callable[[str], bytes]) -> bool:
     """Write the new tags (and cover) to the file, move it, store the item.
 
@@ -842,7 +858,8 @@ def canonicalize(
         log_change(change, apply)
         if apply:
             try:
-                apply_change(change, images, fetch)
+                if apply_change(change, images, fetch):
+                    _moved_event(change)
             except Exception as exc:
                 logger.warning("  [RETAG] %s: failed, retried next run: %s", _path(change.item), exc)
     if resolver is not None:

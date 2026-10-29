@@ -105,6 +105,8 @@ from beets import importer as beets_importer
 from beets import library as beets_library
 from beets.plugins import BeetsPlugin
 
+from music_fetch import events
+
 from music_scan.identity import (
     add_isrcs, add_to_list, fingerprint, item_isrcs, item_spotify_ids, split_list, spotify_id,
 )
@@ -543,6 +545,16 @@ class MusicPipelinePlugin(BeetsPlugin):
                     self._log.warning(
                         "[SAME] {} — {}: same recording as {}; merged (playlist {})",
                         items[0].artist, items[0].title, dup, incoming_playlist,
+                    )
+                    events.record(
+                        "merge", f"[SAME] {items[0].artist} — {items[0].title}: same recording as {dup}; "
+                                 f"merged (playlist {incoming_playlist})",
+                        source="import", item_id=dup.id,
+                        spotify_album_id=events.spotify_album(dup.get("spotify_album_id")),
+                        release_group=dup.get("mb_releasegroupid"),
+                        data={**events.item_fields(dup), "why": "same recording at import",
+                              "incoming": {"artist": items[0].artist, "title": items[0].title,
+                                           "playlist": incoming_playlist}},
                     )
                 if changed:
                     dup.store()

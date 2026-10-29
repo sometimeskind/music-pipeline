@@ -107,9 +107,9 @@ class Library:
         except ValueError:
             return str(p)
 
-    def identities(self) -> list[Item]:
-        """Every item with just the attributes a recording resolves by."""
-        keys = ("spotify_ids", "spotify_url", "isrc")
+    def identities(self, keys: tuple[str, ...] = ("spotify_ids", "spotify_url", "isrc")) -> list[Item]:
+        """Every item that has one of *keys* (by default the attributes a playlist
+        entry resolves by), with just those."""
         values = {k: self.attr(k) for k in keys}
         ids = {i for v in values.values() for i in v}
         return [Item({"id": i, **{k: values[k].get(i) for k in keys}}) for i in sorted(ids)]
