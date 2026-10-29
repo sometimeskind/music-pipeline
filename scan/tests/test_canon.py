@@ -973,6 +973,32 @@ def test_an_album_records_items_take_its_album_whatever_their_ids(tmp_path, ffmp
         assert item.get("mb_album_via") == "files"
 
 
+def test_a_multi_disc_records_items_take_its_disc_count_and_no_longer_clash(tmp_path, ffmpeg, lib, monkeypatch):
+    """homelab#2491: Rocket to Russia (40th Anniversary)'s two "Surfin' Bird"s
+    (disc 1 and 2, track 13) came in as singletons with disctotal 0, so the path
+    had no disc prefix and the disc-2 copy clashed on every scan.  The record's
+    highest disc sets disctotal; a single-disc record's items are left alone."""
+    from beets import config
+
+    from music_scan import canon, cover
+
+    config["paths"].set({"singleton": "$albumartist/$album/%if{$disc,%if{%first{$disctotal,1,0,01},$disc-}}"
+                                      "$track - $title"})
+    monkeypatch.setattr(canon.events, "record", lambda *a, **kw: None)
+    monkeypatch.setattr(cover, "download", lambda url: _jpeg(tmp_path / "c.jpg"))
+    inbox = tmp_path / "in"
+    one, two = (_add(lib, _m4a(inbox / f"{disc}.m4a"), title="Bird", album=MC, albumartist=PUMPKINS, track=13,
+                     disc=disc, via="usenet", album_record="MC30") for disc in (1, 2))
+    records = {"MC30": {**_pumpkins_records()["MC30"], "release_files": {"mb": {"mb_albumid": "MB2025"}}}}
+
+    canon.canonicalize_items([lib.get_item(one.id), lib.get_item(two.id)], _pumpkins_songs(), budget=None,
+                             records=records)
+    paths = {i.disc: (i.disctotal, Path(os.fsdecode(i.path)).name, i.get(canon.CLASH)) for i in lib.all_items()}
+    assert paths == {1: (2, "01-13 - Bird.m4a", None), 2: (2, "02-13 - Bird.m4a", None)}
+    # Alone, an item keeps the disc count it has.
+    assert canon.canonicalize_items([lib.get_item(one.id)], _pumpkins_songs(), budget=None, records=records) == 0
+
+
 def test_an_album_records_item_whose_path_is_taken_is_tagged_in_place(tmp_path, ffmpeg, lib, caplog, monkeypatch):
     """#306: Stop Making Sense's release Psycho Killer (3730) would move onto the
     path a legacy extra of it held.  It takes the album's tags where it is, so it
