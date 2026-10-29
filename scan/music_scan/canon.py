@@ -589,11 +589,17 @@ def plan_changes(
                if q.isrc and q.release.album_id in plan.twins}
     dests: dict[str, object] = {}
     releases = {q.release.album_id: q.release for q in placements.values()}
+    items = list(items)
+    # An album record's highest disc among these items (homelab#2491).
+    discs: Counter[str] = Counter()
+    for item in items:
+        if (key := item.get("album_record")) and key in (records or {}):
+            discs[key] = max(discs[key], _int(item.disc))
     for item in items:
         plan.scanned += 1
         key = item.get("album_record")
         if key and key in (records or {}):
-            _plan_record_item(item, key, records[key], releases, resolver, plan, dests)
+            _plan_record_item(item, key, records[key], releases, resolver, plan, dests, discs[key])
             continue
         if not item_spotify_ids(item):
             continue
@@ -661,11 +667,16 @@ def plan_changes(
 
 
 def _plan_record_item(item, key: str, record: dict, releases: dict[str, Release], resolver: Resolver | None,
-                      plan: Plan, dests: dict) -> None:
+                      plan: Plan, dests: dict, discs: int = 0) -> None:
     """Plan an album record's item (#279): the record's Spotify album names it
     (album, album artist, date, cover, ``spotify_album_id``), the files' own
     MusicBrainz release gives its MusicBrainz album tags, and it keeps its own
-    disc/track: the release is the album.  Its track IDs play no part."""
+    disc/track: the release is the album.  Its track IDs play no part.
+
+    A singleton import leaves ``disctotal`` 0, so a multi-disc release's discs
+    shared file names and clashed (homelab#2491).  *discs*, the record's highest
+    disc among the items canonicalised with it, sets ``disctotal`` when it is 2
+    or more, and never lowers it: the path's disc prefix then applies."""
     release = releases.get(key)
     if release is None:
         plan.noalbum += 1
@@ -673,6 +684,8 @@ def _plan_record_item(item, key: str, record: dict, releases: dict[str, Release]
         return
     p = Placement(release, item.track or 0, item.disc or 1, True)
     fields = {k: v for k, v in spotify_fields(p).items() if k in ("album", "albumartist", "year", "month", "day")}
+    if discs >= 2:
+        fields["disctotal"] = max(_int(item.disctotal), discs)
     mb = (record.get("release_files") or {}).get("mb")
     if mb:
         fields.update(mb)
