@@ -16,9 +16,8 @@ import os
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Callable, Mapping
-from urllib.parse import parse_qs, urlsplit
 
-from music_fetch import events, spotify_limit, state
+from music_fetch import events, overrides, spotify_limit, state
 from music_fetch.names import SPOTDL_NAME_BYTES, truncate_utf8
 
 logger = logging.getLogger(__name__)
@@ -40,39 +39,16 @@ def _backoff_days(attempts: int, kind: str = "miss") -> int:
 
 # A source URL for a track spotdl's search can't find (#247), e.g. a glyph-only title.
 PINS_FILE = Path("/root/.config/music-pipeline/track-pins.conf")
-_TRACK_URL = "https://open.spotify.com/track/"
 
 
 def load_pins(path: Path | None = None) -> dict[str, str]:
-    """Source URLs by Spotify track URL (#247): one ``<spotify track id>  <url>``
-    per line of track-pins.conf (the ID may be the track's open.spotify.com URL;
-    anything after the source URL is a label).  Lines starting with ``#`` and
-    blank lines are ignored; a missing file means no pins."""
-    path = path or PINS_FILE
-    if not path.is_file():
-        return {}
-    pins: dict[str, str] = {}
-    for raw in path.read_text(encoding="utf-8").splitlines():
-        parts = raw.split()
-        if not parts or parts[0].startswith("#"):
-            continue
-        if len(parts) < 2 or not parts[1].startswith("https://"):
-            logger.warning("[PIN] ignoring %r in %s: want <spotify track id> <https source url>", raw.strip(), path.name)
-            continue
-        track = parts[0].split("?")[0].rstrip("/").rsplit("/", 1)[-1]
-        pins[_TRACK_URL + track] = _source_url(parts[1])
-    return pins
-
-
-def _source_url(url: str) -> str:
-    """A YouTube share link without its tracking parameters (``si`` and the
-    like): ``https://<host>/watch?v=<id>``, the form spotdl's own search
-    returns.  Any other URL is kept as it is."""
-    parsed = urlsplit(url)
-    video = parse_qs(parsed.query).get("v")
-    if parsed.netloc.endswith("youtube.com") and parsed.path == "/watch" and video:
-        return f"https://{parsed.netloc}/watch?v={video[0]}"
-    return url
+    """Source URLs by Spotify track URL (#247): the music database's pins once
+    ``music-overrides import`` has moved them there (homelab#2484), else
+    track-pins.conf's (*path*): one ``<spotify track id>  <url>`` per line (the
+    ID may be the track's open.spotify.com URL; anything after the source URL
+    is a label).  Lines starting with ``#`` and blank lines are ignored; a
+    missing file means no pins."""
+    return overrides.pins(path or PINS_FILE)
 
 
 @dataclasses.dataclass(frozen=True)

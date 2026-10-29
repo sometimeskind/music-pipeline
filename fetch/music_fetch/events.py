@@ -162,6 +162,21 @@ def record(kind: str, message: str, *, source: str, spotify_album_id: str | None
         return False
 
 
+def insert(conn: psycopg.Connection, kind: str, message: str, *, source: str,
+           spotify_album_id: str | None = None, release_group: str | None = None,
+           data: dict[str, Any] | None = None) -> None:
+    """Record one event on *conn*, inside the caller's transaction: unlike
+    :func:`record` it raises, for a write whose event is its audit trail (an
+    override, homelab#2484), which must not commit without it."""
+    if kind not in KINDS:
+        raise ValueError(f"unknown event kind {kind!r}")
+    conn.execute(_INSERT, {
+        "kind": kind, "source": source, "spotify_album_id": spotify_album_id or None,
+        "release_group": release_group_id(release_group), "item_id": None,
+        "caller": os.environ.get("MUSIC_EVENT_CALLER") or None, "job_id": os.environ.get("MUSIC_EVENT_JOB") or None,
+        "message": message, "data": Jsonb(data or {})})
+
+
 def prune(conn: psycopg.Connection | None = None, *, days: int = KEEP_DAYS, keep: int = KEEP_PER_ALBUM) -> int:
     """Delete events past retention; returns how many.  Raises on a database error."""
     if conn is not None:

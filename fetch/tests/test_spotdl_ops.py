@@ -1199,17 +1199,17 @@ def test_load_pins_reads_ids_urls_and_labels(tmp_path: Path) -> None:
         "# a comment\n"
         "\n"
         "68ozhSrI4eLbnUgih1SlOT  https://music.youtube.com/watch?v=29Sh3yEaBP8&si=BQmU0Qvnv0Z64Jwc  track 1\n"
-        "https://open.spotify.com/track/5sKY9vib0WClIKDr0qkaWH?si=x  https://www.youtube.com/watch?v=abc\n"
+        "https://open.spotify.com/track/5sKY9vib0WClIKDr0qkaWH?si=x  https://youtu.be/aVqJbrkkdYk?t=3\n"
         "noUrlHere\n"
         "7rgHXYuIpmxO3bpXZ7ZNLR  ftp://example.com/x\n"
-        "1XFW64AA5LnzFT510fKZSF  https://example.com/song.m4a\n",
+        "1XFW64AA5LnzFT510fKZSF  https://example.com/song.m4a\n"  # yt-dlp fetches YouTube only (homelab#2484)
+        "2XFW64AA5LnzFT510fKZSF  https://music.youtube.com/playlist?list=OLAK5uy_l7iC3zWrsZ\n",
         encoding="utf-8",
     )
 
     assert load_pins(conf) == {
         "https://open.spotify.com/track/68ozhSrI4eLbnUgih1SlOT": "https://music.youtube.com/watch?v=29Sh3yEaBP8",
-        "https://open.spotify.com/track/5sKY9vib0WClIKDr0qkaWH": "https://www.youtube.com/watch?v=abc",
-        "https://open.spotify.com/track/1XFW64AA5LnzFT510fKZSF": "https://example.com/song.m4a",
+        "https://open.spotify.com/track/5sKY9vib0WClIKDr0qkaWH": "https://www.youtube.com/watch?v=aVqJbrkkdYk",
     }
     assert load_pins(tmp_path / "absent.conf") == {}
 
@@ -1240,7 +1240,7 @@ def test_pinned_track_downloads_from_its_source_url(tmp_path: Path, caplog) -> N
     failures_file = tmp_path / "failures.json"
     failures_file.write_text(json.dumps({songs[2]["url"]: {"kind": "miss", "attempts": 2, "retry_after": "2999-01-01T00:00:00+00:00"}}))
     pins_file = tmp_path / "track-pins.conf"
-    pins_file.write_text("2  https://music.youtube.com/watch?v=pinned&si=share\n", encoding="utf-8")
+    pins_file.write_text("2  https://music.youtube.com/watch?v=pinnedVideo&si=share\n", encoding="utf-8")
     sent: list = []
 
     def fake_download(batch):
@@ -1260,8 +1260,8 @@ def test_pinned_track_downloads_from_its_source_url(tmp_path: Path, caplog) -> N
         )
 
     assert [s.url for s in sent] == [songs[2]["url"]]
-    assert sent[0].download_url == "https://music.youtube.com/watch?v=pinned"
-    assert "[PIN] Artist - T2 → downloading from https://music.youtube.com/watch?v=pinned" in caplog.text
+    assert sent[0].download_url == "https://music.youtube.com/watch?v=pinnedVideo"
+    assert "[PIN] Artist - T2 → downloading from https://music.youtube.com/watch?v=pinnedVideo" in caplog.text
     assert result.downloaded == 1
     assert songs[2]["url"] not in json.loads(failures_file.read_text())
 
