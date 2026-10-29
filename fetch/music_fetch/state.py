@@ -84,7 +84,10 @@ EMPTY_SLOTS = "empty-slots"          # .empty-slots.json, one document
 # Written by music-state-import --apply with the state it imports: from then on
 # the pipeline reads and writes the database, and the JSON is the rollback copy.
 IMPORTED = "state-imported"
-KV_NAMES = (MB_RELEASES, CANON_ISRC, CANON_PAGES, SPOTIFY_LIMIT, EMPTY_SLOTS, IMPORTED)
+# Written by music-overrides import --apply (homelab#2484): from then on the
+# overrides, holds and pins are the tables', and the ConfigMap's files are ignored.
+OVERRIDES_IMPORTED = "overrides-imported"
+KV_NAMES = (MB_RELEASES, CANON_ISRC, CANON_PAGES, SPOTIFY_LIMIT, EMPTY_SLOTS, IMPORTED, OVERRIDES_IMPORTED)
 
 
 # Present once music-state-import --apply has moved the state into the
@@ -310,11 +313,53 @@ def save_albums(conn: psycopg.Connection, rows: AlbumRows) -> int:
             with conn.cursor() as cur:
                 cur.executemany("INSERT INTO indexer_use (at, kind) VALUES (%s, %s)",
                                 [(datetime.fromisoformat(e["t"]), e["kind"]) for e in rows.indexer])
+        attach_overrides(conn, [r["_id"] for r, _ in changed])
     for i in gone:
         del rows.snapshot[i]
     for record, is_mixed in changed:
         rows.snapshot[record["_id"]] = _fingerprint(record, is_mixed)
     return len(changed) + len(gone)
+
+
+_ROW_REFS = """
+SELECT a.id, array_remove(array_agg(r.ref ORDER BY r.ref) || a.release_group::text, NULL)
+  FROM albums a LEFT JOIN album_refs r ON r.album_id = a.id
+ WHERE a.id = ANY(%s) GROUP BY a.id
+"""
+
+
+def attach_overrides(conn: psycopg.Connection, changed: Iterable[int] = ()) -> None:
+    """Keep the overrides and holds (homelab#2484) on their albums' rows, in
+    the caller's transaction: one whose row is gone (its ``album_id`` set
+    null by the delete) moves to the row that now carries one of its refs, a
+    merge's survivor or the album back on a playlist, unless that row has one
+    of its kind already (then it stays detached, and ``list`` shows it); then
+    the refs of the *changed* rows' overrides are brought up to date."""
+    detached = conn.execute("SELECT id, kind, refs FROM album_overrides WHERE album_id IS NULL ORDER BY id").fetchall()
+    moved: list[int] = []
+    if detached:
+        wanted = sorted({ref for _, _, refs in detached for ref in refs})
+        owner = dict(conn.execute("SELECT ref, album_id FROM album_refs WHERE ref = ANY(%s)", (wanted,)).fetchall())
+        owner.update(conn.execute("SELECT release_group::text, id FROM albums WHERE release_group::text = ANY(%s)",
+                                  (wanted,)).fetchall())
+        taken = set(conn.execute("SELECT album_id, kind FROM album_overrides WHERE album_id IS NOT NULL").fetchall())
+        for override_id, kind, refs in detached:
+            album_id = next((owner[r] for r in refs if r in owner), None)
+            if album_id is None:
+                continue
+            if (album_id, kind) in taken:
+                logger.warning("[OVERRIDE] the %s override %d (%s) names album row %d, which has one already; "
+                               "left detached", kind, override_id, ", ".join(refs), album_id)
+                continue
+            conn.execute("UPDATE album_overrides SET album_id = %s WHERE id = %s", (album_id, override_id))
+            taken.add((album_id, kind))
+            moved.append(album_id)
+            logger.info("[OVERRIDE] the %s override %d (%s) moved to album row %d", kind, override_id,
+                        ", ".join(refs), album_id)
+    ids = sorted({*changed, *moved})
+    if ids:
+        conn.execute(f"UPDATE album_overrides o SET refs = r.refs FROM ({_ROW_REFS}) r (id, refs) "
+                     "WHERE o.album_id = r.id AND o.refs <> r.refs", (ids,))
 
 
 # ---------------------------------------------------------------------------

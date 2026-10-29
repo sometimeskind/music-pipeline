@@ -60,8 +60,8 @@ album rows are keyed by MusicBrainz release group, and two Spotify editions of
 one release group are one record (:mod:`music_fetch.resolve`, run every tick).
 A record's key here stays its primary Spotify album ID (else its release
 group, else a local album's ``artist/name``); a Spotify album ID from a song
-finds its record through :meth:`State.refs`, and an override or hold names any
-of the record's Spotify IDs.
+finds its record through :meth:`State.refs`, and an override or hold names the
+record's row (:mod:`music_fetch.overrides`, homelab#2484).
 """
 
 from __future__ import annotations
@@ -76,7 +76,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Callable, Protocol
 
-from music_fetch import events, resolve, store
+from music_fetch import events, overrides, resolve, store
 from music_fetch import state as statedb
 from music_fetch.ids import spotify_key
 from music_fetch.metrics import _gauge, _push
@@ -85,8 +85,9 @@ from music_fetch.usenet import Release, clean_album, edition, normalise, rank, r
 logger = logging.getLogger(__name__)
 
 STATE_FILE = Path("/root/Music/inbox/spotdl/.albums.json")
-# Search text for albums whose names no normalisation reaches (#197); mounted
-# from the homelab repo next to playlists.conf.
+# Search text for albums whose names no normalisation reaches (#197), and
+# holds; mounted from the homelab repo next to playlists.conf until
+# ``music-overrides import`` moves them to the music database (homelab#2484).
 OVERRIDES_FILE = Path("/root/.config/music-pipeline/album-overrides.conf")
 
 WANTED = "wanted"      # waiting for a search slot
@@ -256,33 +257,29 @@ def album_tracks(record: dict) -> list[list]:
     return tracks
 
 
-# An album-overrides.conf line ``hold <album id>`` holds an album (#288).
-HOLD = "hold"
-
-
-def _override_lines(path: Path | None) -> list[list[str]]:
-    path = path or OVERRIDES_FILE
-    if not path.is_file():
-        return []
-    return [parts for raw in path.read_text(encoding="utf-8").splitlines()
-            if (parts := raw.split("#")[0].split(maxsplit=1))]
-
-
 def load_overrides(path: Path | None = None) -> dict[str, str]:
-    """Search text by Spotify album ID, for names no normalisation can reach.
+    """album-overrides.conf's search text by Spotify album ID, for names no
+    normalisation can reach (#197).
 
     Format: one ``<album id>  <search words…>`` per line; ``#`` comments and
     blank lines are ignored.  A missing file means no overrides.  ``hold``
-    lines are :func:`load_holds`'.
+    lines are :func:`load_holds`'.  The tick reads :func:`album_fixes`.
     """
-    return {parts[0]: normalise(parts[1]) for parts in _override_lines(path)
-            if len(parts) == 2 and parts[0] != HOLD and normalise(parts[1])}
+    return {o.refs[0]: o.words or "" for o in overrides.parse_albums(path or OVERRIDES_FILE)
+            if o.kind == overrides.SEARCH}
 
 
 def load_holds(path: Path | None = None) -> set[str]:
-    """The album IDs the operator holds (#288): ``hold <album id>`` lines in
-    album-overrides.conf.  A held album is never reset automatically."""
-    return {parts[1].split()[0] for parts in _override_lines(path) if len(parts) == 2 and parts[0] == HOLD}
+    """The album IDs album-overrides.conf holds (#288): ``hold <album id>``
+    lines.  A held album is never reset automatically."""
+    return {o.refs[0] for o in overrides.parse_albums(path or OVERRIDES_FILE) if o.kind == overrides.HOLD}
+
+
+def album_fixes(path: Path | None = None) -> list[overrides.AlbumOverride]:
+    """The search overrides and holds the tick applies (homelab#2484): the
+    music database's once imported, else album-overrides.conf's.  Raises
+    :class:`state.Unavailable` when the database holds the state and is down."""
+    return overrides.album_overrides(path or OVERRIDES_FILE)
 
 
 @dataclasses.dataclass
@@ -300,7 +297,7 @@ def plan(key: str, record: dict, overrides: dict[str, str]) -> Plan:
     """The searches for an album (#197).  An override wins; a title with no
     readable words searches the artist alone and matches any of their releases
     on size; with neither, there is nothing to search (``queries`` empty)."""
-    # Keyed by Spotify album ID until homelab#2484: any of the record's IDs (homelab#2410).
+    # By album key (overrides.keyed), or by any of the record's Spotify IDs (a file's, homelab#2410).
     words = next((overrides[ref] for ref in _refs(key, record) if ref in overrides), None)
     if words:
         return Plan([words], album=words, note=" (override)")
@@ -791,14 +788,15 @@ def top_up(
 ) -> None:
     """Search and grab wanted albums until the queue or a budget is full.
 
-    *overrides* default to ``album-overrides.conf``, so every caller searches
-    the same way (#202).
+    *overrides* (search words by album key) default to :func:`album_fixes`,
+    so every caller searches the same way (#202).
 
     The indexers' status is checked before the tick's first search and after
     every empty result: one in backoff stops the tick like a failed search, so
     no album changes status and no further hit is spent (#263).  So do
     ``EMPTY_RUN_LIMIT`` albums in a row with no results at all."""
-    overrides = load_overrides() if overrides is None else overrides
+    if overrides is None:
+        overrides = _search_overrides(state)
     checked = False
     empty_run = 0
     if settings.mode == "on":
@@ -1166,7 +1164,11 @@ def push_metrics(state: State, success: bool) -> None:
     _push("\n".join(lines), "music_albums")
 
 
-def resolve_keys(state: State, overrides_file: Path | None = None,
+def _search_overrides(state: State, fixes: list[overrides.AlbumOverride] | None = None) -> dict[str, str]:
+    return overrides.keyed(album_fixes() if fixes is None else fixes, state)[0]
+
+
+def resolve_keys(state: State, fixes: list[overrides.AlbumOverride] | None = None,
                  library_db: Path = resolve.LIBRARY_DB) -> resolve.Report | None:
     """Key the records the database can't key yet by release group, and merge
     two editions of one (homelab#2410, :mod:`music_fetch.resolve`): a new
@@ -1178,7 +1180,7 @@ def resolve_keys(state: State, overrides_file: Path | None = None,
         with statedb.session() as conn:
             cache = statedb.get_all(conn, statedb.MB_RELEASES) if conn is not None else {}
         library = resolve.library_groups(library_db) if os.path.isfile(library_db) else {}
-        report = resolve.resolve(state, cache, library, load_overrides(overrides_file))
+        report = resolve.resolve(state, cache, library, _search_overrides(state, fixes))
     except Exception:
         logger.exception("Resolving the album keys failed; the next tick tries again")
         return None
@@ -1215,6 +1217,8 @@ def tick(
         return result
     try:
         state = State.load(state_file)
+        # Read with the state: a tick never runs without its overrides and holds (homelab#2484).
+        fixes = album_fixes(overrides_file)
     except statedb.Unavailable as exc:
         # Never run on the stale JSON (homelab#2410): skip, and let
         # MusicAlbumTickFailing say so once the outage outlasts 2h.
@@ -1232,18 +1236,20 @@ def tick(
             feed_wants(state, (want_playlists or []) if settings.want_min > 0 else [], wants, settings)
         if library is not None:
             feed_library(state, library, settings)
-        resolve_keys(state, overrides_file)
+        resolve_keys(state, fixes)
+        # Keyed after the resolve, which may merge or rekey a record.
+        search, holds = overrides.keyed(fixes, state)
         if settings.mode == "on" and on_completion is not None:
             for completion in lost_completions(state, sabnzbd):
                 logger.info("Recovering lost import trigger for %s", completion.nzo_id)
                 on_completion(state, completion)
         if mixed is not None:
             try:
-                auto_reimport(state, settings, mixed, load_holds(overrides_file), result)
+                auto_reimport(state, settings, mixed, holds, result)
             except Exception:
                 # The library's side failed: grabbing what is wanted needn't wait for it.
                 logger.exception("Automatic reimports failed; the next tick tries again")
-        top_up(state, settings, prowlarr, sabnzbd, have, result, overrides=load_overrides(overrides_file))
+        top_up(state, settings, prowlarr, sabnzbd, have, result, overrides=search)
         if settings.mode == "on" and missing is not None:
             fallbacks(state, missing, spotify.album_songs)
         success = True

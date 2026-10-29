@@ -76,6 +76,10 @@ EVENT_KINDS = (
     "later_added",
     "later_removed",
     "spotify_id_resolved",
+    # Migration 5: a search override, hold or track pin set or cleared (homelab#2484);
+    # data.kind says which.
+    "override_set",
+    "override_cleared",
 )
 
 MIGRATIONS: list[str] = [
@@ -183,6 +187,47 @@ MIGRATIONS: list[str] = [
         value      jsonb NOT NULL,
         updated_at timestamptz NOT NULL DEFAULT now(),
         PRIMARY KEY (name, key)
+    );
+    """,
+    # 5: search overrides, holds and track pins, moved off the ConfigMap
+    # (homelab#2484, read and written through music_fetch.overrides).  An
+    # override or hold names its album's row, not a release group: most rows
+    # have none until their import, and those are the albums that need an
+    # override.  ``refs`` keeps the row's refs (Spotify album IDs, names, its
+    # release group) as of the last save, so an override whose row is deleted
+    # (a merge's loser, an album that left its playlist) re-attaches to the row
+    # that next carries one of them.  A pin names a track by Spotify track ID
+    # (what spotdl matches), with its ISRC when known.
+    """
+    ALTER TABLE events DROP CONSTRAINT events_kind_check;
+    ALTER TABLE events ADD CONSTRAINT events_kind_check CHECK (kind IN (
+        'import_done', 'import_wrong', 'import_incomplete', 'import_lost',
+        'retire', 'local', 'merge', 'clash', 'mixed',
+        'grab', 'autoreset', 'fallback', 'failure', 'reject', 'mcp_job',
+        'album_requested', 'later_added', 'later_removed', 'spotify_id_resolved',
+        'filled', 'wrong_version', 'moved', 'override_set', 'override_cleared'));
+    CREATE TABLE album_overrides (
+        id       bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+        kind     text NOT NULL CONSTRAINT album_overrides_kind_check CHECK (kind IN ('search', 'hold')),
+        album_id bigint REFERENCES albums (id) ON DELETE SET NULL,
+        refs     text[] NOT NULL,
+        words    text,
+        reason   text NOT NULL DEFAULT '',
+        set_by   text NOT NULL,
+        set_at   timestamptz NOT NULL DEFAULT now(),
+        CONSTRAINT album_overrides_words_check CHECK ((kind = 'search') = (words IS NOT NULL))
+    );
+    CREATE UNIQUE INDEX album_overrides_album_kind ON album_overrides (album_id, kind) WHERE album_id IS NOT NULL;
+    CREATE TABLE track_pins (
+        id               bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+        spotify_track_id text UNIQUE,
+        isrc             text,
+        url              text NOT NULL,
+        label            text NOT NULL DEFAULT '',
+        reason           text NOT NULL DEFAULT '',
+        set_by           text NOT NULL,
+        set_at           timestamptz NOT NULL DEFAULT now(),
+        CONSTRAINT track_pins_track_check CHECK (spotify_track_id IS NOT NULL OR isrc IS NOT NULL)
     );
     """,
 ]

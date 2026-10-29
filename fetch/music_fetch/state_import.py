@@ -99,11 +99,16 @@ def write(conn, p: Plan, replace: bool = False) -> None:
     """Write *p* and the import marker in one transaction."""
     with conn.transaction():
         held = conn.execute("SELECT (SELECT count(*) FROM albums) + (SELECT count(*) FROM playlist_stores) "
-                            "+ (SELECT count(*) FROM kv)").fetchone()[0]
+                            "+ (SELECT count(*) FROM kv WHERE name <> %s)", (state.OVERRIDES_IMPORTED,)).fetchone()[0]
         if held and not replace:
             raise SystemExit("The music database has state already; --replace empties it first")
         if replace:
-            conn.execute(f"TRUNCATE {', '.join(STATE_TABLES)} RESTART IDENTITY")
+            # The overrides (homelab#2484) are no copy of the JSON: they stay, detached
+            # from the albums deleted here, and re-attach by ref as save_albums writes them.
+            conn.execute("DELETE FROM albums")
+            conn.execute("ALTER TABLE albums ALTER COLUMN id RESTART")
+            conn.execute(f"TRUNCATE {', '.join(t for t in STATE_TABLES if t not in ('albums', 'kv'))} RESTART IDENTITY")
+            conn.execute("DELETE FROM kv WHERE name <> %s", (state.OVERRIDES_IMPORTED,))
         state.save_albums(conn, p.rows)
         for name, data in p.stores.items():
             state.save_store(conn, name, data.get("entries") or [], data.get("source") or "",
