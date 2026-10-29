@@ -97,7 +97,6 @@ from __future__ import annotations
 import argparse
 import contextlib
 import dataclasses
-import json
 import logging
 import os
 import time
@@ -108,7 +107,7 @@ from collections.abc import Callable, Iterable
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from music_fetch import events
+from music_fetch import events, state
 from music_scan.identity import item_spotify_ids, spotify_id
 from music_scan.mb_release import MB_ALBUM_FIELDS, Resolver, SpotifyAlbum
 
@@ -394,22 +393,13 @@ class AlbumsByIsrc:
         self.calls = 0
         self.limited = False
         self._last = 0.0
-        self.cache: dict[str, dict] = {}
-        if cache_file is not None:
-            try:
-                self.cache = json.loads(cache_file.read_text(encoding="utf-8"))
-            except FileNotFoundError:
-                pass
-            except (OSError, ValueError):
-                logger.warning("Ignoring unreadable ISRC album cache %s", cache_file)
+        # The music database's canon-isrc document once the state is there (homelab#2410).
+        self._store = None if cache_file is None else state.KeyedCache(state.CANON_ISRC, cache_file)
+        self.cache: dict[str, dict] = {} if self._store is None else self._store.load()
 
     def save(self) -> None:
-        if self.cache_file is None:
-            return
-        try:
-            self.cache_file.write_text(json.dumps(self.cache, indent=1, sort_keys=True), encoding="utf-8")
-        except OSError as exc:
-            logger.warning("Could not save the ISRC album cache %s: %s", self.cache_file, exc)
+        if self._store is not None:
+            self._store.save(self.cache)
 
     def _due(self, entry: dict | None) -> bool:
         if entry is None or entry.get("v") != ISRC_CACHE_VERSION:
@@ -924,11 +914,11 @@ def read_pages(refresh: bool = False, cache_file: Path = PAGES_CACHE) -> dict[st
 
     if not refresh:
         try:
-            cached = json.loads(cache_file.read_text(encoding="utf-8"))
-            if time.time() - cached["read_at"] < PAGES_MAX_AGE:
+            cached = state.load_doc(state.CANON_PAGES, cache_file)
+            if cached and time.time() - cached["read_at"] < PAGES_MAX_AGE:
                 logger.info("Using the playlist pages read %s ago", f"{(time.time() - cached['read_at']) / 60:.0f} min")
                 return cached["playlists"]
-        except (OSError, ValueError, KeyError):
+        except (OSError, ValueError, KeyError, state.Unavailable):
             pass
     reader = SpotifyPlaylists(ingest.COOKIE_FILE)
     pages: dict[str, list[dict]] = {}
@@ -936,8 +926,8 @@ def read_pages(refresh: bool = False, cache_file: Path = PAGES_CACHE) -> dict[st
         pages[pl.name] = reader.songs(pl.url)
         logger.info("Read %s: %d track(s)", pl.name, len(pages[pl.name]))
     try:
-        cache_file.write_text(json.dumps({"read_at": time.time(), "playlists": pages}), encoding="utf-8")
-    except OSError as exc:
+        state.save_doc(state.CANON_PAGES, cache_file, {"read_at": time.time(), "playlists": pages})
+    except (OSError, state.Unavailable) as exc:
         logger.warning("Could not cache the playlist pages in %s: %s", cache_file, exc)
     return pages
 

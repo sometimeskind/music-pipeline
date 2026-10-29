@@ -28,17 +28,27 @@ In memory an album record is the dict album mode always used, plus:
 group, else its primary Spotify album ID, else its name.  It names the album,
 the row ``id`` identifies it, so a resolved album changes key without moving.
 
-Postgres down: :func:`connect` raises :class:`Unavailable`, and the caller
-skips its run cleanly rather than run without its state (homelab#2410).
+Which copy is the state: the JSON files until ``music-state-import --apply``
+has written the database, then the database.  The switch is the dot file
+:data:`SWITCH`, which the import writes after its transaction commits, so a
+process that has not been switched never needs Postgres, and the previous
+image (the rollback) never sees it.  :func:`session` yields None while the JSON
+is the state.
+
+Postgres down once switched: :func:`connect` raises :class:`Unavailable`, and
+the caller skips its run cleanly rather than run without its state, or on the
+stale JSON (homelab#2410).
 """
 
 from __future__ import annotations
 
+import contextlib
 import dataclasses
 import json
 import logging
-from collections.abc import Iterable, Mapping
+from collections.abc import Iterable, Iterator, Mapping
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any
 
 import psycopg
@@ -72,8 +82,33 @@ IMPORTED = "state-imported"
 KV_NAMES = (MB_RELEASES, CANON_ISRC, CANON_PAGES, SPOTIFY_LIMIT, EMPTY_SLOTS, IMPORTED)
 
 
+# Present once music-state-import --apply has moved the state into the
+# database.  A dot file beside the JSON it replaces (pipeline-state-files-in-dot-dirs).
+SWITCH = Path("/root/Music/inbox/spotdl/.state-in-db")
+
+
 class Unavailable(RuntimeError):
     """The ``music`` database is not configured or not reachable."""
+
+
+def in_db() -> bool:
+    """Whether the database, not the JSON files, holds the state."""
+    return SWITCH.exists()
+
+
+@contextlib.contextmanager
+def session() -> Iterator[psycopg.Connection | None]:
+    """A connection to the state database once :func:`in_db`, else None (the
+    JSON files are the state).  Raises :class:`Unavailable` when switched and
+    the database is down."""
+    if not in_db():
+        yield None
+        return
+    conn = connect()
+    try:
+        yield conn
+    finally:
+        conn.close()
 
 
 def connect(url: str | None = None) -> psycopg.Connection:
@@ -266,6 +301,13 @@ def save_store(conn: psycopg.Connection, playlist: str, entries: list[dict], sou
     return _iso(updated)
 
 
+def load_stores(conn: psycopg.Connection) -> dict[str, dict]:
+    """Every playlist's store, by name."""
+    return {playlist: {"playlist": playlist, "source": source, "updated": _iso(updated), "entries": entries}
+            for playlist, source, updated, entries in conn.execute(
+                "SELECT playlist, source, updated_at, entries FROM playlist_stores ORDER BY playlist")}
+
+
 def remove_store(conn: psycopg.Connection, playlist: str) -> None:
     conn.execute("DELETE FROM playlist_stores WHERE playlist = %s", (playlist,))
 
@@ -331,3 +373,80 @@ def put_many(conn: psycopg.Connection, name: str, values: Mapping[str, Any]) -> 
 def delete(conn: psycopg.Connection, name: str, keys: Iterable[str] = ("",)) -> None:
     _check(name)
     conn.execute("DELETE FROM kv WHERE name = %s AND key = ANY(%s)", (name, list(keys)))
+
+
+class KeyedCache:
+    """A keyed kv document (*name*, e.g. :data:`MB_RELEASES`) as a dict:
+    :meth:`load` reads it from the database once the state is there, else
+    from its JSON file *path*; :meth:`save` writes back the keys that changed
+    (the whole file, before the switch).  A cache is best-effort: a database
+    that is down reads as empty and skips the save, with a warning."""
+
+    def __init__(self, name: str, path: Path) -> None:
+        _check(name)
+        self.name = name
+        self.path = path
+        self._saved: dict[str, str] = {}
+
+    def load(self) -> dict[str, Any]:
+        try:
+            with session() as conn:
+                if conn is not None:
+                    data = get_all(conn, self.name)
+                    self._saved = {k: _dumps(v) for k, v in data.items()}
+                    return data
+        except Unavailable as exc:
+            logger.warning("Ignoring the %s cache: %s", self.name, exc)
+            return {}
+        try:
+            return json.loads(self.path.read_text(encoding="utf-8"))
+        except FileNotFoundError:
+            return {}
+        except (OSError, ValueError):
+            logger.warning("Ignoring unreadable %s cache %s", self.name, self.path)
+            return {}
+
+    def save(self, data: Mapping[str, Any]) -> None:
+        try:
+            with session() as conn:
+                if conn is not None:
+                    dumped = {k: _dumps(v) for k, v in data.items()}
+                    put_many(conn, self.name, {k: data[k] for k, d in dumped.items() if self._saved.get(k) != d})
+                    self._saved = dumped
+                    return
+        except (Unavailable, psycopg.Error) as exc:
+            logger.warning("Could not save the %s cache: %s", self.name, exc)
+            return
+        try:
+            self.path.write_text(json.dumps(data, indent=1, sort_keys=True), encoding="utf-8")
+        except OSError as exc:
+            logger.warning("Could not save the %s cache %s: %s", self.name, self.path, exc)
+
+
+def load_doc(name: str, path: Path) -> Any:
+    """One-document kv *name* (``.canon-pages``, ``.empty-slots``): the
+    database's once the state is there, else *path*'s JSON; None when absent
+    or unreadable.  Raises :class:`Unavailable` when switched and down."""
+    with session() as conn:
+        if conn is not None:
+            return get(conn, name)
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return None
+    except (OSError, ValueError):
+        logger.warning("Ignoring unreadable %s", path)
+        return None
+
+
+def save_doc(name: str, path: Path, value: Any) -> None:
+    """Write one-document kv *name*: to the database once the state is there,
+    else to *path* through a temporary file.  Raises :class:`Unavailable` or
+    OSError on failure."""
+    with session() as conn:
+        if conn is not None:
+            put(conn, name, value)
+            return
+    tmp = path.with_suffix(".tmp")
+    tmp.write_text(json.dumps(value, ensure_ascii=False), encoding="utf-8")
+    tmp.replace(path)

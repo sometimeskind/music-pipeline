@@ -19,7 +19,6 @@ On each run:
 from __future__ import annotations
 
 import functools
-import json
 import logging
 import os
 import re
@@ -33,7 +32,7 @@ from typing import Callable, Iterator
 from music_fetch import albums, store
 from music_fetch.config import load_playlists
 from music_fetch.metrics import IngestMetrics
-from music_fetch.spotdl_ops import download_fallback, fetch_songs, sync_playlist
+from music_fetch.spotdl_ops import _load_failures, download_fallback, fetch_songs, sync_playlist
 
 logger = logging.getLogger(__name__)
 
@@ -217,7 +216,7 @@ def _save_store(name: str, result) -> None:
     known = {} if previous is None else {s.get("url"): s for s in previous.songs}
     playlist = store.Store.from_songs(name, store.merge_spotify(result.songs, {**known, **result.records}),
                                       keep=previous)
-    playlist.save(store.path(name))
+    store.save(playlist)
 
 
 def _build_frozen(name: str, url: str) -> None:
@@ -232,7 +231,7 @@ def _build_frozen(name: str, url: str) -> None:
         playlist = store.Store.from_songs(name, store.merge_spotify(fetch_songs(url, COOKIE_FILE), known),
                                           keep=previous)
         playlist.source = store.SPOTIFY
-        playlist.save(store.path(name))
+        store.save(playlist)
         logger.info("[STORE] %s: built from Spotify, %d entries", name, len(playlist.entries))
     except Exception:
         logger.error("Could not build the store of nosync playlist %s from Spotify", name, exc_info=True)
@@ -492,14 +491,11 @@ def run() -> None:
 
         try:
             logger.info("==> music-ingest starting")
-            if FAILURES_FILE.exists():
-                try:
-                    failures = json.loads(FAILURES_FILE.read_text(encoding="utf-8"))
-                    logger.info("Backoff state (%d track(s)):", len(failures))
-                    for url, entry in failures.items():
-                        logger.info("  [BACK] kind=%s attempts=%d retry_after=%s url=%s reason=%s", entry.get("kind", "miss"), entry.get("attempts", "?"), entry.get("retry_after", "?")[:10], url, entry.get("reason", ""))
-                except Exception:
-                    logger.warning("Could not read backoff state from %s", FAILURES_FILE)
+            failures = _load_failures(FAILURES_FILE)
+            if failures:
+                logger.info("Backoff state (%d track(s)):", len(failures))
+                for url, entry in failures.items():
+                    logger.info("  [BACK] kind=%s attempts=%d retry_after=%s url=%s reason=%s", entry.get("kind", "miss"), entry.get("attempts", "?"), entry.get("retry_after", "?")[:10], url, entry.get("reason", ""))
             else:
                 logger.info("Backoff state: empty")
 

@@ -18,7 +18,7 @@ from pathlib import Path
 from typing import Callable, Mapping
 from urllib.parse import parse_qs, urlsplit
 
-from music_fetch import events, spotify_limit
+from music_fetch import events, spotify_limit, state
 from music_fetch.names import SPOTDL_NAME_BYTES, truncate_utf8
 
 logger = logging.getLogger(__name__)
@@ -224,6 +224,10 @@ def _record_failure(failures: dict, url: str, kind: str, reason: str = "") -> tu
 
 
 def _load_failures(failures_file: Path) -> dict:
+    """The backoff: the music database's once the state is there (homelab#2410), else *failures_file*'s."""
+    with state.session() as conn:
+        if conn is not None:
+            return state.load_failures(conn)
     if not failures_file.exists():
         return {}
     try:
@@ -234,6 +238,10 @@ def _load_failures(failures_file: Path) -> dict:
 
 
 def _save_failures(failures_file: Path, data: dict) -> None:
+    with state.session() as conn:
+        if conn is not None:
+            state.save_failures(conn, data)
+            return
     failures_file.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
 
 
