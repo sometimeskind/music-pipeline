@@ -757,8 +757,10 @@ def test_twin_items_take_the_representatives_id_date_and_numbering(tmp_path, ffm
 # ----------------------------------------------------------------------
 
 
-def test_after_scan_takes_an_item_linked_after_its_import(tmp_path, ffmpeg, lib, monkeypatch):
+def test_after_scan_takes_an_item_linked_after_its_import(tmp_path, ffmpeg, lib, monkeypatch, caplog):
     """A music-rollback-releases [LINK] gives an old item a Spotify ID: the next scan canonicalises it."""
+    import logging
+
     from music_scan import canon, cover
     from music_scan.mb_release import Resolver
 
@@ -771,7 +773,13 @@ def test_after_scan_takes_an_item_linked_after_its_import(tmp_path, ffmpeg, lib,
     monkeypatch.setattr(canon, "Resolver", lambda budget=None: Resolver(
         cache_file=tmp_path / "mb.json", mb=FakeMB(url="REL"), upc_of=lambda _: None))
 
-    assert canon.after_scan(lib, since=10**12) == 1
+    with caplog.at_level(logging.INFO):
+        assert canon.after_scan(lib, since=10**12) == 1
+    # The time per phase, one line a run (homelab#2491).
+    line = next(r.getMessage() for r in caplog.records if r.getMessage().startswith("Canon phases"))
+    assert line.startswith("Canon phases (1 item(s) of 1) in ")
+    assert [part.split()[0] for part in line.split(": ", 1)[1].split(", ")] == [
+        "library", "select", "stores", "placements", "records", "caches", "homes", "plan", "write", "save"]
     item = lib.get_item(linked.id)
     assert (item.album, item.get("spotify_album_id"), item.mb_albumid) == ("Take Care (Deluxe)", "A1", "REL")
     assert canon.after_scan(lib, since=10**12) == 0  # canonical now: no longer picked up
@@ -1013,7 +1021,7 @@ def test_an_album_records_item_whose_path_is_taken_is_tagged_in_place(tmp_path, 
         Path(os.fsdecode(lib.get_item(extra.id).path)).unlink()
         lib.get_item(extra.id).remove(delete=False)
         with monkeypatch.context() as m:
-            m.setattr(canon, "canonicalize_items", lambda items: [i.id for i in items])
+            m.setattr(canon, "canonicalize_items", lambda items, **_: [i.id for i in items])
             assert canon.after_scan(lib, 1e12) == [track.id]  # every scan tries it again
         assert canon.canonicalize_items([lib.get_item(track.id)], songs, budget=None, records=records) == 1
     finally:

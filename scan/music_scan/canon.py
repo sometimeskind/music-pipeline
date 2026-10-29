@@ -828,6 +828,24 @@ def apply_change(change: Change, images: dict[str, bytes | None], fetch: Callabl
     return True
 
 
+class Phases:
+    """Seconds per phase of one canon run, logged as one line (homelab#2491)."""
+
+    def __init__(self) -> None:
+        self.seconds: dict[str, float] = {}
+        self._start = self._last = time.monotonic()
+
+    def lap(self, name: str) -> None:
+        """The time since the previous lap goes to *name*."""
+        now = time.monotonic()
+        self.seconds[name] = self.seconds.get(name, 0.0) + now - self._last
+        self._last = now
+
+    def log(self, what: str) -> None:
+        logger.info("Canon phases (%s) in %.1fs: %s", what, time.monotonic() - self._start,
+                    ", ".join(f"{name} {s:.1f}s" for name, s in self.seconds.items()))
+
+
 def canonicalize(
     items: Iterable,
     placements: dict[str, Placement],
@@ -837,12 +855,15 @@ def canonicalize(
     albums: AlbumsByIsrc | None = None,
     homes: dict[int, frozenset[str]] | None = None,
     records: dict[str, dict] | None = None,
+    phases: Phases | None = None,
 ) -> Plan:
     """Plan, log and (with *apply*) write the canonical tags on *items*."""
     from music_scan import cover  # noqa: PLC0415
 
+    phases = phases or Phases()
     fetch = fetch or cover.download
     plan = plan_changes(items, placements, resolver, albums, homes, records)
+    phases.lap("plan")
     images: dict[str, bytes | None] = {}
     for change in plan.changes:
         log_change(change, apply)
@@ -852,10 +873,12 @@ def canonicalize(
                     _moved_event(change)
             except Exception as exc:
                 logger.warning("  [RETAG] %s: failed, retried next run: %s", _path(change.item), exc)
+    phases.lap("write")
     if resolver is not None:
         resolver.save()
     if albums is not None:
         albums.save()
+    phases.lap("save")
     return plan
 
 
@@ -871,20 +894,31 @@ def _records() -> dict[str, dict]:
 
 
 def canonicalize_items(items: list, songs: list[dict] | None = None, budget: int | None = IMPORT_BUDGET,
-                       records: dict[str, dict] | None = None) -> int:
+                       records: dict[str, dict] | None = None, phases: Phases | None = None,
+                       library: int | None = None) -> int:
     """The import hook: canonicalise *items* from the playlist stores' *songs*
     (:func:`store_songs` when not given).  A release's items stay on their
     album record's album (*records*, read from the album state when not given;
-    #278)."""
+    #278).  Logs the time per phase (*phases*, continued from the item
+    selection when given; *library* is how many items it chose from)."""
     if not items:
         return 0
-    placements = placements_from([(store_songs() if songs is None else songs, True)])
+    phases = phases or Phases()
+    songs = store_songs() if songs is None else songs
+    phases.lap("stores")
+    placements = placements_from([(songs, True)])
+    phases.lap("placements")
     records = _records() if records is None else records
-    plan = canonicalize(items, placements, Resolver(budget=budget), albums=AlbumsByIsrc(budget=IMPORT_SEARCH_BUDGET),
-                        homes=record_homes(items, records), records=records)
+    phases.lap("records")
+    resolver, albums = Resolver(budget=budget), AlbumsByIsrc(budget=IMPORT_SEARCH_BUDGET)
+    phases.lap("caches")
+    homes = record_homes(items, records)
+    phases.lap("homes")
+    plan = canonicalize(items, placements, resolver, albums=albums, homes=homes, records=records, phases=phases)
     if plan.changes:
         logger.info("Canonical albums: retagged %d item(s), moved %d, %d waiting for an ISRC search",
                     len(plan.changes) - plan.waiting, plan.moved, plan.waiting)
+    phases.log(f"{len(items)} item(s)" + (f" of {library}" if library is not None else ""))
     return len(plan.changes) - plan.waiting
 
 
@@ -892,12 +926,16 @@ def after_scan(lib, since: float) -> int:
     """Items the scan just imported, plus those whose MusicBrainz release is still
     pending or missing (the queue and its weekly retry), whose single's ISRC
     search is still to do, or that got a Spotify ID after their import (#244)."""
+    phases = Phases()
+    everything = lib.all_items()
+    phases.lap("library")
     items = [
-        i for i in lib.all_items()
+        i for i in everything
         if (i.added or 0) >= since or i.get("mb_album_via") in (PENDING, "none") or i.get(WAIT) or i.get(CLASH)
         or (not i.get("spotify_album_id") and item_spotify_ids(i))
     ]
-    return canonicalize_items(items)
+    phases.lap("select")
+    return canonicalize_items(items, phases=phases, library=len(everything))
 
 
 # ----------------------------------------------------------------------
