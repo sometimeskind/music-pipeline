@@ -179,8 +179,9 @@ def empty_slots(path: Path) -> dict:
 
     try:
         report = state.load_doc(state.EMPTY_SLOTS, path)
-    except state.Unavailable as exc:
-        return {"error": str(exc)}
+    except state.Unavailable:
+        logger.warning("Could not read the empty slots", exc_info=True)
+        return {"error": "the music database is unavailable"}
     if report is None:
         return {"at": None, "playlists": {}}
     return {"at": report.get("at"),
