@@ -824,8 +824,8 @@ def _pumpkins_songs():
 
 
 def _pumpkins_records():
-    return {"MC30": {"status": "imported", "name": MC, "artist": PUMPKINS},
-            "RA": {"status": "imported", "name": RA, "artist": PUMPKINS}}
+    return {"MC30": {"status": "imported", "name": MC, "artist": PUMPKINS, "spotify_album_ids": ["MC30"]},
+            "RA": {"status": "imported", "name": RA, "artist": PUMPKINS, "spotify_album_ids": ["RA"]}}
 
 
 class _Item(FakeItem):
@@ -979,6 +979,27 @@ def test_an_album_records_items_take_its_album_whatever_their_ids(tmp_path, ffmp
         assert (item.disc, item.track) == (disc, track)
         assert item.get("spotify_album_id") == "MC30" and item.mb_albumid == "MB2012"
         assert item.get("mb_album_via") == "files"
+
+
+def test_an_item_stamped_with_a_row_id_takes_its_records_spotify_album(tmp_path, ffmpeg, lib):
+    """homelab#2478: the stamp is the record's row id; the album is its primary Spotify album, never the key."""
+    from music_scan import canon, cover
+
+    rel_dir = tmp_path / "library" / PUMPKINS / "Mellon Collie and the Infinite Sadness"
+    track = _add(lib, _m4a(rel_dir / "114 - Take Me Down.m4a"), title="Take Me Down", artist=PUMPKINS,
+                 albumartist=PUMPKINS, album="Mellon Collie and the Infinite Sadness", disc=1, track=14,
+                 via="usenet", album_record="17", release="r1")
+    records = {"17": {**_pumpkins_records()["MC30"], "_id": 17,
+                      "release_files": {"mb": {"mb_albumid": "MB2012", "mb_releasegroupid": "RG"}}}}
+    monkey_download = cover.download
+    cover.download = lambda url: _jpeg(tmp_path / "c.jpg")
+    try:
+        canon.canonicalize_items([lib.get_item(track.id)], _pumpkins_songs(), budget=None, records=records)
+    finally:
+        cover.download = monkey_download
+    item = lib.get_item(track.id)
+    assert (item.album, item.year, item.get("spotify_album_id")) == (MC, 2025, "MC30")
+    assert item.get("album_record") == "17"
 
 
 def test_a_multi_disc_records_items_take_its_disc_count_and_no_longer_clash(tmp_path, ffmpeg, lib, monkeypatch):

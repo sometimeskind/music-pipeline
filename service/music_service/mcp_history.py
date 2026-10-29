@@ -70,15 +70,22 @@ def album_group(record: dict) -> str | None:
     return _release_group(record)
 
 
-def album_history(conn, key: str, release_group: str | None, since: str | None) -> list[dict]:
-    """The album's events, newest first: by its Spotify ID, its release group, or
-    (a local files' album) its store key."""
+def album_refs(key: str, record: dict) -> list[str]:
+    """What the album's events may name it by: its key now (a row id since
+    homelab#2478), every Spotify album ID and local name it has, which were its
+    keys before."""
+    return sorted({key, *(record.get("spotify_album_ids") or ()), *(record.get("names") or ())})
+
+
+def album_history(conn, refs: list[str], release_group: str | None, since: str | None) -> list[dict]:
+    """The album's events, newest first: by one of its Spotify IDs, its release
+    group, or the key an event recorded (*refs*, :func:`album_refs`)."""
     rows = conn.execute(
         f"SELECT {_FIELDS} FROM events"  # noqa: S608 — _FIELDS is a constant
-        " WHERE (spotify_album_id = %(key)s OR release_group = %(group)s::uuid OR data->>'key' = %(key)s)"
+        " WHERE (spotify_album_id = ANY(%(refs)s) OR release_group = %(group)s::uuid OR data->>'key' = ANY(%(refs)s))"
         "   AND (%(since)s::timestamptz IS NULL OR at >= %(since)s::timestamptz)"
         " ORDER BY at DESC, id DESC",
-        {"key": key, "group": release_group, "since": since}).fetchall()
+        {"refs": list(refs), "group": release_group, "since": since}).fetchall()
     return [event_view(r) for r in rows]
 
 

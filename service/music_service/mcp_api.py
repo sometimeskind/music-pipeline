@@ -214,7 +214,7 @@ def make_blueprint(jobs: mcp_jobs.JobQueue) -> Blueprint:
         group = mcp_history.album_group(record)
         try:
             with mcp_history.connect() as conn:
-                found = mcp_history.album_history(conn, key, group, since)
+                found = mcp_history.album_history(conn, mcp_history.album_refs(key, record), group, since)
         except (mcp_history.Unavailable, psycopg.Error) as exc:
             return jsonify({"status": "unavailable", "error": unavailable(exc)}), 503
         shown, next_offset = mcp_reads.page(found, offset)

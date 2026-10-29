@@ -251,7 +251,7 @@ def _album_label(key: str, record: Mapping) -> str:
 
 
 def _album_event(conn, event: str, message: str, key: str, record: Mapping, **data) -> None:
-    events.insert(conn, event, message, source="overrides", spotify_album_id=events.spotify_album(key),
+    events.insert(conn, event, message, source="overrides", spotify_album_id=statedb.primary_spotify(record),
                   release_group=record.get("release_group"),
                   data={"key": key, "album": f"{record.get('artist', '')} — {record.get('name', '')}", **data})
 

@@ -222,7 +222,7 @@ def resolve(rows: Any, cache: Mapping[str, dict], library: Mapping[str, set[str]
             record["release_group"], record["unresolved"] = group, None
             report.rekeyed.append(f"{label(survivor, record)} → {group}")
     # A merge can change a record's key (a name-only album that gained a release group).
-    rename = {k: state.album_key(r) for k, r in rows.albums.items() if k not in absorbed}
+    rename = {k: rows.key(r) for k, r in rows.albums.items() if k not in absorbed}
     if absorbed or any(k != v for k, v in rename.items()):
         rows.albums = {rename[k]: r for k, r in rows.albums.items() if k not in absorbed}
         rows.mixed = list(dict.fromkeys(rename[k] for k in rows.mixed if k in rename))

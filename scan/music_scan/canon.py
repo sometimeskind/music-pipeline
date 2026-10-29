@@ -677,8 +677,14 @@ def _plan_record_item(item, key: str, record: dict, releases: dict[str, Release]
     A singleton import leaves ``disctotal`` 0, so a multi-disc release's discs
     shared file names and clashed (homelab#2491).  *discs*, the record's highest
     disc among the items canonicalised with it, sets ``disctotal`` when it is 2
-    or more, and never lowers it: the path's disc prefix then applies."""
-    release = releases.get(key)
+    or more, and never lowers it: the path's disc prefix then applies.
+
+    The record's Spotify album is its primary Spotify album ID, never *key*
+    (a row id since homelab#2478)."""
+    from music_fetch.state import primary_spotify  # noqa: PLC0415
+
+    sid = primary_spotify(record)
+    release = releases.get(sid) if sid else None
     if release is None:
         plan.noalbum += 1
         logger.debug("  [NOALBUM] %s: no playlist entry describes its album record %s", _path(item), key)
@@ -697,17 +703,18 @@ def _plan_record_item(item, key: str, record: dict, releases: dict[str, Release]
             fields["mb_album_via"] = PENDING
         else:
             fields.update(found)
-            fields["mb_album_via"] = resolver.cache[key]["rung"]
-    fields["spotify_album_id"] = key
+            fields["mb_album_via"] = resolver.cache[sid]["rung"]
+    fields["spotify_album_id"] = sid
     plan.records += 1
     _plan_fields(item, p, fields, plan, dests, in_place=True)
 
 
-def _clash_event(item, dest: str, message: str, in_place: bool) -> None:
+def _clash_event(item, dest: str, message: str, in_place: bool, album: str | None = None) -> None:
     """A clash stands until someone fixes it, and every scan sees it again: one
-    event a day per clash (homelab#2413)."""
+    event a day per clash (homelab#2413).  *album*: the album record's primary
+    Spotify album ID for its item, else the item's own."""
     events.record("clash", message, source="canon",
-                  spotify_album_id=events.spotify_album(item.get("album_record") or item.get("spotify_album_id")),
+                  spotify_album_id=events.spotify_album(album or item.get("spotify_album_id")),
                   release_group=item.get("mb_releasegroupid"), item_id=item.id,
                   data={**events.item_fields(item), "path": _path(item), "dest": dest, "in_place": in_place},
                   once_hours=24)
@@ -752,7 +759,7 @@ def _plan_fields(item, p: Placement, fields: dict, plan: Plan, dests: dict, in_p
         logger.warning("  [CLASH] %s %s → %s: another item already has that path; tagged in place",
                        item.id, _path(item), dest)
         _clash_event(item, dest, f"[CLASH] {item.id} {_path(item)} → {dest}: another item already has that path; "
-                                 "tagged in place", in_place=True)
+                                 "tagged in place", in_place=True, album=fields.get("spotify_album_id"))
         fields[CLASH] = "1"
         diff = {k: (item.get(k), v) for k, v in fields.items() if item.get(k) != v}
         if not diff and not art:

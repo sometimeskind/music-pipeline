@@ -100,6 +100,7 @@ from collections import Counter
 from pathlib import Path
 
 from music_fetch import events
+from music_fetch.state import primary_spotify
 
 logger = logging.getLogger(__name__)
 
@@ -235,7 +236,7 @@ def copies(items, key: str, record: dict, keep: str | None, drop: str | None, li
         return [i for i in items if i.get("album_record") == key and i.get("release") == drop]
     return [i for i in items if (i.get("album_record") == key and i.get("release") != keep)
             or (not i.get("album_record") and i.get("via") == "usenet" and _claims(record, i)
-                and i.get("spotify_album_id") in (None, "", key))
+                and i.get("spotify_album_id") in (None, "", primary_spotify(record)))
             or (not i.get("album_record") and _topup(i, key, record, listed))]
 
 
@@ -248,7 +249,8 @@ def _topup(item, key: str, record: dict, listed) -> bool:
     *listed(item)* (:func:`music_scan.scan.store_listings`, homelab#1914) is
     the playlists whose store lists the copy's recording.  ``sources`` says
     where a copy came from, not what lists it, so it doesn't decide."""
-    if item.get("via") != "spotdl" or item.get("spotify_album_id") != key:
+    sid = primary_spotify(record)
+    if item.get("via") != "spotdl" or not sid or item.get("spotify_album_id") != sid:
         return False
     return listed(item) <= set(record.get("playlists") or {})
 
@@ -275,10 +277,18 @@ def _release_group(items) -> str | None:
     return groups.most_common(1)[0][0] if groups else None
 
 
-def _event(kind: str, item, key: str | None, release_group: str | None, message: str,
+def _album_of(items) -> str | None:
+    """The Spotify album most of *items* (an album's kept release) are tagged with:
+    canon gives a record's items its primary Spotify album ID."""
+    albums = Counter(i.get("spotify_album_id") for i in items if i.get("spotify_album_id"))
+    return albums.most_common(1)[0][0] if albums else None
+
+
+def _event(kind: str, item, spotify_album: str | None, release_group: str | None, message: str,
            once_hours: int | None = None, **data) -> None:
-    """Record an item's event in the event store (homelab#2413); *message* is its log line."""
-    events.record(kind, message, source="release", spotify_album_id=events.spotify_album(key),
+    """Record an item's event in the event store (homelab#2413); *message* is its log line.
+    *spotify_album* is the album record's primary Spotify album ID, never its key."""
+    events.record(kind, message, source="release", spotify_album_id=spotify_album or None,
                   release_group=release_group, item_id=item.id, data={**events.item_fields(item), **data},
                   once_hours=once_hours)
 
@@ -295,17 +305,18 @@ def retire(lib, key: str, record: dict, keep: str | None, drop: str | None, list
     others = copies(items, key, record, keep, drop, listed)
     gone, extras = (others, []) if drop is not None else superseded(items, key, keep, others)
     group = _release_group(i for i in items if i.get("album_record") == key and i.get("release") == keep)
+    album = primary_spotify(record)
     for item in gone:
         logger.info("  [RETIRE] %s %s — %s [%s] (%s)", item.id, item.get("artist"), item.get("title"),
                     item.get("album"), _origin(item))
-        _event("retire", item, key, group, f"[RETIRE] {item.id} {item.get('artist')} — {item.get('title')} "
-                                           f"[{item.get('album')}] ({_origin(item)})", origin=_origin(item))
+        _event("retire", item, album, group, f"[RETIRE] {item.id} {item.get('artist')} — {item.get('title')} "
+                                             f"[{item.get('album')}] ({_origin(item)})", origin=_origin(item))
     for item in extras:
         logger.info("  [LOCAL] %s %s — %s [%s] (%s): the kept release lacks its recording; stays on the album",
                     item.id, item.get("artist"), item.get("title"), item.get("album"), _origin(item))
-        _event("local", item, key, group, f"[LOCAL] {item.id} {item.get('artist')} — {item.get('title')} "
-                                          f"[{item.get('album')}] ({_origin(item)}): the kept release lacks its "
-                                          "recording; stays on the album", origin=_origin(item))
+        _event("local", item, album, group, f"[LOCAL] {item.id} {item.get('artist')} — {item.get('title')} "
+                                            f"[{item.get('album')}] ({_origin(item)}): the kept release lacks its "
+                                            "recording; stays on the album", origin=_origin(item))
         if item.get("album_record") != key or not item.get(EXTRA):
             item["album_record"] = key
             item[EXTRA] = "1"
@@ -363,7 +374,7 @@ def retire_held(lib, decoder=None) -> int:
         logger.info("  [RETIRE] %s %s — %s [%s] (extra, now held)", item.id, item.get("artist"), item.get("title"),
                     item.get("album"))
         key = item.get("album_record")
-        _event("retire", item, key, _release_group(kept[key]), f"[RETIRE] {item.id} {item.get('artist')} — "
+        _event("retire", item, _album_of(kept[key]), _release_group(kept[key]), f"[RETIRE] {item.id} {item.get('artist')} — "
                f"{item.get('title')} [{item.get('album')}] (extra, now held)", origin="extra, now held")
     quarantine(gone)
 
@@ -388,7 +399,7 @@ def retire_held(lib, decoder=None) -> int:
                                 "left to music-audit-dupes", item.id, item.get("artist"), item.get("title"),
                                 item.get("album"), len(mine))
                     # It stands until someone merges it by hand, and every scan sees it: once a day.
-                    _event("local", item, key, _release_group(kept[key]),
+                    _event("local", item, _album_of(kept[key]), _release_group(kept[key]),
                            f"[LOCAL] {item.id} {item.get('artist')} — {item.get('title')} [{item.get('album')}]: "
                            f"the same audio as {len(mine)} of the release's items; left to music-audit-dupes",
                            once_hours=24, origin="extra, same audio", left_to_dupes=True,
@@ -475,7 +486,8 @@ def mixed_reasons(key: str, record: dict, items: list, listed) -> list[str]:
 
     if record.get("status") != IMPORTED and record.get("fallback_from") not in (PARTIAL, GAP):
         return []
-    mine = [i for i in items if i.get("spotify_album_id") == key and not i.get(EXTRA)
+    sid = primary_spotify(record)
+    mine = [i for i in items if sid and i.get("spotify_album_id") == sid and not i.get(EXTRA)
             and not (i.get("via") == "spotdl" and not _topup(i, key, record, listed))]
     if any(i.get("album_record") == key for i in mine):
         return []  # imported whole since #279

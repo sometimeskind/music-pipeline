@@ -58,10 +58,13 @@ the playlist stores (on the persistent pipeline-state volume) before that:
 losing it would forget blocklists and the grab budget.  In the database the
 album rows are keyed by MusicBrainz release group, and two Spotify editions of
 one release group are one record (:mod:`music_fetch.resolve`, run every tick).
-A record's key here stays its primary Spotify album ID (else its release
-group, else a local album's ``artist/name``); a Spotify album ID from a song
-finds its record through :meth:`State.refs`, and an override or hold names the
-record's row (:mod:`music_fetch.overrides`, homelab#2484).
+A record's key is its row id once ``music-album-rekey --apply`` has run
+(homelab#2478), else its primary Spotify album ID (else its release group, else
+a local album's ``artist/name``); a record not saved yet is keyed the old way
+until its first save.  Never read a key for a Spotify album ID: that is
+:func:`state.primary_spotify`.  A Spotify album ID from a song finds its record
+through :meth:`State.refs`, and an override or hold names the record's row
+(:mod:`music_fetch.overrides`, homelab#2484).
 """
 
 from __future__ import annotations
@@ -446,7 +449,8 @@ def refresh_playlists(
             if record.pop("origin", None) in (WANTS, LIBRARY):
                 # The album playlist wants it whole: its wanted tracks are no longer the point.
                 record["playlists"] = {}
-            if album_id == key or key not in wanted:
+            primary = _primary_ref(record)
+            if album_id == primary or primary not in wanted:
                 record.update({k: v for k, v in album.items() if k != "tracks"})
             tracks = record.setdefault("playlists", {})
             tracks[name] = [*tracks[name], *album["tracks"]] if key in held else album["tracks"]
@@ -517,8 +521,7 @@ def _release_group(record: dict) -> str | None:
 
 def _event(kind: str, key: str, record: dict, message: str, **data) -> None:
     """Record an album's event in the event store (homelab#2413); *message* is its log line."""
-    primary = next(iter(record.get("spotify_album_ids") or ()), None) or (key if _spotify_album(key) else None)
-    events.record(kind, message, source="albums", spotify_album_id=primary,
+    events.record(kind, message, source="albums", spotify_album_id=statedb.primary_spotify(record),
                   release_group=_release_group(record),
                   data={"album": f"{record.get('artist')} — {record.get('name')}", "key": key,
                         "origin": record.get("origin") or "album", **data})
@@ -573,7 +576,7 @@ def feed_wants(
     for key in ranked:
         on = found[key]["on"]
         record = state.albums.get(key)
-        why = ("local" if not _spotify_album(key) else "album playlist" if record and not _fed(record)
+        why = ("local" if not _spotify_album(found[key]["id"]) else "album playlist" if record and not _fed(record)
                else "library" if record and _library(record) and record.get("status") not in WAITING else "")
         for name in on:
             if why:
@@ -645,7 +648,7 @@ def feed_library(state: State, library: LibraryAlbums, settings: Settings) -> No
             continue
         key = by_ref.get(album_id, album_id)
         record = state.albums.get(key)
-        why = ("local" if not _spotify_album(key) else "no playlist track" if not on
+        why = ("local" if not _spotify_album(album_id) else "no playlist track" if not on
                else "" if record is None or _library(record) else "wants" if _wants(record) else "album playlist")
         if why:
             skipped[why] = skipped.get(why, 0) + 1
@@ -1010,9 +1013,16 @@ def _refs(key: str, record: dict) -> tuple[str, ...]:
     return (key, *(record.get("spotify_album_ids") or ()))
 
 
-def _spotify_album(key: str) -> bool:
-    """Whether *key* is a Spotify album ID (not a local files' artist/name key, nor a release group)."""
-    return statedb.is_spotify_album(key)
+def _spotify_album(ref: str) -> bool:
+    """Whether a song's album *ref* (:func:`album_key`) is a Spotify album ID,
+    not a local files' artist/name.  Never ask it of a record's key."""
+    return statedb.is_spotify_album(ref)
+
+
+def _primary_ref(record: dict) -> str | None:
+    """The song album ref (:func:`album_key`) the record's fields come from:
+    its primary Spotify album ID, else its local name."""
+    return statedb.primary_spotify(record) or next(iter(record.get("names") or ()), None)
 
 
 def _fallback_tracks(record: dict, missing: Missing) -> dict[str, list[str]]:
@@ -1076,18 +1086,19 @@ def fallbacks(state: State, missing: Missing, album_songs: AlbumSongs | None = N
         status = record.get("status")
         if status not in (MISSING, FAILED, FALLBACK):
             continue
-        if album_songs is not None and _spotify_album(key) and "album_songs" not in record \
+        primary = statedb.primary_spotify(record)
+        if album_songs is not None and primary and "album_songs" not in record \
                 and reads < TRACKLISTS_PER_TICK:
             reads += 1
             try:
-                record["album_songs"] = album_songs(key)
+                record["album_songs"] = album_songs(primary)
             except Exception as exc:
                 logger.warning("[ERR]  %s — %s: reading the album's tracklist failed: %s",
                                record["artist"], record["name"], exc)
                 reads = TRACKLISTS_PER_TICK
         if status in (MISSING, FAILED):
             _queue_fallback(key, record, missing, status)
-        known = "album_songs" in record or not _spotify_album(key)
+        known = "album_songs" in record or not primary
         record["fallback_tracks"] = _fallback_tracks(record, missing)
         if known and not record["fallback_tracks"]:
             record.update(status=FILLED, filled_at=_iso(_now()), fallback_tracks={})

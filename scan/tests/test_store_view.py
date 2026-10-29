@@ -235,7 +235,7 @@ def test_an_album_playlist_is_its_stores_album_view(env) -> None:
     album = playlists_dir.parent / "library" / "album" / "01.m4a"
     with mock.patch("music_scan.playlists.album_paths", return_value=([album], [], 1)) as album_paths:
         counts = regen_playlists()
-    songs, source, library, _ = album_paths.call_args.args
+    songs, source, library, _, _ = album_paths.call_args.args
     assert [s["song_id"] for s in songs] == ["E1"]
     assert source.items == []
     assert len(library.items) == 4

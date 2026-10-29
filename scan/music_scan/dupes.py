@@ -476,7 +476,7 @@ def merge(keeper, losers: list, replaced_dir: Path = REPLACED, why: str = "dupli
             logger.warning("[MERGE] keep %s ← %s; its file %s was already gone", keeper.id, loser.id, old)
             message = f"[MERGE] keep {keeper.id} ← {loser.id}; its file {old} was already gone"
         events.record("merge", message, source="dupes",
-                      spotify_album_id=events.spotify_album(keeper.get("album_record") or keeper.get("spotify_album_id")),
+                      spotify_album_id=events.spotify_album(keeper.get("spotify_album_id")),
                       release_group=keeper.get("mb_releasegroupid"), item_id=keeper.id,
                       data={**events.item_fields(keeper), "why": why, "merged": loser.id,
                             "merged_item": events.item_fields(loser)})

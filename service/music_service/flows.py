@@ -179,6 +179,20 @@ def canon_task(since: float) -> None:
         logger.exception("Canonical albums failed; the next scan or music-canon-albums retries it")
 
 
+@task(name="restamp-album-records", log_prints=True)
+def restamp_task() -> None:
+    """Move the ``album_record`` stamps of a merged or re-added album's items
+    to its row now (homelab#2478), before anything finds a record by them."""
+    logger = get_run_logger()
+    from music_scan import restamp  # noqa: PLC0415
+    from music_scan.library import MusicLibrary  # noqa: PLC0415
+    try:
+        with MusicLibrary(scan.LIBRARY_DB) as lib:
+            restamp.scan_step(lib)
+    except Exception:
+        logger.exception("Restamping album records failed; the next scan retries it")
+
+
 @task(name="retire-held-extras", log_prints=True)
 def retire_held_task() -> None:
     """Retire the local-only extras whose recording their album's release now
@@ -290,6 +304,7 @@ def _run_scan_tasks() -> None:
         if outage is None:
             metrics.quarantined_tracks = quarantine_task()
         metrics.tracks_imported = len(imported) + asis_import_task()
+        restamp_task()
         retire_held_task()
         canon_task(since)
         beet_update_task()
@@ -524,7 +539,9 @@ def _album_library_hooks(lib):
 def _album_mixed_hook(lib):
     """``mixed(key, record)`` over one open beets library: why the record's
     album is mixed from several releases (``release.mixed_reasons``, #288).
-    Reads the library once, when first called."""
+    Reads the library once, when first called.  The album's items are those
+    on its primary Spotify album, never on its key (a row id, homelab#2478)."""
+    from music_fetch.state import primary_spotify  # noqa: PLC0415
     from music_scan import release  # noqa: PLC0415
     from music_scan.playlists import by_album_id  # noqa: PLC0415
 
@@ -535,7 +552,7 @@ def _album_mixed_hook(lib):
         if not on_album:
             on_album.update(by_album_id(lib.all_items()) or {"": []})
             listed.append(scan.store_listings())
-        return release.mixed_reasons(key, record, on_album.get(key, []), listed[0])
+        return release.mixed_reasons(key, record, on_album.get(primary_spotify(record) or "", []), listed[0])
 
     return mixed
 

@@ -163,6 +163,10 @@ def import_main() -> None:
             logger.info("Dry run; back the JSON up, then --apply")
             return
         with state.connect() as conn:
+            if args.replace and state.keyed_by_row(conn):
+                # --replace renumbers every row, and the items are stamped with the old numbers.
+                raise SystemExit("Album keys are row ids (homelab#2478): run music-album-rekey --revert --apply "
+                                 "before --replace, then music-album-rekey --apply after it")
             write(conn, p, replace=args.replace)
         # After the commit: from here on every process reads and writes the database.
         state.SWITCH.touch()

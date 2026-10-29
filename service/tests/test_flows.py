@@ -560,8 +560,8 @@ def test_album_mixed_hook_reads_the_library_once():
     lib.all_items.return_value = [MagicMock(get=item.get)]
     with patch.object(flows.scan, "store_listings", return_value=lambda i: set()) as listings:
         mixed = flows._album_mixed_hook(lib)
-        assert mixed("K", {"status": "imported"}) == ["1 spotdl track(s) on the album"]
-        assert mixed("OTHER", {"status": "imported"}) == []
+        assert mixed("17", {"status": "imported", "spotify_album_ids": ["K"]}) == ["1 spotdl track(s) on the album"]
+        assert mixed("18", {"status": "imported", "spotify_album_ids": ["OTHER"]}) == []
     lib.all_items.assert_called_once()
     listings.assert_called_once_with()  # the stores are read once too
 
@@ -575,7 +575,7 @@ def test_album_mixed_hook_leaves_a_copy_another_playlists_store_lists():
     lib.all_items.return_value = [MagicMock(get=item.get)]
     with patch.object(flows.scan, "store_listings", return_value=lambda i: {"keep", "aaaaaah"}):
         mixed = flows._album_mixed_hook(lib)
-        assert mixed("K", {"status": "imported", "playlists": {"keep": []}}) == []
+        assert mixed("K", {"status": "imported", "playlists": {"keep": []}, "spotify_album_ids": ["K"]}) == []
 
 
 def test_album_wants_hook_groups_the_want_list_by_album():
