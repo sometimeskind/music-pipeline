@@ -106,6 +106,8 @@ from beets import library as beets_library
 from beets.plugins import BeetsPlugin
 
 from music_fetch import events
+from music_fetch.album_requests import SOURCE as REQUEST_SOURCE
+from music_fetch.album_requests import url_recording
 
 from music_scan.identity import (
     add_isrcs, add_to_list, fingerprint, item_isrcs, item_spotify_ids, split_list, spotify_id,
@@ -125,6 +127,10 @@ MANAGED_VIA = frozenset({"spotdl", "usenet"})
 #    _move_asis_eligible() copies them into a per-run temp dir under /tmp/
 #    preserving the spotdl/<playlist>/ subdirectory structure.
 ASIS_STAGING_ROOT = Path("/tmp")
+
+
+# The MusicBrainz recording an album request's fallback download was verified as (homelab#2478).
+FALLBACK_RECORDING = "fallback_recording"
 
 
 class SpotdlTags(NamedTuple):
@@ -401,8 +407,16 @@ class MusicPipelinePlugin(BeetsPlugin):
 
     @staticmethod
     def _apply_spotdl_tags(item, tags: SpotdlTags) -> None:
-        """Set spotify_url and spotify_ids, and add spotdl's ISRC to the item's."""
-        if tags.url:
+        """Set spotify_url and spotify_ids, and add spotdl's ISRC to the item's.
+        An album request's fallback download (homelab#2478) carries its
+        MusicBrainz recording URL instead, which the guard verified by
+        fingerprint: it sets ``fallback_recording``, never a Spotify field."""
+        if recording := url_recording(tags.url):
+            item[FALLBACK_RECORDING] = recording
+            if not item.get("mb_trackid"):
+                # AcoustID named it (the guard): an as-is import keeps the ID the retire step matches by.
+                item["mb_trackid"] = recording
+        elif tags.url:
             item["spotify_url"] = tags.url
             add_to_list(item, "spotify_ids", spotify_id(tags.url))
         add_isrcs(item, split_list(tags.isrc, ";"))
@@ -416,7 +430,8 @@ class MusicPipelinePlugin(BeetsPlugin):
         except Exception:
             info = {}
         isrcs = {*split_list(tags.isrc, ";"), *split_list(info.get("isrc"), ";"), *item_isrcs(item)}
-        mb_trackid = info.get("track_id") or info.get("mb_trackid") or item.get("mb_trackid") or None
+        mb_trackid = (info.get("track_id") or info.get("mb_trackid") or item.get("mb_trackid")
+                      or url_recording(tags.url) or None)
         return Incoming(spotify_id(tags.url), frozenset(isrcs), mb_trackid)
 
     def _incoming_spotdl_tags(self, item) -> SpotdlTags:
@@ -468,6 +483,18 @@ class MusicPipelinePlugin(BeetsPlugin):
             else:
                 dup_items.append(dup)
 
+        recording = url_recording(self._incoming_spotdl_tags(items[0]).url) if len(items) == 1 else None
+        if same and recording and not any(d.get(FALLBACK_RECORDING) == recording for d in same):
+            # An album request's fallback track (homelab#2478): its album keeps its own copy, as a
+            # release does (#279), stamped with its key after the import.  A second fallback copy
+            # of the recording is a duplicate like any other.
+            for dup in same:
+                self._log.warning(
+                    "[BOTH] {} — {}: same recording as {}; importing the album request's copy alongside",
+                    items[0].artist, items[0].title, dup,
+                )
+            task.find_duplicates = task.duplicate_items = lambda lib: []
+            return
         usenet = same and _via_from_path(items[0].path) == "usenet"
         # Another release's item: kept apart, the release is one album (#278, #279).
         apart = [d for d in same if d.get("via") == "usenet"] if usenet else []

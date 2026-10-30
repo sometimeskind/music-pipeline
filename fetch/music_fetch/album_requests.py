@@ -14,9 +14,15 @@ The tracklist (:func:`tracklist`) is the preferred release's, else the one of
 the release group's official releases with its most common track count (the
 earliest of them), video media left out.  It is stored as album mode's track
 entries, ``[name, artist, None, isrc, disc, track]``: no Spotify track ID, so
-search, the wrong-album check and the import read it unchanged.  Without
-Spotify IDs there is no spotdl fallback yet: a request Usenet misses stays
-``missing`` (homelab#2478 decisions).
+search, the wrong-album check and the import read it unchanged.
+
+When Usenet misses or fails, a request falls back to spotdl from MusicBrainz
+(:func:`release_songs`, :func:`albums.fallbacks`): its tracklist release's
+tracks as spotdl songs, with no Spotify ID, each found on YouTube Music by
+its ISRC or its artists, title and length.  A download counts only when
+AcoustID's fingerprint lookup names the track's own recording
+(``music_scan.guard.verify_requests``), never by its title.  A track AcoustID
+doesn't know stays a gap.
 
 ``music-requests`` (:mod:`music_fetch.album_requests_cli`) lists and adds
 requests; the Music MCP's ``request_album`` and ``list_requests`` run on it.
@@ -32,6 +38,7 @@ import re
 from collections import Counter
 from collections.abc import Callable, Iterable, Mapping
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any
 
 import psycopg
@@ -68,6 +75,14 @@ SECONDARY_FLAGS = {"Live": "live", "Remix": "remix", "Compilation": "compilation
 _FLAG_WORDS = re.compile(r"\b(live|demo|remix(?:es)?|compilation)\b")
 
 _MBID = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
+
+# A fallback song's URL: its MusicBrainz recording (:func:`recording_url`).
+RECORDING_URL = "https://musicbrainz.org/recording/"
+# Where the nightly downloads a request's fallback songs (:mod:`music_fetch.ingest`):
+# outside the inbox, so nothing imports a file before the scan's fingerprint check
+# (music_scan.guard.verify_requests) has moved it to ``inbox/spotdl/request/``.
+# On the music-data volume, so the move is a rename.
+UNVERIFIED = Path("/root/Music/unverified")
 
 # get(path, **params): a MusicBrainz web service read (music_scan.mb_release.MusicBrainz.get), None on 404.
 Get = Callable[..., "dict | None"]
@@ -266,6 +281,76 @@ def tracklist(get: Get, group_id: str, preferred: str | None = None) -> Tracklis
                      _year(group.get("first-release-date")), album_type, seconds, how, _release_label(release))
 
 
+def recording_url(recording: str) -> str:
+    """A fallback song's URL (:func:`release_songs`): its MusicBrainz recording.
+    spotdl embeds it as the file's ``WOAS``, where a playlist's song has its
+    Spotify URL, so the guard and the import know which recording the file
+    should be."""
+    return f"{RECORDING_URL}{recording}"
+
+
+def url_recording(url: str | None) -> str | None:
+    """The recording a fallback song's *url* names (:func:`recording_url`), else None."""
+    if not url or not url.startswith(RECORDING_URL):
+        return None
+    rest = url.removeprefix(RECORDING_URL)
+    return rest if _MBID.fullmatch(rest) else None
+
+
+def release_songs(get: Get, record: Mapping) -> list[dict]:
+    """A request's album as spotdl songs (homelab#2478): its tracklist
+    release's tracks, read from MusicBrainz, for the spotdl fallback.  Every
+    field spotdl needs is set, so it downloads without asking Spotify
+    (spotdl re-reads a song from Spotify when its genres, counts, album ID or
+    album artist are missing).  ``song_id`` is the MusicBrainz recording and
+    ``url`` its :func:`recording_url`; ``album_id`` is the release.  The cover is
+    the release's Cover Art Archive front, when it has one.  Raises
+    :class:`Refused` when the release is gone, or isn't the request's."""
+    release_id = record.get("tracklist_release")
+    if not release_id:
+        raise Refused("the request has no tracklist release")
+    release = get(f"release/{release_id}", inc="recordings+isrcs+artist-credits+release-groups")
+    if release is None:
+        raise Refused(f"MusicBrainz has no release {release_id}")
+    of = (release.get("release-group") or {}).get("id")
+    if record.get("release_group") and of != record["release_group"]:
+        raise Refused(f"release {release_id} is of release group {of}, not {record['release_group']}")
+    album_artist = record.get("artist") or _credit(release.get("artist-credit"))
+    album_artist_id = (((release.get("artist-credit") or [{}])[0]).get("artist") or {}).get("id")
+    album = record.get("name") or release.get("title") or ""
+    date = release.get("date") or ""
+    year = _year(date) or record.get("year") or 0
+    art = (release.get("cover-art-archive") or {}).get("front")
+    cover = f"https://coverartarchive.org/release/{release_id}/front-500" if art else None
+    media = [m for m in release.get("media") or () if _audio(m)]
+    count = sum(len(m.get("tracks") or ()) for m in media)
+    songs: list[dict] = []
+    for medium in media:
+        for track in medium.get("tracks") or ():
+            recording = track.get("recording") or {}
+            if not recording.get("id"):
+                continue
+            credits = track.get("artist-credit") or recording.get("artist-credit") or ()
+            artists = [c.get("name") or (c.get("artist") or {}).get("name", "") for c in credits] or [album_artist]
+            isrcs = recording.get("isrcs") or []
+            songs.append({
+                "name": track.get("title") or recording.get("title") or "",
+                "artists": artists, "artist": artists[0], "genres": [],
+                "disc_number": medium.get("position") or 1, "disc_count": len(media),
+                "album_name": album, "album_artist": album_artist,
+                "duration": (track.get("length") or recording.get("length") or 0) // 1000,
+                "year": year, "date": date or str(year or ""),
+                "track_number": track.get("position") or 0, "tracks_count": count,
+                "song_id": recording["id"], "explicit": False, "publisher": "",
+                "url": recording_url(recording["id"]), "isrc": isrcs[0] if isrcs else None,
+                "cover_url": cover, "copyright_text": None, "download_url": None, "lyrics": None,
+                "popularity": None, "album_id": release_id, "list_name": None, "list_url": None,
+                "list_position": None, "list_length": None, "artist_id": album_artist_id,
+                "album_type": record.get("album_type") or "album",
+            })
+    return songs
+
+
 def musicbrainz() -> Get:
     """The pipeline's rate-limited MusicBrainz reads."""
     from music_scan.mb_release import MusicBrainz  # noqa: PLC0415 — the image holds both packages
@@ -358,6 +443,9 @@ def entry(request: Request, rows: statedb.AlbumRows) -> dict:
         key, record = found
         album = {"key": key, "status": record.get("status"), "origin": record.get("origin") or statedb.ALBUM,
                  "searched_at": record.get("searched_at"), "query": record.get("query")}
+        if record.get("status") == "fallback":
+            # The tracks spotdl still has to get from MusicBrainz's tracklist (homelab#2478).
+            album["fallback_left"] = sum(len(ids) for ids in (record.get("fallback_tracks") or {}).values())
     return {"release_group": request.release_group, "artist": request.artist, "name": request.name,
             "preferred_release": request.preferred_release, "tracklist_release": request.tracklist_release,
             "tracks": len(request.tracks), "requested_by": request.requested_by,

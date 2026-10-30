@@ -11,7 +11,8 @@ A playlist flagged ``album`` in playlists.conf is never synced by spotdl.  Inste
    edition first, #279) and send the best to SABnzbd.
 3. Hand a missing or failed album to spotdl whole (#205): its tracks become
    ``fallback`` tracks the nightly sync downloads into the playlist's inbox.
-   Once the library holds them all the album is ``filled``.
+   Once the library holds them all the album is ``filled``.  A request's
+   tracks come from MusicBrainz instead (homelab#2478).
 
 Before the top-up, :func:`auto_reimport` resets a few albums mixed from
 several releases (#288), as ``music-album-reset --reimport`` does but
@@ -52,9 +53,14 @@ An album request (homelab#2478, :mod:`music_fetch.album_requests`) names a
 MusicBrainz release group: :func:`feed_requests` gives it a record with
 ``origin: "request"`` whose tracks are its MusicBrainz tracklist, or upgrades
 the record that has the release group already.  It is searched with the album
-playlists' albums, and imported whole under ``inbox/usenet/request/``.  With
-no Spotify tracklist it has no spotdl fallback yet: a request that misses
-stays ``missing``.
+playlists' albums, and imported whole under ``inbox/usenet/request/``.  When
+Usenet misses or fails, it falls back to spotdl from its MusicBrainz tracklist
+(:func:`fallbacks`): the nightly downloads the tracks no item of the album
+holds, the scan imports only those whose AcoustID fingerprint names the
+track's own recording, and stamps them with the album's key, so a track
+AcoustID doesn't know stays a gap.  A request in ``fallback`` is searched on
+Usenet again every ``MISSING_RETRY`` while it has gaps (:func:`_due`): a
+release found then is the album, and retires the spotdl copies.
 
 ``ALBUM_MODE`` is ``off`` (default), ``dry-run`` (search and log the pick, never
 grab) or ``on``.  Indexer use is capped by a rolling-24h budget counted from our
@@ -504,6 +510,14 @@ def _requested(record: dict) -> bool:
     return record.get("origin") == REQUEST
 
 
+def _request_fallback(record: dict) -> bool:
+    """A request's record with the request's own tracklist (homelab#2478): its
+    fallback is built from MusicBrainz, not from a Spotify tracklist.  A
+    record a playlist lists keeps the playlist's Spotify tracks, and falls
+    back as an album playlist's does when it is one."""
+    return _requested(record) and album_requests.SOURCE in record.get("playlists", {})
+
+
 def _fed(record: dict) -> bool:
     """A record a feed made (wants or library), not an album playlist's: it
     never falls back, and its tracks are held off spotdl only near its turn."""
@@ -527,7 +541,7 @@ def _back(record: dict) -> str:
     if _library(record):
         return "; its wanted tracks stay with spotdl"
     if _requested(record):
-        return "; a request has no spotdl fallback yet"
+        return "; it falls back to spotdl from its MusicBrainz tracklist"
     if not _wants(record):
         return ""
     return f"; its {sum(len(t) for t in record.get('playlists', {}).values())} wanted track(s) go back to spotdl"
@@ -766,6 +780,9 @@ def feed_requests(state: State, requests: list[album_requests.Request]) -> None:
                 on.setdefault(album_requests.SOURCE, tracks)
                 record.setdefault("origin", REQUEST)
         record["requested"] = True
+        if album_requests.SOURCE in record.get("playlists", {}):
+            # The release the tracks were read from: the fallback reads it again for its songs.
+            record["tracklist_release"] = request.tracklist_release
     order = [k for k, r in state.albums.items() if not _fed(r)]
     order += [k for k in state.albums if k not in set(order)]
     state.albums = {k: state.albums[k] for k in order}
@@ -830,6 +847,10 @@ def _due(record: dict, now: datetime, mode: str, search: Plan) -> bool:
         return mode == "on"
     if status == MISSING:
         return _requery(record, search) or now - datetime.fromisoformat(record["searched_at"]) >= MISSING_RETRY
+    if status == FALLBACK and _request_fallback(record) and record.get("fallback_tracks") \
+            and record.get("searched_at"):
+        # A request spotdl hasn't filled is searched on Usenet again, weekly as a miss is (homelab#2478).
+        return now - datetime.fromisoformat(record["searched_at"]) >= MISSING_RETRY
     return False
 
 
@@ -902,7 +923,8 @@ def top_up(
             continue
         if not search.queries:
             # Costs nothing, so it is logged even when no slot is free.
-            record.update(status=MISSING, searched_at=_iso(now()), query="")
+            record.update(status=MISSING if record.get("status") != FALLBACK else FALLBACK,
+                          searched_at=_iso(now()), query="")
             logger.warning("[NOWORDS] %s: %s: add a search override", key, label)
             continue
         # In dry-run, re-checking a sampled miss after its query changed takes no sample slot.
@@ -975,9 +997,12 @@ def top_up(
                         "as it is", label, search.note, len(releases), len(record["blocklist"]))
             continue
         if not ranked:
-            record["status"] = MISSING
+            # A request's fallback goes on: its gaps stay with spotdl until the next retry.
+            if record.get("status") != FALLBACK:
+                record["status"] = MISSING
             logger.info("[MISS] %s%s: %d result(s), none match; queries: %s%s",
-                        label, search.note, len(releases), ", ".join(f'"{q}"' for q in sent), _back(record))
+                        label, search.note, len(releases), ", ".join(f'"{q}"' for q in sent),
+                        "; its gaps stay with spotdl" if record["status"] == FALLBACK else _back(record))
             continue
 
         best: Release = ranked[0]
@@ -1092,6 +1117,12 @@ def auto_reimport(
 Missing = Callable[[str, list[list]], list[list]]
 # album_songs(album id): the Spotify album's tracklist, in spotdl's song format.
 AlbumSongs = Callable[[str], list[dict]]
+# request_songs(record): a request's tracklist release as spotdl songs, from
+# MusicBrainz (album_requests.release_songs).
+RequestSongs = Callable[[dict], list[dict]]
+# recordings(key): the MusicBrainz recordings of the library items stamped with
+# album record *key* (``album_record``): the request tracks it holds.
+Recordings = Callable[[str], set[str]]
 
 
 def _refs(key: str, record: dict) -> tuple[str, ...]:
@@ -1123,10 +1154,17 @@ def _fallback_tracks(record: dict, missing: Missing) -> dict[str, list[str]]:
     return {playlists[0]: ids} if ids else {}
 
 
-def _queue_fallback(key: str, record: dict, missing: Missing, source: str) -> None:
-    """Leave the album's absent tracks to spotdl; *source* is the status it leaves."""
-    record.update(status=FALLBACK, fallback_from=source, fallback_at=_iso(_now()),
-                  fallback_tracks=_fallback_tracks(record, missing))
+def _request_tracks(key: str, record: dict, recordings: Recordings) -> dict[str, list[str]]:
+    """The recordings of a request's tracks no item stamped with its key holds,
+    under :data:`album_requests.SOURCE`, once its songs are read (homelab#2478)."""
+    held = recordings(key)
+    ids = list(dict.fromkeys(s["song_id"] for s in record.get("album_songs") or () if s["song_id"] not in held))
+    return {album_requests.SOURCE: ids} if ids else {}
+
+
+def _queue_fallback(key: str, record: dict, tracks: dict[str, list[str]], source: str) -> None:
+    """Leave the album's absent *tracks* to spotdl; *source* is the status it leaves."""
+    record.update(status=FALLBACK, fallback_from=source, fallback_at=_iso(_now()), fallback_tracks=tracks)
     n = sum(len(ids) for ids in record["fallback_tracks"].values())
     logger.info("[FALLBACK] %s — %s: %d track(s) left to spotdl (%s)", record["artist"], record["name"], n, source)
     _event("fallback", key, record, f"[FALLBACK] {record['artist']} — {record['name']}: {n} track(s) left to "
@@ -1149,10 +1187,11 @@ def settle_imported(record: dict) -> bool:
     return True
 
 
-def fallbacks(state: State, missing: Missing, album_songs: AlbumSongs | None = None) -> None:
+def fallbacks(state: State, missing: Missing, album_songs: AlbumSongs | None = None,
+              request_songs: RequestSongs | None = None, recordings: Recordings | None = None) -> None:
     """Hand missing and failed albums to spotdl, and mark fallback albums the
     library now completes as filled (``on`` only).  An album in fallback is no
-    longer searched.
+    longer searched, but for a request's with gaps, weekly (:func:`_due`).
 
     spotdl fetches the Spotify album's whole tracklist (#268), read once per
     album by *album_songs* (``TRACKLISTS_PER_TICK`` a tick; a failed read stops
@@ -1161,11 +1200,29 @@ def fallbacks(state: State, missing: Missing, album_songs: AlbumSongs | None = N
     partial or gap fallback is settled (:func:`settle_imported`).  An imported
     release sends nothing to spotdl (#279): the release is the album.  A
     wants record (#324) never falls back: its wanted tracks are back on the
-    playlist's own want list once it is missing or failed.  Nor does a
-    request's (homelab#2478): it has no Spotify tracklist for spotdl, so it
-    stays missing or failed until the MusicBrainz-built fallback."""
+    playlist's own want list once it is missing or failed.
+
+    A request's record (homelab#2478) falls back from MusicBrainz instead:
+    *request_songs* reads its tracklist release as spotdl songs, once per
+    album and from the same ``TRACKLISTS_PER_TICK``, and its fallback tracks are
+    the recordings no item stamped with its key holds (*recordings*).  It is
+    ``filled`` once the stamped items hold every one.  Without both hooks it
+    stays missing or failed."""
     reads = 0
     for key, record in state.albums.items():
+        if _request_fallback(record):
+            if request_songs is None or recordings is None or record.get("status") not in (MISSING, FAILED, FALLBACK):
+                continue
+            if "album_songs" not in record and reads < TRACKLISTS_PER_TICK:
+                reads += 1
+                try:
+                    record["album_songs"] = request_songs(record)
+                except Exception as exc:
+                    logger.warning("[ERR]  %s — %s: reading the request's MusicBrainz tracklist failed: %s",
+                                   record["artist"], record["name"], exc)
+                    reads = TRACKLISTS_PER_TICK
+            _fall_back(key, record, _request_tracks(key, record, recordings), bool(record.get("album_songs")))
+            continue
         if _fed(record) or _requested(record):
             continue
         if settle_imported(record):
@@ -1175,6 +1232,10 @@ def fallbacks(state: State, missing: Missing, album_songs: AlbumSongs | None = N
         status = record.get("status")
         if status not in (MISSING, FAILED, FALLBACK):
             continue
+        if album_requests.url_recording(next(iter(record.get("album_songs") or ()), {}).get("url")):
+            # A request's MusicBrainz songs, from before a playlist listed the album: its
+            # fallback is the playlist's now, from the Spotify tracklist.
+            record.pop("album_songs")
         primary = statedb.primary_spotify(record)
         if album_songs is not None and primary and "album_songs" not in record \
                 and reads < TRACKLISTS_PER_TICK:
@@ -1185,14 +1246,20 @@ def fallbacks(state: State, missing: Missing, album_songs: AlbumSongs | None = N
                 logger.warning("[ERR]  %s — %s: reading the album's tracklist failed: %s",
                                record["artist"], record["name"], exc)
                 reads = TRACKLISTS_PER_TICK
-        if status in (MISSING, FAILED):
-            _queue_fallback(key, record, missing, status)
-        known = "album_songs" in record or not primary
-        record["fallback_tracks"] = _fallback_tracks(record, missing)
-        if known and not record["fallback_tracks"]:
-            record.update(status=FILLED, filled_at=_iso(_now()), fallback_tracks={})
-            logger.info("[FILLED] %s — %s", record["artist"], record["name"])
-            _event("filled", key, record, f"[FILLED] {record['artist']} — {record['name']}")
+        _fall_back(key, record, _fallback_tracks(record, missing), "album_songs" in record or not primary)
+
+
+def _fall_back(key: str, record: dict, tracks: dict[str, list[str]], known: bool) -> None:
+    """Queue a missing or failed album's absent *tracks* for spotdl, update a
+    fallback album's, and mark it filled once none are left and its whole
+    tracklist is *known*."""
+    if record.get("status") in (MISSING, FAILED):
+        _queue_fallback(key, record, tracks, record["status"])
+    record["fallback_tracks"] = tracks
+    if known and not tracks:
+        record.update(status=FILLED, filled_at=_iso(_now()), fallback_tracks={})
+        logger.info("[FILLED] %s — %s", record["artist"], record["name"])
+        _event("filled", key, record, f"[FILLED] {record['artist']} — {record['name']}")
 
 
 def _spotdl_tracks(record: dict) -> dict[str, list[str]]:
@@ -1305,13 +1372,16 @@ def tick(
     want_playlists: list[str] | None = None,
     wants: WantAlbums | None = None,
     library: LibraryAlbums | None = None,
+    request_songs: RequestSongs | None = None,
+    recordings: Recordings | None = None,
 ) -> TickResult:
     """One album-mode pass: refresh changed playlists, queue the requested
     albums (:func:`feed_requests`), the albums of the spotdl playlists *want_playlists* (*wants*, :func:`feed_wants`) and the
     library-wide ones (*library*, :func:`feed_library`), recover lost import
     triggers (*on_completion*, ``on`` only), reset a few mixed albums for a
     reimport (*mixed*, :func:`auto_reimport`), top the queue up, then hand
-    what Usenet can't supply to spotdl (*missing*, ``on`` only)."""
+    what Usenet can't supply to spotdl (*missing*, and for requests
+    *request_songs* and *recordings*, ``on`` only)."""
     settings = settings or Settings.from_env()
     result = TickResult()
     if settings.mode == "off":
@@ -1355,7 +1425,7 @@ def tick(
                 logger.exception("Automatic reimports failed; the next tick tries again")
         top_up(state, settings, prowlarr, sabnzbd, have, result, overrides=search)
         if settings.mode == "on" and missing is not None:
-            fallbacks(state, missing, spotify.album_songs)
+            fallbacks(state, missing, spotify.album_songs, request_songs, recordings)
         success = True
     finally:
         state.save(state_file)

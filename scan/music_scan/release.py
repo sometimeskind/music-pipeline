@@ -220,6 +220,45 @@ def claim(items, playlist: str, since: float, key: str, guid: str, job: str) -> 
     return mine
 
 
+def claim_fallback(items, records: dict[str, dict]) -> list:
+    """Stamp each album request's fallback track (homelab#2478) with its
+    record's key: an item with a ``fallback_recording`` (the recording the
+    scan's fingerprint check verified it as) and no ``album_record`` goes to
+    the request record whose MusicBrainz songs hold that recording, the one in
+    ``fallback`` when two do.  Canon then names it from the request, and the
+    tick's ``recordings`` hook counts it.  Returns the stamped items; one no
+    record or several claim is logged and left for the next scan."""
+    from music_fetch.albums import FALLBACK, REQUEST  # noqa: PLC0415
+
+    from music_scan.music_pipeline import FALLBACK_RECORDING  # noqa: PLC0415
+
+    by_recording: dict[str, list[str]] = {}
+    for key, record in records.items():
+        if record.get("origin") != REQUEST:
+            continue
+        for song in record.get("album_songs") or ():
+            if song.get("song_id"):
+                by_recording.setdefault(song["song_id"], []).append(key)
+    stamped = []
+    for item in items:
+        recording = item.get(FALLBACK_RECORDING)
+        if not recording or item.get("album_record"):
+            continue
+        keys = list(dict.fromkeys(by_recording.get(recording, ())))
+        if len(keys) > 1:
+            keys = [k for k in keys if records[k].get("status") == FALLBACK]
+        if len(keys) != 1:
+            logger.warning("  [UNCLAIMED] %s %s: %s album request(s) hold recording %s; not stamped",
+                           item.id, item.get("title"), len(keys) or "no", recording)
+            continue
+        item["album_record"] = keys[0]
+        item.store()
+        stamped.append(item)
+        logger.info("  [CLAIM] %s %s: album request %s's track (recording %s)",
+                    item.id, item.get("title"), keys[0], recording)
+    return stamped
+
+
 # The flex attr that marks an album record's local-only extra (#287).
 EXTRA = "album_extra"
 # The IDs of the kept release's items an extra shares a title with (#306).
@@ -485,6 +524,10 @@ def mixed_reasons(key: str, record: dict, items: list, listed) -> list[str]:
     from music_fetch.albums import GAP, IMPORTED, PARTIAL  # noqa: PLC0415
 
     if record.get("status") != IMPORTED and record.get("fallback_from") not in (PARTIAL, GAP):
+        return []
+    if record.get("origin") == "request":
+        # An album request's (homelab#2478) is imported whole, its release stamped, and its
+        # spotdl fallback tracks are its own: never mixed, whatever its blocklist says.
         return []
     sid = primary_spotify(record)
     mine = [i for i in items if sid and i.get("spotify_album_id") == sid and not i.get(EXTRA)

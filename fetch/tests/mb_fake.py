@@ -16,10 +16,16 @@ RLIVE = "44444444-4444-4444-8444-444444444444"
 RBOOT = "55555555-5555-4555-8555-555555555555"
 
 
+def recording(position: int, i: int) -> str:
+    """Track *i* of medium *position*'s MusicBrainz recording ID."""
+    return f"{position:08x}-0000-4000-8000-{i:012x}"
+
+
 def _medium(n: int, position: int = 1, fmt: str = "CD", isrc: bool = True) -> dict:
     return {"position": position, "format": fmt, "track-count": n, "tracks": [
         {"position": i, "title": f"Song {i}", "length": 200_000,
-         "recording": {"title": f"Song {i}", "isrcs": [f"GBAAA00{position}{i:03d}"] if isrc else []}}
+         "recording": {"id": recording(position, i), "title": f"Song {i}",
+                       "isrcs": [f"GBAAA00{position}{i:03d}"] if isrc else []}}
         for i in range(1, n + 1)]}
 
 

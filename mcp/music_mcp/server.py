@@ -234,8 +234,10 @@ def build_server(
         ] = None,
         offset: Offset = 0,
     ) -> dict:
-        """The album requests, oldest first: the release group, who asked when, and the album's status
-        (missing or failed ones stay so: a request has no spotdl fallback yet)."""
+        """The album requests, oldest first: the release group, who asked when, and the album's status.
+        One Usenet misses falls back to spotdl from its MusicBrainz tracklist: fallback, with
+        album.fallback_left the tracks still missing (only audio AcoustID confirms is imported),
+        then filled."""
         return await call("list_requests", lambda c: pipeline.get(c, "/requests", status=status, offset=offset))
 
     @mcp.tool(annotations={"readOnlyHint": True})
@@ -424,8 +426,8 @@ def build_server(
         """Ask for whole albums by MusicBrainz release group: the album tick searches Usenet for each
         and imports it whole. The dry run reads each tracklist from MusicBrainz and says what the
         next tick does (a new album, or the album row that has the release group already). A
-        request that misses stays missing: list_requests shows it. With later, an album requested
-        already is only appended to Later."""
+        request Usenet misses falls back to spotdl from its MusicBrainz tracklist: list_requests
+        shows it. With later, an album requested already is only appended to Later."""
         body = {"albums": [a.model_dump() for a in albums], "later": later, "apply": apply}
         return await run("request_album", body, write=True)
 

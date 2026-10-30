@@ -970,3 +970,49 @@ def test_sync_nosync_fetch_failure_never_fails_the_sync(tmp_path: Path, caplog) 
     assert [c["name"] for c in calls] == ["pl"]
     assert store.load("pl").songs == [song("A")]
     assert metrics.success is True
+
+
+def test_sync_playlists_downloads_the_requests_fallback_into_unverified_after_the_playlists(tmp_path: Path) -> None:
+    """homelab#2478: an album request's MusicBrainz-built songs go to unverified/request/,
+    after the playlists and within the same budget; a held one (waiting there, or rejected)
+    isn't fetched again, and there is no [HAVE] check."""
+    import unittest.mock as mock
+
+    from music_fetch import album_requests, albums, ingest
+    from music_fetch.metrics import IngestMetrics
+
+    spotdl_dir = tmp_path / "spotdl"
+    spotdl_dir.mkdir()
+    conf = tmp_path / "playlists.conf"
+    conf.write_text("aaaaaaah  https://open.spotify.com/playlist/A000000000000000000000\n", encoding="utf-8")
+    songs = [{"url": album_requests.recording_url(f"r{i}"), "song_id": f"r{i}", "name": f"T{i}"} for i in range(3)]
+    state = albums.State(albums={"7": {"status": albums.FALLBACK, "origin": albums.REQUEST, "album_songs": songs,
+                                       "fallback_tracks": {album_requests.SOURCE: ["r0", "r1", "r2"]}}})
+    state.save(spotdl_dir / ".albums.json")
+
+    calls: list[tuple[str, int | None]] = []
+
+    def fake_sync(name, track_limit=None, **_kwargs):
+        calls.append((name, track_limit))
+        return SyncResult(set(), 3, 3, 0, 0, {})
+
+    def fake_fallback(songs, output_dir, track_limit=None, in_library=None, **_kwargs):
+        calls.append((f"fallback:{output_dir}:{','.join(s['song_id'] for s in songs)}", track_limit))
+        assert in_library is None
+        return SyncResult(set(), 2, 2, 0, 0, {})
+
+    metrics = IngestMetrics()
+    with mock.patch.object(ingest, "SPOTDL_DIR", spotdl_dir), \
+         mock.patch.object(ingest, "CONF_PATH", conf), \
+         mock.patch.object(ingest, "COOKIE_FILE", tmp_path / "cookies.txt"), \
+         mock.patch.object(ingest, "FAILURES_FILE", tmp_path / ".failures.json"), \
+         mock.patch.object(album_requests, "UNVERIFIED", tmp_path / "unverified"), \
+         mock.patch.dict("os.environ", {"SYNC_TRACK_LIMIT": "10"}), \
+         mock.patch("music_fetch.ingest.sync_playlist", side_effect=fake_sync), \
+         mock.patch("music_fetch.ingest.download_fallback", side_effect=fake_fallback), \
+         mock.patch("music_fetch.ingest.time.sleep"):
+        ingest.sync_playlists(metrics, resolves=lambda song: False, held=frozenset({songs[1]["url"]}),
+                              in_library=lambda pl, song: False)
+
+    assert calls == [("aaaaaaah", 10), (f"fallback:{tmp_path / 'unverified' / 'request'}:r0,r2", 7)]
+    assert metrics.tracks_attempted == 5

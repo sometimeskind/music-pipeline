@@ -680,11 +680,15 @@ def _plan_record_item(item, key: str, record: dict, releases: dict[str, Release]
     or more, and never lowers it: the path's disc prefix then applies.
 
     The record's Spotify album is its primary Spotify album ID, never *key*
-    (a row id since homelab#2478)."""
+    (a row id since homelab#2478).  An album request's record has none: it
+    is named from MusicBrainz instead (:func:`_plan_request_item`)."""
     from music_fetch.state import primary_spotify  # noqa: PLC0415
 
     sid = primary_spotify(record)
     release = releases.get(sid) if sid else None
+    if release is None and not sid and record.get("tracklist_release"):
+        _plan_request_item(item, key, record, plan, dests, discs)
+        return
     if release is None:
         plan.noalbum += 1
         logger.debug("  [NOALBUM] %s: no playlist entry describes its album record %s", _path(item), key)
@@ -705,6 +709,46 @@ def _plan_record_item(item, key: str, record: dict, releases: dict[str, Release]
             fields.update(found)
             fields["mb_album_via"] = resolver.cache[sid]["rung"]
     fields["spotify_album_id"] = sid
+    plan.records += 1
+    _plan_fields(item, p, fields, plan, dests, in_place=True)
+
+
+def _plan_request_item(item, key: str, record: dict, plan: Plan, dests: dict, discs: int = 0) -> None:
+    """Plan an album request's item (homelab#2478): no Spotify album names it,
+    so the request's MusicBrainz data does.  Album, album artist and date come
+    from the record and its tracklist release, and the MusicBrainz album tags
+    from the files' own release when Usenet imported them (``files``), else
+    from the tracklist release (``request``): a spotdl fallback's tracks, so
+    Navidrome shows them as one album with the release's.  A fallback track
+    (``fallback_recording``) takes its disc/track from the tracklist; a
+    release's item keeps its own.  No ``spotify_album_id``."""
+    from music_scan.music_pipeline import FALLBACK_RECORDING  # noqa: PLC0415
+
+    songs = record.get("album_songs") or []
+    song = next((s for s in songs if s.get("song_id") and s["song_id"] == item.get(FALLBACK_RECORDING)), None)
+    first = songs[0] if songs else {}
+    date = str(first.get("date") or record.get("year") or "")
+    release = Release(f"request:{key}", record.get("name") or "", record.get("artist") or "",
+                      record.get("album_type") or "album", date,
+                      _int(first.get("tracks_count")) or _int(record.get("tracks_count")),
+                      _int(first.get("disc_count")), first.get("cover_url"), ())
+    if song is not None:
+        p = Placement(release, _int(song.get("track_number")), _int(song.get("disc_number")) or 1, True)
+        fields = spotify_fields(p)
+    else:
+        p = Placement(release, item.track or 0, item.disc or 1, True)
+        fields = {k: v for k, v in spotify_fields(p).items() if k in ("album", "albumartist", "year", "month", "day")}
+        if discs >= 2:
+            fields["disctotal"] = max(_int(item.disctotal), discs)
+    mb = (record.get("release_files") or {}).get("mb")
+    if mb:
+        fields.update(mb)
+        fields["mb_album_via"] = "files"
+    else:
+        fields.update({k: v for k, v in {"mb_albumid": record["tracklist_release"],
+                                         "mb_releasegroupid": record.get("release_group"),
+                                         "mb_albumartistid": first.get("artist_id")}.items() if v})
+        fields["mb_album_via"] = "request"
     plan.records += 1
     _plan_fields(item, p, fields, plan, dests, in_place=True)
 
@@ -947,16 +991,23 @@ def after_scan(lib, since: float) -> int:
     """Items the scan just imported, plus those whose MusicBrainz release is still
     pending or missing (the queue and its weekly retry), whose single's ISRC
     search is still to do, or that got a Spotify ID after their import (#244)."""
+    from music_scan.music_pipeline import FALLBACK_RECORDING  # noqa: PLC0415
+    from music_scan.release import claim_fallback  # noqa: PLC0415
+
     phases = Phases()
     everything = lib.all_items()
     phases.lap("library")
+    # An album request's fallback tracks take their record's stamp first (homelab#2478).
+    unclaimed = [i for i in everything if i.get(FALLBACK_RECORDING) and not i.get("album_record")]
+    records = _records() if unclaimed else None
+    claimed = {i.id for i in claim_fallback(unclaimed, records)} if records else set()
     items = [
         i for i in everything
         if (i.added or 0) >= since or i.get("mb_album_via") in (PENDING, "none") or i.get(WAIT) or i.get(CLASH)
-        or (not i.get("spotify_album_id") and item_spotify_ids(i))
+        or (not i.get("spotify_album_id") and item_spotify_ids(i)) or i.id in claimed
     ]
     phases.lap("select")
-    return canonicalize_items(items, phases=phases, library=len(everything))
+    return canonicalize_items(items, records=records, phases=phases, library=len(everything))
 
 
 # ----------------------------------------------------------------------

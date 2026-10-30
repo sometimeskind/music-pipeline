@@ -383,6 +383,23 @@ def scan_flow() -> None:
 # ---------------------------------------------------------------------------
 
 
+def _album_request_recordings(lib):
+    """The tick's ``recordings`` hook (homelab#2478): the MusicBrainz recordings
+    of the library items stamped with an album record's key, an album
+    request's fallback tracks among them.  The library is read once a tick."""
+    from music_scan.music_pipeline import FALLBACK_RECORDING  # noqa: PLC0415
+    from music_scan.playlists import by_stamp  # noqa: PLC0415
+
+    stamped: dict[str, list] = {}
+
+    def recordings(key: str) -> set[str]:
+        if not stamped:
+            stamped.update(by_stamp(lib.all_items()) or {"": []})
+        return {r for i in stamped.get(key, ()) for r in (i.get(FALLBACK_RECORDING), i.get("mb_trackid")) if r}
+
+    return recordings
+
+
 def _album_library_hooks(lib):
     """have / missing / complete callbacks over one open beets library.
 
@@ -604,7 +621,10 @@ def _album_library_feed_hook(lib):
 @task(name="album-tick", log_prints=True)
 def album_tick_task(settings) -> None:
     """Refresh album playlists, recover lost import triggers and top the Usenet queue up."""
+    import functools  # noqa: PLC0415
+
     import music_fetch.albums as albums  # noqa: PLC0415
+    from music_fetch import album_requests  # noqa: PLC0415
     from music_fetch.spotdl_ops import SpotifyPlaylists  # noqa: PLC0415
     from music_fetch.usenet import Prowlarr, Sabnzbd  # noqa: PLC0415
     from music_scan.library import MusicLibrary  # noqa: PLC0415
@@ -634,6 +654,8 @@ def album_tick_task(settings) -> None:
             want_playlists=want_playlists,
             wants=_album_wants_hook(lib),
             library=_album_library_feed_hook(lib),
+            request_songs=functools.partial(album_requests.release_songs, album_requests.musicbrainz()),
+            recordings=_album_request_recordings(lib),
         )
 
 

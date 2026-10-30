@@ -633,6 +633,23 @@ def test_album_tick_task_writes_no_removal_queue():
     assert args[0] == [("keep", "https://open.spotify.com/playlist/P")]
     assert args[1:4] == (spotify.return_value, prowlarr.return_value, sabnzbd.return_value)
     assert callable(args[4]) and args[5] is settings and len(args) == 6
-    assert set(tick.call_args.kwargs) == {"on_completion", "missing", "mixed", "want_playlists", "wants", "library"}
+    assert set(tick.call_args.kwargs) == {"on_completion", "missing", "mixed", "want_playlists", "wants", "library",
+                                          "request_songs", "recordings"}
     assert tick.call_args.kwargs["want_playlists"] == []  # an album playlist has no want list to feed
     assert [c[0] for c in mock_ingest.method_calls] == []  # no schedule_unlink, no save_pending_removals
+
+
+def test_album_request_recordings_reads_the_stamped_items_once():
+    """homelab#2478: the tick's recordings hook, the request tracks an album's stamped items hold."""
+    from music_service import flows
+
+    def item(**fields):
+        return MagicMock(get=lambda k, d=None: fields.get(k, d))
+
+    lib = MagicMock()
+    lib.all_items.return_value = [item(album_record="7", fallback_recording="r1", mb_trackid="r1"),
+                                  item(album_record="7", mb_trackid="r2"), item(album_record="8", mb_trackid="r3"),
+                                  item(mb_trackid="r4")]
+    recordings = flows._album_request_recordings(lib)
+    assert recordings("7") == {"r1", "r2"} and recordings("9") == set()
+    lib.all_items.assert_called_once()
