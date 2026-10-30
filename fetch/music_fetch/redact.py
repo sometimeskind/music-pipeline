@@ -16,13 +16,15 @@ from typing import Any
 
 REDACTED = "REDACTED"
 DROPPED = frozenset({"download_url", "downloadUrl"})
-# Any parameter naming a credential (apikey, X-Api-Key, access_token, passwd…), and the r= of NZB links.
-_NAME = r"(?:[\w.-]*(?:key|token|pass|secret|auth|sig)[\w.-]*|r)"
-_PARAM = re.compile(rf"([?&;]{_NAME}=)[^&#\s\"'<>]+", re.IGNORECASE)
+# A parameter is a credential when its name holds one of these (apikey, X-Api-Key, access_token,
+# passwd…), or is the r= of NZB links.  The name is one bounded group, checked in _mask: linear.
+_CREDENTIAL = re.compile(r"key|token|pass|secret|auth|sig", re.IGNORECASE)
+_PARAM = re.compile(r"([?&;]([\w.-]{1,64})=)([^&#\s\"'<>]+)")
 # Percent-encoded inside another parameter, once or more (%3F, %253F…).
-_ENCODED = re.compile(rf"(%(?:25)*(?:3F|26){_NAME}%(?:25)*3D)(?:(?!%(?:25)*26)[^&#\s\"'<>])+", re.IGNORECASE)
+_ENCODED = re.compile(r"(%(?:25)*(?:3F|26)([\w.-]{1,64})%(?:25)*3D)((?:(?!%(?:25)*26)[^&#\s\"'<>])+)",
+                      re.IGNORECASE)
 # User info runs to the last '@' before the host: a password may hold one.
-_USERINFO = re.compile(r"(\b[a-z][a-z0-9+.-]*://)[^/\s\"'<>]+@", re.IGNORECASE)
+_USERINFO = re.compile(r"(\b[a-z][a-z0-9+.-]{0,31}://)[^/\s\"'<>]{1,256}@", re.IGNORECASE)
 # The credentials this process holds, masked wherever they appear, in whatever shape.
 _SECRET_ENV = re.compile(r"(?:^|_)(?:API_?KEY|KEY|TOKEN|SECRET|PASSWORD|PASSWD)$")
 _MIN_SECRET = 8
@@ -34,12 +36,17 @@ def secrets() -> list[str]:
                   key=len, reverse=True)
 
 
+def _mask(m: re.Match) -> str:
+    name = m.group(2)
+    return m.group(1) + REDACTED if name.lower() == "r" or _CREDENTIAL.search(name) else m.group(0)
+
+
 def redact_text(text: str, known: list[str] | None = None) -> str:
     """*text* with every credential in a URL, and every one of *known* (default :func:`secrets`), masked."""
     for secret in secrets() if known is None else known:
         text = text.replace(secret, REDACTED)
-    text = _PARAM.sub(rf"\g<1>{REDACTED}", text)
-    text = _ENCODED.sub(rf"\g<1>{REDACTED}", text)
+    text = _PARAM.sub(_mask, text)
+    text = _ENCODED.sub(_mask, text)
     return _USERINFO.sub(rf"\g<1>{REDACTED}@", text)
 
 

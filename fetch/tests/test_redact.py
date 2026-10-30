@@ -44,6 +44,16 @@ def test_redact_masks_the_environments_credentials_in_any_shape(monkeypatch):
     assert redact({"line": text})[1] == 1
 
 
+@pytest.mark.parametrize("text", ["?" + "k" * 50_000 + "&" + "key" * 20_000, "a." * 50_000,
+                                  "http://" + "u" * 50_000, "%3F" + "key" * 20_000])
+def test_redact_text_is_linear(text):
+    import time
+
+    started = time.monotonic()
+    assert redact_text(text, []) == text
+    assert time.monotonic() - started < 1
+
+
 def test_redact_walks_json_and_drops_download_urls():
     value = {"candidate": {"guid": "https://indexer/details/9?apikey=abc123", "title": "Abbey Road",
                            "download_url": "http://prowlarr/1/download?apikey=abc123"},
