@@ -10,8 +10,8 @@ dropped after its apply.
   ``available_at`` when the library holds it whole, a second apart and earlier
   than every entry the queue has, so the albums keep their place ahead of the
   ones requested since.  An album on the queue already moves to its store
-  place.  Once ``later`` has no store the queue alone writes ``later.m3u``,
-  and it lists what the store did.
+  place.  The queue alone writes ``later.m3u``, so once applied it lists
+  what the store did.
 - **Keep:** every album on the ``keep`` store becomes an album request
   (:mod:`music_fetch.album_requests`), its tracklist read from MusicBrainz
   by release group at ``--apply``; one requested already is left as it is,

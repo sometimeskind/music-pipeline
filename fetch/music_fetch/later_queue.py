@@ -22,10 +22,9 @@ written by ``music_scan.scan.regen_playlists``) lists the available albums in
 ``available_at`` order, so an album that arrives late joins the end, not
 behind the listening position.  Pending albums aren't in it.
 
-Until the stage 3 cutover the Spotify album playlist ``later`` still has its
-store: the queue's albums then follow that playlist's albums in the same
-``later.m3u``, each file once.  Once ``later`` leaves ``playlists.conf`` the
-queue alone writes it.
+The queue alone writes ``later.m3u``: the Spotify album playlist ``later``
+left ``playlists.conf`` at the stage 3 cutover, and a store by that name is
+not read for it.
 """
 
 from __future__ import annotations
