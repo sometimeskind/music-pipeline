@@ -3,6 +3,7 @@
 Library tests generate audio with ffmpeg (skipped where it is missing; the dev image has it).
 """
 
+import logging
 import os
 import subprocess
 from datetime import datetime, timedelta, timezone
@@ -151,6 +152,29 @@ def test_backfill_attributes_the_release_and_applies_only_with_apply(tmp_path, f
     supersede.backfill(lib, records, apply=True, replaced_dir=replaced)
     assert lib.get_item(loose.id) is None and any(replaced.iterdir())
     assert supersede.backfill(lib, records, apply=True, replaced_dir=replaced) == []
+
+
+def test_backfill_reads_the_library_once_and_again_only_after_a_merge(tmp_path, ffmpeg, lib, monkeypatch, caplog):
+    """homelab#2521: a read per record took over an hour on 2,123 records."""
+    from music_scan import supersede
+
+    loose, album, _ = _dylan(tmp_path, lib)
+    bott = {"status": "imported", "name": "Blood On The Tracks", "artist": "Bob Dylan", "tracks_count": 10,
+            "grabbed_at": GRAB.isoformat(), "imported_at": IMPORTED.isoformat()}
+    # Records with no release in the library, before and after the one that has one.
+    records = {"A": {**bott, "name": "Desire"}, "BOTT": bott, "Z": {**bott, "artist": "Joan Baez"}}
+    reads = []
+    all_items = lib.all_items
+    monkeypatch.setattr(lib, "all_items", lambda: reads.append(1) or all_items())
+
+    with caplog.at_level(logging.INFO, logger="music_scan.supersede"):
+        assert [p.album.id for p in supersede.backfill(lib, records, apply=False)] == [album.id]
+    assert len(reads) == 1
+    assert "Supersede backfill: 3 record(s), 1 library read(s)" in caplog.text
+
+    reads.clear()
+    supersede.backfill(lib, records, apply=True, replaced_dir=tmp_path / "replaced")
+    assert len(reads) == 2 and lib.get_item(loose.id) is None
 
 
 KAPUTT = {"album": "Kaputt", "albumartist": "Destroyer", "artist": "Destroyer", "year": 2011, "tracktotal": 9,

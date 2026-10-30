@@ -65,6 +65,7 @@ from __future__ import annotations
 import dataclasses
 import logging
 import os
+import time
 from collections import Counter
 from pathlib import Path
 
@@ -209,16 +210,17 @@ def _same_audio(loose, release: list, titled: dict, frames_of, on_album: bool) -
 
 
 def plan(release: list, library: list, tracks_count: int, tracks=(),
-         decoder=None) -> tuple[list[Pair], list[Kept]]:
+         decoder=None, frames_of=None) -> tuple[list[Pair], list[Kept]]:
     """``(pairs, kept)``: which *library* items each item of *release* (one
     import's usenet items) supersedes, and the loose items on its album no
     rung matched (and those off it a same-titled release item vetoed).
     *tracks* are the album's tracklist entries (:class:`PlaylistTrack`
     lists); *decoder* decodes fingerprints
-    (:func:`music_scan.dupes.decode` by default).  Leaves the items as they were."""
+    (:func:`music_scan.dupes.decode` by default), or *frames_of* reads them
+    from a cache shared across calls.  Leaves the items as they were."""
     from music_scan import dupes  # noqa: PLC0415
 
-    frames_of = dupes.frames_reader(decoder or dupes.decode)
+    frames_of = frames_of or dupes.frames_reader(decoder or dupes.decode)
     titled: dict[str, list] = {}
     for album in sorted(release, key=lambda i: i.id):
         titled.setdefault(dupes._base_title(album), []).append(album)
@@ -335,22 +337,53 @@ def release_items(items: list, record: dict) -> list:
     return [i for i in items if i.get("via") == "usenet" and _claims(record, i) and _from_success(record, i.added or 0)]
 
 
+def _releases(items: list, records: dict[str, dict]) -> dict[str, list]:
+    """``{record key: its release's items}``: :func:`release_items` for every
+    record at once, through :func:`music_scan.rollback.claimants`."""
+    from music_scan.rollback import _from_success, claimants  # noqa: PLC0415
+
+    claiming = claimants(records)
+    out: dict[str, list] = {}
+    for item in items:
+        if item.get("via") != "usenet":
+            continue
+        for key in claiming(item):
+            if _from_success(records[key], item.added or 0):
+                out.setdefault(key, []).append(item)
+    return out
+
+
 def backfill(lib, records: dict[str, dict], apply: bool, replaced_dir: Path | None = None) -> list[Pair]:
-    """Supersede for every album record's successful release; with *apply*, merge."""
+    """Supersede for every album record's successful release; with *apply*, merge.
+
+    The library is read once, and again only after a merge changed it: a read
+    takes ~2 s in the pod, and once per record it took over an hour (homelab#2521)."""
     from music_fetch.albums import album_tracks  # noqa: PLC0415
 
+    from music_scan import dupes  # noqa: PLC0415
+
+    start = time.monotonic()
+    reads = 1
+    items = lib.all_items()
+    releases = _releases(items, records)
+    # Keyed by item ID: a merge removes loose items and leaves the album item's fingerprint as it was.
+    frames_of = dupes.frames_reader(dupes.decode)
     done: list[Pair] = []
-    for record in records.values():
-        items = lib.all_items()
-        release = release_items(items, record)
+    for key, record in records.items():
+        release = releases.get(key)
         if not release:
             continue
-        pairs, kept = plan(release, items, record.get("tracks_count") or 0, album_tracks(record))
+        pairs, kept = plan(release, items, record.get("tracks_count") or 0, album_tracks(record),
+                           frames_of=frames_of)
         if pairs or kept:
             logger.info("[ALBUM] %s — %s: %d loose item(s) superseded, %d kept", record.get("artist"),
                         record.get("name"), sum(len(p.loose) for p in pairs), len(kept))
         log(pairs, kept, apply)
-        if apply:
-            apply_pairs(pairs, replaced_dir)
+        if apply and apply_pairs(pairs, replaced_dir):
+            reads += 1
+            items = lib.all_items()
+            releases = _releases(items, records)
         done += pairs
+    logger.info("Supersede backfill: %d record(s), %d library read(s) in %.1fs", len(records), reads,
+                time.monotonic() - start)
     return done
