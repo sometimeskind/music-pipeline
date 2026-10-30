@@ -237,17 +237,44 @@ def test_request_album_normalises_the_release_groups(client, env):
                                 "preferred_release": f"https://musicbrainz.org/release/{REL}"},
         {"release_group": RG, "preferred_release": ""}]})
     assert resp.status_code == 200, resp.json
-    assert resp.json["args"] == {"albums": [{"release_group": RG2, "preferred_release": REL},
-                                            {"release_group": RG, "preferred_release": None}]}
-    assert env["commands"].ran[-1] == ["music-requests", "add", "--", f"{RG2}={REL}", RG]
+    assert resp.json["args"] == {"albums": [{"release_group": RG, "preferred_release": None},
+                                            {"release_group": RG2, "preferred_release": REL}], "later": False}
+    assert env["commands"].ran[-1] == ["music-requests", "add", "--", RG, f"{RG2}={REL}"]
+    # homelab#2478 2b: later appends them to Later in the order given.
+    resp = client.post("/mcp-api/run/request_album", headers=WRITE, json={"albums": [
+        {"release_group": RG2}, {"release_group": RG}], "later": True})
+    assert resp.status_code == 200, resp.json
+    assert env["commands"].ran[-1] == ["music-requests", "add", "--later", "--", RG2, RG]
     for albums in ([], [{"release_group": "abc"}], [{"release_group": RG, "surprise": 1}],
                    [{"release_group": RG}, {"release_group": RG, "preferred_release": REL}],
                    [{"release_group": RG, "preferred_release": f"https://musicbrainz.org/release-group/{RG}"}],
                    [{"release_group": f"{i:08d}-2d38-3d3c-9d38-4f0c2b5b7a11"} for i in range(26)], ["x"]):
         assert client.post("/mcp-api/run/request_album", json={"albums": albums},
                            headers=WRITE).status_code == 400, albums
+    assert client.post("/mcp-api/run/request_album", json={"albums": [{"release_group": RG}], "later": "yes"},
+                       headers=WRITE).status_code == 400
     assert client.post("/mcp-api/run/request_album", json={"albums": [{"release_group": RG}]},
                        headers=READ).status_code == 403
+
+
+def test_remove_from_later_normalises_its_release_groups(client, env):
+    """homelab#2478 2b: release groups as MBIDs or URLs, deduplicated in order, and a position."""
+    resp = client.post("/mcp-api/run/remove_from_later", headers=WRITE, json={
+        "release_groups": [RG2, f"https://musicbrainz.org/release-group/{RG}", RG], "through": 3})
+    assert resp.status_code == 200, resp.json
+    assert resp.json["args"] == {"release_groups": [RG2, RG], "through": 3}
+    assert env["commands"].ran[-1] == ["music-later", "remove", "--through=3", "--", RG2, RG]
+    resp = client.post("/mcp-api/run/remove_from_later", headers=WRITE, json={"through": 1})
+    assert env["commands"].ran[-1] == ["music-later", "remove", "--through=1"]
+    for body in ({}, {"release_groups": []}, {"through": 0}, {"through": True}, {"release_groups": "x"},
+                 {"release_groups": ["abc"]}, {"release_groups": [RG], "surprise": 1}):
+        assert client.post("/mcp-api/run/remove_from_later", json=body, headers=WRITE).status_code == 400, body
+    assert client.post("/mcp-api/run/remove_from_later", json={"through": 1}, headers=READ).status_code == 403
+
+
+def test_get_later_needs_the_state_in_the_database(client):
+    resp = client.get("/mcp-api/later", headers=READ)
+    assert resp.status_code == 503 and resp.get_json()["status"] == "unavailable"
 
 
 def test_list_requests_needs_the_state_in_the_database(client):
@@ -334,6 +361,7 @@ def test_no_read_returns_a_credential(client, env, no_event_store):
         "/mcp-api/digest_summary": ["/mcp-api/digest_summary"],
         "/mcp-api/overrides": ["/mcp-api/overrides"],
         "/mcp-api/requests": ["/mcp-api/requests"],
+        "/mcp-api/later": ["/mcp-api/later"],
         "/mcp-api/jobs/<job_id>": [f"/mcp-api/jobs/{ran.json['job_id']}"],
     }
     routes = {r.rule for r in client.application.url_map.iter_rules()

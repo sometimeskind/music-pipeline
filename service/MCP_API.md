@@ -190,6 +190,24 @@ The album requests in the `music` database (`music_fetch.album_requests`), oldes
 
 Before `music-state-import` has run, or with the database down: `503 {"status": "unavailable", "error": "…"}`.
 
+## The Later queue (any tier, homelab#2478)
+
+### `GET /mcp-api/later[?offset=N]` (`get_later`)
+
+The Later queue in the `music` database (`music_fetch.later_queue`): the albums in `later.m3u`, in arrival order (`available_at`, the first held whole first), each with its `position` from 1, then the `pending` ones the library doesn't hold whole yet, in the order they were added (`position` null). `album` is the album row that has the release group (its key, status and origin), or `null` while the album tick hasn't queued the request, when `status` is `pending`. `available` counts the albums in the `.m3u`; `requested` says whether an album request names the release group.
+
+```json
+{"status": "ok", "total": 2, "available": 1, "offset": 0, "next_offset": null,
+ "albums": [{"position": 1, "state": "available", "release_group": "6e0a…", "artist": "…", "name": "…",
+             "status": "imported", "album": {"key": "2120", "status": "imported", "origin": "request"},
+             "requested": true, "added_at": "2026-10-30T09:00:00Z", "available_at": "2026-10-30T11:02:13Z"},
+            {"position": null, "state": "pending", "release_group": "0b4e…", "artist": "…", "name": "…",
+             "status": "wanted", "album": {"key": "2121", "status": "wanted", "origin": "request"},
+             "requested": true, "added_at": "2026-10-30T09:00:00Z", "available_at": null}]}
+```
+
+Before `music-state-import` has run, or with the database down: `503 {"status": "unavailable", "error": "…"}`.
+
 ## Jobs
 
 The CLI tools run as jobs in a **single-slot queue** of depth 5: at most 5 jobs are queued or running at once. A 6th call returns `503 {"status": "busy", "queue": [<job summary>…]}`. Jobs run one at a time, in order, each one a subprocess of the CLI (`argv` below).
@@ -267,7 +285,8 @@ Every write tool's body takes `"apply": false` (the default) or `true`.
 | `release_album` | `{"album": "…"}` | `music-overrides release -- <key>` | none |
 | `pin_track` | `{"track": "…", "url": "…", "label": "", "reason": ""}` | `music-overrides pin [--label=L] [--reason=R] -- <track id> <url>` | none |
 | `unpin_track` | `{"track": "…"}` | `music-overrides unpin -- <track id>` | none |
-| `request_album` | `{"albums": [{"release_group": "…", "preferred_release": null}, …]}` | `music-requests add -- <release group>[=<release>]…` | none |
+| `request_album` | `{"albums": [{"release_group": "…", "preferred_release": null}, …], "later": false}` | `music-requests add [--later] -- <release group>[=<release>]…` | none |
+| `remove_from_later` | `{"release_groups": ["…"], "through": null}` | `music-later remove [--through=N] -- <release group>…` | none |
 
 Free-text values never parse as flags: positional values follow `--`, and the `--replaced` query is passed as `--replaced=QUERY`. The argparse test checks that a dry run's argv never parses with `--apply`, whatever its arguments hold.
 
@@ -277,7 +296,9 @@ Validation (400): `reset_album` needs a non-empty `query`, which must name exact
 
 The override tools (homelab#2484) write rows of their own tables, which the tick and the nightly read at their start, so they take no lock. `album` is an album query as for `reset_album` (resolved to the key; ambiguous and not found as above). `words` are normalised as the tick searches (`usenet.normalise`) and must keep a readable word; `reason` and `label` are whitespace-collapsed, at most 500 characters, and `hold_album` needs a reason. `track` is a Spotify track ID or `open.spotify.com/track` URL, reduced to the ID; `url` must be a YouTube or YouTube Music video (an ID, or a `youtube.com`, `music.youtube.com` or `youtu.be` URL), reduced to its canonical watch URL on its own host; another site or a playlist is a 400, since the URL reaches yt-dlp. Each apply records an `override_set` or `override_cleared` event with the caller, in the same transaction as the row. Until `music-overrides import --apply` has run, every write fails (exit 1): the tick still reads the ConfigMap's files.
 
-`request_album` (homelab#2478) takes 1 to 25 albums, each a `release_group` and an optional `preferred_release`: an MBID or a `musicbrainz.org/release-group/…` (`/release/…`) URL, reduced to the MBID; the list is deduplicated and sorted by release group, and one release group given twice with different preferred releases is a 400. The dry run reads each tracklist from MusicBrainz (two or three reads each, at one a second, so a long list outlasts the inline wait) and says what the next album tick does: a new album row, or the row that has the release group taken over (a wants or library row's wanted tracks become the whole album) or kept when it leaves its playlists. A release group requested already is listed and left as it is. A release group or release MusicBrainz doesn't have, a preferred release of another release group, or no official release with tracks fails the call (exit 1), and nothing is written. The apply adds every request, each with its `album_requested` event and the caller, in one transaction. The request's own table is read by the tick at its start, so it takes no lock.
+`request_album` (homelab#2478) takes 1 to 25 albums, each a `release_group` and an optional `preferred_release`: an MBID or a `musicbrainz.org/release-group/…` (`/release/…`) URL, reduced to the MBID; the list is deduplicated in the order given, and one release group given twice with different preferred releases is a 400. The dry run reads each tracklist from MusicBrainz (two or three reads each, at one a second, so a long list outlasts the inline wait) and says what the next album tick does: a new album row, or the row that has the release group taken over (a wants or library row's wanted tracks become the whole album) or kept when it leaves its playlists. A release group requested already is listed and left as it is. A release group or release MusicBrainz doesn't have, a preferred release of another release group, or no official release with tracks fails the call (exit 1), and nothing is written. The apply adds every request, each with its `album_requested` event and the caller, in one transaction. The request's own table is read by the tick at its start, so it takes no lock. With `"later": true` the albums are also appended to the Later queue in that order, each with a `later_added` event, in the same transaction; an album requested already is only appended, and one on Later already stays where it is. The dry run's `Later:` line per album says which, and whether the library holds it already (it joins the end of `later.m3u` at the next scan) or it waits for its import.
+
+`remove_from_later` (homelab#2478) takes `release_groups` (up to 25, MBIDs or URLs, deduplicated in order) and `through`, a positive integer: Later's first N albums, `get_later`'s positions 1 to N. At least one is needed. A release group not on Later is listed and left as it is; a `through` past the end of Later fails the call (exit 1). The apply deletes the queue rows, each with a `later_removed` event and the caller, in one transaction; `later.m3u` drops the albums at the next scan, and their files stay in the library. The scan's regen reads the queue, so it takes no lock.
 
 `merge_items` runs its pairs in order and stops at the first that fails; each pair is its own CLI run, so the pairs before it stay merged. Within a pair, beets commits each store and removal on its own (no transaction spans the merge), so a crash mid-pair can leave the keeper with the loser's IDs and the loser still in the library: rerun the pair.
 

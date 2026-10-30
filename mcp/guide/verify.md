@@ -20,6 +20,8 @@ Say what should change and when, and offer to check then.
   row at once, and `album_history` the event.
 - **A request** is queued by the next tick (`list_requests`: `pending`, then `wanted`; the
   tick logs `[REQUESTS] N request(s): …`), and searched by the same tick when a slot is free.
+- **Later** changes in `get_later` at once; `later.m3u` follows at the next scan (an import's
+  scan logs `[LATER] N album(s) now held whole` as albums arrive). `remove_from_later` likewise.
 - **Playlists** catch up with Spotify at the next nightly (album playlists: the next tick after
   a Spotify edit). `get_playlist` shows an entry's `item_id` once an item holds it.
 - **Metrics** move on the next push: `music_albums*` each tick, `music_scan_*` each scan.

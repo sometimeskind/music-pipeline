@@ -53,3 +53,29 @@ A request that misses stays **missing**: there is no spotdl fallback for a reque
 searched again after 7 days. When the search words are wrong (the log's `[MISS]` names the
 query), `set_search_override` on the album fixes them; `digest_summary` lists missing and
 failed requests under `requests`.
+
+## Later
+
+`request_album` with `later` also appends the albums to Later, in the order given. An album
+requested already is only appended, so `later` is also how an album already asked for (or
+already in the library) goes on Later. The dry run's `Later:` line per album says what happens:
+
+| Later line | Meaning |
+|------------|---------|
+| appended; the library holds it | It joins the end of Later's `.m3u` at the next scan |
+| appended; it joins the end of Later once the library holds it whole | Pending: listed in `get_later`, not in the `.m3u` until its import |
+| on it already | Nothing changes: an album never moves |
+
+Later's `.m3u` is in **arrival order**: an album is placed when the library first holds it
+whole, not when it was asked for, so one that downloads late lands at the end rather than
+behind where the user is listening. A reset or reimport doesn't move it.
+
+`get_later` shows the queue: positions 1, 2, … are the `.m3u`'s albums, oldest arrival first,
+then the pending ones with their album's status. `remove_from_later` takes albums off it, by
+release group, or `through=N` for the first N (the ones listened to). Removing touches no files:
+the album stays in the library. Both writes are a dry run first; the `.m3u` changes at the next
+scan (`trigger_scan` to have it now).
+
+Until the operator's cutover from the Spotify `later` playlist (homelab#2478 stage 3), that
+playlist's albums come first in `later.m3u` and the queue's follow; `get_later` and
+`remove_from_later` see only the queue's.

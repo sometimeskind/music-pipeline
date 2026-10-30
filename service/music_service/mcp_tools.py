@@ -356,7 +356,7 @@ def mbid(value, kind: str, name: str) -> str:
 def _request_album(body: dict, _: Albums) -> dict:
     from music_fetch.album_requests import MAX_PER_CALL  # noqa: PLC0415
 
-    _only(body, "albums")
+    _only(body, "albums", "later")
     albums = body.get("albums")
     if not isinstance(albums, list) or not albums:
         raise BadRequest("albums must be a non-empty list of {release_group, preferred_release?}")
@@ -373,13 +373,38 @@ def _request_album(body: dict, _: Albums) -> dict:
         out[group] = preferred
     if len(out) > MAX_PER_CALL:
         raise BadRequest(f"{len(out)} release groups: at most {MAX_PER_CALL} a call")
-    return {"albums": [{"release_group": g, "preferred_release": p} for g, p in sorted(out.items())]}
+    # In the order given: Later appends them in it.
+    return {"albums": [{"release_group": g, "preferred_release": p} for g, p in out.items()],
+            "later": _bool(body, "later")}
 
 
 def _request_argv(args: dict, apply: bool) -> list[list[str]]:
     specs = [a["release_group"] + (f"={a['preferred_release']}" if a["preferred_release"] else "")
              for a in args["albums"]]
-    return [_apply(["music-requests", "add"], apply, *specs)]
+    return [_apply(["music-requests", "add", *(["--later"] if args["later"] else [])], apply, *specs)]
+
+
+def _remove_from_later(body: dict, _: Albums) -> dict:
+    from music_fetch.album_requests import MAX_PER_CALL  # noqa: PLC0415
+
+    _only(body, "release_groups", "through")
+    groups = body.get("release_groups") or []
+    if not isinstance(groups, list):
+        raise BadRequest("release_groups must be a list of MusicBrainz release group IDs or URLs")
+    out = list(dict.fromkeys(mbid(g, "release-group", "release_groups") for g in groups))
+    if len(out) > MAX_PER_CALL:
+        raise BadRequest(f"{len(out)} release groups: at most {MAX_PER_CALL} a call")
+    through = body.get("through")
+    if through is not None and (isinstance(through, bool) or not isinstance(through, int) or through < 1):
+        raise BadRequest("through must be a positive integer: Later's first N albums")
+    if not out and through is None:
+        raise BadRequest("name release_groups, or through")
+    return {"release_groups": out, "through": through}
+
+
+def _remove_later_argv(args: dict, apply: bool) -> list[list[str]]:
+    through = [f"--through={args['through']}"] if args["through"] is not None else []
+    return [_apply(["music-later", "remove", *through], apply, *args["release_groups"])]
 
 
 def _canon_albums(body: dict, _: Albums) -> dict:
@@ -428,4 +453,6 @@ TOOLS: dict[str, Tool] = {t.name: t for t in [
     Tool("unpin_track", WRITE, _track_only, _overrides("unpin")),
     # Rows of album_requests, which the tick reads at its start: no lock.
     Tool("request_album", WRITE, _request_album, _request_argv),
+    # Rows of later_queue, which the scan's regen reads: no lock.
+    Tool("remove_from_later", WRITE, _remove_from_later, _remove_later_argv),
 ]}

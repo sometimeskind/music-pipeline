@@ -397,10 +397,11 @@ def _album_library_hooks(lib):
     import music_fetch.albums as albums  # noqa: PLC0415
     from music_scan.identity import ItemIndex  # noqa: PLC0415
 
-    from music_scan.playlists import by_album_id  # noqa: PLC0415
+    from music_scan.playlists import by_album_id, by_stamp  # noqa: PLC0415
 
     keys: dict[str | None, ItemIndex] = {}  # None: the whole library
     albums_by_id: dict[str, list] = {}
+    albums_by_stamp: dict[str, list] = {}
     none = ItemIndex([])
 
     def indexes(playlist: str) -> tuple[ItemIndex, ItemIndex]:
@@ -412,8 +413,9 @@ def _album_library_hooks(lib):
     def have(key: str, record: dict) -> bool:
         library = indexes(next(iter(record.get("playlists", {})), ""))[1]
         if not albums_by_id:
-            albums_by_id.update(by_album_id(library.items))
-        if not scan.have_album(lambda pl: indexes(pl)[0], library, albums_by_id, key, record):
+            albums_by_id.update(by_album_id(library.items) or {"": []})
+            albums_by_stamp.update(by_stamp(library.items))
+        if not scan.have_album(lambda pl: indexes(pl)[0], library, albums_by_id, key, record, albums_by_stamp):
             return False
         for playlist, tracks in record["playlists"].items():
             scan.have_or_link(*indexes(playlist), playlist, tracks)

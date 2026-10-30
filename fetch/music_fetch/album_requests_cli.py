@@ -6,6 +6,8 @@ it, and is what the Music MCP shows before an apply and compares again before
 applying, so it prints nothing that changes between two runs of the same
 request.  The release groups follow ``--``: ``<release group>`` or
 ``<release group>=<preferred release>``, each an MBID or a musicbrainz.org URL.
+``--later`` also appends them to the Later queue (:mod:`music_fetch.later_queue`),
+in the order given.
 """
 
 from __future__ import annotations
@@ -18,6 +20,7 @@ from collections.abc import Mapping
 import psycopg
 
 from music_fetch import album_requests as req
+from music_fetch import later_queue
 from music_fetch import state as statedb
 from music_fetch.overrides_cli import describe
 
@@ -75,37 +78,65 @@ def effect(found: req.Tracklist, key: str | None, record: dict | None) -> str:
             + ", and it is kept when it leaves its playlists")
 
 
+def _later_line(group: str, record: dict | None, queued: dict[str, int | None]) -> str:
+    """What ``--later`` does with release group *group*: *queued* is Later's
+    release groups, each with its position (None while pending)."""
+    if group in queued:
+        position = queued[group]
+        return "  Later: on it already, " + (f"position {position}" if position else "pending its import")
+    if later_queue.held(record):
+        return "  Later: appended; the library holds it, so it joins the end of Later at the next scan"
+    return "  Later: appended; it joins the end of Later once the library holds it whole"
+
+
 def add_dry_run(conn: psycopg.Connection, rows: statedb.AlbumRows, specs: list[tuple[str, str | None]],
-                get: req.Get) -> tuple[list[tuple[req.Tracklist, str | None, dict | None]], list[str]]:
+                get: req.Get, later: bool = False
+                ) -> tuple[list[tuple[req.Tracklist, str | None, dict | None]], list[str], list[str]]:
     """The requests ``--apply`` would add (each with the album row that has
-    its release group, if any) and the dry run's lines.  A release group
-    requested already is listed and left as it is."""
+    its release group, if any), the release groups it would append to Later
+    (*later*), and the dry run's lines.  A release group requested already is
+    listed and left as it is, and one on Later already stays where it is."""
     have = {r.release_group: r for r in req.load(conn)}
+    queued: dict[str, int | None] = {}
+    if later:
+        entries = later_queue.load(conn)
+        available = [e.release_group for e in entries if e.available_at is not None]
+        queued = {e.release_group: None for e in entries} | {g: n for n, g in enumerate(available, 1)}
     out: list[tuple[req.Tracklist, str | None, dict | None]] = []
+    queue: list[str] = []
     lines: list[str] = []
     for n, (group, preferred) in enumerate(specs, 1):
         head = f"Request {n} of {len(specs)}:"
+        hit = req.find_row(rows, group)
+        if later:
+            if group not in queued:
+                queue.append(group)
         if group in have:
             old = have[group]
             lines.append(f"{head} {old.artist} — {old.name} [release group {group}]: requested already, by "
                          f"{old.requested_by} at {req.iso(old.requested_at)}; nothing changes")
+            if later:
+                lines.append(_later_line(group, hit[1] if hit else None, queued))
             continue
         try:
             found = req.tracklist(get, group, preferred)
         except OSError as exc:  # urllib's errors: MusicBrainz down or refusing
             raise req.Refused(f"reading release group {group} from MusicBrainz failed: {exc}") from exc
         isrcs = sum(1 for t in found.tracks if t[3])
-        hit = req.find_row(rows, group)
         key, record = hit if hit else (None, None)
         lines += [f"{head} {found.artist} — {found.name} [release group {group}; {found.album_type}"
                   + (f"; {found.year}" if found.year else "") + "]",
                   f"  Tracklist: {len(found.tracks)} track(s), {isrcs} with an ISRC, from release {found.release}: "
                   f"{found.release_label}; {found.how}",
                   f"  Album: {effect(found, key, record)}"]
+        if later:
+            lines.append(_later_line(group, record, queued))
         out.append((found, key, record))
     if out:
         lines.append(f"{len(out)} request(s) to add; a request Usenet misses stays missing (no spotdl fallback yet)")
-    return out, lines
+    if queue:
+        lines.append(f"{len(queue)} album(s) to append to Later, in this order")
+    return out, lines, queue
 
 
 def _connect() -> psycopg.Connection:
@@ -132,6 +163,7 @@ def _parser() -> argparse.ArgumentParser:
     p.add_argument("--status", choices=STATUSES)
     p = sub.add_parser("add", help="request albums by release group")
     p.add_argument("--apply", action="store_true", help="write it (a dry run without)")
+    p.add_argument("--later", action="store_true", help="also append them to Later, in the order given")
     p.add_argument("specs", nargs="+", metavar="RELEASE_GROUP[=RELEASE]",
                    help="a release group MBID or URL, optionally =<preferred release MBID or URL>")
     return parser
@@ -147,7 +179,7 @@ def run(args: argparse.Namespace, get: req.Get | None = None) -> None:
                 logger.info("%s", _listed(entry))
             logger.info("%d request(s)", len(found))
             return
-        out, lines = add_dry_run(conn, rows, specs, get or req.musicbrainz())
+        out, lines, queue = add_dry_run(conn, rows, specs, get or req.musicbrainz(), args.later)
         for line in lines:
             logger.info("%s", line)
         if not args.apply:
@@ -156,8 +188,10 @@ def run(args: argparse.Namespace, get: req.Get | None = None) -> None:
         by = req.caller()
         with conn.transaction():
             added = sum(req.add(conn, found, by, key, record) for found, key, record in out)
-        logger.info("Applied: %d request(s) added%s", added,
-                    f", {len(out) - added} requested meanwhile" if added < len(out) else "")
+            appended = later_queue.add(conn, queue, rows, later_queue.requests_by_group(conn)) if queue else 0
+        logger.info("Applied: %d request(s) added%s%s", added,
+                    f", {len(out) - added} requested meanwhile" if added < len(out) else "",
+                    f"; {appended} album(s) appended to Later" if args.later else "")
 
 
 def main(argv: list[str] | None = None) -> None:

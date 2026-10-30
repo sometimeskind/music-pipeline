@@ -70,8 +70,9 @@ EVENT_KINDS = (
     # spotify_album_id), which the digest checks for a move between unrelated albums.
     "moved",
     # Requests and the Later queue (homelab#2478): an album requested
-    # (music-requests, migration 7), added to or removed from Later, and a
-    # Spotify ID resolved for a release group; only the first is emitted yet.
+    # (music-requests, migration 7), added to or removed from Later
+    # (music-later, migration 8), and a Spotify ID resolved for a release
+    # group; the last is not emitted yet.
     "album_requested",
     "later_added",
     "later_removed",
@@ -265,6 +266,20 @@ MIGRATIONS: list[str] = [
         tracks            jsonb NOT NULL,
         requested_by      text NOT NULL,
         requested_at      timestamptz NOT NULL DEFAULT now()
+    );
+    """,
+    # 8: the Later queue (homelab#2478 stage 2, read and written through
+    # music_fetch.later_queue).  One row per album on Later, by release group:
+    # ``available_at`` is when the library first held it whole (null while it
+    # is pending), and the .m3u lists the available ones in that order, so an
+    # album that arrives late joins the end.  ``id`` breaks ties: one call
+    # adds several albums at one now().
+    """
+    CREATE TABLE later_queue (
+        id            bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+        release_group uuid NOT NULL UNIQUE,
+        added_at      timestamptz NOT NULL DEFAULT now(),
+        available_at  timestamptz
     );
     """,
 ]
