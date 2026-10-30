@@ -238,15 +238,12 @@ def _names(text: str | None) -> list[str]:
     return [Path(line).name for line in (text or "").splitlines()]
 
 
-def test_the_queues_albums_follow_the_later_playlists_until_the_cutover(tmp_path: Path, real_lib) -> None:
-    """Before stage 3 the album playlist later still has its store: the queue's albums follow its albums."""
+def test_a_later_store_is_not_read_the_queue_alone_writes_later_m3u(tmp_path: Path, real_lib) -> None:
+    """Since the stage 3 cutover (homelab#2478) later.m3u is the queue's alone: a store named later is ignored."""
     _release(real_lib)
     _asked(real_lib)
-    text = _regen_later(tmp_path, real_lib, {"later": [_song("One", "S1")]},
-                        [("41", REQUEST_RECORD), ("ALBKEY", {"name": "Album", "spotify_album_ids": ["ALB"],
-                                                             "playlists": {}})])
-    assert [line.split("/")[-2:] for line in text.splitlines()] == [
-        ["Album", "01.m4a"], ["Album", "03.m4a"], ["Album", "04.m4a"], ["Asked", "01.m4a"], ["Asked", "02.m4a"]]
+    text = _regen_later(tmp_path, real_lib, {"later": [_song("One", "S1")]}, [("41", REQUEST_RECORD)])
+    assert [line.split("/")[-2:] for line in text.splitlines()] == [["Asked", "01.m4a"], ["Asked", "02.m4a"]]
 
 
 def test_without_the_later_store_the_queue_alone_writes_later_m3u(tmp_path: Path, real_lib) -> None:

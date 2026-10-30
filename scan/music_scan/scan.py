@@ -388,10 +388,10 @@ def regen_playlists(metrics: ScanMetrics | None = None) -> dict[str, int]:
     logged and keeps its last ``.m3u``: a store failure never fails a scan or
     empties a playlist.
 
-    The Later queue's available albums (homelab#2478, :func:`later_view`)
-    follow the ``later`` store's albums in ``later.m3u`` while that album
-    playlist has a store, and make up ``later.m3u`` alone once it has none.
-    When the queue can't be read, ``later.m3u`` keeps its last content.
+    ``later.m3u`` is the Later queue's available albums (homelab#2478,
+    :func:`later_view`) once the state is in the database; a playlist store
+    named ``later`` is not read for it.  When the queue can't be read,
+    ``later.m3u`` keeps its last content.
     """
     PLAYLISTS.mkdir(parents=True, exist_ok=True)
     names = store.names()
@@ -417,8 +417,8 @@ def regen_playlists(metrics: ScanMetrics | None = None) -> dict[str, int]:
             logger.error("  [LATER] the Later queue can't be read — %s.m3u is left as it was", later_queue.PLAYLIST,
                          exc_info=True)
         for name in names:
-            if name == later_queue.PLAYLIST and queue_failed:
-                continue
+            if name == later_queue.PLAYLIST and (queue is not None or queue_failed):
+                continue  # the Later queue writes later.m3u
             try:
                 view = store_view(name, library, by_album, stamps)
                 if view is None:
@@ -429,14 +429,10 @@ def regen_playlists(metrics: ScanMetrics | None = None) -> dict[str, int]:
             except Exception:
                 logger.error("Playlist store failed for %s — its .m3u is left as it was", name, exc_info=True)
                 continue
-            if name == later_queue.PLAYLIST and queue:
-                listed = set(paths)
-                paths = paths + [p for p in queue if p not in listed]
             counts[name] = _write_m3u(name, paths)
             empty[name] = playlists.empty_slots(slots)
             missing[name] = [f"{s.entry.artist} — {s.entry.name}" for s in slots if s.item is None]
-        if later_queue.PLAYLIST not in names and queue is not None \
-                and (queue or (PLAYLISTS / f"{later_queue.PLAYLIST}.m3u").exists()):
+        if queue is not None and (queue or (PLAYLISTS / f"{later_queue.PLAYLIST}.m3u").exists()):
             counts[later_queue.PLAYLIST] = _write_m3u(later_queue.PLAYLIST, queue)
 
     if metrics is not None:
