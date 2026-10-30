@@ -282,6 +282,18 @@ MIGRATIONS: list[str] = [
         available_at  timestamptz
     );
     """,
+    # 9: a Later album with no release group yet (homelab#2478 stage 3): the
+    # cutover queues every album on the later playlist, and some rows have none
+    # until an import or a MusicBrainz lookup gives them one.  Such an entry
+    # names its album by ``ref``, one of its album_refs (its primary Spotify
+    # album ID), which follows the album through a merge; the regen sets its
+    # release group once the row has one, and keeps the ref.
+    """
+    ALTER TABLE later_queue ALTER COLUMN release_group DROP NOT NULL;
+    ALTER TABLE later_queue ADD COLUMN ref text UNIQUE;
+    ALTER TABLE later_queue ADD CONSTRAINT later_queue_named_check
+        CHECK (release_group IS NOT NULL OR ref IS NOT NULL);
+    """,
 ]
 
 

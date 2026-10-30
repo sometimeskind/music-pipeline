@@ -85,4 +85,9 @@ scan (`trigger_scan` to have it now).
 
 Until the operator's cutover from the Spotify `later` playlist (homelab#2478 stage 3), that
 playlist's albums come first in `later.m3u` and the queue's follow; `get_later` and
-`remove_from_later` see only the queue's.
+`remove_from_later` see only the queue's. The cutover (`music-cutover`, an operator step) puts
+the playlist's albums on the queue ahead of the others, in the playlist's order, so the `.m3u`
+doesn't change. An album whose record had no release group yet is queued by its album ref
+instead: `get_later` shows it with no release group and a ref (its Spotify album ID). It gets
+its release group at a later scan, once an import or a MusicBrainz lookup gives its record one.
+Until then `remove_from_later` reaches it only with `through=N`, never by release group.

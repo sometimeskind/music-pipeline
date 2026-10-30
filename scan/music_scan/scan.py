@@ -451,13 +451,16 @@ def _write_m3u(name: str, paths: list[Path]) -> int:
 
 def _later_albums() -> list[tuple[str, dict]] | None:
     """The Later queue's available albums, ``(key, record)`` in ``.m3u`` order,
-    once the pending albums the library now holds whole have become available
-    (:func:`later_queue.mark_available`).  None while the JSON files are the
-    state; raises when the database can't be read."""
+    once the entries named by ref whose rows now have a release group have it
+    (:func:`later_queue.resolve_refs`) and the pending albums the library now
+    holds whole have become available (:func:`later_queue.mark_available`).
+    None while the JSON files are the state; raises when the database can't
+    be read."""
     with state.session() as conn:
         if conn is None:
             return None
         rows = state.load_albums(conn)
+        later_queue.resolve_refs(conn, rows)
         later_queue.mark_available(conn, rows)
         return later_queue.albums(conn, rows)
 
@@ -472,6 +475,18 @@ def later_view(library: ItemIndex, by_album: dict[str, list], by_record: dict[st
     found = _later_albums()
     if found is None:
         return None
+    paths = later_paths(found, library, by_album, by_record)
+    if found:
+        logger.info("  [LATER] %s: %d album(s), %d track(s) from the Later queue", later_queue.PLAYLIST, len(found),
+                    len(paths))
+    return paths
+
+
+def later_paths(found: list[tuple[str, dict]], library: ItemIndex, by_album: dict[str, list],
+                by_record: dict[str, list]) -> list[Path]:
+    """The ``.m3u`` paths of the Later albums *found* (``(key, record)`` in
+    ``.m3u`` order): each one's local tracks, album by album, each file once.
+    ``music-cutover`` renders the queue it would write with it."""
     none = ItemIndex([])
     paths: list[Path] = []
     seen: set[Path] = set()
@@ -483,9 +498,6 @@ def later_view(library: ItemIndex, by_album: dict[str, list], by_record: dict[st
             if (p := _item_path(item)) not in seen:
                 seen.add(p)
                 paths.append(p)
-    if found:
-        logger.info("  [LATER] %s: %d album(s), %d track(s) from the Later queue", later_queue.PLAYLIST, len(found),
-                    len(paths))
     return paths
 
 

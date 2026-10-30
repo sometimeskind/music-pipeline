@@ -310,6 +310,24 @@ def test_reconcile_detects_removed_playlist(tmp_path: Path) -> None:
     assert (spotdl_dir / "kept").is_dir()
 
 
+def test_reconcile_leaves_later_m3u_to_the_later_queue(tmp_path: Path) -> None:
+    """homelab#2478: once the state is in the database the Later queue writes later.m3u, so the later
+    playlist leaving playlists.conf doesn't delete it; another playlist's .m3u still goes."""
+    import unittest.mock as mock
+
+    playlists_dir = tmp_path / "playlists"
+    playlists_dir.mkdir()
+    for name in ("later", "keep"):
+        (playlists_dir / f"{name}.m3u").write_text("/library/x.m4a\n", encoding="utf-8")
+    conf = _make_conf(tmp_path, ["kept  https://open.spotify.com/playlist/abc0000000000000000000"])
+    with mock.patch.object(ingest, "CONF_PATH", conf), mock.patch.object(ingest, "SPOTDL_DIR", tmp_path / "spotdl"), \
+         mock.patch.object(store, "names", return_value=["keep", "later"]), mock.patch.object(store, "remove"), \
+         mock.patch.object(ingest.state, "in_db", return_value=True):
+        assert reconcile_playlists() == ["keep", "later"]
+    assert (playlists_dir / "later.m3u").exists()
+    assert not (playlists_dir / "keep.m3u").exists()
+
+
 def test_reconcile_ignores_a_leftover_spotdl_file(tmp_path: Path) -> None:
     """A .spotdl file is never read: without a store, its playlist is not 'removed' (homelab#1914)."""
     import unittest.mock as mock

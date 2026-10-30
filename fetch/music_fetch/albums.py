@@ -432,7 +432,13 @@ def refresh_playlists(
 
     An album leaves the playlist only when none of its tracks remain (#268):
     the ``.m3u`` lists whole albums, so a track removed from an album that
-    still has others on the playlist changes nothing."""
+    still has others on the playlist changes nothing.
+
+    A playlist that left ``playlists.conf`` loses its snapshot, so one added
+    back is read again and gets its store back (homelab#2478's rollback)."""
+    configured = {name for name, _ in playlists}
+    for name in [n for n in state.playlists if n not in configured]:
+        del state.playlists[name]
     for name, url in playlists:
         snapshot = spotify.snapshot_id(url)
         entry = state.playlists.setdefault(name, {})

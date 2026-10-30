@@ -266,3 +266,28 @@ def test_a_queue_that_cant_be_read_leaves_later_m3u_as_it_was(tmp_path: Path, re
     for stores in ({"later": [_song("One", "S1")]}, {}):
         assert _regen_later(tmp_path, real_lib, stores, state.Unavailable("down"), old="old/line.m4a\n") == \
             "old/line.m4a\n"
+
+
+def test_the_cutovers_queue_writes_what_the_later_store_did(tmp_path: Path, real_lib) -> None:
+    """homelab#2478 stage 3: music-cutover's check renders the queue as the scan will; for the
+    store's albums in the store's order it is the later store's .m3u, line for line."""
+    from music_scan import cutover
+
+    _release(real_lib)
+    _add(real_lib, "Other", "/lib/Other/01.m4a", album="Other", disc=1, track=1, spotify_ids="O1",
+         spotify_album_id="OTH")
+    songs = [_song("Other", "O1", "OTH", "Other"), _song("One", "S1"), _song("Three", "S3")]
+    with mock.patch("music_scan.scan._album_records", return_value={}):
+        _regen(tmp_path, real_lib, {"later": songs}, {"later"})
+    written = (tmp_path / "playlists" / "later.m3u").read_text().splitlines()
+    queue = [("7", {"name": "Other", "spotify_album_ids": ["OTH"],
+                    "playlists": {"later": [["Other", "Artist", "O1", None, 1, 1]]}}),
+             ("8", {"name": "Album", "spotify_album_ids": ["ALB"],
+                    "playlists": {"later": [["One", "Artist", "S1", None, 1, 1], ["Three", "Artist", "S3", None, 1, 3]]}})]
+    wrapper = mock.MagicMock()
+    wrapper.__enter__ = mock.MagicMock(return_value=real_lib)
+    wrapper.__exit__ = mock.MagicMock(return_value=False)
+    with mock.patch("music_scan.scan.PLAYLISTS", tmp_path / "playlists"), \
+         mock.patch("music_scan.library.MusicLibrary", return_value=wrapper):
+        assert cutover.m3u_lines(queue) == written
+    assert cutover.compare(written, written) == ["later.m3u: unchanged by the cutover (4 line(s))"]
