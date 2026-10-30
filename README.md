@@ -75,7 +75,7 @@ The scan phase is idempotent and safe to run at any time: on its 5-minute schedu
 
 ## State
 
-The pipeline's own state is in the Postgres database `music` (`MUSIC_DATABASE_URL`, homelab#2410), read and written through one module, `music_fetch.state` (migration 4 in `music_fetch/db.py`; the overrides are migration 5 and `music_fetch.overrides`):
+The pipeline's own state is in the Postgres database `music` (`MUSIC_DATABASE_URL`, homelab#2410), read and written through one module, `music_fetch.state` (migration 4 in `music_fetch/db.py`; the overrides are migration 5 and `music_fetch.overrides`, the album requests migration 7 and `music_fetch.album_requests`):
 
 | Table | Holds | Was |
 |---|---|---|
@@ -84,6 +84,7 @@ The pipeline's own state is in the Postgres database `music` (`MUSIC_DATABASE_UR
 | `spotdl_failures` | The spotdl backoff | `inbox/.spotdl-failures.json` (on the scratch volume, so a restore forgot it) |
 | `kv` | The MusicBrainz release and ISRC caches (`mb-releases`, `canon-isrc`), the playlist-page cache (`canon-pages`), the Spotify rate-limit stamp, the empty-slots report, and the `state-imported` and `overrides-imported` markers | `.mb-releases.json`, `.canon-isrc.json`, `.canon-pages.json`, `.spotify-rate-limit.json`, `.empty-slots.json` |
 | `album_overrides`, `track_pins` | Search overrides and holds (on an album row), track pins (by Spotify track ID), each with its reason, `set_by` and `set_at` (homelab#2484, see Album mode) | homelab's ConfigMap: `album-overrides.conf`, `track-pins.conf` |
+| `album_requests` | Albums requested by MusicBrainz release group: the preferred release, the tracklist read from MusicBrainz, `requested_by` and `requested_at` (homelab#2478, see Album requests below) | new |
 
 beets' library stays SQLite (`library.db`): beets has no other backend. The events (homelab#2413) are in the same database.
 
@@ -101,6 +102,8 @@ beets' library stays SQLite (`library.db`): beets has no other backend. The even
 3. the beets items tagged with its Spotify album ID, when every one that has a release group has the same one.
 
 Cache and library evidence that name two release groups leave the row `conflict`. Two rows that resolve to one release group merge (`[MERGE]`), never while either is grabbed or importing (they wait `in-flight`): the survivor is the row that already had the release group, else the one furthest along, and it takes the others' Spotify IDs, playlist tracks and blocklisted releases, the higher attempt count and the strongest origin. Each pass that changes anything logs `[REKEY]`, `[MERGE]`, `[CONFLICT]` and `[FLAG]` lines and a `Resolve:` summary. `music-state-import` runs the same pass, on local data only (no MusicBrainz calls), so what it can't key stays flagged for later passes.
+
+**Album requests** (homelab#2478). `music-requests add [--apply] -- <release group>[=<preferred release>]…` (the Music MCP's `request_album`) asks for whole albums by MusicBrainz release group, each an MBID or a musicbrainz.org URL; `music-requests list [--status S]` (`list_requests`) shows each request with its album's status, `pending` until the tick has queued it. The dry run reads each tracklist from MusicBrainz: the preferred release's, else the earliest official release with the release group's most common track count (releases marked live left out, unless the group is a live album; video media left out), stored as album mode's track entries without Spotify IDs. Each album tick (`albums.feed_requests`, logged `[REQUESTS]`) gives every request an album row with origin `request` and those tracks under the pseudo-playlist `request`, or upgrades the row that has the release group: a waiting wants or library row becomes the request's (the whole album wanted), and an album playlist's row is marked `requested`, so it stays when it leaves its playlists and then takes the request's tracks. A playlist's Spotify tracks always stand in for the request's, so `have` and the import read one tracklist. A request is searched with the album playlists' albums, ahead of the fed ones, and imported under `inbox/usenet/request/`. It has no spotdl fallback yet: one that misses stays `missing` (searched again weekly), and `digest_summary` lists it. Rolling back to an image from before migration 7 leaves the request rows alone, but that image would treat a request row as an album playlist's and fall it back to spotdl with no tracks to fetch, marking it `filled`: reset those albums after rolling forward again.
 
 **Postgres down.** Once switched, the pipeline never runs on the stale JSON. Each run skips instead: the album tick logs `[DB-DOWN] Album tick skipped` and pushes `music_albums_last_tick_success 0`, the scan logs `[DB-DOWN] Scan skipped` (the inbox waits), and the nightly's preflight fails with `state_unavailable`. An album import triggered during the outage fails, and the tick's lost-trigger recovery imports it from SABnzbd history once the database is back.
 

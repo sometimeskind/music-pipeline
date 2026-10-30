@@ -15,6 +15,7 @@ music-album-requeue = "music_fetch.albums:requeue_main"
 music-state-import = "music_fetch.state_import:import_main"
 music-album-resolve = "music_fetch.state_import:resolve_main"
 music-overrides = "music_fetch.overrides_cli:main"
+music-requests = "music_fetch.album_requests_cli:main"
 
 [tool.setuptools.packages.find]
 where = ["."]

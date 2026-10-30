@@ -338,6 +338,50 @@ def _overrides(command: str, *flags: str) -> Callable[[dict, bool], list[list[st
     return argv
 
 
+# ---- album requests (homelab#2478): music-requests ----
+
+
+def mbid(value, kind: str, name: str) -> str:
+    """A MusicBrainz *kind* ID from an MBID or a musicbrainz.org URL (``album_requests.mbid``)."""
+    from music_fetch.album_requests import mbid as parse  # noqa: PLC0415
+
+    if not isinstance(value, str) or not value.strip():
+        raise BadRequest(f"{name} must be a MusicBrainz {kind} ID or URL")
+    try:
+        return parse(value, kind)
+    except ValueError as exc:
+        raise BadRequest(str(exc)) from exc
+
+
+def _request_album(body: dict, _: Albums) -> dict:
+    from music_fetch.album_requests import MAX_PER_CALL  # noqa: PLC0415
+
+    _only(body, "albums")
+    albums = body.get("albums")
+    if not isinstance(albums, list) or not albums:
+        raise BadRequest("albums must be a non-empty list of {release_group, preferred_release?}")
+    out: dict[str, str | None] = {}
+    for album in albums:
+        if not isinstance(album, dict):
+            raise BadRequest("each album must be {release_group, preferred_release?}")
+        _only(album, "release_group", "preferred_release")
+        group = mbid(album.get("release_group"), "release-group", "release_group")
+        preferred = album.get("preferred_release")
+        preferred = None if preferred in (None, "") else mbid(preferred, "release", "preferred_release")
+        if group in out and out[group] != preferred:
+            raise BadRequest(f"release group {group} is given twice, with different preferred releases")
+        out[group] = preferred
+    if len(out) > MAX_PER_CALL:
+        raise BadRequest(f"{len(out)} release groups: at most {MAX_PER_CALL} a call")
+    return {"albums": [{"release_group": g, "preferred_release": p} for g, p in sorted(out.items())]}
+
+
+def _request_argv(args: dict, apply: bool) -> list[list[str]]:
+    specs = [a["release_group"] + (f"={a['preferred_release']}" if a["preferred_release"] else "")
+             for a in args["albums"]]
+    return [_apply(["music-requests", "add"], apply, *specs)]
+
+
 def _canon_albums(body: dict, _: Albums) -> dict:
     _only(body, "refresh", "search_budget", "mb_budget")
     return {"refresh": _bool(body, "refresh"), "search_budget": _budget(body, "search_budget"),
@@ -382,4 +426,6 @@ TOOLS: dict[str, Tool] = {t.name: t for t in [
     Tool("release_album", WRITE, _album_only, _overrides("release")),
     Tool("pin_track", WRITE, _pin, _overrides("pin", "label", "reason")),
     Tool("unpin_track", WRITE, _track_only, _overrides("unpin")),
+    # Rows of album_requests, which the tick reads at its start: no lock.
+    Tool("request_album", WRITE, _request_album, _request_argv),
 ]}

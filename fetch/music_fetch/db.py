@@ -69,9 +69,9 @@ EVENT_KINDS = (
     # Migration 3: an item canon moved from one album to another (a changed
     # spotify_album_id), which the digest checks for a move between unrelated albums.
     "moved",
-    # Requests and the Later queue (homelab#2478), nothing emits them yet: an
-    # album requested, added to or removed from Later, and a Spotify ID resolved
-    # for a release group.
+    # Requests and the Later queue (homelab#2478): an album requested
+    # (music-requests, migration 7), added to or removed from Later, and a
+    # Spotify ID resolved for a release group; only the first is emitted yet.
     "album_requested",
     "later_added",
     "later_removed",
@@ -240,6 +240,31 @@ MIGRATIONS: list[str] = [
         id      bigint PRIMARY KEY,
         refs    text[] NOT NULL,
         gone_at timestamptz NOT NULL DEFAULT now()
+    );
+    """,
+    # 7: album requests (homelab#2478 stage 2, read and written through
+    # music_fetch.album_requests).  A request names a MusicBrainz release group;
+    # the album tick gives it an albums row with origin 'request', or upgrades
+    # the row that has the release group already.  The request finds its row by
+    # release group (unique on both tables), so it holds no row id for a merge
+    # to change.  ``tracks`` is the tracklist read from MusicBrainz when it was
+    # requested, as album mode's track entries, from ``tracklist_release``: the
+    # preferred release, else one with the release group's most common track
+    # count.  ``data`` holds the album's year, type and length.
+    """
+    ALTER TABLE albums DROP CONSTRAINT albums_origin_check;
+    ALTER TABLE albums ADD CONSTRAINT albums_origin_check CHECK (origin IN ('album', 'wants', 'library', 'request'));
+    CREATE TABLE album_requests (
+        id                bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+        release_group     uuid NOT NULL UNIQUE,
+        preferred_release uuid,
+        tracklist_release uuid NOT NULL,
+        artist            text NOT NULL,
+        name              text NOT NULL,
+        data              jsonb NOT NULL DEFAULT '{}'::jsonb,
+        tracks            jsonb NOT NULL,
+        requested_by      text NOT NULL,
+        requested_at      timestamptz NOT NULL DEFAULT now()
     );
     """,
 ]

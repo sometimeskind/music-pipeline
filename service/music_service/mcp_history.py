@@ -154,6 +154,27 @@ def stuck(records: dict[str, dict], now: datetime) -> dict:
     return {k: listed(v) for k, v in out.items()}
 
 
+def requests(state) -> dict:
+    """The album requests (homelab#2478) whose album ended ``missing`` or
+    ``failed``; none while the JSON files are the state, and an ``error``
+    when the database can't be read."""
+    import psycopg  # noqa: PLC0415
+
+    from music_fetch import album_requests  # noqa: PLC0415
+    from music_fetch import state as statedb  # noqa: PLC0415
+
+    out: dict[str, list[dict]] = {"missing": [], "failed": []}
+    try:
+        with statedb.session() as conn:
+            found = [] if conn is None else album_requests.listing(conn, state)
+    except (statedb.Unavailable, psycopg.Error) as exc:
+        return {"error": f"the music database: {type(exc).__name__}", **{k: listed(v) for k, v in out.items()}}
+    for entry in found:
+        if entry["status"] in out:
+            out[entry["status"]].append(entry)
+    return {k: listed(v) for k, v in out.items()}
+
+
 def mixed(state) -> dict:
     """The imported albums mixed from several releases at the last album tick (#288)."""
     return listed([_album(k, state.albums[k]) for k in state.mixed if k in state.albums])

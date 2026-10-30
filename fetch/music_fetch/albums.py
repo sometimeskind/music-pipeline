@@ -48,6 +48,14 @@ that goes missing or fails, goes back to spotdl's want list, never a
 whole-album fallback.  While its grab is near (within a day's grab budget)
 or its import pending, its tracks are held off spotdl (:func:`held_tracks`).
 
+An album request (homelab#2478, :mod:`music_fetch.album_requests`) names a
+MusicBrainz release group: :func:`feed_requests` gives it a record with
+``origin: "request"`` whose tracks are its MusicBrainz tracklist, or upgrades
+the record that has the release group already.  It is searched with the album
+playlists' albums, and imported whole under ``inbox/usenet/request/``.  With
+no Spotify tracklist it has no spotdl fallback yet: a request that misses
+stays ``missing``.
+
 ``ALBUM_MODE`` is ``off`` (default), ``dry-run`` (search and log the pick, never
 grab) or ``on``.  Indexer use is capped by a rolling-24h budget counted from our
 own timestamps, because the indexer's reset window is unknown.
@@ -79,7 +87,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Callable, Protocol
 
-from music_fetch import events, overrides, resolve, store
+from music_fetch import album_requests, events, overrides, resolve, store
 from music_fetch import state as statedb
 from music_fetch.ids import spotify_key
 from music_fetch.metrics import _gauge, _push
@@ -106,8 +114,10 @@ FILLED = "filled"      # complete, with tracks from spotdl
 PARTIAL, GAP = "partial", "gap"
 # A record's ``origin`` (#324): absent for an album playlist's, WANTS for one
 # :func:`feed_wants` made from a spotdl playlist's want list, LIBRARY for one
-# :func:`feed_library` made from the library's and every store's tracks (homelab#2403).
-ALBUM, WANTS, LIBRARY = "album", "wants", "library"
+# :func:`feed_library` made from the library's and every store's tracks
+# (homelab#2403), REQUEST for one :func:`feed_requests` made from an album
+# request (homelab#2478).
+ALBUM, WANTS, LIBRARY, REQUEST = "album", "wants", "library", "request"
 # A wants record not yet grabbed: the feed updates it, or drops it.
 WAITING = (WANTED, DRY_RUN, MISSING, HAVE)
 
@@ -459,7 +469,9 @@ def refresh_playlists(
         for key, record in list(state.albums.items()):
             if key not in held and name in record.get("playlists", {}):
                 del record["playlists"][name]
-                if not record["playlists"] and record.get("status") in (WANTED, DRY_RUN, MISSING, HAVE, IMPORTED, FAILED, FALLBACK, FILLED):
+                if not record["playlists"] and not record.get("requested") \
+                        and record.get("status") in (WANTED, DRY_RUN, MISSING, HAVE, IMPORTED, FAILED, FALLBACK, FILLED):
+                    # A requested album stays: feed_requests gives it the request's tracks (homelab#2478).
                     del state.albums[key]
         entry["snapshot_id"] = snapshot
         result.refreshed.append(name)
@@ -488,6 +500,10 @@ def _library(record: dict) -> bool:
     return record.get("origin") == LIBRARY
 
 
+def _requested(record: dict) -> bool:
+    return record.get("origin") == REQUEST
+
+
 def _fed(record: dict) -> bool:
     """A record a feed made (wants or library), not an album playlist's: it
     never falls back, and its tracks are held off spotdl only near its turn."""
@@ -500,6 +516,8 @@ def _label(record: dict) -> str:
         label += f" (wants: {', '.join(record.get('playlists', {}))})"
     elif _library(record):
         label += " (library)"
+    elif _requested(record):
+        label += " (request)"
     return label
 
 
@@ -508,6 +526,8 @@ def _back(record: dict) -> str:
     fallback, its wanted tracks go back to spotdl (#324)."""
     if _library(record):
         return "; its wanted tracks stay with spotdl"
+    if _requested(record):
+        return "; a request has no spotdl fallback yet"
     if not _wants(record):
         return ""
     return f"; its {sum(len(t) for t in record.get('playlists', {}).values())} wanted track(s) go back to spotdl"
@@ -576,7 +596,8 @@ def feed_wants(
     for key in ranked:
         on = found[key]["on"]
         record = state.albums.get(key)
-        why = ("local" if not _spotify_album(found[key]["id"]) else "album playlist" if record and not _fed(record)
+        why = ("local" if not _spotify_album(found[key]["id"])
+               else ("request" if _requested(record) else "album playlist") if record and not _fed(record)
                else "library" if record and _library(record) and record.get("status") not in WAITING else "")
         for name in on:
             if why:
@@ -649,7 +670,8 @@ def feed_library(state: State, library: LibraryAlbums, settings: Settings) -> No
         key = by_ref.get(album_id, album_id)
         record = state.albums.get(key)
         why = ("local" if not _spotify_album(album_id) else "no playlist track" if not on
-               else "" if record is None or _library(record) else "wants" if _wants(record) else "album playlist")
+               else "" if record is None or _library(record) else "wants" if _wants(record)
+               else "request" if _requested(record) else "album playlist")
         if why:
             skipped[why] = skipped.get(why, 0) + 1
             continue
@@ -689,6 +711,70 @@ def feed_library(state: State, library: LibraryAlbums, settings: Settings) -> No
         queued = sum(1 for k in listed if state.albums.get(k, {}).get("status") in (WANTED, DRY_RUN, GRABBED))
         logger.info("[LIBRARY] %d album(s) queued (%d new), %d held off spotdl%s", queued, len(new),
                     sum(1 for k in _held(state, settings) if k in listed), skips)
+
+
+def feed_requests(state: State, requests: list[album_requests.Request]) -> None:
+    """Give every album request (homelab#2478, :mod:`music_fetch.album_requests`)
+    its album record, one per release group:
+
+    - none has the release group: a new record, ``origin: "request"``, whose
+      tracks under :data:`album_requests.SOURCE` are the request's tracklist;
+    - a wants or library record not grabbed yet: the request takes it over,
+      the whole album wanted instead of its wanted tracks; one grabbed or
+      done keeps its tracks and becomes a request's;
+    - an album playlist's record keeps its playlists' Spotify tracks while
+      it has any; once it has none it becomes a request's, with the
+      request's tracks.
+
+    Every record a request holds is ``requested``, which
+    :func:`refresh_playlists` never deletes.  A playlist's tracks always
+    stand in for the request's: the request's tracks are dropped once a
+    playlist lists the album again (an album playlist adding it, or a merge
+    with its Spotify edition), so ``have`` and the import's checks read one
+    tracklist.  An album not yet keyed by release group (a Spotify album the
+    resolver hasn't looked up) gets a record of its own, which the resolver
+    merges into the request's once it resolves.  The requests' records are
+    searched with the album playlists', ahead of the fed ones.  One
+    ``[REQUESTS]`` line."""
+    if not requests:
+        return
+    by_group = {r["release_group"]: k for k, r in state.albums.items() if r.get("release_group")}
+    new = took = 0
+    for request in requests:
+        tracks = [list(t) for t in request.tracks]
+        key = by_group.get(request.release_group)
+        record = state.albums.get(key) if key else None
+        if record is None:
+            record = {"status": WANTED, "blocklist": [], "origin": REQUEST, **request.fields(),
+                      "release_group": request.release_group, "unresolved": None, "spotify_album_ids": [],
+                      "names": [], "playlists": {album_requests.SOURCE: tracks}}
+            by_group[request.release_group] = key = state.key(record)
+            state.albums[key] = record
+            new += 1
+        elif _fed(record) and record.get("status") in WAITING:
+            took += 1
+            record.update(origin=REQUEST, playlists={album_requests.SOURCE: tracks}, **request.fields())
+            record.pop("references", None)
+        else:
+            if _fed(record):
+                took += 1
+                record["origin"] = REQUEST
+            on = record.setdefault("playlists", {})
+            if any(name != album_requests.SOURCE for name in on):
+                on.pop(album_requests.SOURCE, None)
+            else:
+                on.setdefault(album_requests.SOURCE, tracks)
+                record.setdefault("origin", REQUEST)
+        record["requested"] = True
+    order = [k for k, r in state.albums.items() if not _fed(r)]
+    order += [k for k in state.albums if k not in set(order)]
+    state.albums = {k: state.albums[k] for k in order}
+    statuses: dict[str, int] = {}
+    for request in requests:
+        status = state.albums[by_group[request.release_group]].get("status", WANTED)
+        statuses[status] = statuses.get(status, 0) + 1
+    logger.info("[REQUESTS] %d request(s): %d new album(s), %d taken over from wants or library; %s", len(requests),
+                new, took, ", ".join(f"{s}={n}" for s, n in sorted(statuses.items())))
 
 
 def _held(state: State, settings: Settings) -> set[str]:
@@ -1075,10 +1161,12 @@ def fallbacks(state: State, missing: Missing, album_songs: AlbumSongs | None = N
     partial or gap fallback is settled (:func:`settle_imported`).  An imported
     release sends nothing to spotdl (#279): the release is the album.  A
     wants record (#324) never falls back: its wanted tracks are back on the
-    playlist's own want list once it is missing or failed."""
+    playlist's own want list once it is missing or failed.  Nor does a
+    request's (homelab#2478): it has no Spotify tracklist for spotdl, so it
+    stays missing or failed until the MusicBrainz-built fallback."""
     reads = 0
     for key, record in state.albums.items():
-        if _fed(record):
+        if _fed(record) or _requested(record):
             continue
         if settle_imported(record):
             logger.info("[SETTLED] %s — %s: the release is the album; its %s fallback is no longer chased",
@@ -1147,8 +1235,9 @@ def status_counts(state: State) -> dict[str, int]:
 def origin_counts(state: State) -> dict[tuple[str, str], int]:
     """Records by ``(status, origin)`` (#324): ``album`` for an album
     playlist's, ``wants`` for a spotdl playlist's (:func:`feed_wants`),
-    ``library`` for the library-wide feed's (:func:`feed_library`)."""
-    counts = {(s, o): 0 for s in status_counts(State()) for o in (ALBUM, WANTS, LIBRARY)}
+    ``library`` for the library-wide feed's (:func:`feed_library`),
+    ``request`` for an album request's (:func:`feed_requests`)."""
+    counts = {(s, o): 0 for s in status_counts(State()) for o in (ALBUM, WANTS, LIBRARY, REQUEST)}
     for record in state.albums.values():
         k = (record.get("status", WANTED), record.get("origin") or ALBUM)
         counts[k] = counts.get(k, 0) + 1
@@ -1217,8 +1306,8 @@ def tick(
     wants: WantAlbums | None = None,
     library: LibraryAlbums | None = None,
 ) -> TickResult:
-    """One album-mode pass: refresh changed playlists, queue the albums of
-    the spotdl playlists *want_playlists* (*wants*, :func:`feed_wants`) and the
+    """One album-mode pass: refresh changed playlists, queue the requested
+    albums (:func:`feed_requests`), the albums of the spotdl playlists *want_playlists* (*wants*, :func:`feed_wants`) and the
     library-wide ones (*library*, :func:`feed_library`), recover lost import
     triggers (*on_completion*, ``on`` only), reset a few mixed albums for a
     reimport (*mixed*, :func:`auto_reimport`), top the queue up, then hand
@@ -1229,8 +1318,10 @@ def tick(
         return result
     try:
         state = State.load(state_file)
-        # Read with the state: a tick never runs without its overrides and holds (homelab#2484).
+        # Read with the state: a tick never runs without its overrides and holds (homelab#2484),
+        # or its requests (homelab#2478).
         fixes = album_fixes(overrides_file)
+        requests = album_requests.album_requests()
     except statedb.Unavailable as exc:
         # Never run on the stale JSON (homelab#2410): skip, and let
         # MusicAlbumTickFailing say so once the outage outlasts 2h.
@@ -1243,6 +1334,7 @@ def tick(
     success = False
     try:
         refresh_playlists(state, playlists, spotify, result)
+        feed_requests(state, requests)
         if wants is not None:
             # ALBUM_WANT_MIN=0: no playlist is fed, and the waiting wants records go.
             feed_wants(state, (want_playlists or []) if settings.want_min > 0 else [], wants, settings)

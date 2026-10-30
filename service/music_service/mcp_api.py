@@ -261,8 +261,7 @@ def make_blueprint(jobs: mcp_jobs.JobQueue) -> Blueprint:
                 "empty_slots": mcp_history.empty_slots(STATE_FILE.parent / EMPTY_SLOTS_NAME),
                 "rejects": mcp_history.rejects(quarantine),
             }
-        # Requests (homelab#2478) that ended missing or failed: none exist yet.
-        requests = {"missing": mcp_history.listed([]), "failed": mcp_history.listed([])}
+        requests = mcp_history.requests(state)
         return jsonify({"status": "ok", "since": _z(since), "until": _z(now.isoformat(timespec="seconds")),
                         "history": history, "issues": issues, "requests": requests})
 
@@ -292,6 +291,33 @@ def make_blueprint(jobs: mcp_jobs.JobQueue) -> Blueprint:
         shown, next_offset = mcp_reads.page(found, offset)
         return jsonify({"status": "ok", "kind": kind, "total": len(found), "offset": offset,
                         "next_offset": next_offset, "overrides": shown})
+
+    @bp.get("/requests")
+    def list_requests():
+        import psycopg  # noqa: PLC0415
+
+        from music_fetch import album_requests  # noqa: PLC0415
+        from music_fetch import state as statedb  # noqa: PLC0415
+        from music_fetch.album_requests_cli import STATUSES  # noqa: PLC0415
+        from music_service.mcp_tools import BadRequest  # noqa: PLC0415
+
+        status = request.args.get("status") or None
+        if status not in (None, *STATUSES):
+            raise BadRequest(f"status must be one of {', '.join(STATUSES)}")
+        offset = _offset()
+        read("list_requests", status=status)
+        try:
+            with statedb.session() as conn:
+                if conn is None:
+                    return jsonify({"status": "unavailable",
+                                    "error": "the state is not in the music database yet (music-state-import)"}), 503
+                found = album_requests.listing(conn, statedb.load_albums(conn), status)
+        except (statedb.Unavailable, psycopg.Error) as exc:
+            logger.warning("[MCP] reading the requests failed: %s", exc)
+            return jsonify({"status": "unavailable", "error": f"the music database: {type(exc).__name__}"}), 503
+        shown, next_offset = mcp_reads.page(found, offset)
+        return jsonify({"status": "ok", "filter": status, "total": len(found), "offset": offset,
+                        "next_offset": next_offset, "requests": shown})
 
     # ------------------------------------------------------------------
     # Jobs

@@ -18,6 +18,8 @@ Say what should change and when, and offer to check then.
   again at once), a hold from the next tick's reimport pass, a pin at the next nightly
   (`[PIN] … → downloading from …`, then the item in `get_playlist`). `list_overrides` shows the
   row at once, and `album_history` the event.
+- **A request** is queued by the next tick (`list_requests`: `pending`, then `wanted`; the
+  tick logs `[REQUESTS] N request(s): …`), and searched by the same tick when a slot is free.
 - **Playlists** catch up with Spotify at the next nightly (album playlists: the next tick after
   a Spotify edit). `get_playlist` shows an entry's `item_id` once an item holds it.
 - **Metrics** move on the next push: `music_albums*` each tick, `music_scan_*` each scan.
