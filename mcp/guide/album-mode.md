@@ -29,8 +29,15 @@ unreachable), the pod is the problem, which is an operator matter.
 Usually the app pods (SABnzbd, Prowlarr) or the Usenet egress, all operator matters with
 their own homelab runbooks. One case shows in the music data: **the tick logs `grabbed=3` tick
 after tick and grabs nothing new**. Every in-flight slot is held by a job SABnzbd never
-finished (paused or aborted). The operator resumes it in SABnzbd. It then fails and is
-blocklisted like `[WRONG]`.
+finished, and `digest_summary` lists the albums under `stuck.grabbed` once they have been
+grabbed for 12 h. `SabnzbdQueueStalled` fires after 2 h with nothing downloaded. Two causes:
+
+- **A job paused or aborted.** The operator resumes it in SABnzbd. It then fails and is
+  blocklisted like `[WRONG]`.
+- **SABnzbd's URL grabber hung on one NZB fetch**: its queue shows the jobs as `Grabbing`
+  with nothing left to download, and only the first has a `Grabbing URL` line. The grabber is
+  one thread, so every grab queues behind it (homelab#2516). The operator restarts the pod,
+  and the new one fetches the NZBs again. No reset or requeue is needed.
 
 ## 4. A download doesn't import
 
