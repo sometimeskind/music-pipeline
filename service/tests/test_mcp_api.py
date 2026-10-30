@@ -333,6 +333,7 @@ def test_no_read_returns_a_credential(client, env, no_event_store):
         "/mcp-api/album_history": ["/mcp-api/album_history?query=ALB1"],
         "/mcp-api/digest_summary": ["/mcp-api/digest_summary"],
         "/mcp-api/overrides": ["/mcp-api/overrides"],
+        "/mcp-api/requests": ["/mcp-api/requests"],
         "/mcp-api/jobs/<job_id>": [f"/mcp-api/jobs/{ran.json['job_id']}"],
     }
     routes = {r.rule for r in client.application.url_map.iter_rules()
