@@ -40,38 +40,42 @@ def remove_dry_run(conn: psycopg.Connection, rows: statedb.AlbumRows, groups: li
                    through: int | None) -> tuple[list[later.Entry], list[str]]:
     """The entries ``--apply`` would remove, and the dry run's lines: the
     first *through* available albums, then *groups* in order.  A release
-    group not on Later is listed and left as it is."""
+    group not on Later is listed and left as it is.  An entry named by ref
+    alone (queued by the cutover before its row had a release group) is
+    removed by *through* only."""
     if not groups and not through:
         raise req.Refused("name at least one release group, or --through")
     entries = later.load(conn)
     available = [e for e in entries if e.available_at is not None]
-    position = {e.release_group: n for n, e in enumerate(available, 1)}
+    position = {e.id: n for n, e in enumerate(available, 1)}
     if through and through > len(available):
         raise req.Refused(f"--through {through}: Later lists {len(available)} album(s)")
-    chosen = {e.release_group: e for e in available[:through or 0]}
-    on = {e.release_group: e for e in entries}
+    chosen = {e.id: e for e in available[:through or 0]}
+    on = {e.release_group: e for e in entries if e.release_group}
     requests = later.requests_by_group(conn)
-    index = later.by_group(rows)
+    index = later.Index(rows)
     lines: list[str] = []
     for group in groups:
         if group in on:
-            chosen.setdefault(group, on[group])
+            chosen.setdefault(on[group].id, on[group])
         else:
-            lines.append(f"{_named(group, index.get(group), requests)}: not on Later; nothing changes")
+            lines.append(f"{_named(group, index.groups.get(group), requests)}: not on Later; nothing changes")
     for n, entry in enumerate(chosen.values(), 1):
-        where = (f"position {position[entry.release_group]} of {len(available)}" if entry.release_group in position
+        where = (f"position {position[entry.id]} of {len(available)}" if entry.id in position
                  else "pending: not in the .m3u yet")
         lines.append(f"Remove {n} of {len(chosen)}: "
-                     f"{_named(entry.release_group, index.get(entry.release_group), requests)}: {where}")
+                     f"{_named(entry.release_group, index.find(entry), requests, entry.ref)}: {where}")
     if chosen:
         lines.append(f"{len(chosen)} album(s) leave Later at the next scan's regen; their files stay in the library")
     return list(chosen.values()), lines
 
 
-def _named(group: str, found: tuple[str, dict] | None, requests: dict) -> str:
-    """``artist — name [release group …]``, or the release group alone when nothing names it."""
-    label = later.label(group, found, requests)
-    return f"{label} [release group {group}]" if not label.startswith("release group ") else label.capitalize()
+def _named(group: str | None, found: tuple[str, dict] | None, requests: dict, ref: str | None = None) -> str:
+    """``artist — name [release group …]``, or the release group (or ref) alone when nothing names it."""
+    label = later.label(group, found, requests, ref)
+    if label.startswith(("release group ", "album ref ")):
+        return label[0].upper() + label[1:]  # not capitalize(): a Spotify ID's case stays
+    return f"{label} [release group {group}]" if group else f"{label} [album ref {ref}, no release group yet]"
 
 
 def _listed(entry: dict) -> str:
@@ -79,7 +83,9 @@ def _listed(entry: dict) -> str:
     where = f"album {album['key']}, {album['status']} ({album['origin']})" if album else "pending: no album row yet"
     head = f"{entry['position']}." if entry["position"] else "-"
     name = f"{entry['artist']} — {entry['name']}" if entry["name"] else "?"
-    return (f"{head} {name} [release group {entry['release_group']}]: {entry['state']}; {where}; "
+    named = (f"release group {entry['release_group']}" if entry["release_group"]
+             else f"album ref {entry['ref']}, no release group yet")
+    return (f"{head} {name} [{named}]: {entry['state']}; {where}; "
             f"added at {entry['added_at']}" + (f", available at {entry['available_at']}" if entry["available_at"] else ""))
 
 

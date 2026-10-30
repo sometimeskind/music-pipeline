@@ -451,13 +451,16 @@ def _write_m3u(name: str, paths: list[Path]) -> int:
 
 def _later_albums() -> list[tuple[str, dict]] | None:
     """The Later queue's available albums, ``(key, record)`` in ``.m3u`` order,
-    once the pending albums the library now holds whole have become available
-    (:func:`later_queue.mark_available`).  None while the JSON files are the
-    state; raises when the database can't be read."""
+    once the entries named by ref whose rows now have a release group have it
+    (:func:`later_queue.resolve_refs`) and the pending albums the library now
+    holds whole have become available (:func:`later_queue.mark_available`).
+    None while the JSON files are the state; raises when the database can't
+    be read."""
     with state.session() as conn:
         if conn is None:
             return None
         rows = state.load_albums(conn)
+        later_queue.resolve_refs(conn, rows)
         later_queue.mark_available(conn, rows)
         return later_queue.albums(conn, rows)
 

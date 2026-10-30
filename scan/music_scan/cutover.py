@@ -17,8 +17,11 @@ dropped after its apply.
   by release group at ``--apply``; one requested already is left as it is,
   and one MusicBrainz can't give a tracklist for is listed and skipped (run
   ``--apply`` again for it).  Keep has no store or ``.m3u`` afterwards.
-- **No release group:** the queue and the requests are keyed by release
-  group, so an album whose row has none yet is listed and left out.
+- **No release group:** a Later album whose row has none yet goes on the
+  queue by its album ref (migration 9) in its store place, and the regen
+  gives the entry its release group once the row has one.  A Keep album
+  whose row has none gets no request: it is listed, and its row stays as it
+  is.
 
 The dry run also renders ``later.m3u`` as the queue will write it and
 compares it with the file the last scan wrote.  ``--apply`` writes the queue
@@ -64,7 +67,7 @@ def label(key: str, record: Mapping) -> str:
 
 @dataclasses.dataclass
 class Plan:
-    later: list[Row]                  # to queue, in the store's order
+    later: list[Row]                  # to queue, in the store's order (by ref when no release group)
     keep: list[Row]                   # to request
     requested: list[Row]              # keep albums requested already
     unresolved: dict[str, list[Row]]  # playlist → its albums whose row has no release group
@@ -97,8 +100,8 @@ def plan(rows: statedb.AlbumRows, later_songs: list[dict], keep_songs: list[dict
     out = Plan([], [], [], {LATER: [], KEEP: []}, {})
     later_rows, out.unknown[LATER] = store_albums(rows, later_songs)
     keep_rows, out.unknown[KEEP] = store_albums(rows, keep_songs)
-    for key, record in later_rows:
-        (out.later if record.get("release_group") else out.unresolved[LATER]).append((key, record))
+    out.later = later_rows
+    out.unresolved[LATER] = [(k, r) for k, r in later_rows if not r.get("release_group")]
     for key, record in keep_rows:
         group = record.get("release_group")
         if not group:
@@ -125,39 +128,61 @@ def queue_after(entries: list[later_queue.Entry], rows: statedb.AlbumRows, impor
     """The available albums of the queue after the cutover, ``(key, record)``
     in ``.m3u`` order: the *imported* Later albums the library holds whole,
     then the queue's other available ones in their order."""
-    groups = {r["release_group"] for _, r in imported}
-    index = later_queue.by_group(rows)
-    rest = [index[e.release_group] for e in entries
-            if e.available_at is not None and e.release_group not in groups and e.release_group in index]
+    keys = {k for k, _ in imported}
+    index = later_queue.Index(rows)
+    rest = [found for e in entries if e.available_at is not None
+            and (found := index.find(e)) is not None and found[0] not in keys]
     return [(k, r) for k, r in imported if later_queue.held(r)] + rest
+
+
+def marker_name(record: Mapping) -> str:
+    """How the marker names a Later album's entry: its release group, else ``ref:<its ref>``."""
+    return record.get("release_group") or f"ref:{later_queue.ref(record)}"
+
+
+def _place(entry: later_queue.Entry | None) -> dict | None:
+    return None if entry is None else {
+        "added_at": entry.added_at.isoformat(),
+        "available_at": entry.available_at.isoformat() if entry.available_at else None}
 
 
 def write_queue(conn: psycopg.Connection, imported: list[Row],
                 previous: Mapping[str, dict | None]) -> dict[str, dict | None]:
     """Put the *imported* Later albums on the queue in order, each with its
-    ``later_added`` event, in the caller's transaction.  Returns each one's
-    entry before (None: it had none) for the marker; *previous* is the
-    marker's from an earlier apply, which wins."""
-    before = {e.release_group: e for e in later_queue.load(conn)}
+    ``later_added`` event, in the caller's transaction: by release group, else
+    by album ref.  Returns each one's place before (None: it had no entry) by
+    :func:`marker_name`, for the marker; *previous* is the marker's from an
+    earlier apply, which wins, also for an album that has resolved since."""
+    entries = later_queue.load(conn)
+    by_group = {e.release_group: e for e in entries if e.release_group}
+    by_ref = {e.ref: e for e in entries if e.ref}
     out: dict[str, dict | None] = {}
     for n, ((key, record), at) in enumerate(zip(imported, queue_times(conn, len(imported))), 1):
-        group = record["release_group"]
-        old = before.get(group)
-        out[group] = previous[group] if group in previous else (None if old is None else {
-            "added_at": old.added_at.isoformat(),
-            "available_at": old.available_at.isoformat() if old.available_at else None})
+        group, ref = record.get("release_group"), later_queue.ref(record)
+        old = by_group.get(group) if group else None
+        old = old or (by_ref.get(ref) if ref else None)
+        name = marker_name(record)
+        if f"ref:{ref}" in previous:
+            name = f"ref:{ref}"  # queued by ref at an earlier apply: still the cutover's
+        out[name] = previous[name] if name in previous else _place(old)
         available = later_queue.held(record)
-        conn.execute(
-            "INSERT INTO later_queue (release_group, added_at, available_at) VALUES (%s, %s, %s) "
-            "ON CONFLICT (release_group) DO UPDATE SET added_at = EXCLUDED.added_at, "
-            "available_at = EXCLUDED.available_at", (group, at, at if available else None))
+        times = (at, at if available else None)
+        if old is not None:
+            conn.execute("UPDATE later_queue SET release_group = coalesce(release_group, %s), added_at = %s, "
+                         "available_at = %s WHERE id = %s", (group, *times, old.id))
+        elif group:
+            conn.execute("INSERT INTO later_queue (release_group, added_at, available_at) VALUES (%s, %s, %s)",
+                         (group, *times))
+        else:
+            conn.execute("INSERT INTO later_queue (ref, added_at, available_at) VALUES (%s, %s, %s)", (ref, *times))
         album = f"{record.get('artist', '')} — {record.get('name', '')}"
         events.insert(conn, "later_added",
-                      f"[LATER] {album} ({group}): from the later playlist, its album {n}"
-                      + ("" if available else ", pending its import") + (", moved" if old else ""),
+                      f"[LATER] {album} ({group or f'album ref {ref}, no release group yet'}): from the later "
+                      f"playlist, its album {n}" + ("" if available else ", pending its import")
+                      + (", moved" if old else ""),
                       source="cutover", release_group=group, spotify_album_id=statedb.primary_spotify(record),
-                      data={"album": album, "key": key, "available": available, "cutover": True,
-                            "moved": old is not None})
+                      data={"album": album, "key": key, "ref": None if group else ref, "available": available,
+                            "cutover": True, "moved": old is not None})
     return out
 
 
@@ -224,15 +249,17 @@ def compare(now: list[str] | None, after: list[str]) -> list[str]:
 def lines(p: Plan, queued: Mapping[str, later_queue.Entry], verbose: bool = False) -> list[str]:
     """The dry run's summary of *p*; *queued*: the queue's entries by release group."""
     held = sum(1 for _, r in p.later if later_queue.held(r))
-    moved = sum(1 for _, r in p.later if r["release_group"] in queued)
+    moved = sum(1 for _, r in p.later if r.get("release_group") in queued)
     out = [f"Later: {len(p.later)} album(s) to queue in the later store's order, ahead of the queue's "
            f"{len(queued)}: {held} available now, {len(p.later) - held} pending"
+           + (f"; {len(p.unresolved[LATER])} by album ref" if p.unresolved[LATER] else "")
            + (f"; {moved} on the queue already move to their store place" if moved else ""),
            f"Keep: {len(p.keep)} album(s) to request (tracklists read from MusicBrainz at --apply), "
            f"{len(p.requested)} requested already"]
-    for name in (LATER, KEEP):
+    for name, fate in ((LATER, "go on Later by album ref, resolved at a later regen"),
+                       (KEEP, "get no request; their rows stay as they are")):
         if p.unresolved[name]:
-            out.append(f"{name}: {len(p.unresolved[name])} album(s) have no release group yet and are left out:")
+            out.append(f"{name}: {len(p.unresolved[name])} album(s) have no release group yet and {fate}:")
             out += [f"  [NO-RG] {name}: {label(k, r)}: {r.get('status')}, {r.get('unresolved')}"
                     for k, r in p.unresolved[name]]
         if p.unknown[name]:
@@ -297,8 +324,8 @@ def revert(conn: psycopg.Connection, apply: bool) -> None:
     if marker is None:
         logger.info("No cutover to revert (no %s marker)", statedb.CUTOVER)
         return
-    added = [g for g, old in marker["queue"].items() if old is None]
-    moved = {g: old for g, old in marker["queue"].items() if old is not None}
+    added = [n for n, old in marker["queue"].items() if old is None]
+    moved = {n: old for n, old in marker["queue"].items() if old is not None}
     logger.info("Revert: %d Later entr(ies) to remove, %d to move back, %d Keep request(s) to remove",
                 len(added), len(moved), len(marker["requests"]))
     if not apply:
@@ -308,12 +335,15 @@ def revert(conn: psycopg.Connection, apply: bool) -> None:
 
     with _locks(True), conn.transaction():
         rows = statedb.load_albums(conn)
-        on = [e for e in later_queue.load(conn) if e.release_group in set(added)]
+        entries = later_queue.load(conn)
+        named = {e.release_group: e for e in entries if e.release_group} | {
+            f"ref:{e.ref}": e for e in entries if e.ref}
+        on = [named[n] for n in added if n in named]
         removed = later_queue.remove(conn, on, rows, later_queue.requests_by_group(conn))
-        for group, old in moved.items():
-            conn.execute("UPDATE later_queue SET added_at = %s::timestamptz, available_at = %s::timestamptz "
-                         "WHERE release_group = %s",
-                         (old["added_at"], old["available_at"], group))
+        for name, old in moved.items():
+            if name in named:
+                conn.execute("UPDATE later_queue SET added_at = %s::timestamptz, available_at = %s::timestamptz "
+                             "WHERE id = %s", (old["added_at"], old["available_at"], named[name].id))
         dropped = conn.execute("DELETE FROM album_requests WHERE release_group = ANY(%s::uuid[])",
                                (marker["requests"],)).rowcount
         statedb.delete(conn, statedb.CUTOVER)

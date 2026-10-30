@@ -50,15 +50,17 @@ def test_the_plan_takes_later_in_store_order_and_splits_keep():
         "U": _record("U", None, playlist="keep")})
     later = [_song("B"), _song("A"), _song("B", 2), _song("N"), _song("GONE")]
     p = cutover.plan(rows, later, [_song("K"), _song("Q"), _song("U")], requested=[RG_ASKED])
-    assert [k for k, _ in p.later] == ["B", "A"]  # first appearance, each once
+    assert [k for k, _ in p.later] == ["B", "A", "N"]  # first appearance, each once; N by its ref
     assert [k for k, _ in p.unresolved["later"]] == ["N"]
     assert p.unknown["later"] == ["Band — Album GONE (GONE)"]
     assert [k for k, _ in p.keep] == ["K"]
     assert [k for k, _ in p.requested] == ["Q"]
     assert [k for k, _ in p.unresolved["keep"]] == ["U"]
     text = "\n".join(cutover.lines(p, {}))
-    assert "2 album(s) to queue" in text and "1 available now, 1 pending" in text
+    assert "3 album(s) to queue" in text and "2 available now, 1 pending; 1 by album ref" in text
+    assert "1 album(s) have no release group yet and go on Later by album ref" in text
     assert "[NO-RG] later: Band — Album N (album N): have, no-match" in text
+    assert "1 album(s) have no release group yet and get no request" in text
     assert "[NO-ROW] later: Band — Album GONE (GONE)" in text
 
 
@@ -211,3 +213,67 @@ def test_queue_times_are_a_second_apart_and_before_the_first():
     times = cutover.queue_times(Conn(), 3)
     assert [t.second for t in times] == [57, 58, 59]
     assert times[1] - times[0] == timedelta(seconds=1)
+
+
+@needs_pg
+def test_an_album_with_no_release_group_keeps_its_place_by_ref_until_it_resolves(switched, caplog):
+    _setup([_song("A"), _song("N"), _song("B")], [],
+           _record("A", RG_A), _record("N", None), _record("B", RG_B))
+    _run(caplog)
+    with state.connect() as conn:
+        entries = later_queue.load(conn)
+        listed = later_queue.listing(conn, state.load_albums(conn))
+        marker = state.get(conn, state.CUTOVER)
+    assert [(e.release_group, e.ref) for e in entries] == [(RG_A, None), (None, "N"), (RG_B, None)]
+    assert [(e["position"], e["release_group"], e["ref"], e["name"]) for e in listed][1] == (2, None, "N", "Album N")
+    assert set(marker["queue"]) == {RG_A, "ref:N", RG_B}
+    with state.connect() as conn:  # the queue view finds its row by the ref
+        assert [k for k, _ in later_queue.albums(conn, state.load_albums(conn))] == ["A", "N", "B"]
+
+    # The row resolves; the next regen gives the entry its release group, and it keeps its place.
+    with state.connect() as conn:
+        rows = state.load_albums(conn)
+        rows.albums["N"].update(release_group=RG_C, unresolved=None)
+        state.save_albums(conn, rows)
+        assert later_queue.resolve_refs(conn, state.load_albums(conn)) == 1
+        assert [(e.release_group, e.ref) for e in later_queue.load(conn)] == \
+            [(RG_A, None), (RG_C, "N"), (RG_B, None)]
+        assert later_queue.resolve_refs(conn, state.load_albums(conn)) == 0
+
+    # --revert still finds it by its ref.
+    out = _run(caplog, revert=True)
+    assert out[-1] == "Reverted: 3 Later entr(ies) removed, 0 moved back, 0 Keep request(s) removed"
+    assert _queue() == []
+
+
+@needs_pg
+def test_a_ref_entry_and_a_later_request_for_its_album_become_one(switched, caplog):
+    """The album was requested with later meanwhile: once its row resolves, the earlier entry stays."""
+    _setup([_song("N")], [], _record("N", None))
+    _run(caplog)
+    with state.connect() as conn:
+        conn.execute("INSERT INTO later_queue (release_group, available_at) VALUES (%s, now())", (RG_C,))
+        rows = state.load_albums(conn)
+        rows.albums["N"].update(release_group=RG_C, unresolved=None)
+        state.save_albums(conn, rows)
+        (first,) = [e for e in later_queue.load(conn) if e.ref == "N"]
+        assert later_queue.resolve_refs(conn, state.load_albums(conn)) == 1
+        (kept,) = later_queue.load(conn)
+    assert (kept.id, kept.release_group, kept.ref) == (first.id, RG_C, "N")
+    assert kept.available_at == first.available_at
+
+
+@needs_pg
+def test_a_ref_entry_is_removed_by_through(switched, caplog):
+    from music_fetch import later_cli
+
+    _setup([_song("N"), _song("A")], [], _record("N", None), _record("A", RG_A))
+    _run(caplog)
+    with state.connect() as conn:
+        rows = state.load_albums(conn)
+        out, lines = later_cli.remove_dry_run(conn, rows, [], 1)
+        assert [e.ref for e in out] == ["N"]
+        assert lines[0] == "Remove 1 of 1: Band — Album N [album ref N, no release group yet]: position 1 of 2"
+        with conn.transaction():
+            assert later_queue.remove(conn, out, rows, {}) == 1
+    assert _queue() == [(RG_A, True)]

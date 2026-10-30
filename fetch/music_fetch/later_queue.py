@@ -7,6 +7,13 @@ only by explicit removal (:func:`remove`, ``music-later remove``): by release
 group, or every album up to a position (``--through``).  Leaving touches no
 files, and there is no removal from play counts.
 
+An album the stage 3 cutover (``music-cutover``) queued from the later
+playlist before its row had a release group names it by ``ref`` instead
+(migration 9): one of its album refs, its primary Spotify album ID, which
+follows the album through a merge.  The regen gives such an entry its row's
+release group once the row has one (:func:`resolve_refs`); until then it is
+removed by ``--through`` only.
+
 ``available_at`` is when the library first held the album whole: set when it
 is added if it is held already, else by the first ``.m3u`` regen that finds it
 held (:func:`mark_available`; a scan, and so a regen, follows every import).
@@ -46,16 +53,17 @@ AVAILABLE, PENDING = "available", "pending"
 @dataclasses.dataclass
 class Entry:
     id: int
-    release_group: str
+    release_group: str | None
     added_at: datetime
     available_at: datetime | None = None
+    ref: str | None = None  # the album ref an entry with no release group yet names its album by
 
 
 def load(conn: psycopg.Connection) -> list[Entry]:
     """Every album on Later: the available ones in ``.m3u`` order, then the
     pending ones in the order they were added."""
     return [Entry(*row) for row in conn.execute(
-        "SELECT id, release_group::text, added_at, available_at FROM later_queue "
+        "SELECT id, release_group::text, added_at, available_at, ref FROM later_queue "
         "ORDER BY available_at NULLS LAST, added_at, id")]
 
 
@@ -68,7 +76,28 @@ def by_group(rows: statedb.AlbumRows) -> dict[str, tuple[str, dict]]:
     return {r["release_group"]: (k, r) for k, r in rows.albums.items() if r.get("release_group")}
 
 
-def names(group: str, found: tuple[str, dict] | None,
+class Index:
+    """The album rows an entry names: by release group, else by its ref."""
+
+    def __init__(self, rows: statedb.AlbumRows) -> None:
+        self.rows = rows
+        self.groups = by_group(rows)
+        self.refs = rows.by_ref()
+
+    def find(self, entry: Entry) -> tuple[str, dict] | None:
+        if entry.release_group:
+            return self.groups.get(entry.release_group)
+        key = self.refs.get(entry.ref or "")
+        return None if key is None else (key, self.rows.albums[key])
+
+
+def ref(record: Mapping) -> str | None:
+    """The ref an album row with no release group is queued by: its primary
+    Spotify album ID, else its local name."""
+    return statedb.primary_spotify(record) or next(iter(record.get("names") or ()), None)
+
+
+def names(group: str | None, found: tuple[str, dict] | None,
           requests: Mapping[str, album_requests.Request]) -> tuple[str, str]:
     """``(artist, name)`` of release group *group*: its album row's (*found*), else its request's."""
     if found is not None and found[1].get("name"):
@@ -78,9 +107,10 @@ def names(group: str, found: tuple[str, dict] | None,
     return "", ""
 
 
-def label(group: str, found: tuple[str, dict] | None, requests: Mapping[str, album_requests.Request]) -> str:
+def label(group: str | None, found: tuple[str, dict] | None, requests: Mapping[str, album_requests.Request],
+          entry_ref: str | None = None) -> str:
     artist, name = names(group, found, requests)
-    return f"{artist} — {name}" if name else f"release group {group}"
+    return f"{artist} — {name}" if name else (f"release group {group}" if group else f"album ref {entry_ref}")
 
 
 def requests_by_group(conn: psycopg.Connection) -> dict[str, album_requests.Request]:
@@ -120,35 +150,69 @@ def remove(conn: psycopg.Connection, entries: Iterable[Entry], rows: statedb.Alb
     caller's transaction.  Their files stay in the library.  Returns how many
     were removed (one removed meanwhile is not counted)."""
     removed = 0
-    index = by_group(rows)
+    index = Index(rows)
     for entry in entries:
-        if conn.execute("DELETE FROM later_queue WHERE release_group = %s",
-                        (entry.release_group,)).rowcount == 0:
+        if conn.execute("DELETE FROM later_queue WHERE id = %s", (entry.id,)).rowcount == 0:
             continue
         removed += 1
-        found = index.get(entry.release_group)
+        found = index.find(entry)
         key, record = found if found else (None, None)
-        album = label(entry.release_group, found, requests)
-        events.insert(conn, "later_removed", f"[LATER] {album} ({entry.release_group}): removed",
+        album = label(entry.release_group, found, requests, entry.ref)
+        events.insert(conn, "later_removed", f"[LATER] {album} ({entry.release_group or entry.ref}): removed",
                       source="later", release_group=entry.release_group,
                       spotify_album_id=statedb.primary_spotify(record) if record else None,
-                      data={"album": album, "key": key, "added_at": album_requests.iso(entry.added_at),
+                      data={"album": album, "key": key, "ref": entry.ref,
+                            "added_at": album_requests.iso(entry.added_at),
                             "available_at": album_requests.iso(entry.available_at)})
     return removed
 
 
-def mark_available(conn: psycopg.Connection, rows: statedb.AlbumRows) -> list[str]:
+def resolve_refs(conn: psycopg.Connection, rows: statedb.AlbumRows) -> int:
+    """Give every entry named by ref alone its album row's release group once
+    the row has one, and keep the ref.  When an entry has that release group
+    already (the album was requested with ``later`` meanwhile), the two are one
+    album: the first in queue order stays, with the earlier times of the two.
+    Returns how many entries were resolved.  Logs one ``[LATER]`` line each."""
+    index = Index(rows)
+    entries = load(conn)
+    on = {e.release_group: e for e in entries if e.release_group}
+    done = 0
+    for entry in entries:
+        if entry.release_group or (found := index.find(entry)) is None or not found[1].get("release_group"):
+            continue
+        group = found[1]["release_group"]
+        album = label(group, found, {}, entry.ref)
+        other = on.get(group)
+        if other is None:
+            conn.execute("UPDATE later_queue SET release_group = %s WHERE id = %s", (group, entry.id))
+            on[group] = entry
+            logger.info("[LATER] %s (%s): resolved to release group %s", album, entry.ref, group)
+        else:
+            first, second = (entry, other) if entries.index(entry) < entries.index(other) else (other, entry)
+            conn.execute("DELETE FROM later_queue WHERE id = %s", (second.id,))
+            conn.execute(
+                "UPDATE later_queue SET release_group = %s, ref = coalesce(ref, %s), added_at = least(added_at, %s), "
+                "available_at = CASE WHEN available_at IS NULL THEN %s ELSE least(available_at, coalesce(%s, available_at)) END "
+                "WHERE id = %s",
+                (group, second.ref, second.added_at, second.available_at, second.available_at, first.id))
+            on[group] = first
+            logger.info("[LATER] %s (%s): resolved to release group %s, on Later already; one entry kept",
+                        album, entry.ref, group)
+        done += 1
+    return done
+
+
+def mark_available(conn: psycopg.Connection, rows: statedb.AlbumRows) -> list[int]:
     """Set ``available_at`` on every pending album the library now holds
-    whole, and return their release groups: they join the end of the
-    ``.m3u``.  Logs one ``[LATER]`` line when any did."""
-    index = by_group(rows)
-    ready = [e.release_group for e in load(conn)
-             if e.available_at is None and held((index.get(e.release_group) or (None, None))[1])]
+    whole, and return their entries' ids: they join the end of the ``.m3u``.
+    Logs one ``[LATER]`` line when any did."""
+    index = Index(rows)
+    ready = [e.id for e in load(conn) if e.available_at is None and held((index.find(e) or (None, None))[1])]
     if not ready:
         return []
-    done = [g for (g,) in conn.execute(
-        "UPDATE later_queue SET available_at = now() WHERE release_group = ANY(%s::uuid[]) AND available_at IS NULL "
-        "RETURNING release_group::text", (ready,))]
+    done = [i for (i,) in conn.execute(
+        "UPDATE later_queue SET available_at = now() WHERE id = ANY(%s) AND available_at IS NULL RETURNING id",
+        (ready,))]
     if done:
         logger.info("[LATER] %d album(s) now held whole, at the end of %s.m3u", len(done), PLAYLIST)
     return done
@@ -156,16 +220,17 @@ def mark_available(conn: psycopg.Connection, rows: statedb.AlbumRows) -> list[st
 
 def albums(conn: psycopg.Connection, rows: statedb.AlbumRows) -> list[tuple[str, dict]]:
     """The available albums' rows ``(key, record)``, in ``.m3u`` order.  An
-    album whose row is gone (its release group on no row) is left out."""
+    album whose row is gone (no row has its release group or ref) is left out."""
     out = []
-    index = by_group(rows)
+    index = Index(rows)
     for entry in load(conn):
         if entry.available_at is None:
             break
-        found = index.get(entry.release_group)
+        found = index.find(entry)
         if found is None:
-            logger.warning("[LATER] release group %s: no album row has it; left out of %s.m3u",
-                           entry.release_group, PLAYLIST)
+            logger.warning("[LATER] %s %s: no album row has it; left out of %s.m3u",
+                           "release group" if entry.release_group else "album ref",
+                           entry.release_group or entry.ref, PLAYLIST)
             continue
         out.append(found)
     return out
@@ -175,13 +240,15 @@ def listing(conn: psycopg.Connection, rows: statedb.AlbumRows) -> list[dict]:
     """Every album on Later as ``get_later`` shows it, in :func:`load`'s order:
     ``position`` (1-based, the available ones only), its album row's key,
     status and origin (``status`` ``pending`` while the album tick hasn't
-    queued its request), and when it was added and became available."""
+    queued its request), its ``ref`` (an album queued before its row had a
+    release group, which is then null), and when it was added and became
+    available."""
     requests = requests_by_group(conn)
-    index = by_group(rows)
+    index = Index(rows)
     out = []
     position = 0
     for entry in load(conn):
-        found = index.get(entry.release_group)
+        found = index.find(entry)
         album = None
         if found is not None:
             key, record = found
@@ -191,7 +258,7 @@ def listing(conn: psycopg.Connection, rows: statedb.AlbumRows) -> list[dict]:
         artist, name = names(entry.release_group, found, requests)
         out.append({"position": position if entry.available_at is not None else None,
                     "state": AVAILABLE if entry.available_at is not None else PENDING,
-                    "release_group": entry.release_group, "artist": artist, "name": name,
+                    "release_group": entry.release_group, "ref": entry.ref, "artist": artist, "name": name,
                     "status": album["status"] if album else album_requests.PENDING, "album": album,
                     "requested": entry.release_group in requests,
                     "added_at": album_requests.iso(entry.added_at),

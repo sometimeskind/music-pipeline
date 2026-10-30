@@ -104,6 +104,7 @@ def add_dry_run(conn: psycopg.Connection, rows: statedb.AlbumRows, specs: list[t
         entries = later_queue.load(conn)
         available = [e.release_group for e in entries if e.available_at is not None]
         queued = {e.release_group: None for e in entries} | {g: n for n, g in enumerate(available, 1)}
+        queued.pop(None, None)  # an entry named by ref alone: no release group to match
     out: list[tuple[req.Tracklist, str | None, dict | None]] = []
     queue: list[str] = []
     lines: list[str] = []
