@@ -14,7 +14,7 @@ from music_fetch import album_requests_cli, albums, later_cli, later_queue, stat
 
 sys.path.insert(0, str(Path(__file__).parent))  # importable however pytest imports this file
 from pg_fixture import pg_url  # noqa: E402, F401 — a fixture
-from test_album_requests import RG, FakeMB  # noqa: E402
+from mb_fake import RG, FakeMB  # noqa: E402
 
 needs_pg = pytest.mark.skipif(not os.environ.get("MUSIC_TEST_DATABASE_URL"),
                               reason="MUSIC_TEST_DATABASE_URL is unset")
