@@ -1077,7 +1077,8 @@ def test_run_marks_a_musicbrainz_outage(tmp_path: Path) -> None:
     (inbox / "spotdl" / "keep" / "Artist - Song.m4a").touch()
     with mock.patch("music_scan.scan.MusicLibrary", return_value=_make_mock_lib()), \
          mock.patch("music_scan.scan.run_beet_import", return_value=1), \
-         mock.patch("music_scan.scan.guard_inbox", return_value=0), \
+         mock.patch("music_scan.scan.guard_inbox", return_value={}), \
+         mock.patch("music_scan.scan.UNVERIFIED", tmp_path / "unverified"), \
          mock.patch("music_scan.scan.INBOX", inbox), \
          mock.patch("music_scan.scan.SPOTDL_DIR", inbox / "spotdl"), \
          mock.patch("music_scan.scan.QUARANTINE", tmp_path / "quarantine"), \

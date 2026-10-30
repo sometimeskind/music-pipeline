@@ -29,7 +29,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable, Iterator
 
-from music_fetch import albums, later_queue, state, store
+from music_fetch import album_requests, albums, later_queue, state, store
 from music_fetch.config import load_playlists
 from music_fetch.metrics import IngestMetrics
 from music_fetch.spotdl_ops import _load_failures, download_fallback, fetch_songs, sync_playlist
@@ -245,6 +245,40 @@ def _build_frozen(name: str, url: str) -> None:
         logger.error("Could not build the store of nosync playlist %s from Spotify", name, exc_info=True)
 
 
+def _sync_requests(album_state: albums.State, held: frozenset[str], metrics: IngestMetrics,
+                   track_limit: int | None) -> int:
+    """Download the album requests' fallback songs (homelab#2478), built from
+    MusicBrainz with no Spotify ID, into ``unverified/request/``: outside the
+    inbox, so the scan imports only what its fingerprint check accepts.  A
+    song whose download waits there or was rejected (*held*) isn't fetched
+    again.  No [HAVE] check: a request's album holds its own copies, stamped
+    with its key.  Returns the downloads attempted."""
+    songs = [s for s in albums.fallback_songs(album_state, album_requests.SOURCE, [])
+             if s.get("url") not in held]
+    if not songs:
+        return 0
+    logger.info("==> Album requests: [FALLBACK] %d track(s) from MusicBrainz tracklists", len(songs))
+    output_dir = album_requests.UNVERIFIED / album_requests.SOURCE
+    output_dir.mkdir(parents=True, exist_ok=True)
+    try:
+        result = download_fallback(songs, output_dir=output_dir, cookie_file=COOKIE_FILE, track_limit=track_limit,
+                                   failures_file=FAILURES_FILE)
+    except Exception as exc:
+        reason = classify_failure(str(exc))
+        logger.error("ERROR: spotdl fallback for the album requests failed (reason=%s): %s", reason, exc)
+        metrics.success = False
+        metrics.failure_reason = reason
+        if reason == "auth_youtube":
+            metrics.cookies_expired = True
+        raise
+    metrics.tracks_attempted += result.attempted
+    metrics.tracks_downloaded += result.downloaded
+    metrics.tracks_missed += result.missed
+    metrics.tracks_failed += result.failed
+    _flag_expired_cookies_from_failures(result.fail_reasons, album_requests.SOURCE, metrics)
+    return result.attempted
+
+
 def sync_playlists(
     metrics: IngestMetrics,
     resolves: Callable[[dict], bool],
@@ -414,6 +448,14 @@ def sync_playlists(
 
         # Brief pause between playlists — avoid hammering Spotify/YouTube APIs.
         time.sleep(5)
+
+    if remaining is None or remaining > 0:
+        if _deadline_reached(time.monotonic() - start, soft_timeout):
+            logger.info("==> Soft timeout reached — deferring the album requests' fallback to next session")
+        else:
+            attempted = _sync_requests(album_state, held, metrics, None if remaining is None else max(remaining, 0))
+            if remaining is not None:
+                remaining -= attempted
 
     _flag_expired_cookies_from_totals(metrics)
 

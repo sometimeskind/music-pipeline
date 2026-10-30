@@ -487,7 +487,8 @@ def test_digest_summary_without_the_event_store_still_reports_the_issues(client,
     assert issues["path_clashes"] == {"total": 0, "listed": []}
     assert issues["empty_slots"]["playlists"] == {"chill": {"total": 1, "entries": ["Someone — Absent"]}}
     assert issues["rejects"] == {"total": 1, "listed": ["rejected/chill/two.m4a"]}
-    assert body["requests"] == {"missing": {"total": 0, "listed": []}, "failed": {"total": 0, "listed": []}}
+    assert body["requests"] == {"missing": {"total": 0, "listed": []}, "failed": {"total": 0, "listed": []},
+                                "fallback": {"total": 0, "listed": []}}
     assert body["since"].endswith("Z") and body["until"].endswith("Z")
 
 

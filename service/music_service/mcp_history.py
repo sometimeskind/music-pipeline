@@ -158,14 +158,15 @@ def stuck(records: dict[str, dict], now: datetime) -> dict:
 
 def requests(state) -> dict:
     """The album requests (homelab#2478) whose album ended ``missing`` or
-    ``failed``; none while the JSON files are the state, and an ``error``
-    when the database can't be read."""
+    ``failed``, or is in ``fallback`` with tracks spotdl hasn't got (each
+    entry's ``album.fallback_left``); none while the JSON files are the
+    state, and an ``error`` when the database can't be read."""
     import psycopg  # noqa: PLC0415
 
     from music_fetch import album_requests  # noqa: PLC0415
     from music_fetch import state as statedb  # noqa: PLC0415
 
-    out: dict[str, list[dict]] = {"missing": [], "failed": []}
+    out: dict[str, list[dict]] = {"missing": [], "failed": [], "fallback": []}
     try:
         with statedb.session() as conn:
             found = [] if conn is None else album_requests.listing(conn, state)

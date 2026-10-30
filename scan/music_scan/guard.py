@@ -22,6 +22,18 @@ the asis pass skips that directory, and the nightly holds their URLs back
 ``LENGTH_GUARD``: ``on`` rejects, ``dry-run`` (default) only logs
 ``[WOULD-REJECT]``, ``off`` skips the check.  Usenet albums are not checked:
 the whole-release match verifies them.
+
+An album request's fallback (homelab#2478) is built from MusicBrainz, so
+spotdl found its audio by ISRC or by artist, title and length alone.  Its
+downloads wait outside the inbox, in ``unverified/request/``, and
+:func:`verify_requests` checks each against the track its ``WOAS`` names (its
+MusicBrainz recording URL): the length and silence checks above against
+MusicBrainz's length, then an AcoustID lookup of its fingerprint.  A file is
+accepted, and moved to ``inbox/spotdl/request/`` for the import, only when
+AcoustID names the track's own recording: two items are one track only when
+an ID agrees, never by title.  Any other answer, none included, rejects it
+(``fingerprint``), whatever ``LENGTH_GUARD`` says; a lookup that fails leaves
+it for the next scan.
 """
 
 from __future__ import annotations
@@ -31,9 +43,11 @@ import os
 import re
 import shutil
 import subprocess
+import time
 from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Callable
 
 from music_fetch import events
 
@@ -43,7 +57,11 @@ TOLERANCE = 0.10
 SILENCE_NOISE = "-50dB"
 SILENCE_MIN_SECONDS = 8
 EDGE_SECONDS = 5
-REASONS = ("duration", "silence")
+REASONS = ("duration", "silence", "fingerprint")
+# AcoustID's fingerprint score a request fallback's recording must reach (music-mb-fingerprint's).
+FINGERPRINT_MIN_SCORE = 0.85
+# AcoustID asks for at most three lookups a second.
+ACOUSTID_DELAY = 0.35
 
 _SILENCE_START = re.compile(r"silence_start:\s*(-?[\d.]+)")
 _SILENCE_END = re.compile(r"silence_end:\s*(-?[\d.]+)")
@@ -156,6 +174,105 @@ def reject(path: Path, rejection: Rejection, inbox: Path, rejected_dir: Path) ->
     return dest
 
 
+def _reject_event(playlist: str, f: Path, rejection: Rejection, dest: Path) -> None:
+    events.record("reject", f"[REJECT] {playlist}: {f.name} — {rejection.reason}: {rejection.detail} → {dest}",
+                  source="guard", data={"playlist": playlist, "file": f.name, "reason": rejection.reason,
+                                        "detail": rejection.detail, "dest": str(dest)})
+
+
+class LookupFailed(RuntimeError):
+    """AcoustID couldn't be asked: the file waits for the next scan."""
+
+
+def acoustid_recordings(path: Path) -> set[str]:
+    """The MusicBrainz recordings AcoustID links to *path*'s fingerprint with a
+    score of at least :data:`FINGERPRINT_MIN_SCORE`.  Raises
+    :class:`LookupFailed` when there is no API key or the web service fails,
+    and ``ValueError`` when the file can't be fingerprinted (a rejection)."""
+    import acoustid  # noqa: PLC0415
+
+    key = os.environ.get("ACOUSTID_APIKEY")
+    if not key:
+        raise LookupFailed("ACOUSTID_APIKEY is not set")
+    try:
+        results = list(acoustid.match(key, str(path)))
+    except acoustid.FingerprintGenerationError as exc:
+        raise ValueError(f"no fingerprint: {exc}") from exc
+    except acoustid.WebServiceError as exc:
+        raise LookupFailed(str(exc)) from exc
+    return {rid for score, rid, *_ in results if rid and score >= FINGERPRINT_MIN_SCORE}
+
+
+def request_songs(state_file: Path | None = None) -> dict[str, dict]:
+    """``{recording URL: song}`` of every album request's fallback songs, from
+    the album state; empty when it can't be read."""
+    from music_fetch import albums  # noqa: PLC0415
+
+    try:
+        records = albums.State.load(state_file or albums.STATE_FILE).albums
+    except Exception as exc:
+        logger.warning("  [GUARD] could not read the album state (%s); request fallbacks wait", exc)
+        return {}
+    return {s["url"]: s for r in records.values() for s in r.get("album_songs") or () if s.get("url")}
+
+
+def verify_requests(unverified: Path, inbox: Path, rejected_dir: Path, audio_exts: set[str],
+                    songs: dict[str, dict] | None = None,
+                    recordings: Callable[[Path], set[str]] = acoustid_recordings) -> Counter:
+    """Check every album request fallback download in *unverified*
+    (``<source>/<file>``) against the track its ``WOAS`` names (homelab#2478):
+    move it to *inbox*/``<source>/`` when AcoustID names that track's own
+    recording, else to *rejected_dir*/``<source>/`` with its reason, so the
+    nightly holds it back.  *songs*: :func:`request_songs`.  Returns the
+    rejections per reason."""
+    from music_fetch.album_requests import url_recording  # noqa: PLC0415
+
+    rejected: Counter = Counter({r: 0 for r in REASONS})
+    files = [f for f in sorted(unverified.rglob("*")) if f.is_file() and f.suffix.lower() in audio_exts] \
+        if unverified.exists() else []
+    if not files:
+        return rejected
+    songs = request_songs() if songs is None else songs
+    for f in files:
+        source = f.relative_to(unverified).parts[0]
+        url = song_url(f)
+        recording = url_recording(url)
+        song = songs.get(url or "")
+        if recording is None or song is None:
+            # Its request was reset or answered meanwhile, or it isn't one of ours: it isn't wanted.
+            rejection = Rejection("fingerprint", f"no album request's track is {url or 'named'}")
+        else:
+            rejection = check_file(f, song.get("duration") or None)
+        if rejection is None:
+            try:
+                found = recordings(f)
+            except LookupFailed as exc:
+                logger.warning("  [GUARD] %s: %s: AcoustID lookup failed (%s); checked at the next scan",
+                               source, f.name, exc)
+                continue
+            except ValueError as exc:
+                found, why = set(), str(exc)
+            else:
+                why = (f"AcoustID names {len(found)} other recording(s)" if found
+                       else "AcoustID knows no recording for it")
+            finally:
+                time.sleep(ACOUSTID_DELAY)
+            if recording not in found:
+                rejection = Rejection("fingerprint", f"not recording {recording}: {why}")
+        if rejection is not None:
+            dest = reject(f, rejection, unverified, rejected_dir)
+            rejected[rejection.reason] += 1
+            logger.warning("  [REJECT] %s: %s — %s: %s → %s", source, f.name, rejection.reason, rejection.detail,
+                           dest)
+            _reject_event(source, f, rejection, dest)
+            continue
+        dest = inbox / f.relative_to(unverified)
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        shutil.move(str(f), dest)
+        logger.info("  [VERIFIED] %s: %s — AcoustID names recording %s", source, f.name, recording)
+    return rejected
+
+
 def guard_inbox(inbox: Path, rejected_dir: Path, audio_exts: set[str], mode: str | None = None) -> Counter:
     """Check every spotdl inbox file; returns the count of files rejected per reason.
 
@@ -166,11 +283,15 @@ def guard_inbox(inbox: Path, rejected_dir: Path, audio_exts: set[str], mode: str
     rejected: Counter = Counter({r: 0 for r in REASONS})
     if mode == "off" or not inbox.exists():
         return rejected
+    from music_fetch.album_requests import SOURCE  # noqa: PLC0415
+
     durations = expected_durations()
     for f in sorted(inbox.rglob("*")):
         if not f.is_file() or f.suffix.lower() not in audio_exts:
             continue
         playlist = f.relative_to(inbox).parts[0]
+        if playlist == SOURCE:
+            continue  # an album request's fallback: verify_requests checked it
         expected = _expected(durations, playlist, song_url(f))
         if expected is None:
             logger.info("  [GUARD] %s: %s has no Spotify duration; length not checked", playlist, f.name)
@@ -183,7 +304,5 @@ def guard_inbox(inbox: Path, rejected_dir: Path, audio_exts: set[str], mode: str
         dest = reject(f, rejection, inbox, rejected_dir)
         rejected[rejection.reason] += 1
         logger.warning("  [REJECT] %s: %s — %s: %s → %s", playlist, f.name, rejection.reason, rejection.detail, dest)
-        events.record("reject", f"[REJECT] {playlist}: {f.name} — {rejection.reason}: {rejection.detail} → {dest}",
-                      source="guard", data={"playlist": playlist, "file": f.name, "reason": rejection.reason,
-                                            "detail": rejection.detail, "dest": str(dest)})
+        _reject_event(playlist, f, rejection, dest)
     return rejected

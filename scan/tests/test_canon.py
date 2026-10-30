@@ -1099,3 +1099,33 @@ def test_a_move_between_spotify_albums_is_a_moved_event(monkeypatch):
     assert kw["spotify_album_id"] == "NEW" and kw["item_id"] == 7
     assert kw["data"]["from"] == {"album": "Old", "spotify_album_id": "OLD"}
     assert kw["data"]["to"] == {"album": "New", "spotify_album_id": "NEW"}
+
+
+def test_an_album_requests_fallback_track_is_named_from_musicbrainz(tmp_path, ffmpeg, lib):
+    """homelab#2478: a request has no Spotify album, so its record and tracklist release name its
+    items: one album with the release's MusicBrainz IDs, the tracklist's numbering, no Spotify album."""
+    from music_scan import canon, cover
+
+    rec = "00000001-0000-4000-8000-000000000002"
+    track = _add(lib, _m4a(tmp_path / "library" / "Band" / "Singles" / "07 - Song 2.m4a"), title="Song 2",
+                 artist="Band", albumartist="Band", album="Singles", disc=1, track=7, via="spotdl",
+                 sources="request", fallback_recording=rec, album_record="12")
+    songs = [{"song_id": f"00000001-0000-4000-8000-00000000000{i}", "disc_number": 2 if i == 2 else 1,
+              "track_number": i, "tracks_count": 3, "disc_count": 2, "date": "1999-03-01",
+              "cover_url": "https://coverartarchive.org/release/R/front-500", "artist_id": "ARTIST"}
+             for i in (1, 2, 3)]
+    records = {"12": {"origin": "request", "status": "fallback", "name": "The Album", "artist": "Band & Friend",
+                      "release_group": "RG", "tracklist_release": "R", "spotify_album_ids": [], "names": [],
+                      "album_songs": songs, "playlists": {"request": []}}}
+    monkey_download = cover.download
+    cover.download = lambda url: _jpeg(tmp_path / "c.jpg")
+    try:
+        canon.canonicalize_items([lib.get_item(track.id)], [], budget=None, records=records)
+    finally:
+        cover.download = monkey_download
+    item = lib.get_item(track.id)
+    assert (item.album, item.albumartist, item.year, item.month) == ("The Album", "Band & Friend", 1999, 3)
+    assert (item.disc, item.track, item.disctotal, item.tracktotal) == (2, 2, 2, 3)
+    assert (item.mb_albumid, item.mb_releasegroupid, item.mb_albumartistid) == ("R", "RG", "ARTIST")
+    assert item.get("mb_album_via") == "request" and not item.get("spotify_album_id")
+    assert Path(os.fsdecode(item.path)).parent == tmp_path / "library" / "Band & Friend" / "The Album"

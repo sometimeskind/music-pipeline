@@ -971,3 +971,50 @@ def test_handle_duplicates_keeps_apart_and_supersede_takes_the_spotdl_copy() -> 
     assert any("[BOTH]" in line for line in lines) and any("[ALBUM]" in line for line in lines)
 
 
+
+
+# ---------------------------------------------------------------------------
+# An album request's fallback download (homelab#2478)
+# ---------------------------------------------------------------------------
+
+REC = "00000001-0000-4000-8000-000000000001"
+REC_URL = f"https://musicbrainz.org/recording/{REC}"
+
+
+def test_a_request_fallback_download_records_its_recording_never_a_spotify_id() -> None:
+    plugin = _make_plugin()
+    item = _item("/root/Music/inbox/spotdl/request/Band - Song.m4a", title="Song")
+    task = _task(item=item)
+    with patch("music_scan.music_pipeline._read_spotdl_tags", return_value=SpotdlTags(REC_URL, "GBAAA001001")):
+        plugin.tag_source_on_created(session=MagicMock(), task=task)
+    item.__setitem__.assert_any_call("fallback_recording", REC)
+    item.__setitem__.assert_any_call("mb_trackid", REC)
+    item.__setitem__.assert_any_call("sources", "request")
+    keys = [c.args[0] for c in item.__setitem__.call_args_list]
+    assert "spotify_url" not in keys and "spotify_ids" not in keys
+
+
+def test_a_request_fallback_download_imports_alongside_the_librarys_copy() -> None:
+    plugin = _make_plugin()
+    item = _item("/root/Music/inbox/spotdl/request/Band - Song.m4a", title="Song")
+    task = _task(item=item)
+    dup = _dup(via="spotdl", sources="chill")
+    task.find_duplicates.return_value = [dup]
+    with patch("music_scan.music_pipeline._read_spotdl_tags", return_value=SpotdlTags(REC_URL)):
+        _handle_same(plugin, MagicMock(), task)
+    task.set_choice.assert_not_called()
+    assert task.find_duplicates(None) == []  # hidden from beets' own check
+    assert dup._data["sources"] == "chill"
+    assert any("[BOTH]" in c.args[0] for c in plugin._log.warning.call_args_list)
+
+
+def test_a_second_fallback_copy_of_a_recording_is_a_duplicate() -> None:
+    plugin = _make_plugin()
+    item = _item("/root/Music/inbox/spotdl/request/Band - Song.m4a", title="Song")
+    task = _task(item=item)
+    dup = _dup(via="spotdl", sources="request")
+    dup._data["fallback_recording"] = REC
+    task.find_duplicates.return_value = [dup]
+    with patch("music_scan.music_pipeline._read_spotdl_tags", return_value=SpotdlTags(REC_URL)):
+        _handle_same(plugin, MagicMock(), task)
+    task.set_choice.assert_called_once_with(beets_importer.Action.SKIP)
