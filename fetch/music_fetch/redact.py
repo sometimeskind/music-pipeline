@@ -17,14 +17,17 @@ from typing import Any
 REDACTED = "REDACTED"
 DROPPED = frozenset({"download_url", "downloadUrl"})
 # A parameter is a credential when its name holds one of these (apikey, X-Api-Key, access_token,
-# passwd…), or is the r= of NZB links.  The name is one bounded group, checked in _mask: linear.
+# passwd…), or is the r= of NZB links.
 _CREDENTIAL = re.compile(r"key|token|pass|secret|auth|sig", re.IGNORECASE)
-_PARAM = re.compile(r"([?&;]([\w.-]{1,64})=)([^&#\s\"'<>]+)")
+# A name is a run no separator can be part of, so the runs after two separators never overlap and
+# each scan is linear, with no bound to slip past.  Only a credential's value is consumed: a URL
+# nested in another parameter's value (?next=http://h/?apikey=…) is still scanned.
+_PARAM = (re.compile(r"[?&;]([\w.-]+)="), re.compile(r"[^&#\s\"'<>]+"))
 # Percent-encoded inside another parameter, once or more (%3F, %253F…).
-_ENCODED = re.compile(r"(%(?:25)*(?:3F|26)([\w.-]{1,64})%(?:25)*3D)((?:(?!%(?:25)*26)[^&#\s\"'<>])+)",
-                      re.IGNORECASE)
-# User info runs to the last '@' before the host: a password may hold one.
-_USERINFO = re.compile(r"(\b[a-z][a-z0-9+.-]{0,31}://)[^/\s\"'<>]{1,256}@", re.IGNORECASE)
+_ENCODED = (re.compile(r"%(?:25)*(?:3F|26)([\w.-]+)%(?:25)*3D", re.IGNORECASE),
+            re.compile(r"(?:(?!%(?:25)*26)[^&#\s\"'<>])+", re.IGNORECASE))
+# User info runs to the last '@' before the host (a password may hold one); '/' ends the run.
+_USERINFO = re.compile(r"(://)[^/\s\"'<>]+@")
 # The credentials this process holds, masked wherever they appear, in whatever shape.
 _SECRET_ENV = re.compile(r"(?:^|_)(?:API_?KEY|KEY|TOKEN|SECRET|PASSWORD|PASSWD)$")
 _MIN_SECRET = 8
@@ -36,17 +39,25 @@ def secrets() -> list[str]:
                   key=len, reverse=True)
 
 
-def _mask(m: re.Match) -> str:
-    name = m.group(2)
-    return m.group(1) + REDACTED if name.lower() == "r" or _CREDENTIAL.search(name) else m.group(0)
+def _mask_params(text: str, name: re.Pattern, value: re.Pattern) -> str:
+    out, pos = [], 0
+    for m in name.finditer(text):
+        found = m.group(1)
+        if m.start() < pos or not (found.lower() == "r" or _CREDENTIAL.search(found)):
+            continue
+        v = value.match(text, m.end())
+        if v:
+            out += [text[pos:m.end()], REDACTED]
+            pos = v.end()
+    return "".join(out) + text[pos:]
 
 
 def redact_text(text: str, known: list[str] | None = None) -> str:
     """*text* with every credential in a URL, and every one of *known* (default :func:`secrets`), masked."""
     for secret in secrets() if known is None else known:
         text = text.replace(secret, REDACTED)
-    text = _PARAM.sub(_mask, text)
-    text = _ENCODED.sub(_mask, text)
+    text = _mask_params(text, *_PARAM)
+    text = _mask_params(text, *_ENCODED)
     return _USERINFO.sub(rf"\g<1>{REDACTED}@", text)
 
 
