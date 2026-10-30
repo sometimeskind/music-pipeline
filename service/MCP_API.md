@@ -1,6 +1,6 @@
 # MCP API (`/mcp-api/*`)
 
-The contract between the pipeline service (`service/`) and the Music MCP adapter (`mcp/`), homelab#2412. The adapter is the only client. It never runs in the pipeline pod, and this API never returns a credential.
+The contract between the pipeline service (`service/`) and the Music MCP adapter (`mcp/`), homelab#2412. The adapter is the only client. It never runs in the pipeline pod, and this API never returns a credential: every JSON response passes `music_fetch.redact` on its way out, which drops `download_url` fields (a Prowlarr download link carries Prowlarr's API key) and masks credential query parameters (`apikey=REDACTED`) and URL user info in every string, records, events and job output alike (#343).
 
 Every timestamp in a request or a response is ISO 8601; a response's are always UTC (`2026-10-27T14:03:11Z`).
 

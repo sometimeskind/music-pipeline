@@ -282,6 +282,40 @@ def test_a_slow_job_returns_its_id_and_get_job_pages_its_output(client, env, mon
     assert rest["output"].splitlines()[0] == "line 200" and rest["next_offset"] is None
 
 
+def test_no_read_returns_a_credential(client, env, no_event_store):
+    """Every GET route, and a run's job view, over a store and job output holding an API key (#343)."""
+    url = f"http://prowlarr:9696/1/download?apikey={mcp_harness.SECRET}&link=x"
+
+    def leaky(argv, env_, on_line):
+        on_line(f"[ERR]  grab failed: Max retries exceeded with url: {url}")
+        return 0
+
+    env["jobs"]._run_command = leaky
+    ran = client.post("/mcp-api/run/audit_want_albums", json={}, headers=READ)
+    reads = {
+        "/mcp-api/library_status": ["/mcp-api/library_status"],
+        "/mcp-api/albums": ["/mcp-api/albums?query=abbey"],
+        "/mcp-api/album": ["/mcp-api/album?query=ALB1", "/mcp-api/album?query=abbey"],
+        "/mcp-api/items/<int:item_id>": [f"/mcp-api/items/{env['items'][0].id}"],
+        "/mcp-api/quarantine": ["/mcp-api/quarantine?kind=unmatched"],
+        "/mcp-api/playlists/<name>": ["/mcp-api/playlists/chill"],
+        "/mcp-api/album_history": ["/mcp-api/album_history?query=ALB1"],
+        "/mcp-api/digest_summary": ["/mcp-api/digest_summary"],
+        "/mcp-api/overrides": ["/mcp-api/overrides"],
+        "/mcp-api/jobs/<job_id>": [f"/mcp-api/jobs/{ran.json['job_id']}"],
+    }
+    routes = {r.rule for r in client.application.url_map.iter_rules()
+              if r.rule.startswith("/mcp-api/") and "GET" in r.methods}
+    assert set(reads) == routes, "a new read route: add it here"
+    for path in [p for paths in reads.values() for p in paths]:
+        assert mcp_harness.SECRET not in client.get(path, headers=READ).get_data(as_text=True), path
+    assert mcp_harness.SECRET not in ran.get_data(as_text=True)
+    album = client.get("/mcp-api/album?query=ALB1", headers=READ).json["album"]["record"]
+    assert "download_url" not in album["candidate"] and album["candidate"]["guid"] == "https://indexer/details/9"
+    assert album["blocklist"] == ["https://indexer/api?t=get&id=8&apikey=REDACTED"]
+    assert "apikey=REDACTED" in client.get(f"/mcp-api/jobs/{ran.json['job_id']}", headers=READ).json["output"]
+
+
 def test_unknown_job(client):
     resp = client.get("/mcp-api/jobs/deadbeef", headers=MCP)
     assert resp.status_code == 404 and resp.json["status"] == "unknown"
@@ -434,6 +468,16 @@ def test_digest_summary_counts_and_lists_the_windows_events(client, event_store)
     assert merged[0]["item_id"] == 9 and merged[0]["data"] == {"why": "same recording at import"}
     later = client.get("/mcp-api/digest_summary?since=2999-01-01T00:00:00Z", headers=READ).get_json()
     assert later["history"] == {"counts": {}, "events": {}}
+
+
+@needs_pg
+def test_event_history_returns_no_credential(env, client, event_store):
+    reason = f"Max retries exceeded with url: /1/download?apikey={mcp_harness.SECRET}"
+    event_store.record("failure", f"[FAIL] Abbey Road: {reason}", source="albums", spotify_album_id="ALB1",
+                       data={"reason": reason, "gave_up": True})
+    for path in ["/mcp-api/album_history?query=ALB1", "/mcp-api/digest_summary"]:
+        resp = client.get(path, headers=READ)
+        assert resp.status_code == 200 and mcp_harness.SECRET not in resp.get_data(as_text=True), path
 
 
 def test_stuck_names_stale_grabs_and_fallbacks_only():

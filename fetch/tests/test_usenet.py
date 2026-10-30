@@ -101,6 +101,19 @@ def test_prowlarr_nzb_location_reads_redirect_without_following() -> None:
     assert get.call_args.kwargs["allow_redirects"] is False
 
 
+def test_a_failed_download_link_does_not_name_the_api_key() -> None:
+    import requests
+
+    release = rel("x")
+    release.download_url = "http://prowlarr:9696/1/download?apikey=s3kr1t&link=abc"
+    error = requests.ConnectionError(f"Max retries exceeded with url: {release.download_url}")
+    with patch("music_fetch.usenet.requests.get", side_effect=error):
+        with pytest.raises(RuntimeError) as raised:
+            Prowlarr(url="http://p", api_key="k").nzb_location(release)
+    assert "s3kr1t" not in str(raised.value) and "apikey=REDACTED" in str(raised.value)
+    assert raised.value.__cause__ is None and raised.value.__suppress_context__
+
+
 def test_prowlarr_nzb_location_raises_without_redirect() -> None:
     resp = MagicMock(status_code=200, headers={})
     with patch("music_fetch.usenet.requests.get", return_value=resp):

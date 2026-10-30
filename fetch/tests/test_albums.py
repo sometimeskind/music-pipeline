@@ -237,6 +237,7 @@ def test_dry_run_picks_without_grabbing() -> None:
     top_up(state, Settings(mode="dry-run"), prowlarr, sab, never_have, result, now=lambda: NOW)
     assert state.albums["a0"]["status"] == albums.DRY_RUN
     assert state.albums["a0"]["candidate"]["guid"] == "r1"
+    assert "download_url" not in state.albums["a0"]["candidate"]  # it carries Prowlarr's API key (#343)
     prowlarr.nzb_location.assert_not_called()
     sab.add_url.assert_not_called()
     assert state.used("hit", NOW) == 1 and state.used("grab", NOW) == 0

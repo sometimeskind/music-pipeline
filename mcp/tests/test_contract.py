@@ -112,6 +112,8 @@ async def test_structured_reads(pipeline_url):
 
         album = (await c.call_tool("get_album", {"query": "ALB1"})).data
         assert album["status"] == "ok" and album["album"]["key"] == "ALB1"
+        assert "download_url" not in album["album"]["record"]["candidate"]  # Prowlarr's API key (#343)
+        assert "apikey=REDACTED" in album["album"]["record"]["blocklist"][0]
         assert album["items"], album
         item_id = album["items"][0]["id"]
         item = (await c.call_tool("get_item", {"id": item_id})).data
