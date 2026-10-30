@@ -6,6 +6,7 @@ from __future__ import annotations
 import logging
 import os
 import sys
+from datetime import datetime, timedelta
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -18,7 +19,7 @@ from music_fetch.albums import Settings, State, tick
 
 sys.path.insert(0, str(Path(__file__).parent))  # importable however pytest imports this file
 from mb_fake import (  # noqa: E402
-    GROUP, OTHER_RG, R12, R14, RBOOT, RELEASES, RG, RLIVE, FakeMB, _medium, _release,
+    GROUP, OTHER_RG, R12, R14, RBOOT, RELEASES, RG, RLIVE, FakeMB, _medium, _release, recording,
 )
 from pg_fixture import pg_url  # noqa: E402, F401 — a fixture
 
@@ -175,13 +176,160 @@ def test_a_request_record_an_album_playlist_lists_again_drops_the_request_tracks
     assert list(record["playlists"]) == ["later"] and "origin" not in record
 
 
-def test_a_request_never_falls_back_to_spotdl():
-    record = {"status": albums.MISSING, "origin": albums.REQUEST, "name": "The Album", "artist": "Band",
-              "release_group": RG, "unresolved": None, "spotify_album_ids": [], "names": [], "blocklist": [],
-              "playlists": {req.SOURCE: _request().tracks}}
+def _missing_request(status: str = albums.MISSING, **fields) -> dict:
+    return {"status": status, "origin": albums.REQUEST, "name": "The Album", "artist": "Band",
+            "release_group": RG, "unresolved": None, "spotify_album_ids": [], "names": [], "blocklist": [],
+            "requested": True, "tracklist_release": R12, "album_type": "album", "year": 1999,
+            "playlists": {req.SOURCE: _request().tracks}, **fields}
+
+
+def test_the_feed_gives_a_request_its_tracklist_release():
+    s = State()
+    albums.feed_requests(s, [_request()])
+    assert s.albums[RG]["tracklist_release"] == R12
+
+
+def test_without_its_hooks_a_request_stays_missing():
+    record = _missing_request()
     s = State(albums={RG: record})
     albums.fallbacks(s, lambda playlist, tracks: tracks, lambda album_id: [])
     assert record["status"] == albums.MISSING and "fallback_tracks" not in record
+
+
+def test_a_missing_request_falls_back_from_its_musicbrainz_tracklist_then_fills():
+    record = _missing_request()
+    s = State(albums={RG: record})
+    held: set[str] = {recording(1, 2)}
+    reads = []
+
+    def songs(r):
+        reads.append(r["tracklist_release"])
+        return req.release_songs(FakeMB(), r)
+
+    albums.fallbacks(s, lambda pl, ts: ts, None, songs, lambda key, record: held)
+    assert record["status"] == albums.FALLBACK and record["fallback_from"] == albums.MISSING
+    left = [recording(1, i) for i in range(1, 13) if i != 2]
+    assert record["fallback_tracks"] == {req.SOURCE: left}
+    assert [s["song_id"] for s in albums.fallback_songs(s, req.SOURCE, [])] == left
+    assert albums.fallback_queue(s) == 11
+
+    held |= set(left)  # downloaded, verified, imported and stamped
+    albums.fallbacks(s, lambda pl, ts: ts, None, songs, lambda key, record: held)
+    assert record["status"] == albums.FILLED and record["fallback_tracks"] == {}
+    assert reads == [R12]  # read once
+
+
+def test_a_former_playlist_albums_spotify_tracklist_gives_way_to_musicbrainz():
+    """Stage 3: a keep album in fallback becomes a request's; its Spotify songs can't be verified."""
+    record = _missing_request(albums.FALLBACK, fallback_from=albums.MISSING,
+                              album_songs=[{"song_id": "sp1-1", "url": "https://open.spotify.com/track/sp1-1"}])
+    s = State(albums={RG: record})
+    albums.fallbacks(s, lambda pl, ts: ts, None, lambda r: req.release_songs(FakeMB(), r),
+                     lambda key, r: {recording(1, i) for i in range(2, 13)})
+    assert record["fallback_tracks"] == {req.SOURCE: [recording(1, 1)]}
+
+
+def test_a_request_is_not_filled_before_its_tracklist_is_read():
+    record = _missing_request(albums.FAILED)
+    s = State(albums={RG: record})
+
+    def broken(r):
+        raise OSError("MusicBrainz 503")
+
+    albums.fallbacks(s, lambda pl, ts: ts, None, broken, lambda key, record: set())
+    assert record["status"] == albums.FALLBACK and record["fallback_tracks"] == {}
+    assert "album_songs" not in record
+
+
+def test_a_request_a_playlist_lists_falls_back_as_the_playlists_album():
+    record = {**_missing_request(), "origin": albums.ALBUM, "spotify_album_ids": ["sp1"],
+              "playlists": {"later": [["Song 1", "Band", "sp1-1", None, 1, 1]]}}
+    s = State(albums={RG: record})
+    asked = []
+    albums.fallbacks(s, lambda pl, ts: ts, lambda album_id: [], lambda r: asked.append(r) or [], lambda key, record: set())
+    assert record["fallback_tracks"] == {"later": ["sp1-1"]} and asked == []
+
+
+def test_a_requests_musicbrainz_songs_give_way_once_a_playlist_lists_the_album():
+    mb_songs = req.release_songs(FakeMB(), _missing_request())
+    record = {**_missing_request(albums.FALLBACK), "origin": albums.ALBUM, "spotify_album_ids": ["sp1"],
+              "album_songs": mb_songs, "fallback_from": albums.MISSING,
+              "playlists": {"later": [["Song 1", "Band", "sp1-1", None, 1, 1]]}}
+    s = State(albums={RG: record})
+    spotify = [{"song_id": "sp1-1", "url": "https://open.spotify.com/track/sp1-1"}]
+    albums.fallbacks(s, lambda pl, ts: ts, lambda album_id: spotify, None, None)
+    assert record["album_songs"] == spotify and record["fallback_tracks"] == {"later": ["sp1-1"]}
+
+
+def test_release_songs_are_whole_spotdl_songs_with_no_spotify_id():
+    from spotdl.types.song import Song
+
+    songs = req.release_songs(FakeMB(), _missing_request())
+    assert len(songs) == 12
+    first = songs[0]
+    assert first["song_id"] == recording(1, 1) and first["url"] == f"https://musicbrainz.org/recording/{recording(1, 1)}"
+    assert req.url_recording(first["url"]) == recording(1, 1)
+    assert first["isrc"] == "GBAAA001001" and first["duration"] == 200 and first["album_id"] == R12
+    assert (first["disc_number"], first["track_number"], first["tracks_count"], first["disc_count"]) == (1, 1, 12, 1)
+    assert first["album_name"] == "The Album" and first["album_artist"] == "Band" and first["cover_url"] is None
+    assert "spotify" not in str(songs)
+    song = Song.from_dict(first)  # every field, none extra
+    # spotdl asks Spotify again for a song missing any of these.
+    assert all(getattr(song, f) is not None for f in ("genres", "disc_count", "tracks_count", "track_number",
+                                                       "album_id", "album_artist"))
+
+
+def test_release_songs_take_the_cover_art_archive_front():
+    releases = {R12: {**RELEASES[R12], "cover-art-archive": {"front": True}}}
+    [first, *_] = req.release_songs(FakeMB(releases=releases), _missing_request())
+    assert first["cover_url"] == f"https://coverartarchive.org/release/{R12}/front-500"
+
+
+def test_release_songs_refuse_another_groups_release():
+    with pytest.raises(req.Refused, match="not"):
+        req.release_songs(FakeMB(), _missing_request(release_group=OTHER_RG))
+
+
+@pytest.mark.parametrize("url", [None, "https://open.spotify.com/track/abc", "https://musicbrainz.org/recording/x"])
+def test_url_recording_is_none_for_anything_else(url):
+    assert req.url_recording(url) is None
+
+
+def _search_state(status: str, searched_days_ago: int, **fields) -> State:
+    record = _missing_request(status, searched_at=albums._iso(albums._now() - timedelta(days=searched_days_ago)),
+                              query="band the album", **fields)
+    return State(albums={RG: record})
+
+
+def test_a_request_with_gaps_is_searched_on_usenet_again_weekly_and_stays_in_fallback_on_a_miss():
+    from music_fetch.albums import Settings
+
+    s = _search_state(albums.FALLBACK, 8, fallback_from=albums.MISSING, fallback_tracks={req.SOURCE: ["r"]})
+    prowlarr, sabnzbd = MagicMock(), MagicMock()
+    prowlarr.blocked.return_value = []
+    prowlarr.search.return_value = []
+    albums.top_up(s, Settings(mode="on"), prowlarr, sabnzbd, lambda k, r: False, albums.TickResult(),
+                  overrides={})
+    record = s.albums[RG]
+    assert prowlarr.search.called
+    assert record["status"] == albums.FALLBACK and record["fallback_tracks"] == {req.SOURCE: ["r"]}
+    assert albums._now() - datetime.fromisoformat(record["searched_at"]) < timedelta(minutes=1)
+
+
+@pytest.mark.parametrize("status,days,tracks", [
+    (albums.FALLBACK, 3, {req.SOURCE: ["r"]}),  # not a week yet
+    (albums.FALLBACK, 8, {}),  # no gaps
+    (albums.FILLED, 30, {}),
+])
+def test_a_request_without_gaps_or_within_the_week_is_not_searched(status, days, tracks):
+    from music_fetch.albums import Settings
+
+    s = _search_state(status, days, fallback_from=albums.MISSING, fallback_tracks=tracks)
+    prowlarr = MagicMock()
+    prowlarr.blocked.return_value = []
+    albums.top_up(s, Settings(mode="on"), prowlarr, MagicMock(), lambda k, r: False, albums.TickResult(),
+                  overrides={})
+    assert not prowlarr.search.called
 
 
 def test_a_merge_with_an_album_playlist_edition_keeps_the_album_origin():

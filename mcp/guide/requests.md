@@ -56,10 +56,19 @@ call and writes nothing. Apply only once the user agrees with the dry run.
 `imported`, `have`, …). Each request is an event in `album_history`, which
 finds the album by its release group once the tick has queued it.
 
-A request that misses stays **missing**: there is no spotdl fallback for a request yet. It is
-searched again after 7 days. When the search words are wrong (the log's `[MISS]` names the
-query), `set_search_override` on the album fixes them; `digest_summary` lists missing and
-failed requests under `requests`.
+A request Usenet misses (or whose releases all fail) falls back to spotdl from its MusicBrainz
+tracklist: `fallback`, and `filled` once the library holds every track. spotdl finds each track
+on YouTube Music by its ISRC, else its artists, title and length, and the scan imports a download
+only when AcoustID's fingerprint lookup names that track's own MusicBrainz recording (`[VERIFIED]`;
+anything else is `[REJECT] … fingerprint`, kept in `quarantine/rejected/request/` and never
+downloaded again). So a track AcoustID doesn't know stays a gap: `list_requests` shows how many
+the album still lacks (its fallback_left), and the album is not `filled` (nor on Later's `.m3u`) until it has none.
+The tracks it has are one album, named from MusicBrainz (album, artist, release IDs).
+
+While it has gaps, the album is searched on Usenet again every 7 days; a release found then is
+the album, and replaces the spotdl copies. When the search words are wrong (the log's `[MISS]`
+names the query), `set_search_override` on the album fixes them; `digest_summary` lists missing,
+failed and gapped (`fallback`) requests under `requests`.
 
 ## Later
 

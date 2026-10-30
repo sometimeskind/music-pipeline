@@ -689,3 +689,36 @@ def test_retire_held_same_audio_is_one_merge_event(quarantined, recorded) -> Non
     (kind, _, kw), = recorded
     assert kind == "merge" and kw["item_id"] == track.id and kw["data"]["why"] == "extra, same audio"
     assert kw["data"]["merged"] == extra.id
+
+
+def test_claim_fallback_stamps_a_requests_verified_tracks_with_its_key() -> None:
+    """homelab#2478: a fallback track goes to the request record whose MusicBrainz songs hold its recording."""
+    records = {
+        "7": {"origin": "request", "status": "fallback", "album_songs": [{"song_id": "rec-1"}, {"song_id": "rec-2"}]},
+        "8": {"origin": "request", "status": "filled", "album_songs": [{"song_id": "rec-2"}]},
+        "9": {"status": "imported", "album_songs": [{"song_id": "rec-3"}]},  # a playlist's: Spotify songs
+    }
+    one = FakeItem(1, fallback_recording="rec-1", title="One")
+    shared = FakeItem(2, fallback_recording="rec-2", title="Two")  # on two requests: the one in fallback
+    playlist = FakeItem(3, fallback_recording="rec-3")
+    stamped = FakeItem(4, fallback_recording="rec-1", album_record="7")
+    loose = FakeItem(5, title="Loose")
+    claimed = release.claim_fallback([one, shared, playlist, stamped, loose], records)
+    assert claimed == [one, shared]
+    assert one["album_record"] == "7" and shared["album_record"] == "7" and one.stored == 1
+    assert not playlist.get("album_record") and not loose.get("album_record")
+
+
+def test_claim_fallback_leaves_an_ambiguous_track_for_the_next_scan(caplog) -> None:
+    records = {"7": {"origin": "request", "status": "fallback", "album_songs": [{"song_id": "rec-1"}]},
+               "8": {"origin": "request", "status": "fallback", "album_songs": [{"song_id": "rec-1"}]}}
+    item = FakeItem(1, fallback_recording="rec-1")
+    assert release.claim_fallback([item], records) == []
+    assert not item.get("album_record") and "[UNCLAIMED]" in caplog.text
+
+
+def test_an_album_requests_album_is_never_mixed() -> None:
+    """homelab#2478: a request has no Spotify album to find its items on, but its release was
+    imported whole; a release that failed for it before (its blocklist) mixes nothing."""
+    record = {"status": "imported", "origin": "request", "blocklist": ["r0"], "fallback_from": "failed"}
+    assert release.mixed_reasons("7", record, [], set()) == []

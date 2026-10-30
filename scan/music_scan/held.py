@@ -36,7 +36,8 @@ def _read_spotify_url(path: Path) -> str | None:
 
 
 def spotify_urls(directory: Path) -> frozenset[str]:
-    """The Spotify URLs of the spotdl downloads under *directory*."""
+    """The Spotify URLs of the spotdl downloads under *directory* (a request
+    fallback's: its MusicBrainz recording URL)."""
     urls: set[str] = set()
     for m4a in directory.rglob("*.m4a"):
         url = _read_spotify_url(m4a)
@@ -45,9 +46,16 @@ def spotify_urls(directory: Path) -> frozenset[str]:
     return frozenset(urls)
 
 
-def held_urls(quarantine_dir: Path = QUARANTINE_DIR, inbox_dir: Path = SPOTDL_DIR) -> frozenset[str]:
-    """The URLs downloaded into quarantine or still waiting in the inbox."""
-    return spotify_urls(quarantine_dir) | spotify_urls(inbox_dir)
+def held_urls(quarantine_dir: Path = QUARANTINE_DIR, inbox_dir: Path = SPOTDL_DIR,
+              unverified_dir: Path | None = None) -> frozenset[str]:
+    """The URLs downloaded into quarantine or still waiting in the inbox, or,
+    for an album request's fallback (homelab#2478), for the scan's fingerprint
+    check in *unverified_dir* (``album_requests.UNVERIFIED`` when not given)."""
+    if unverified_dir is None:
+        from music_fetch.album_requests import UNVERIFIED  # noqa: PLC0415
+
+        unverified_dir = UNVERIFIED
+    return spotify_urls(quarantine_dir) | spotify_urls(inbox_dir) | spotify_urls(unverified_dir)
 
 
 def album_held(state_file: Path | None = None) -> frozenset[str]:

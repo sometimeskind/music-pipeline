@@ -12,14 +12,16 @@ import os
 import shutil
 import tempfile
 import time
+from collections import Counter
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable, Iterator
 
 from music_fetch import albums, later_queue, state, store
+from music_fetch.album_requests import UNVERIFIED
 from music_scan import playlists
-from music_scan.guard import guard_inbox
+from music_scan.guard import REASONS, guard_inbox, verify_requests
 from music_scan.held import album_held, held_urls
 from music_scan.identity import (
     ItemIndex, PlaylistTrack, add_to_list, item_isrcs, item_spotify_ids, same_base_title, spotify_id,
@@ -683,11 +685,19 @@ def run() -> None:
 
         quarantined_before = _count_quarantine()
 
+        rejected: Counter = Counter()
+        logger.info("==> Checking album requests' fallback downloads...")
+        try:
+            rejected.update(verify_requests(UNVERIFIED, SPOTDL_DIR, REJECTED, AUDIO_EXTS))
+        except Exception:
+            logger.error("Request fallback check failed — its downloads wait for the next scan", exc_info=True)
+
         logger.info("==> Checking download lengths...")
         try:
-            metrics.rejected = guard_inbox(SPOTDL_DIR, REJECTED, AUDIO_EXTS)
+            rejected.update(guard_inbox(SPOTDL_DIR, REJECTED, AUDIO_EXTS))
         except Exception:
             logger.error("Length guard failed — continuing with import", exc_info=True)
+        metrics.rejected = {**dict.fromkeys(REASONS, 0), **rejected}
 
         logger.info("==> Importing from inbox...")
         since = time.time()

@@ -10,6 +10,10 @@ request.  The release groups follow ``--``: ``<release group>`` or
 in the order given.  ``search -- <query>`` lists the release groups
 MusicBrainz finds for a query the caller typed, with their releases, flagging
 demo, live, remix and compilation ones; it reads nothing but MusicBrainz.
+``fallback-sample --n N`` measures the MusicBrainz-built fallback's hit rate on
+N albums the library holds whole (:mod:`music_scan.request_sample`): it
+downloads from YouTube into a scratch directory and keeps nothing, an
+operator step.
 """
 
 from __future__ import annotations
@@ -198,10 +202,21 @@ def _parser() -> argparse.ArgumentParser:
     p.add_argument("--limit", type=int, default=req.SEARCH_LIMIT,
                    help=f"release groups to list, 1 to {req.SEARCH_MAX} (default {req.SEARCH_LIMIT})")
     p.add_argument("query", nargs="+", help="what the user typed: an artist and album, or MusicBrainz search syntax")
+    p = sub.add_parser("fallback-sample",
+                       help="measure the MusicBrainz-built fallback on albums the library holds (downloads, keeps nothing)")
+    p.add_argument("--n", type=int, default=10, help="albums to sample, 1 to 25 (default 10)")
+    p.add_argument("--seed", type=int, default=0, help="which albums: the same seed picks the same ones")
     return parser
 
 
 def run(args: argparse.Namespace, get: req.Get | None = None) -> None:
+    if args.command == "fallback-sample":
+        from music_scan import request_sample  # noqa: PLC0415 — the image holds both packages
+
+        if not 1 <= args.n <= request_sample.MAX_N:
+            raise req.Refused(f"--n must be 1 to {request_sample.MAX_N}")
+        request_sample.run(args.n, args.seed)
+        return
     if args.command == "search":
         query = " ".join(" ".join(args.query).split())
         if not query or len(query) > req.QUERY_MAX:

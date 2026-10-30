@@ -93,7 +93,7 @@ def test_guard_rejects_into_playlist_dir_with_reason(dirs, clip, monkeypatch) ->
 
     counts = guard_inbox(inbox, rejected, AUDIO_EXTS, mode="on")
 
-    assert counts == {"duration": 1, "silence": 0}
+    assert counts == {"duration": 1, "silence": 0, "fingerprint": 0}
     (kind, message, kw), = recorded
     assert kind == "reject" and message.startswith("[REJECT] wedding: Artist - Song.m4a — duration: ")
     assert kw["data"]["playlist"] == "wedding" and kw["data"]["reason"] == "duration"
@@ -190,3 +190,93 @@ def test_asis_pass_skips_rejected(tmp_path: Path, clip) -> None:
 
     assert _move_asis_eligible(quarantine, staging) == 0
     assert f.exists()
+
+
+# ---------------------------------------------------------------------------
+# verify_requests: an album request's fallback (homelab#2478)
+# ---------------------------------------------------------------------------
+
+REC = "00000001-0000-4000-8000-000000000001"
+REC_URL = f"https://musicbrainz.org/recording/{REC}"
+
+
+@pytest.fixture
+def requests_dirs(tmp_path: Path, monkeypatch) -> tuple[Path, Path, Path]:
+    from music_fetch import events
+
+    monkeypatch.setattr(guard, "ACOUSTID_DELAY", 0)
+    monkeypatch.setattr(events, "record", lambda *a, **kw: None)
+    unverified = tmp_path / "unverified"
+    (unverified / "request").mkdir(parents=True)
+    return unverified, tmp_path / "inbox" / "spotdl", tmp_path / "quarantine" / "rejected"
+
+
+def _verify(dirs, found, songs=None):
+    unverified, inbox, rejected = dirs
+    songs = {REC_URL: {"url": REC_URL, "song_id": REC, "duration": 30}} if songs is None else songs
+
+    def recordings(path):
+        if isinstance(found, Exception):
+            raise found
+        return found
+
+    return guard.verify_requests(unverified, inbox, rejected, AUDIO_EXTS, songs, recordings)
+
+
+def test_a_fallback_download_acoustid_names_as_its_recording_moves_to_the_inbox(requests_dirs, clip) -> None:
+    unverified, inbox, rejected = requests_dirs
+    clip(unverified / "request" / "Band - Song.m4a", ("tone", 30), url=REC_URL)
+    counts = _verify(requests_dirs, {REC, "00000002-0000-4000-8000-000000000002"})
+    assert sum(counts.values()) == 0
+    assert (inbox / "request" / "Band - Song.m4a").exists()
+    assert not (unverified / "request" / "Band - Song.m4a").exists()
+
+
+@pytest.mark.parametrize("found,why", [
+    ({"00000002-0000-4000-8000-000000000002"}, "AcoustID names 1 other recording(s)"),
+    (set(), "AcoustID knows no recording for it"),
+    (ValueError("no fingerprint: bad file"), "no fingerprint: bad file"),
+])
+def test_a_fallback_download_no_id_confirms_is_rejected(requests_dirs, clip, found, why) -> None:
+    unverified, inbox, rejected = requests_dirs
+    clip(unverified / "request" / "Band - Song.m4a", ("tone", 30), url=REC_URL)
+    counts = _verify(requests_dirs, found)
+    assert counts["fingerprint"] == 1
+    assert not (inbox / "request").exists()
+    reason = (rejected / "request" / "Band - Song.m4a.reason").read_text()
+    assert reason.startswith(f"fingerprint: not recording {REC}: {why}")
+    # Held from then on: the nightly doesn't download the same video again.
+    from music_scan.held import held_urls
+
+    assert REC_URL in held_urls(rejected.parent, inbox, unverified)
+
+
+def test_a_fallback_download_of_the_wrong_length_is_rejected_before_the_lookup(requests_dirs, clip) -> None:
+    unverified, _, rejected = requests_dirs
+    clip(unverified / "request" / "Band - Song.m4a", ("tone", 20), url=REC_URL)
+    counts = _verify(requests_dirs, AssertionError("not looked up"))
+    assert counts["duration"] == 1 and (rejected / "request" / "Band - Song.m4a").exists()
+
+
+def test_a_failed_lookup_leaves_the_download_for_the_next_scan(requests_dirs, clip, caplog) -> None:
+    unverified, inbox, rejected = requests_dirs
+    path = clip(unverified / "request" / "Band - Song.m4a", ("tone", 30), url=REC_URL)
+    counts = _verify(requests_dirs, guard.LookupFailed("503"))
+    assert sum(counts.values()) == 0 and path.exists()
+    assert "AcoustID lookup failed (503)" in caplog.text
+
+
+def test_a_download_no_request_wants_is_rejected(requests_dirs, clip) -> None:
+    unverified, _, rejected = requests_dirs
+    clip(unverified / "request" / "Band - Song.m4a", ("tone", 30), url=REC_URL)
+    counts = _verify(requests_dirs, AssertionError("not looked up"), songs={})
+    assert counts["fingerprint"] == 1
+    assert "no album request's track is" in (rejected / "request" / "Band - Song.m4a.reason").read_text()
+
+
+def test_the_length_guard_leaves_verified_request_files_alone(dirs, clip, monkeypatch) -> None:
+    inbox, rejected = dirs
+    (inbox / "request").mkdir()
+    path = clip(inbox / "request" / "Band - Song.m4a", ("tone", 15), ("silence", 10), ("tone", 15), url=REC_URL)
+    assert sum(guard_inbox(inbox, rejected, AUDIO_EXTS, mode="on").values()) == 0
+    assert path.exists()
