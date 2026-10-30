@@ -472,6 +472,18 @@ def later_view(library: ItemIndex, by_album: dict[str, list], by_record: dict[st
     found = _later_albums()
     if found is None:
         return None
+    paths = later_paths(found, library, by_album, by_record)
+    if found:
+        logger.info("  [LATER] %s: %d album(s), %d track(s) from the Later queue", later_queue.PLAYLIST, len(found),
+                    len(paths))
+    return paths
+
+
+def later_paths(found: list[tuple[str, dict]], library: ItemIndex, by_album: dict[str, list],
+                by_record: dict[str, list]) -> list[Path]:
+    """The ``.m3u`` paths of the Later albums *found* (``(key, record)`` in
+    ``.m3u`` order): each one's local tracks, album by album, each file once.
+    ``music-cutover`` renders the queue it would write with it."""
     none = ItemIndex([])
     paths: list[Path] = []
     seen: set[Path] = set()
@@ -483,9 +495,6 @@ def later_view(library: ItemIndex, by_album: dict[str, list], by_record: dict[st
             if (p := _item_path(item)) not in seen:
                 seen.add(p)
                 paths.append(p)
-    if found:
-        logger.info("  [LATER] %s: %d album(s), %d track(s) from the Later queue", later_queue.PLAYLIST, len(found),
-                    len(paths))
     return paths
 
 

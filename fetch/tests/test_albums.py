@@ -120,6 +120,13 @@ def test_refresh_skips_unchanged_snapshot(tmp_path: Path) -> None:
     assert state.albums == {}
 
 
+def test_refresh_forgets_a_playlist_that_left_the_conf() -> None:
+    """homelab#2478: keep left playlists.conf; added back, it is read again, so its store is rebuilt."""
+    state = State(playlists={"later": {"snapshot_id": "s1"}, "keep": {"snapshot_id": "k1"}})
+    refresh_playlists(state, [("later", "url")], FakeSpotify("s1", []), albums.TickResult())
+    assert state.playlists == {"later": {"snapshot_id": "s1"}}
+
+
 def test_refresh_writes_the_store_and_logs_albums_that_left(tmp_path: Path, caplog) -> None:
     old = song("Gone", "Z", album="Old Album", url="https://open.spotify.com/track/gone")
     store.Store.from_songs("later", [old]).save(store.path("later"))
