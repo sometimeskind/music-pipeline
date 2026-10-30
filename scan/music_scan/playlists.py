@@ -104,6 +104,16 @@ def by_album_id(items) -> dict[str, list]:
     return out
 
 
+def by_stamp(items) -> dict[str, list]:
+    """The *items* per ``album_record`` stamp (homelab#2478): a request's
+    record has no Spotify album, so its release is found by the stamp alone."""
+    out: dict[str, list] = {}
+    for item in items:
+        if item.get("album_record"):
+            out.setdefault(item.get("album_record"), []).append(item)
+    return out
+
+
 def record_stamps(records: dict[str, dict]) -> dict[str, str]:
     """Each album record's primary Spotify album ID → its key (homelab#2478)."""
     from music_fetch.state import primary_spotify  # noqa: PLC0415
@@ -123,7 +133,7 @@ def album_groups(songs: list[dict]) -> dict[str, list[dict]]:
 
 
 def album_items(album_id: str | None, name: str, slots: list[Slot], by_album: dict[str, list],
-                stamp: str | None = None) -> list:
+                stamp: str | None = None, by_record: dict[str, list] | None = None) -> list:
     """The local tracks of the Spotify album *album_id* named *name*, whose
     playlist entries resolved to *slots*: the items they resolve to, and
     every item canon filed on the album.  That is *album_id*, plus the album a
@@ -136,14 +146,20 @@ def album_items(album_id: str | None, name: str, slots: list[Slot], by_album: di
     ``album_record`` *stamp* (the key of the record whose primary Spotify album
     *album_id* is; *album_id* itself when not given, as before homelab#2478),
     they alone are listed, whatever the slots resolve to (a same recording
-    kept on another album stays there)."""
+    kept on another album stays there).  A record with no Spotify album (a
+    request's, homelab#2478: *album_id* None) finds its release by *stamp* in
+    *by_record* (:func:`by_stamp`), since canon gives its items no
+    ``spotify_album_id``."""
     from music_scan.scan import _item_path  # noqa: PLC0415
 
     def ordered(items) -> list:
         return sorted(items, key=lambda i: (i.disc or 1, i.track or 0, str(_item_path(i))))
 
     stamp = stamp or album_id
-    release = [i for i in by_album.get(album_id, []) if i.get("album_record") == stamp] if album_id else []
+    if album_id:
+        release = [i for i in by_album.get(album_id, []) if i.get("album_record") == stamp]
+    else:
+        release = list((by_record or {}).get(stamp, [])) if stamp else []
     if release:
         return ordered(release)
     found = [s.item for s in slots if s.item is not None]

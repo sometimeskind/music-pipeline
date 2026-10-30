@@ -169,3 +169,100 @@ def test_a_release_stamped_with_a_row_id_is_its_spotify_albums() -> None:
     stamps = record_stamps({"17": {"spotify_album_ids": ["K", "K2"]}, "18": {"names": ["a/b"]}})
     assert stamps == {"K": "17"}
     assert album_items("K", "Album", [], {"K": [stray, mine]}, stamps["K"]) == [mine]
+
+
+# ---------------------------------------------------------------------------
+# A request's album (homelab#2478): no Spotify album, its release by stamp
+# ---------------------------------------------------------------------------
+
+
+REQUEST_RECORD = {"name": "Asked", "artist": "Artist", "tracks_count": 2, "release_group": "rg-1",
+                  "spotify_album_ids": [], "origin": "request",
+                  "playlists": {"request": [["Ask One", "Artist", None, "ISRCA1", 1, 1],
+                                            ["Ask Two", "Artist", None, "ISRCA2", 1, 2]]}}
+
+
+def _asked(lib) -> list:
+    """A request's release, imported and stamped with its row id 41: canon gives it no spotify_album_id."""
+    return [
+        _add(lib, "Ask Two", "/lib/Asked/02.m4a", album="Asked", disc=1, track=2, via="usenet", sources="request",
+             isrc="ISRCA2", album_record="41"),
+        _add(lib, "Ask One", "/lib/Asked/01.m4a", album="Asked", disc=1, track=1, via="usenet", sources="request",
+             isrc="ISRCA1", album_record="41"),
+    ]
+
+
+def test_a_requests_release_is_found_by_its_stamp_alone(real_lib) -> None:
+    from music_scan.playlists import album_items, by_album_id, by_stamp
+    from music_scan.scan import have_album
+
+    _asked(real_lib)
+    _add(real_lib, "Ask One", "/lib/Other/01.m4a", album="Other", isrc="ISRCA1")  # another copy, not the release
+    items = real_lib.all_items()
+    assert [i.title for i in album_items(None, "Asked", [], by_album_id(items), "41", by_stamp(items))] == \
+        ["Ask One", "Ask Two"]
+    assert album_items(None, "Asked", [], by_album_id(items), "41") == []
+    library = ItemIndex(items)
+    assert have_album(lambda pl: ItemIndex(real_lib.items_by_source(pl)), library, by_album_id(items), "41",
+                      REQUEST_RECORD, by_stamp(items))
+
+
+def _regen_later(tmp_path: Path, lib, stores: dict[str, list[dict]], queue: list[tuple[str, dict]] | Exception,
+                 old: str | None = None) -> str | None:
+    """Regen with the Later queue's available albums *queue* (``scan._later_albums``), or its read failing.
+    With no *stores*, the state is in the database and has no playlist store (after the cutover)."""
+    from music_fetch import state, store
+
+    def later_albums():
+        if isinstance(queue, Exception):
+            raise queue
+        return queue
+
+    playlists_dir = tmp_path / "playlists"
+    playlists_dir.mkdir(exist_ok=True)
+    if old is not None:
+        (playlists_dir / "later.m3u").write_text(old)
+    with mock.patch("music_scan.scan._later_albums", later_albums), \
+         mock.patch("music_scan.scan._album_records", return_value={}):
+        if stores:
+            _regen(tmp_path, lib, stores, {"later"})
+        else:
+            with mock.patch.object(state, "in_db", return_value=True), \
+                 mock.patch.object(store, "names", return_value=[]):
+                _regen(tmp_path, lib, {}, set())
+    path = playlists_dir / "later.m3u"
+    return path.read_text() if path.exists() else None
+
+
+def _names(text: str | None) -> list[str]:
+    return [Path(line).name for line in (text or "").splitlines()]
+
+
+def test_the_queues_albums_follow_the_later_playlists_until_the_cutover(tmp_path: Path, real_lib) -> None:
+    """Before stage 3 the album playlist later still has its store: the queue's albums follow its albums."""
+    _release(real_lib)
+    _asked(real_lib)
+    text = _regen_later(tmp_path, real_lib, {"later": [_song("One", "S1")]},
+                        [("41", REQUEST_RECORD), ("ALBKEY", {"name": "Album", "spotify_album_ids": ["ALB"],
+                                                             "playlists": {}})])
+    assert [line.split("/")[-2:] for line in text.splitlines()] == [
+        ["Album", "01.m4a"], ["Album", "03.m4a"], ["Album", "04.m4a"], ["Asked", "01.m4a"], ["Asked", "02.m4a"]]
+
+
+def test_without_the_later_store_the_queue_alone_writes_later_m3u(tmp_path: Path, real_lib) -> None:
+    _asked(real_lib)
+    assert _names(_regen_later(tmp_path, real_lib, {}, [("41", REQUEST_RECORD)])) == ["01.m4a", "02.m4a"]
+    assert _regen_later(tmp_path, real_lib, {}, [], old="old/line.m4a\n") == ""  # emptied, not left stale
+
+
+def test_no_queue_and_no_later_m3u_writes_none(tmp_path: Path, real_lib) -> None:
+    assert _regen_later(tmp_path, real_lib, {}, []) is None
+
+
+def test_a_queue_that_cant_be_read_leaves_later_m3u_as_it_was(tmp_path: Path, real_lib) -> None:
+    from music_fetch import state
+
+    _release(real_lib)
+    for stores in ({"later": [_song("One", "S1")]}, {}):
+        assert _regen_later(tmp_path, real_lib, stores, state.Unavailable("down"), old="old/line.m4a\n") == \
+            "old/line.m4a\n"

@@ -17,7 +17,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable, Iterator
 
-from music_fetch import albums, state, store
+from music_fetch import albums, later_queue, state, store
 from music_scan import playlists
 from music_scan.guard import guard_inbox
 from music_scan.held import album_held, held_urls
@@ -385,10 +385,15 @@ def regen_playlists(metrics: ScanMetrics | None = None) -> dict[str, int]:
     (#268, :func:`playlists.album_paths`).  A playlist whose store fails is
     logged and keeps its last ``.m3u``: a store failure never fails a scan or
     empties a playlist.
+
+    The Later queue's available albums (homelab#2478, :func:`later_view`)
+    follow the ``later`` store's albums in ``later.m3u`` while that album
+    playlist has a store, and make up ``later.m3u`` alone once it has none.
+    When the queue can't be read, ``later.m3u`` keeps its last content.
     """
     PLAYLISTS.mkdir(parents=True, exist_ok=True)
     names = store.names()
-    if not names:
+    if not names and not state.in_db():
         logger.debug("No playlist stores found — no playlists to generate")
         return {}
 
@@ -399,8 +404,19 @@ def regen_playlists(metrics: ScanMetrics | None = None) -> dict[str, int]:
         all_items = lib.all_items()
         library = ItemIndex(all_items)
         by_album = playlists.by_album_id(all_items)
+        by_record = playlists.by_stamp(all_items)
         stamps = playlists.record_stamps(_album_records())
+        queue: list[Path] | None = None
+        queue_failed = False
+        try:
+            queue = later_view(library, by_album, by_record)
+        except Exception:
+            queue_failed = True
+            logger.error("  [LATER] the Later queue can't be read — %s.m3u is left as it was", later_queue.PLAYLIST,
+                         exc_info=True)
         for name in names:
+            if name == later_queue.PLAYLIST and queue_failed:
+                continue
             try:
                 view = store_view(name, library, by_album, stamps)
                 if view is None:
@@ -411,16 +427,66 @@ def regen_playlists(metrics: ScanMetrics | None = None) -> dict[str, int]:
             except Exception:
                 logger.error("Playlist store failed for %s — its .m3u is left as it was", name, exc_info=True)
                 continue
-            lines = [os.path.relpath(p, PLAYLISTS) for p in paths]
-            (PLAYLISTS / f"{name}.m3u").write_text("\n".join(lines) + ("\n" if lines else ""), encoding="utf-8")
-            counts[name] = len(lines)
+            if name == later_queue.PLAYLIST and queue:
+                listed = set(paths)
+                paths = paths + [p for p in queue if p not in listed]
+            counts[name] = _write_m3u(name, paths)
             empty[name] = playlists.empty_slots(slots)
             missing[name] = [f"{s.entry.artist} — {s.entry.name}" for s in slots if s.item is None]
+        if later_queue.PLAYLIST not in names and queue is not None \
+                and (queue or (PLAYLISTS / f"{later_queue.PLAYLIST}.m3u").exists()):
+            counts[later_queue.PLAYLIST] = _write_m3u(later_queue.PLAYLIST, queue)
 
     if metrics is not None:
         metrics.slots_empty = empty
         _save_empty_slots(empty, missing)
     return counts
+
+
+def _write_m3u(name: str, paths: list[Path]) -> int:
+    lines = [os.path.relpath(p, PLAYLISTS) for p in paths]
+    (PLAYLISTS / f"{name}.m3u").write_text("\n".join(lines) + ("\n" if lines else ""), encoding="utf-8")
+    return len(lines)
+
+
+def _later_albums() -> list[tuple[str, dict]] | None:
+    """The Later queue's available albums, ``(key, record)`` in ``.m3u`` order,
+    once the pending albums the library now holds whole have become available
+    (:func:`later_queue.mark_available`).  None while the JSON files are the
+    state; raises when the database can't be read."""
+    with state.session() as conn:
+        if conn is None:
+            return None
+        rows = state.load_albums(conn)
+        later_queue.mark_available(conn, rows)
+        return later_queue.albums(conn, rows)
+
+
+def later_view(library: ItemIndex, by_album: dict[str, list], by_record: dict[str, list]) -> list[Path] | None:
+    """The Later queue's ``.m3u`` paths (homelab#2478, :mod:`music_fetch.later_queue`):
+    each available album's local tracks (:func:`album_tracks`), album by album
+    in ``available_at`` order, each file once.  An import's album becomes
+    available here (:func:`_later_albums`), so it joins the end at the scan
+    that follows it.  None while the JSON files are the state; raises when
+    the database can't be read."""
+    found = _later_albums()
+    if found is None:
+        return None
+    none = ItemIndex([])
+    paths: list[Path] = []
+    seen: set[Path] = set()
+    for key, record in found:
+        slots: list[Slot] = []
+        for tracks in record.get("playlists", {}).values():
+            slots += _album_slots(none, tracks, library)
+        for item in album_tracks(key, record, slots, by_album, by_record):
+            if (p := _item_path(item)) not in seen:
+                seen.add(p)
+                paths.append(p)
+    if found:
+        logger.info("  [LATER] %s: %d album(s), %d track(s) from the Later queue", later_queue.PLAYLIST, len(found),
+                    len(paths))
+    return paths
 
 
 def _save_empty_slots(empty: dict[str, int], missing: dict[str, list[str]]) -> None:
@@ -500,21 +566,32 @@ def have_or_link(source_index: ItemIndex, library: ItemIndex, source: str, track
     return True
 
 
-def have_album(indexes, library: ItemIndex, by_album: dict[str, list], key: str, record: dict) -> bool:
+def have_album(indexes, library: ItemIndex, by_album: dict[str, list], key: str, record: dict,
+               by_record: dict[str, list] | None = None) -> bool:
     """True when the library holds the album *record* whole (#268), so it needs no download.
 
     Every playlist track resolves (*indexes(playlist)*: the playlist's items,
     then any item by Spotify ID or ISRC), and the album's local tracks
-    (:func:`playlists.album_items`) number at least Spotify's track count.
-    One track already in the library no longer makes an album "have": adding
-    one song on Spotify brings in the whole album."""
+    (:func:`album_tracks`) number at least Spotify's track count.  One track
+    already in the library no longer makes an album "have": adding one song
+    on Spotify brings in the whole album."""
     slots: list[Slot] = []
     for playlist, tracks in record.get("playlists", {}).items():
         slots += _album_slots(indexes(playlist), tracks, library)
     if not slots or any(slot.item is None for slot in slots):
         return False
-    have = len(playlists.album_items(state.primary_spotify(record), record.get("name", ""), slots, by_album, key))
+    have = len(album_tracks(key, record, slots, by_album, by_record))
     return have >= (record.get("tracks_count") or 0)
+
+
+def album_tracks(key: str, record: dict, slots: list[Slot], by_album: dict[str, list],
+                 by_record: dict[str, list] | None = None) -> list:
+    """The local tracks of album *record* (key *key*) whose tracks resolved
+    to *slots* (:func:`playlists.album_items`): by its primary Spotify album,
+    or by its key's ``album_record`` stamp alone when it has none (a
+    request's, homelab#2478)."""
+    return playlists.album_items(state.primary_spotify(record), record.get("name", ""), slots, by_album, key,
+                                 by_record)
 
 
 def _release_isrc_match(track: PlaylistTrack, items: list):

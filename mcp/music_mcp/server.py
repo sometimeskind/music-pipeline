@@ -36,8 +36,9 @@ Spotify ID itself. An album query (find_albums, get_album,
 reset_album, the override and hold tools) is the key, any of the album's Spotify IDs, its
 release group, the exact "artist — album", or a part matching one album; a query matching
 several returns "ambiguous" with the candidates and does nothing. A track (pin_track,
-unpin_track) is a Spotify track ID or URL. An album is requested (request_album) by its
-MusicBrainz release group, an MBID or musicbrainz.org URL. An item ID is a
+unpin_track) is a Spotify track ID or URL. An album is requested (request_album) and taken
+off Later (remove_from_later) by its MusicBrainz release group, an MBID or musicbrainz.org
+URL. An item ID is a
 beets item (an integer: get_item, merge_items pairs, replace_item, audit_dupes fingerprint_ids);
 get_album also shows beets album IDs, which no tool takes. A playlist entry resolves to an item
 by Spotify track ID (song_id) or ISRC. replace_item takes a YouTube video ID or URL. A tool run
@@ -45,7 +46,8 @@ that outlasts the inline wait returns a job_id: poll get_job.
 
 Tiers. Read tools anyone signed in may use. Write tools (reset_album, requeue_albums,
 merge_items, replace_item, embed_covers, canon_albums, set_search_override,
-clear_search_override, hold_album, release_album, pin_track, unpin_track, request_album) are a dry run unless
+clear_search_override, hold_album, release_album, pin_track, unpin_track, request_album,
+remove_from_later) are a dry run unless
 apply=true, and
 apply is accepted only after a dry run with the same arguments in the last 15 minutes whose
 output still matches: show the user the dry run and apply only once they agree. If an apply
@@ -235,6 +237,13 @@ def build_server(
         (missing or failed ones stay so: a request has no spotdl fallback yet)."""
         return await call("list_requests", lambda c: pipeline.get(c, "/requests", status=status, offset=offset))
 
+    @mcp.tool(annotations={"readOnlyHint": True})
+    async def get_later(offset: Offset = 0) -> dict:
+        """The Later queue: the albums in Later's .m3u, in arrival order (position 1 is the first, the
+        oldest arrival), then the pending ones the library doesn't hold whole yet, each with its
+        album's status. remove_from_later takes albums off it."""
+        return await call("get_later", lambda c: pipeline.get(c, "/later", offset=offset))
+
     # ---- read-tier CLI dry runs ----
 
     @mcp.tool(annotations={"readOnlyHint": True})
@@ -393,14 +402,38 @@ def build_server(
     @mcp.tool(annotations={"destructiveHint": False})
     async def request_album(
         albums: Annotated[list[AlbumRequest], Field(description="1 to 25 albums", min_length=1, max_length=25)],
+        later: Annotated[
+            bool, Field(description="also append them to Later, in this order; each joins Later's .m3u when the "
+                                    "library holds it whole")
+        ] = False,
         apply: Apply = False,
     ) -> dict:
         """Ask for whole albums by MusicBrainz release group: the album tick searches Usenet for each
         and imports it whole. The dry run reads each tracklist from MusicBrainz and says what the
         next tick does (a new album, or the album row that has the release group already). A
-        request that misses stays missing: list_requests shows it."""
-        body = {"albums": [a.model_dump() for a in albums], "apply": apply}
+        request that misses stays missing: list_requests shows it. With later, an album requested
+        already is only appended to Later."""
+        body = {"albums": [a.model_dump() for a in albums], "later": later, "apply": apply}
         return await run("request_album", body, write=True)
+
+    @mcp.tool(annotations={"destructiveHint": False})
+    async def remove_from_later(
+        release_groups: Annotated[
+            list[str] | None,
+            Field(description="albums to take off Later: MusicBrainz release group MBIDs or URLs", max_length=25),
+        ] = None,
+        through: Annotated[
+            int | None, Field(description="also take off Later's first N albums (get_later's positions 1 to N)",
+                              ge=1)
+        ] = None,
+        apply: Apply = False,
+    ) -> dict:
+        """Take albums off Later, by release group or every album up to a position. Their files stay in
+        the library; Later's .m3u drops them at the next scan."""
+        body: dict[str, Any] = {"release_groups": release_groups or [], "apply": apply}
+        if through is not None:
+            body["through"] = through
+        return await run("remove_from_later", body, write=True)
 
     # ---- triggers: no dry run, a no-op if already pending ----
 

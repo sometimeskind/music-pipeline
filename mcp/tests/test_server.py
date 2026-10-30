@@ -20,10 +20,10 @@ PILOT = Caller("pilot", "read")
 
 READS = {"library_status", "find_albums", "get_album", "get_item", "list_quarantine", "get_playlist",
          "get_job", "get_guide", "audit_dupes", "audit_lengths", "audit_releases", "audit_want_albums",
-         "album_history", "digest_summary", "list_overrides", "list_requests"}
+         "album_history", "digest_summary", "list_overrides", "list_requests", "get_later"}
 WRITES = {"reset_album", "requeue_albums", "merge_items", "replace_item", "embed_covers", "canon_albums",
           "trigger_scan", "trigger_album_tick", "set_search_override", "clear_search_override", "hold_album",
-          "release_album", "pin_track", "unpin_track", "request_album"}
+          "release_album", "pin_track", "unpin_track", "request_album", "remove_from_later"}
 # One minimal call per write tool.
 WRITE_CALLS = {
     "reset_album": {"query": "abbey road"},
@@ -41,6 +41,7 @@ WRITE_CALLS = {
     "pin_track": {"track": "68ozhSrI4eLbnUgih1SlOT", "url": "https://music.youtube.com/watch?v=29Sh3yEaBP8"},
     "unpin_track": {"track": "68ozhSrI4eLbnUgih1SlOT"},
     "request_album": {"albums": [{"release_group": "6e0a6c2a-2d38-3d3c-9d38-4f0c2b5b7a11"}]},
+    "remove_from_later": {"through": 1},
 }
 # Never exposed (homelab#2412: irreversible, workstation-only).
 IRREVERSIBLE = {"only_copies", "rollback", "force", "allow_manual", "quarantine"}
@@ -83,6 +84,7 @@ async def test_tool_surface_is_the_v1_list_and_nothing_irreversible(pipeline):
     ("list_requests", {}, "GET", "/mcp-api/requests", {"offset": "0"}),
     ("list_requests", {"status": "missing", "offset": 200}, "GET", "/mcp-api/requests",
      {"status": "missing", "offset": "200"}),
+    ("get_later", {}, "GET", "/mcp-api/later", {"offset": "0"}),
 ])
 async def test_reads_route_to_the_contract(pipeline, fake, tool, args, method, path, params):
     async with Client(build_server(pipeline, lambda: PILOT)) as client:
@@ -129,7 +131,13 @@ async def test_reads_route_to_the_contract(pipeline, fake, tool, args, method, p
     ("request_album", {"albums": [{"release_group": "rg-1"}, {"release_group": "rg-2", "preferred_release": "r-2"}],
                        "apply": True}, "/mcp-api/run/request_album",
      {"albums": [{"release_group": "rg-1", "preferred_release": None},
-                 {"release_group": "rg-2", "preferred_release": "r-2"}], "apply": True}),
+                 {"release_group": "rg-2", "preferred_release": "r-2"}], "later": False, "apply": True}),
+    ("request_album", {"albums": [{"release_group": "rg-1"}], "later": True}, "/mcp-api/run/request_album",
+     {"albums": [{"release_group": "rg-1", "preferred_release": None}], "later": True, "apply": False}),
+    ("remove_from_later", {"release_groups": ["rg-1"], "through": 2}, "/mcp-api/run/remove_from_later",
+     {"release_groups": ["rg-1"], "through": 2, "apply": False}),
+    ("remove_from_later", {"through": 1, "apply": True}, "/mcp-api/run/remove_from_later",
+     {"release_groups": [], "through": 1, "apply": True}),
 ])
 async def test_runs_post_the_contract_body(pipeline, fake, tool, args, path, body):
     async with Client(build_server(pipeline, lambda: TOM)) as client:

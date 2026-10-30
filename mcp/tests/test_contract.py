@@ -263,13 +263,22 @@ async def test_the_request_tools(pipeline_url):
             {"release_group": f"https://musicbrainz.org/release-group/{rg}"},
             {"release_group": rg2, "preferred_release": rel}]})).data)
         assert job["status"] == "done", job
-        assert job["args"] == {"albums": [{"release_group": rg2, "preferred_release": rel},
-                                          {"release_group": rg, "preferred_release": None}]}
-        assert job["argv"] == [["music-requests", "add", "--", f"{rg2}={rel}", rg]]
+        assert job["args"] == {"albums": [{"release_group": rg, "preferred_release": None},
+                                          {"release_group": rg2, "preferred_release": rel}], "later": False}
+        assert job["argv"] == [["music-requests", "add", "--", rg, f"{rg2}={rel}"]]
         applied = await finish(c, (await c.call_tool("request_album", {"albums": [
-            {"release_group": rg2, "preferred_release": rel}, {"release_group": rg}], "apply": True})).data)
+            {"release_group": rg}, {"release_group": rg2, "preferred_release": rel}], "apply": True})).data)
         assert applied["status"] == "done" and applied["argv"] == [
-            ["music-requests", "add", "--apply", "--", f"{rg2}={rel}", rg]], applied
+            ["music-requests", "add", "--apply", "--", rg, f"{rg2}={rel}"]], applied
+        later = await finish(c, (await c.call_tool("request_album", {"albums": [{"release_group": rg}],
+                                                                     "later": True})).data)
+        assert later["argv"] == [["music-requests", "add", "--later", "--", rg]], later
+        removed = await finish(c, (await c.call_tool("remove_from_later", {
+            "release_groups": [f"https://musicbrainz.org/release-group/{rg2}"], "through": 2})).data)
+        assert removed["status"] == "done" and removed["args"] == {"release_groups": [rg2], "through": 2}
+        assert removed["argv"] == [["music-later", "remove", "--through=2", "--", rg2]], removed
+        with pytest.raises(ToolError):
+            await c.call_tool("remove_from_later", {})
         for albums in ([{"release_group": "not an mbid"}],
                        [{"release_group": rg, "preferred_release": f"https://musicbrainz.org/release-group/{rg}"}]):
             with pytest.raises(ToolError):
@@ -277,9 +286,13 @@ async def test_the_request_tools(pipeline_url):
     async with Client(server(pipeline_url, PILOT)) as c:
         with pytest.raises(ToolError):
             await c.call_tool("request_album", {"albums": [{"release_group": rg}]})
-        # No music database here: the read says so.
+        with pytest.raises(ToolError):
+            await c.call_tool("remove_from_later", {"through": 1})
+        # No music database here: the reads say so.
         listed = (await c.call_tool("list_requests", {})).data
         assert listed["status"] == "unavailable" and listed["error"]
+        queue = (await c.call_tool("get_later", {})).data
+        assert queue["status"] == "unavailable" and queue["error"]
 
 
 async def test_bad_requests_reach_the_model_as_errors(pipeline_url):

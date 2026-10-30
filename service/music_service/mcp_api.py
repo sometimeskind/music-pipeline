@@ -319,6 +319,29 @@ def make_blueprint(jobs: mcp_jobs.JobQueue) -> Blueprint:
         return jsonify({"status": "ok", "filter": status, "total": len(found), "offset": offset,
                         "next_offset": next_offset, "requests": shown})
 
+    @bp.get("/later")
+    def get_later():
+        import psycopg  # noqa: PLC0415
+
+        from music_fetch import later_queue  # noqa: PLC0415
+        from music_fetch import state as statedb  # noqa: PLC0415
+
+        offset = _offset()
+        read("get_later")
+        try:
+            with statedb.session() as conn:
+                if conn is None:
+                    return jsonify({"status": "unavailable",
+                                    "error": "the state is not in the music database yet (music-state-import)"}), 503
+                found = later_queue.listing(conn, statedb.load_albums(conn))
+        except (statedb.Unavailable, psycopg.Error) as exc:
+            logger.warning("[MCP] reading the Later queue failed: %s", exc)
+            return jsonify({"status": "unavailable", "error": f"the music database: {type(exc).__name__}"}), 503
+        shown, next_offset = mcp_reads.page(found, offset)
+        return jsonify({"status": "ok", "total": len(found),
+                        "available": sum(1 for e in found if e["state"] == later_queue.AVAILABLE),
+                        "offset": offset, "next_offset": next_offset, "albums": shown})
+
     # ------------------------------------------------------------------
     # Jobs
     # ------------------------------------------------------------------
