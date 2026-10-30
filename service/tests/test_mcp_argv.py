@@ -27,6 +27,7 @@ CASES = {
     "audit_releases": [{"replaced_query": None}, {"replaced_query": ""}, {"replaced_query": "Artist — Album"},
                        {"replaced_query": "--apply"}],
     "audit_want_albums": [{}],
+    "search_releases": [{"query": "band the album", "limit": 5}, {"query": "--apply -x", "limit": 10}],
     "reset_album": [{"album": "0ETFjACtuP2ADo6LFhL6HN", "reimport": False},
                     {"album": "0ETFjACtuP2ADo6LFhL6HN", "reimport": True},
                     {"album": "-m-/le baptême", "reimport": False}],  # a local album's key

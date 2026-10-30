@@ -10,8 +10,15 @@ MusicBrainz.
 - A release group is the album in every edition: the original, its remasters and deluxe
   versions. Usenet decides which edition arrives. Request the album's own release group: not a
   single, EP, compilation or live album of the same songs, unless that is what is wanted.
-- The user gives it as an MBID or a musicbrainz.org release-group URL. Don't look a library
-  title up on MusicBrainz or the web yourself; ask the user for the link.
+- The user gives it as an MBID or a musicbrainz.org release-group URL, or `search_releases`
+  finds it from what the user typed (an artist and album, or MusicBrainz search syntax such as
+  `artist:"…" AND releasegroup:"…"`). The query goes to MusicBrainz as given: use the user's
+  words, never a title read from the library tools, and don't search the web for it either.
+- `search_releases` lists the best matches (5 by default, at most 10; each costs a second), each
+  with its type, year and releases: date, country, media, track count. `Flagged: live: not a
+  studio album` marks a live, remix, compilation, demo, DJ-mix or mixtape release group, and
+  `[flagged: bootleg]` (or `promotion`, `live`, `demo`, …) a release. Show the user the
+  candidates and let them pick; pass the pick's release group to `request_album`.
 - Several albums go in one call (at most 25). Each costs two or three MusicBrainz reads at one
   a second, so a long list outlasts the inline wait: poll `get_job`.
 

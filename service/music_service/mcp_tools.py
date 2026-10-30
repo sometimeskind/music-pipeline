@@ -384,6 +384,20 @@ def _request_argv(args: dict, apply: bool) -> list[list[str]]:
     return [_apply(["music-requests", "add", *(["--later"] if args["later"] else [])], apply, *specs)]
 
 
+def _search_releases(body: dict, _: Albums) -> dict:
+    from music_fetch.album_requests import QUERY_MAX, SEARCH_LIMIT, SEARCH_MAX  # noqa: PLC0415
+
+    _only(body, "query", "limit")
+    query = body.get("query")
+    query = " ".join(query.split()) if isinstance(query, str) else ""
+    if not query or len(query) > QUERY_MAX:
+        raise BadRequest(f"query must be 1 to {QUERY_MAX} characters")
+    limit = body.get("limit", SEARCH_LIMIT)
+    if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= SEARCH_MAX:
+        raise BadRequest(f"limit must be an integer from 1 to {SEARCH_MAX}")
+    return {"query": query, "limit": limit}
+
+
 def _remove_from_later(body: dict, _: Albums) -> dict:
     from music_fetch.album_requests import MAX_PER_CALL  # noqa: PLC0415
 
@@ -430,6 +444,9 @@ TOOLS: dict[str, Tool] = {t.name: t for t in [
          lambda a, _: [["music-audit-lengths", "--silence"] if a["silence"] else ["music-audit-lengths"]]),
     Tool("audit_releases", READ, _audit_releases, _audit_releases_argv),
     Tool("audit_want_albums", READ, _none, lambda a, _: [["music-audit-want-albums"]]),
+    # MusicBrainz only (homelab#2478): the query the caller typed, after "--".
+    Tool("search_releases", READ, _search_releases,
+         lambda a, _: [["music-requests", "search", f"--limit={a['limit']}", "--", a["query"]]]),
     Tool("reset_album", WRITE, _reset_album,
          lambda a, apply: [_apply(["music-album-reset", *(["--reimport"] if a["reimport"] else [])], apply,
                                   a["album"])],

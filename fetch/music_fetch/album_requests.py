@@ -20,6 +20,9 @@ Spotify IDs there is no spotdl fallback yet: a request Usenet misses stays
 
 ``music-requests`` (:mod:`music_fetch.album_requests_cli`) lists and adds
 requests; the Music MCP's ``request_album`` and ``list_requests`` run on it.
+Its ``search`` (:func:`search`, the MCP's ``search_releases``) finds the release
+group to request from a query the caller typed: MusicBrainz is searched with
+it as given, never with a title read from the library.
 """
 
 from __future__ import annotations
@@ -51,6 +54,18 @@ VIDEO_FORMATS = frozenset({"DVD-Video", "Blu-ray", "HD-DVD", "VHS", "VCD", "SVCD
 # Releases read per page when browsing a release group's (MusicBrainz's maximum), and pages at most.
 PAGE = 100
 MAX_PAGES = 5
+
+# Release groups a search lists by default, and at most: each costs a release browse.
+SEARCH_LIMIT, SEARCH_MAX = 5, 10
+# Releases a search lists per release group; the rest are counted.
+SEARCH_RELEASES = 15
+# A search query's longest.
+QUERY_MAX = 200
+# MusicBrainz secondary types a search flags (homelab#2478): never what a studio album's request wants.
+SECONDARY_FLAGS = {"Live": "live", "Remix": "remix", "Compilation": "compilation", "Demo": "demo",
+                   "DJ-mix": "dj-mix", "Mixtape/Street": "mixtape"}
+# Words in a release's disambiguation a search flags.
+_FLAG_WORDS = re.compile(r"\b(live|demo|remix(?:es)?|compilation)\b")
 
 _MBID = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
 
@@ -133,6 +148,50 @@ def _release_label(release: Mapping) -> str:
 
 def _live(release: Mapping) -> bool:
     return bool(re.search(r"\blive\b", (release.get("disambiguation") or "").lower()))
+
+
+def group_flags(group: Mapping) -> list[str]:
+    """The flags of a release group's secondary types, in :data:`SECONDARY_FLAGS` order."""
+    types = set(group.get("secondary-types") or ())
+    return [flag for name, flag in SECONDARY_FLAGS.items() if name in types]
+
+
+def release_flags(release: Mapping) -> list[str]:
+    """A release's own flags: its status when not official (bootleg,
+    promotion, pseudo-release), and the flag words in its disambiguation."""
+    flags = [] if release.get("status") in (OFFICIAL, None) else [str(release["status"]).lower()]
+    for word in _FLAG_WORDS.findall((release.get("disambiguation") or "").lower()):
+        flag = "remix" if word.startswith("remix") else word
+        if flag not in flags:
+            flags.append(flag)
+    return flags
+
+
+@dataclasses.dataclass
+class Found:
+    """One release group a search found, with its releases (earliest first)."""
+
+    group: dict
+    releases: list[dict]
+    flags: list[str]
+    release_count: int
+
+    @property
+    def id(self) -> str:
+        return self.group["id"]
+
+
+def search(get: Get, query: str, limit: int = SEARCH_LIMIT) -> list[Found]:
+    """The release groups MusicBrainz finds for *query* (its order: best
+    match first), at most *limit*, each with its releases read by a browse,
+    earliest first, and the flags of :func:`group_flags`.  *query* is sent as
+    given, so it must be what the caller typed."""
+    data = get("release-group", query=query, limit=str(limit)) or {}
+    out = []
+    for group in (data.get("release-groups") or [])[:limit]:
+        releases = sorted(_browse(get, group["id"]), key=lambda r: (r.get("date") or "9999", r["id"]))
+        out.append(Found(group, releases, group_flags(group), len(releases)))
+    return out
 
 
 def _browse(get: Get, group: str) -> list[dict]:

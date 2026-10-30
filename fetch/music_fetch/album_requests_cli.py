@@ -7,7 +7,9 @@ applying, so it prints nothing that changes between two runs of the same
 request.  The release groups follow ``--``: ``<release group>`` or
 ``<release group>=<preferred release>``, each an MBID or a musicbrainz.org URL.
 ``--later`` also appends them to the Later queue (:mod:`music_fetch.later_queue`),
-in the order given.
+in the order given.  ``search -- <query>`` lists the release groups
+MusicBrainz finds for a query the caller typed, with their releases, flagging
+demo, live, remix and compilation ones; it reads nothing but MusicBrainz.
 """
 
 from __future__ import annotations
@@ -139,6 +141,31 @@ def add_dry_run(conn: psycopg.Connection, rows: statedb.AlbumRows, specs: list[t
     return out, lines, queue
 
 
+def search_lines(found: list[req.Found], query: str) -> list[str]:
+    """``search``'s lines: each release group, its flags, then its releases (earliest first)."""
+    lines: list[str] = []
+    for n, hit in enumerate(found, 1):
+        group = hit.group
+        types = " + ".join([group.get("primary-type") or "?", *(group.get("secondary-types") or ())])
+        year = f"; {group['first-release-date'][:4]}" if group.get("first-release-date") else ""
+        lines.append(f"{n}. {req._credit(group.get('artist-credit'))} — {group.get('title', '')} "
+                     f"[release group {hit.id}; {types}{year}]"
+                     + (f" ({group['disambiguation']})" if group.get("disambiguation") else ""))
+        if hit.flags:
+            lines.append(f"  Flagged: {', '.join(hit.flags)}: not a studio album")
+        lines.append(f"  {hit.release_count} release(s)" + (":" if hit.releases else ""))
+        for release in hit.releases[:req.SEARCH_RELEASES]:
+            flags = req.release_flags(release)
+            lines.append(f"  - {release['id']}: {req._release_label(release)}, {req._track_count(release)} track(s)"
+                         + (f" [flagged: {', '.join(flags)}]" if flags else ""))
+        if hit.release_count > req.SEARCH_RELEASES:
+            lines.append(f"  … and {hit.release_count - req.SEARCH_RELEASES} more")
+    lines.append(f"{len(found)} release group(s) for {query!r}"
+                 + ("; request one with request_album (a release ID above as preferred_release only when the "
+                    "edition matters)" if found else ""))
+    return lines
+
+
 def _connect() -> psycopg.Connection:
     if not statedb.in_db():
         raise req.Refused("the state is not in the music database yet (music-state-import)")
@@ -166,10 +193,27 @@ def _parser() -> argparse.ArgumentParser:
     p.add_argument("--later", action="store_true", help="also append them to Later, in the order given")
     p.add_argument("specs", nargs="+", metavar="RELEASE_GROUP[=RELEASE]",
                    help="a release group MBID or URL, optionally =<preferred release MBID or URL>")
+    p = sub.add_parser("search", help="find release groups on MusicBrainz by a typed query")
+    p.add_argument("--limit", type=int, default=req.SEARCH_LIMIT,
+                   help=f"release groups to list, 1 to {req.SEARCH_MAX} (default {req.SEARCH_LIMIT})")
+    p.add_argument("query", nargs="+", help="what the user typed: an artist and album, or MusicBrainz search syntax")
     return parser
 
 
 def run(args: argparse.Namespace, get: req.Get | None = None) -> None:
+    if args.command == "search":
+        query = " ".join(" ".join(args.query).split())
+        if not query or len(query) > req.QUERY_MAX:
+            raise req.Refused(f"the query must be 1 to {req.QUERY_MAX} characters")
+        if not 1 <= args.limit <= req.SEARCH_MAX:
+            raise req.Refused(f"--limit must be 1 to {req.SEARCH_MAX}")
+        try:
+            found = req.search(get or req.musicbrainz(), query, args.limit)
+        except OSError as exc:  # urllib's errors: MusicBrainz down or refusing
+            raise req.Refused(f"searching MusicBrainz failed: {exc}") from exc
+        for line in search_lines(found, query):
+            logger.info("%s", line)
+        return
     specs = parse(args.specs) if args.command == "add" else []
     with _connect() as conn:
         rows = statedb.load_albums(conn)

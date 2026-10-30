@@ -284,6 +284,9 @@ async def test_the_request_tools(pipeline_url):
             with pytest.raises(ToolError):
                 await c.call_tool("request_album", {"albums": albums})
     async with Client(server(pipeline_url, PILOT)) as c:
+        found = await finish(c, (await c.call_tool("search_releases", {"query": "band the album", "limit": 3})).data)
+        assert found["status"] == "done" and found["argv"] == [
+            ["music-requests", "search", "--limit=3", "--", "band the album"]], found
         with pytest.raises(ToolError):
             await c.call_tool("request_album", {"albums": [{"release_group": rg}]})
         with pytest.raises(ToolError):

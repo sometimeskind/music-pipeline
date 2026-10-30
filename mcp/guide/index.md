@@ -37,7 +37,8 @@ purpose → `hold_album`; a `[MISS]` that never resolves → `pin_track` (see `c
 ## Requests
 
 `request_album` asks for whole albums by MusicBrainz release group (an MBID or
-musicbrainz.org URL the user gives), dry run first; `list_requests` shows each request and its
+musicbrainz.org URL the user gives, or one `search_releases` found from what the user typed),
+dry run first; `list_requests` shows each request and its
 album's status. A request that misses stays missing: it has no spotdl fallback yet. With
 `later` the albums also go on Later, whose `.m3u` is in arrival order; `get_later` shows it and
 `remove_from_later` takes albums off. See `requests`.

@@ -264,8 +264,11 @@ A write tool's **apply** takes Prefect's `pipeline` lock (and first `albums`, fo
 | `audit_lengths` | `{"silence": false}` | `music-audit-lengths [--silence]` |
 | `audit_releases` | `{"replaced_query": "…"}` (optional; `""` lists every only copy) | `music-album-audit-releases` / `… --replaced` / `… --replaced=QUERY` |
 | `audit_want_albums` | `{}` | `music-audit-want-albums` |
+| `search_releases` | `{"query": "…", "limit": 5}` | `music-requests search --limit=N -- QUERY` |
 
 `audit_releases --replaced` takes the CLI's query as given, ambiguity included: the CLI itself refuses more than one match.
+
+`search_releases` (homelab#2478) reads only MusicBrainz, never the library: it sends `query` (1 to 200 characters, whitespace collapsed) as given, in MusicBrainz's release-group search syntax, so it must be what the user typed, never a title read from the library. It lists the best `limit` matches (1 to 10, default 5), each release group with its primary and secondary types, first year and its releases, earliest first (at most 15 listed, the rest counted): date, country, media, disambiguation and track count. A release group whose secondary types include Live, Remix, Compilation, Demo, DJ-mix or Mixtape/Street is `Flagged: …: not a studio album`; a release not official, or whose disambiguation says live, demo, remix or compilation, is `[flagged: …]`. Each match costs a release browse at one MusicBrainz read a second, so a long list outlasts the inline wait. A query MusicBrainz rejects, or MusicBrainz down, fails the call (exit 1).
 
 ## Write tools (write tier)
 

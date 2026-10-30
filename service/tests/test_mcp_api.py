@@ -257,6 +257,17 @@ def test_request_album_normalises_the_release_groups(client, env):
                        headers=READ).status_code == 403
 
 
+def test_search_releases_passes_the_query_after_a_double_dash(client, env):
+    """homelab#2478 2c: a read; the query is never a flag."""
+    resp = client.post("/mcp-api/run/search_releases", headers=READ, json={"query": "  --apply  band \n album "})
+    assert resp.status_code == 200, resp.json
+    assert resp.json["args"] == {"query": "--apply band album", "limit": 5}
+    assert env["commands"].ran[-1] == ["music-requests", "search", "--limit=5", "--", "--apply band album"]
+    for body in ({}, {"query": ""}, {"query": "x" * 201}, {"query": "x", "limit": 0}, {"query": "x", "limit": 11},
+                 {"query": "x", "limit": True}, {"query": "x", "apply": True}, {"query": 3}):
+        assert client.post("/mcp-api/run/search_releases", json=body, headers=READ).status_code == 400, body
+
+
 def test_remove_from_later_normalises_its_release_groups(client, env):
     """homelab#2478 2b: release groups as MBIDs or URLs, deduplicated in order, and a position."""
     resp = client.post("/mcp-api/run/remove_from_later", headers=WRITE, json={

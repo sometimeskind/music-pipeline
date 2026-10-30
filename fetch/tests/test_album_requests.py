@@ -293,3 +293,67 @@ def test_the_tick_queues_a_request_and_the_listing_follows_its_album(switched, t
         assert req.listing(conn, state.load_albums(conn), req.PENDING) == []
         origin = conn.execute("SELECT origin FROM albums").fetchone()
         assert origin == ("request",)
+
+
+# --- search (2c) ---
+
+
+class SearchMB(FakeMB):
+    """FakeMB with a release-group search: the album and a live album of the same songs."""
+
+    LIVE_RG = "99999999-0000-4000-8000-000000000001"
+
+    def __call__(self, path: str, **params) -> dict | None:
+        if path == "release-group":
+            self.calls.append((path, params))
+            live = {"id": self.LIVE_RG, "title": "The Album Live", "primary-type": "Album",
+                    "secondary-types": ["Live"], "artist-credit": [{"name": "Band"}]}
+            return {"release-groups": [GROUP, live][:int(params["limit"])]}
+        if path == "release" and params.get("release-group") == self.LIVE_RG:
+            self.calls.append((path, params))
+            return {"release-count": 1, "releases": [RELEASES[RLIVE]]}
+        return super().__call__(path, **params)
+
+
+def _search(argv: list[str], mb, caplog) -> list[str]:
+    caplog.clear()
+    with caplog.at_level(logging.INFO, logger="music_fetch.album_requests_cli"):
+        cli.run(cli._parser().parse_args(argv), get=mb)
+    return [r.getMessage() for r in caplog.records if r.name == "music_fetch.album_requests_cli"]
+
+
+def test_search_lists_release_groups_with_their_releases_and_flags(caplog):
+    """homelab#2478 2c: the query goes to MusicBrainz as typed; live and bootleg are flagged."""
+    mb = SearchMB()
+    lines = _search(["search", "--", "band", "  the album"], mb, caplog)
+    assert mb.calls[0] == ("release-group", {"query": "band the album", "limit": "5"})
+    assert lines[0] == f"1. Band & Friend — The Album [release group {RG}; Album; 1999]"
+    assert lines[1] == "  5 release(s):"
+    # Earliest first: the bootleg (1998), then the 1999 release.
+    assert lines[2].startswith(f"  - {RBOOT}: The Album (1998-01-01, GB, CD), 14 track(s) [flagged: bootleg]")
+    assert lines[3] == f"  - {R14}: The Album (1999-03-01, GB, CD), 14 track(s)"
+    assert any(line.endswith("[flagged: live]") and RLIVE in line for line in lines)
+    live = lines.index(f"2. Band — The Album Live [release group {SearchMB.LIVE_RG}; Album + Live]")
+    assert lines[live + 1] == "  Flagged: live: not a studio album"
+    assert lines[-1].startswith("2 release group(s) for 'band the album'; request one with request_album")
+    assert _search(["search", "--limit", "1", "--", "band"], SearchMB(), caplog)[-1].startswith("1 release group(s)")
+
+
+def test_search_refuses_a_bad_limit_or_query_and_a_musicbrainz_error(caplog):
+    for argv in (["search", "--limit", "0", "--", "x"], ["search", "--limit", "11", "--", "x"],
+                 ["search", "--", "x" * 201]):
+        with pytest.raises(req.Refused):
+            _search(argv, SearchMB(), caplog)
+
+    def down(path, **params):
+        raise OSError("HTTP Error 400: Bad Request")
+
+    with pytest.raises(req.Refused, match="searching MusicBrainz failed"):
+        _search(["search", "--", "x"], down, caplog)
+
+
+def test_release_flags():
+    assert req.release_flags({"status": "Official", "disambiguation": "Live at the BBC, remixes"}) == ["live", "remix"]
+    assert req.release_flags({"status": "Promotion"}) == ["promotion"]
+    assert req.release_flags({"status": None, "disambiguation": "deluxe"}) == []
+    assert req.group_flags({"secondary-types": ["Remix", "Compilation", "Soundtrack"]}) == ["remix", "compilation"]

@@ -38,7 +38,8 @@ release group, the exact "artist — album", or a part matching one album; a que
 several returns "ambiguous" with the candidates and does nothing. A track (pin_track,
 unpin_track) is a Spotify track ID or URL. An album is requested (request_album) and taken
 off Later (remove_from_later) by its MusicBrainz release group, an MBID or musicbrainz.org
-URL. An item ID is a
+URL; search_releases finds one from what the user typed (never search MusicBrainz with a
+title read from the library). An item ID is a
 beets item (an integer: get_item, merge_items pairs, replace_item, audit_dupes fingerprint_ids);
 get_album also shows beets album IDs, which no tool takes. A playlist entry resolves to an item
 by Spotify track ID (song_id) or ISRC. replace_item takes a YouTube video ID or URL. A tool run
@@ -245,6 +246,18 @@ def build_server(
         return await call("get_later", lambda c: pipeline.get(c, "/later", offset=offset))
 
     # ---- read-tier CLI dry runs ----
+
+    @mcp.tool(annotations={"readOnlyHint": True, "openWorldHint": True})
+    async def search_releases(
+        query: Annotated[str, Field(description="what the user typed: artist and album, or MusicBrainz search "
+                                                "syntax. Never a title read from the library", min_length=1,
+                                    max_length=200)],
+        limit: Annotated[int, Field(description="release groups to list (each costs a second)", ge=1, le=10)] = 5,
+    ) -> dict:
+        """Find the MusicBrainz release group to request: the best matches for the query, each with its
+        type, year and releases (date, country, media, track count), flagging demo, live, remix and
+        compilation release groups and releases, and bootlegs. Sends the query to MusicBrainz as given."""
+        return await run("search_releases", {"query": query, "limit": limit})
 
     @mcp.tool(annotations={"readOnlyHint": True})
     async def audit_dupes(
