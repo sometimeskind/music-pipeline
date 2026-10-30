@@ -20,6 +20,7 @@ music-rollback-releases = "music_scan.rollback:main"
 music-album-audit-releases = "music_scan.release:audit_main"
 music-audit-want-albums = "music_scan.want_albums:main"
 music-album-rekey = "music_scan.restamp:main"
+music-cutover = "music_scan.cutover:main"
 
 [tool.setuptools.packages.find]
 where = ["."]

@@ -29,7 +29,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable, Iterator
 
-from music_fetch import album_requests, albums, state, store
+from music_fetch import album_requests, albums, later_queue, state, store
 from music_fetch.config import load_playlists
 from music_fetch.metrics import IngestMetrics
 from music_fetch.spotdl_ops import _load_failures, download_fallback, fetch_songs, sync_playlist
@@ -206,7 +206,9 @@ def reconcile_playlists() -> list[str]:
         store.remove(name)
         (SPOTDL_DIR / f"{name}.nosync").unlink(missing_ok=True)
         (SPOTDL_DIR / f"{name}.album").unlink(missing_ok=True)
-        (PLAYLISTS_DIR / f"{name}.m3u").unlink(missing_ok=True)
+        if name != later_queue.PLAYLIST or not state.in_db():
+            # later.m3u outlives the later playlist: the Later queue writes it (homelab#2478).
+            (PLAYLISTS_DIR / f"{name}.m3u").unlink(missing_ok=True)
         download_dir = SPOTDL_DIR / name
         if download_dir.exists():
             shutil.rmtree(download_dir)

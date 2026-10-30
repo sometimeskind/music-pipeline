@@ -99,8 +99,11 @@ OVERRIDES_IMPORTED = "overrides-imported"
 # Written by music-album-rekey --apply (homelab#2478) before it restamps the
 # items: from then on an album's key is its row id.  Deleted by --revert.
 ALBUM_KEYS = "album-keys"
+# Written by music-cutover --apply (homelab#2478 stage 3): the Later entries and
+# Keep requests it wrote, and each Later entry's place before, for --revert.
+CUTOVER = "later-keep-cutover"
 KV_NAMES = (MB_RELEASES, CANON_ISRC, CANON_PAGES, SPOTIFY_LIMIT, EMPTY_SLOTS, IMPORTED, OVERRIDES_IMPORTED,
-            ALBUM_KEYS)
+            ALBUM_KEYS, CUTOVER)
 
 
 # Present once music-state-import --apply has moved the state into the
