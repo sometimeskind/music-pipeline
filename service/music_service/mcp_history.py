@@ -19,7 +19,9 @@ logger = logging.getLogger(__name__)
 # Entries listed per list; every list carries its total.
 LISTED = 25
 # A grab SABnzbd hasn't finished, and an album spotdl hasn't filled, after this long is stuck.
-STALE_GRAB = timedelta(days=2)
+# A download takes minutes and a MusicBrainz outage's deferrals about 7 h, so 12 h names a
+# stalled SABnzbd (its URL grabber hung for 23 h, homelab#2516) in the next digest.
+STALE_GRAB = timedelta(hours=12)
 STALE_FALLBACK = timedelta(days=14)
 
 # The kinds whose events digest_summary lists with their item and data: the digest

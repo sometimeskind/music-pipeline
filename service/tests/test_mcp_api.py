@@ -520,7 +520,10 @@ def test_stuck_names_stale_grabs_and_fallbacks_only():
     now = datetime(2026, 10, 29, 5, tzinfo=timezone.utc)
     records = {
         "G1": {"artist": "A", "name": "Old grab", "status": "grabbed", "grabbed_at": "2026-10-26T00:00:00+00:00"},
-        "G2": {"artist": "A", "name": "New grab", "status": "grabbed", "grabbed_at": "2026-10-28T12:00:00+00:00"},
+        # 17 h: SABnzbd's URL grabber hung on its NZB fetch (homelab#2516).
+        "G3": {"artist": "A", "name": "Hung grab", "status": "grabbed", "grabbed_at": "2026-10-28T12:00:00+00:00"},
+        # 7 h: a MusicBrainz outage's import deferrals, still within their budget.
+        "G2": {"artist": "A", "name": "New grab", "status": "grabbed", "grabbed_at": "2026-10-28T22:00:00+00:00"},
         "F1": {"artist": "B", "name": "Old fallback", "status": "fallback", "fallback_at": "2026-10-01T00:00:00+00:00",
                "fallback_tracks": {"later": ["s1", "s2"]}},
         "F2": {"artist": "B", "name": "New fallback", "status": "fallback", "fallback_at": "2026-10-25T00:00:00+00:00"},
@@ -528,7 +531,7 @@ def test_stuck_names_stale_grabs_and_fallbacks_only():
         "W1": {"artist": "D", "name": "Wanted", "status": "wanted"},
     }
     out = mcp_history.stuck(records, now)
-    assert [a["key"] for a in out["grabbed"]["listed"]] == ["G1"]
+    assert [a["key"] for a in out["grabbed"]["listed"]] == ["G3", "G1"]
     assert out["fallback"]["listed"] == [{"key": "F1", "album": "B — Old fallback", "origin": "album",
                                           "fallback_at": "2026-10-01T00:00:00+00:00", "tracks": 2}]
     assert out["missing"]["listed"][0]["origin"] == "wants"
