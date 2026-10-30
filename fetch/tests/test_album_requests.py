@@ -206,7 +206,7 @@ def test_a_missing_request_falls_back_from_its_musicbrainz_tracklist_then_fills(
         reads.append(r["tracklist_release"])
         return req.release_songs(FakeMB(), r)
 
-    albums.fallbacks(s, lambda pl, ts: ts, None, songs, lambda key: held)
+    albums.fallbacks(s, lambda pl, ts: ts, None, songs, lambda key, record: held)
     assert record["status"] == albums.FALLBACK and record["fallback_from"] == albums.MISSING
     left = [recording(1, i) for i in range(1, 13) if i != 2]
     assert record["fallback_tracks"] == {req.SOURCE: left}
@@ -214,9 +214,19 @@ def test_a_missing_request_falls_back_from_its_musicbrainz_tracklist_then_fills(
     assert albums.fallback_queue(s) == 11
 
     held |= set(left)  # downloaded, verified, imported and stamped
-    albums.fallbacks(s, lambda pl, ts: ts, None, songs, lambda key: held)
+    albums.fallbacks(s, lambda pl, ts: ts, None, songs, lambda key, record: held)
     assert record["status"] == albums.FILLED and record["fallback_tracks"] == {}
     assert reads == [R12]  # read once
+
+
+def test_a_former_playlist_albums_spotify_tracklist_gives_way_to_musicbrainz():
+    """Stage 3: a keep album in fallback becomes a request's; its Spotify songs can't be verified."""
+    record = _missing_request(albums.FALLBACK, fallback_from=albums.MISSING,
+                              album_songs=[{"song_id": "sp1-1", "url": "https://open.spotify.com/track/sp1-1"}])
+    s = State(albums={RG: record})
+    albums.fallbacks(s, lambda pl, ts: ts, None, lambda r: req.release_songs(FakeMB(), r),
+                     lambda key, r: {recording(1, i) for i in range(2, 13)})
+    assert record["fallback_tracks"] == {req.SOURCE: [recording(1, 1)]}
 
 
 def test_a_request_is_not_filled_before_its_tracklist_is_read():
@@ -226,7 +236,7 @@ def test_a_request_is_not_filled_before_its_tracklist_is_read():
     def broken(r):
         raise OSError("MusicBrainz 503")
 
-    albums.fallbacks(s, lambda pl, ts: ts, None, broken, lambda key: set())
+    albums.fallbacks(s, lambda pl, ts: ts, None, broken, lambda key, record: set())
     assert record["status"] == albums.FALLBACK and record["fallback_tracks"] == {}
     assert "album_songs" not in record
 
@@ -236,7 +246,7 @@ def test_a_request_a_playlist_lists_falls_back_as_the_playlists_album():
               "playlists": {"later": [["Song 1", "Band", "sp1-1", None, 1, 1]]}}
     s = State(albums={RG: record})
     asked = []
-    albums.fallbacks(s, lambda pl, ts: ts, lambda album_id: [], lambda r: asked.append(r) or [], lambda key: set())
+    albums.fallbacks(s, lambda pl, ts: ts, lambda album_id: [], lambda r: asked.append(r) or [], lambda key, record: set())
     assert record["fallback_tracks"] == {"later": ["sp1-1"]} and asked == []
 
 

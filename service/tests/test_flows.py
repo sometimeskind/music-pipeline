@@ -649,7 +649,9 @@ def test_album_request_recordings_reads_the_stamped_items_once():
     lib = MagicMock()
     lib.all_items.return_value = [item(album_record="7", fallback_recording="r1", mb_trackid="r1"),
                                   item(album_record="7", mb_trackid="r2"), item(album_record="8", mb_trackid="r3"),
-                                  item(mb_trackid="r4")]
+                                  item(mb_trackid="r4"), item(spotify_album_id="sp1", mb_trackid="r5")]
     recordings = flows._album_request_recordings(lib)
-    assert recordings("7") == {"r1", "r2"} and recordings("9") == set()
+    assert recordings("7", {}) == {"r1", "r2"} and recordings("9", {}) == set()
+    # An album playlist's copies, on its Spotify album, before the cutover made it a request's.
+    assert recordings("9", {"spotify_album_ids": ["sp1"]}) == {"r5"}
     lib.all_items.assert_called_once()

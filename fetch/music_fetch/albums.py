@@ -1120,9 +1120,10 @@ AlbumSongs = Callable[[str], list[dict]]
 # request_songs(record): a request's tracklist release as spotdl songs, from
 # MusicBrainz (album_requests.release_songs).
 RequestSongs = Callable[[dict], list[dict]]
-# recordings(key): the MusicBrainz recordings of the library items stamped with
-# album record *key* (``album_record``): the request tracks it holds.
-Recordings = Callable[[str], set[str]]
+# recordings(key, record): the MusicBrainz recordings of the library items stamped
+# with album record *key* (``album_record``), or on one of its Spotify albums: the
+# request tracks it holds.
+Recordings = Callable[[str, dict], set[str]]
 
 
 def _refs(key: str, record: dict) -> tuple[str, ...]:
@@ -1157,9 +1158,14 @@ def _fallback_tracks(record: dict, missing: Missing) -> dict[str, list[str]]:
 def _request_tracks(key: str, record: dict, recordings: Recordings) -> dict[str, list[str]]:
     """The recordings of a request's tracks no item stamped with its key holds,
     under :data:`album_requests.SOURCE`, once its songs are read (homelab#2478)."""
-    held = recordings(key)
+    held = recordings(key, record)
     ids = list(dict.fromkeys(s["song_id"] for s in record.get("album_songs") or () if s["song_id"] not in held))
     return {album_requests.SOURCE: ids} if ids else {}
+
+
+def _mb_songs(record: dict) -> bool:
+    """Whether the record's ``album_songs`` are a request's MusicBrainz songs, not a Spotify tracklist."""
+    return bool(album_requests.url_recording(next(iter(record.get("album_songs") or ()), {}).get("url")))
 
 
 def _queue_fallback(key: str, record: dict, tracks: dict[str, list[str]], source: str) -> None:
@@ -1213,6 +1219,10 @@ def fallbacks(state: State, missing: Missing, album_songs: AlbumSongs | None = N
         if _request_fallback(record):
             if request_songs is None or recordings is None or record.get("status") not in (MISSING, FAILED, FALLBACK):
                 continue
+            if record.get("album_songs") and not _mb_songs(record):
+                # A Spotify tracklist from when a playlist listed it (the stage 3 cutover): a
+                # request's fallback is built from MusicBrainz.
+                record.pop("album_songs")
             if "album_songs" not in record and reads < TRACKLISTS_PER_TICK:
                 reads += 1
                 try:
@@ -1232,7 +1242,7 @@ def fallbacks(state: State, missing: Missing, album_songs: AlbumSongs | None = N
         status = record.get("status")
         if status not in (MISSING, FAILED, FALLBACK):
             continue
-        if album_requests.url_recording(next(iter(record.get("album_songs") or ()), {}).get("url")):
+        if _mb_songs(record):
             # A request's MusicBrainz songs, from before a playlist listed the album: its
             # fallback is the playlist's now, from the Spotify tracklist.
             record.pop("album_songs")
