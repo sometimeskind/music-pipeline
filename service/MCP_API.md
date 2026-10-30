@@ -154,7 +154,7 @@ What happened since `since` (default: 24 hours ago), and the library issues stan
 - `history.events` holds each kind's latest 25 in the window, oldest first; `counts` every kind's total. A `merge`, `moved` or `local` event also carries its `item_id` and `data`, which the digest judges: a merge or a move between unrelated recordings or albums, an extra left to `music-audit-dupes`. With the event store unavailable, `history` is `{"error": "…"}` and the rest still answers.
 - `issues.stuck`: `failed` and `missing` albums (a feed's, which never fall back), grabs SABnzbd hasn't finished in 2 days, and fallbacks spotdl hasn't filled in 14.
 - `issues.mixed` is the last album tick's; `only_copies` are the files in `quarantine/replaced/` holding a recording the library doesn't; `path_clashes` the items canon tagged in place (`canon_clash`); `empty_slots` the last scan's (`inbox/spotdl/.empty-slots.json`), playlists with none left out; `rejects` the length guard's files still in `quarantine/rejected/`.
-- `requests` (homelab#2478) are the requests that ended `missing` or `failed`; none exist yet, so both are empty.
+- `requests` (homelab#2478) are the album requests whose album ended `missing` or `failed`, each as `list_requests` shows it. A request that misses stays `missing` until the MusicBrainz-built fallback: it never goes to spotdl. Both are empty while the JSON files are the state; with the database down they are empty and an `error` says so.
 
 ## Overrides (any tier, homelab#2484)
 
@@ -173,6 +173,22 @@ The search overrides, holds and track pins in the `music` database (`music_fetch
 ```
 
 Before `music-overrides import` has run, or with the database down: `503 {"status": "unavailable", "error": "…"}`.
+
+## Requests (any tier, homelab#2478)
+
+### `GET /mcp-api/requests[?status=S][&offset=N]` (`list_requests`)
+
+The album requests in the `music` database (`music_fetch.album_requests`), oldest first. A request names a MusicBrainz release group; `album` is the album row that has it (its key, status and origin), or `null` while the next album tick hasn't queued it, when `status` is `pending`. Otherwise `status` is the album's (`wanted`, `dry-run`, `grabbed`, `missing`, `have`, `imported`, `failed`, `fallback`, `filled`); `?status=` keeps only those. `tracklist_release` is the release the tracklist was read from: the `preferred_release`, else one with the release group's most common track count.
+
+```json
+{"status": "ok", "filter": null, "total": 1, "offset": 0, "next_offset": null,
+ "requests": [{"release_group": "6e0a…", "artist": "…", "name": "…", "preferred_release": null,
+               "tracklist_release": "b84e…", "tracks": 10, "requested_by": "sub-…", "requested_at": "2026-10-30T09:00:00Z",
+               "status": "missing",
+               "album": {"key": "2120", "status": "missing", "origin": "request", "searched_at": "…", "query": "…"}}]}
+```
+
+Before `music-state-import` has run, or with the database down: `503 {"status": "unavailable", "error": "…"}`.
 
 ## Jobs
 
@@ -251,6 +267,7 @@ Every write tool's body takes `"apply": false` (the default) or `true`.
 | `release_album` | `{"album": "…"}` | `music-overrides release -- <key>` | none |
 | `pin_track` | `{"track": "…", "url": "…", "label": "", "reason": ""}` | `music-overrides pin [--label=L] [--reason=R] -- <track id> <url>` | none |
 | `unpin_track` | `{"track": "…"}` | `music-overrides unpin -- <track id>` | none |
+| `request_album` | `{"albums": [{"release_group": "…", "preferred_release": null}, …]}` | `music-requests add -- <release group>[=<release>]…` | none |
 
 Free-text values never parse as flags: positional values follow `--`, and the `--replaced` query is passed as `--replaced=QUERY`. The argparse test checks that a dry run's argv never parses with `--apply`, whatever its arguments hold.
 
@@ -259,6 +276,8 @@ Validation (400): `reset_album` needs a non-empty `query`, which must name exact
 `replace_item` accepts only a YouTube video ID, or a youtube.com / music.youtube.com / youtu.be URL reduced to one (`music_fetch.ids.youtube_url`, homelab#2411), and passes the canonical watch URL; anything else is a 400. An album query or a requeue ID may be an `open.spotify.com/album` URL, reduced to its ID as the CLIs do (`music_fetch.ids.spotify_key`); a Spotify URL of another kind is a 400.
 
 The override tools (homelab#2484) write rows of their own tables, which the tick and the nightly read at their start, so they take no lock. `album` is an album query as for `reset_album` (resolved to the key; ambiguous and not found as above). `words` are normalised as the tick searches (`usenet.normalise`) and must keep a readable word; `reason` and `label` are whitespace-collapsed, at most 500 characters, and `hold_album` needs a reason. `track` is a Spotify track ID or `open.spotify.com/track` URL, reduced to the ID; `url` must be a YouTube or YouTube Music video (an ID, or a `youtube.com`, `music.youtube.com` or `youtu.be` URL), reduced to its canonical watch URL on its own host; another site or a playlist is a 400, since the URL reaches yt-dlp. Each apply records an `override_set` or `override_cleared` event with the caller, in the same transaction as the row. Until `music-overrides import --apply` has run, every write fails (exit 1): the tick still reads the ConfigMap's files.
+
+`request_album` (homelab#2478) takes 1 to 25 albums, each a `release_group` and an optional `preferred_release`: an MBID or a `musicbrainz.org/release-group/…` (`/release/…`) URL, reduced to the MBID; the list is deduplicated and sorted by release group, and one release group given twice with different preferred releases is a 400. The dry run reads each tracklist from MusicBrainz (two or three reads each, at one a second, so a long list outlasts the inline wait) and says what the next album tick does: a new album row, or the row that has the release group taken over (a wants or library row's wanted tracks become the whole album) or kept when it leaves its playlists. A release group requested already is listed and left as it is. A release group or release MusicBrainz doesn't have, a preferred release of another release group, or no official release with tracks fails the call (exit 1), and nothing is written. The apply adds every request, each with its `album_requested` event and the caller, in one transaction. The request's own table is read by the tick at its start, so it takes no lock.
 
 `merge_items` runs its pairs in order and stops at the first that fails; each pair is its own CLI run, so the pairs before it stay merged. Within a pair, beets commits each store and removal on its own (no transaction spans the merge), so a crash mid-pair can leave the keeper with the loser's IDs and the loser still in the library: rerun the pair.
 

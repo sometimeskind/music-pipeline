@@ -225,6 +225,37 @@ def test_requeue_normalises_since_to_utc(client, env):
     assert client.post("/mcp-api/run/requeue_albums", json={}, headers=WRITE).status_code == 400
 
 
+RG = "6e0a6c2a-2d38-3d3c-9d38-4f0c2b5b7a11"
+RG2 = "0b4ed3a1-7d3c-4d9e-9b8e-0c5c6a8d2f10"
+REL = "11111111-1111-4111-8111-111111111111"
+
+
+def test_request_album_normalises_the_release_groups(client, env):
+    """homelab#2478: MBIDs or musicbrainz.org URLs, deduplicated and sorted, each with its preferred release."""
+    resp = client.post("/mcp-api/run/request_album", headers=WRITE, json={"albums": [
+        {"release_group": RG}, {"release_group": f"https://musicbrainz.org/release-group/{RG2.upper()}",
+                                "preferred_release": f"https://musicbrainz.org/release/{REL}"},
+        {"release_group": RG, "preferred_release": ""}]})
+    assert resp.status_code == 200, resp.json
+    assert resp.json["args"] == {"albums": [{"release_group": RG2, "preferred_release": REL},
+                                            {"release_group": RG, "preferred_release": None}]}
+    assert env["commands"].ran[-1] == ["music-requests", "add", "--", f"{RG2}={REL}", RG]
+    for albums in ([], [{"release_group": "abc"}], [{"release_group": RG, "surprise": 1}],
+                   [{"release_group": RG}, {"release_group": RG, "preferred_release": REL}],
+                   [{"release_group": RG, "preferred_release": f"https://musicbrainz.org/release-group/{RG}"}],
+                   [{"release_group": f"{i:08d}-2d38-3d3c-9d38-4f0c2b5b7a11"} for i in range(26)], ["x"]):
+        assert client.post("/mcp-api/run/request_album", json={"albums": albums},
+                           headers=WRITE).status_code == 400, albums
+    assert client.post("/mcp-api/run/request_album", json={"albums": [{"release_group": RG}]},
+                       headers=READ).status_code == 403
+
+
+def test_list_requests_needs_the_state_in_the_database(client):
+    resp = client.get("/mcp-api/requests", headers=READ)
+    assert resp.status_code == 503 and resp.get_json()["status"] == "unavailable"
+    assert client.get("/mcp-api/requests?status=lost", headers=READ).status_code == 400
+
+
 def test_bad_arguments_are_400(client):
     assert client.post("/mcp-api/run/canon_albums", json={"mb_budget": -1}, headers=WRITE).status_code == 400
     assert client.post("/mcp-api/run/embed_covers", json={"surprise": 1}, headers=WRITE).status_code == 400

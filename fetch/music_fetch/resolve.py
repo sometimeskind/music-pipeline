@@ -28,7 +28,7 @@ of them is grabbed or importing, none of them merges and the newcomers stay
 the release group, else the one furthest along (:data:`STATUS_RANK`).  It
 keeps its own fields, and takes the others' Spotify IDs, playlists' tracks
 and blocklisted releases, the higher attempt count and the strongest origin
-(an album playlist's, then wants, then library).
+(an album playlist's, then a request's, then wants, then library).
 
 The pass is idempotent: run it again after the cache or the library learns
 more, and it resolves and merges what it now can (``music-album-resolve``).
@@ -52,7 +52,7 @@ IMPORT, CACHE, LIBRARY = "import", "cache", "library"
 STATUS_RANK = {"imported": 0, "filled": 0, "have": 0, "fallback": 1, "failed": 2, "missing": 3,
                "dry-run": 4, "wanted": 5, "grabbed": 6}
 # A record's origin, strongest first; absent means an album playlist's.
-ORIGIN_RANK = {state.ALBUM: 0, "wants": 1, "library": 2}
+ORIGIN_RANK = {state.ALBUM: 0, "request": 1, "wants": 2, "library": 3}
 # beets' library, read for the library evidence (music_scan.library.LIBRARY_DB).
 LIBRARY_DB = Path("/root/.config/beets/library.db")
 # A grabbed record's import in progress (albums.IMPORT_FIELDS, not imported here: albums imports state).

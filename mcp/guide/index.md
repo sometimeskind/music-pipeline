@@ -12,6 +12,7 @@ ts-egress, Prowlarr, cookies) stays in homelab's `docs/media/` runbooks.
 | `album-mode` | How an album moves from `wanted` to `imported`, what each log tag means, and what to do when a stage fails |
 | `workflow` | Dry run → apply, jobs and paging, the read and write tiers, and the operations that stay on the operator's workstation |
 | `verify` | When a fix shows: tick and scan timing, and the line or metric that should change |
+| `requests` | Asking for an album by MusicBrainz release group: choosing the release group and a preferred release, and what happens after |
 
 ## History
 
@@ -32,6 +33,13 @@ search can't find), each with its reason and who set it when. `set_search_overri
 run. There is no git history behind them: each change is an event in `album_history`, and a
 bad one is undone the same way. Routes: `[NOWORDS]` → `set_search_override`; an album mixed on
 purpose → `hold_album`; a `[MISS]` that never resolves → `pin_track` (see `classify`).
+
+## Requests
+
+`request_album` asks for whole albums by MusicBrainz release group (an MBID or
+musicbrainz.org URL the user gives), dry run first; `list_requests` shows each request and its
+album's status. A request that misses stays missing: it has no spotdl fallback yet. See
+`requests`.
 
 ## The two invariants
 

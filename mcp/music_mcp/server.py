@@ -13,7 +13,7 @@ from typing import Annotated, Any, Literal
 
 from fastmcp import FastMCP
 from fastmcp.exceptions import ToolError
-from pydantic import Field
+from pydantic import BaseModel, Field
 from starlette.requests import Request
 from starlette.responses import PlainTextResponse
 
@@ -36,7 +36,8 @@ Spotify ID itself. An album query (find_albums, get_album,
 reset_album, the override and hold tools) is the key, any of the album's Spotify IDs, its
 release group, the exact "artist — album", or a part matching one album; a query matching
 several returns "ambiguous" with the candidates and does nothing. A track (pin_track,
-unpin_track) is a Spotify track ID or URL. An item ID is a
+unpin_track) is a Spotify track ID or URL. An album is requested (request_album) by its
+MusicBrainz release group, an MBID or musicbrainz.org URL. An item ID is a
 beets item (an integer: get_item, merge_items pairs, replace_item, audit_dupes fingerprint_ids);
 get_album also shows beets album IDs, which no tool takes. A playlist entry resolves to an item
 by Spotify track ID (song_id) or ISRC. replace_item takes a YouTube video ID or URL. A tool run
@@ -44,7 +45,7 @@ that outlasts the inline wait returns a job_id: poll get_job.
 
 Tiers. Read tools anyone signed in may use. Write tools (reset_album, requeue_albums,
 merge_items, replace_item, embed_covers, canon_albums, set_search_override,
-clear_search_override, hold_album, release_album, pin_track, unpin_track) are a dry run unless
+clear_search_override, hold_album, release_album, pin_track, unpin_track, request_album) are a dry run unless
 apply=true, and
 apply is accepted only after a dry run with the same arguments in the last 15 minutes whose
 output still matches: show the user the dry run and apply only once they agree. If an apply
@@ -79,6 +80,18 @@ AlbumQuery = Annotated[
 ]
 Reason = Annotated[str, Field(description="why, kept with it and shown by list_overrides", max_length=500)]
 Track = Annotated[str, Field(description="a Spotify track ID or open.spotify.com track URL", min_length=1)]
+RequestStatus = Literal["pending", "wanted", "dry-run", "grabbed", "missing", "have", "imported", "failed",
+                        "fallback", "filled"]
+
+
+class AlbumRequest(BaseModel):
+    release_group: Annotated[str, Field(description="the MusicBrainz release group: an MBID or "
+                                                    "musicbrainz.org/release-group URL", min_length=1)]
+    preferred_release: Annotated[
+        str | None,
+        Field(description="a release of that group whose tracklist is the album's, only when the edition "
+                          "matters; never a demo, live or remix release. Default: the most common tracklist"),
+    ] = None
 
 
 def build_server(
@@ -208,6 +221,19 @@ def build_server(
         and who set it when. A detached one lost its album (it left its playlists): it returns
         to the album when the album does. Each change is in album_history too."""
         return await call("list_overrides", lambda c: pipeline.get(c, "/overrides", kind=kind, offset=offset))
+
+    @mcp.tool(annotations={"readOnlyHint": True})
+    async def list_requests(
+        status: Annotated[
+            RequestStatus | None,
+            Field(description="only the requests whose album has this status; pending: not queued by the "
+                              "album tick yet. Default: all"),
+        ] = None,
+        offset: Offset = 0,
+    ) -> dict:
+        """The album requests, oldest first: the release group, who asked when, and the album's status
+        (missing or failed ones stay so: a request has no spotdl fallback yet)."""
+        return await call("list_requests", lambda c: pipeline.get(c, "/requests", status=status, offset=offset))
 
     # ---- read-tier CLI dry runs ----
 
@@ -361,6 +387,20 @@ def build_server(
     async def unpin_track(track: Track, apply: Apply = False) -> dict:
         """Remove a track's pin."""
         return await run("unpin_track", {"track": track, "apply": apply}, write=True)
+
+    # ---- album requests: dry run, then apply ----
+
+    @mcp.tool(annotations={"destructiveHint": False})
+    async def request_album(
+        albums: Annotated[list[AlbumRequest], Field(description="1 to 25 albums", min_length=1, max_length=25)],
+        apply: Apply = False,
+    ) -> dict:
+        """Ask for whole albums by MusicBrainz release group: the album tick searches Usenet for each
+        and imports it whole. The dry run reads each tracklist from MusicBrainz and says what the
+        next tick does (a new album, or the album row that has the release group already). A
+        request that misses stays missing: list_requests shows it."""
+        body = {"albums": [a.model_dump() for a in albums], "apply": apply}
+        return await run("request_album", body, write=True)
 
     # ---- triggers: no dry run, a no-op if already pending ----
 

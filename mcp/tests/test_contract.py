@@ -252,6 +252,34 @@ async def test_the_override_tools(pipeline_url):
         assert listed["status"] == "unavailable" and listed["error"]
 
 
+async def test_the_request_tools(pipeline_url):
+    """homelab#2478: request_album's release groups normalise as music-requests takes them."""
+    rg, rg2, rel = ("6e0a6c2a-2d38-3d3c-9d38-4f0c2b5b7a11", "0b4ed3a1-7d3c-4d9e-9b8e-0c5c6a8d2f10",
+                    "11111111-1111-4111-8111-111111111111")
+    async with Client(server(pipeline_url, TOM)) as c:
+        job = await finish(c, (await c.call_tool("request_album", {"albums": [
+            {"release_group": f"https://musicbrainz.org/release-group/{rg}"},
+            {"release_group": rg2, "preferred_release": rel}]})).data)
+        assert job["status"] == "done", job
+        assert job["args"] == {"albums": [{"release_group": rg2, "preferred_release": rel},
+                                          {"release_group": rg, "preferred_release": None}]}
+        assert job["argv"] == [["music-requests", "add", "--", f"{rg2}={rel}", rg]]
+        applied = await finish(c, (await c.call_tool("request_album", {"albums": [
+            {"release_group": rg2, "preferred_release": rel}, {"release_group": rg}], "apply": True})).data)
+        assert applied["status"] == "done" and applied["argv"] == [
+            ["music-requests", "add", "--apply", "--", f"{rg2}={rel}", rg]], applied
+        for albums in ([{"release_group": "not an mbid"}],
+                       [{"release_group": rg, "preferred_release": f"https://musicbrainz.org/release-group/{rg}"}]):
+            with pytest.raises(ToolError):
+                await c.call_tool("request_album", {"albums": albums})
+    async with Client(server(pipeline_url, PILOT)) as c:
+        with pytest.raises(ToolError):
+            await c.call_tool("request_album", {"albums": [{"release_group": rg}]})
+        # No music database here: the read says so.
+        listed = (await c.call_tool("list_requests", {})).data
+        assert listed["status"] == "unavailable" and listed["error"]
+
+
 async def test_bad_requests_reach_the_model_as_errors(pipeline_url):
     async with Client(server(pipeline_url, TOM)) as c:
         with pytest.raises(ToolError):

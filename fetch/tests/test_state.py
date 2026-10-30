@@ -103,7 +103,7 @@ def test_checks_agree_with_album_mode(pg_url):
         assert _check_values(conn, "albums_status_check") == {
             albums.WANTED, albums.DRY_RUN, albums.GRABBED, albums.MISSING, albums.HAVE, albums.IMPORTED,
             albums.FAILED, albums.FALLBACK, albums.FILLED}
-        assert _check_values(conn, "albums_origin_check") == {albums.ALBUM, albums.WANTS, albums.LIBRARY}
+        assert _check_values(conn, "albums_origin_check") == {albums.ALBUM, albums.WANTS, albums.LIBRARY, albums.REQUEST}
         assert _check_values(conn, "albums_unresolved_check") == set(state.UNRESOLVED)
 
 
