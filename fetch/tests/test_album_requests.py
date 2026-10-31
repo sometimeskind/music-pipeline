@@ -279,6 +279,106 @@ def test_release_songs_are_whole_spotdl_songs_with_no_spotify_id():
                                                        "album_id", "album_artist"))
 
 
+# --- a joint credit: the search tries the first credited artist alone (homelab#2533) ---
+
+JOINT = [{"name": "Band", "joinphrase": " & "}, {"name": "Friend", "joinphrase": ""}]
+
+
+def _joint_release(on_tracks: bool) -> dict:
+    """R12 credited to Band & Friend: on every track, or only on the release."""
+    release = {**RELEASES[R12], "artist-credit": JOINT, "media": [_medium(12)]}
+    if on_tracks:
+        for track in release["media"][0]["tracks"]:
+            track["artist-credit"] = JOINT
+    return release
+
+
+def _searcher(finds: list[str] | None):
+    """A spotdl ``Downloader.search`` stand-in that finds a song only when
+    searched by exactly *finds*, recording each search's artists and ISRC."""
+    calls: list[tuple[list[str], str | None]] = []
+
+    def search(downloader, song):
+        calls.append((list(song.artists), song.isrc))
+        if song.artists == finds:
+            return "https://music.youtube.com/watch?v=found"
+        raise LookupError(f"No results found for song: {song.display_name}")
+
+    return search, calls
+
+
+@pytest.mark.parametrize("on_tracks", [True, False])
+def test_a_joint_credit_tracklist_is_searched_by_its_first_artist_alone(on_tracks):
+    from spotdl.types.song import Song
+
+    from music_fetch import spotdl_ops
+
+    songs = req.release_songs(FakeMB(releases={R12: _joint_release(on_tracks)}), _missing_request())
+    assert {tuple(s["artists"]) for s in songs} == {("Band", "Friend")}
+    song = Song.from_dict(songs[0])
+    search, calls = _searcher(["Band"])
+
+    assert spotdl_ops._widened_search(search)(None, song) == "https://music.youtube.com/watch?v=found"
+    # The full credit with its ISRC first, as spotdl searches; then the first artist, the ISRC already tried.
+    assert calls == [(["Band", "Friend"], "GBAAA001001"), (["Band"], None)]
+    assert song.artists == ["Band", "Friend"] and song.isrc == "GBAAA001001"  # the song keeps its credit
+
+
+def test_a_joint_credit_found_by_its_full_credit_is_searched_once():
+    from spotdl.types.song import Song
+
+    from music_fetch import spotdl_ops
+
+    song = Song.from_dict(req.release_songs(FakeMB(releases={R12: _joint_release(True)}), _missing_request())[0])
+    search, calls = _searcher(["Band", "Friend"])
+    assert spotdl_ops._widened_search(search)(None, song) == "https://music.youtube.com/watch?v=found"
+    assert len(calls) == 1
+
+
+def test_a_joint_credit_neither_search_finds_keeps_the_first_error():
+    from spotdl.types.song import Song
+
+    from music_fetch import spotdl_ops
+
+    song = Song.from_dict(req.release_songs(FakeMB(releases={R12: _joint_release(True)}), _missing_request())[0])
+    search, calls = _searcher(None)
+    with pytest.raises(LookupError, match="Band - Song 1"):
+        spotdl_ops._widened_search(search)(None, song)
+    assert [artists for artists, _ in calls] == [["Band", "Friend"], ["Band"]]
+
+
+@pytest.mark.parametrize("url,artists", [
+    (f"https://musicbrainz.org/recording/{recording(1, 1)}", ["Band"]),  # one credited artist
+    ("https://open.spotify.com/track/sp1-1", ["Band", "Friend"]),  # a Spotify song keeps spotdl's search
+])
+def test_only_a_musicbrainz_built_joint_credit_is_searched_again(url, artists):
+    from spotdl.types.song import Song
+
+    from music_fetch import spotdl_ops
+
+    first = req.release_songs(FakeMB(), _missing_request())[0]
+    song = Song.from_dict({**first, "url": url, "artists": artists, "artist": artists[0]})
+    search, calls = _searcher(["Band"] if len(artists) > 1 else ["Nobody"])
+    with pytest.raises(LookupError):
+        spotdl_ops._widened_search(search)(None, song)
+    assert len(calls) == 1
+
+
+def test_the_widened_search_is_installed_on_spotdls_downloader_once():
+    from spotdl.download.downloader import Downloader
+
+    from music_fetch import spotdl_ops
+
+    original = Downloader.search
+    try:
+        spotdl_ops._install_first_artist_search()
+        widened = Downloader.search
+        spotdl_ops._install_first_artist_search()
+        assert Downloader.search is widened and widened is not original
+    finally:
+        Downloader.search = original
+
+
 def test_release_songs_take_the_cover_art_archive_front():
     releases = {R12: {**RELEASES[R12], "cover-art-archive": {"front": True}}}
     [first, *_] = req.release_songs(FakeMB(releases=releases), _missing_request())

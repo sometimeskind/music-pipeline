@@ -255,6 +255,58 @@ def _install_name_cap() -> None:
         downloader.create_file_name = _capped_file_name
 
 
+_WIDENED_ATTR = "_music_pipeline_first_artist"
+
+
+def _first_artist_alone(song):
+    """The song to search for again (homelab#2533) when spotdl finds nothing
+    for a MusicBrainz-built song whose credit names several artists: the same
+    song with only its first credited artist, and no ISRC, since the ISRC
+    search has already been tried.  None for any other song (a Spotify song
+    keeps spotdl's own search)."""
+    from music_fetch.album_requests import RECORDING_URL  # noqa: PLC0415 — its URL (recording_url)
+
+    if not (song.url or "").startswith(RECORDING_URL) or len(song.artists or ()) < 2:
+        return None
+    return dataclasses.replace(song, artists=[song.artists[0]], artist=song.artists[0], isrc=None)
+
+
+def _widened_search(search: Callable) -> Callable:
+    """spotdl's ``Downloader.search`` widened for the request fallback
+    (homelab#2533).  spotdl's text query joins every artist ("A, B - title")
+    and scores results by every artist, so YouTube Music often finds nothing
+    for a joint credit.  When the first search raises ``LookupError``, the
+    song is searched once more by its first credited artist alone
+    (:func:`_first_artist_alone`).  Only the search is widened: the song keeps
+    its full credit, and the scan still imports a download only when AcoustID
+    names the track's own recording."""
+
+    def search_widened(self, song):
+        try:
+            return search(self, song)
+        except LookupError as exc:
+            alone = _first_artist_alone(song)
+            if alone is None:
+                raise
+            try:
+                url = search(self, alone)
+            except LookupError:
+                raise exc from None
+            logger.info("[ALONE] %s → found by its first credited artist alone", _song_label(song))
+            return url
+
+    setattr(search_widened, _WIDENED_ATTR, True)
+    return search_widened
+
+
+def _install_first_artist_search() -> None:
+    """Install :func:`_widened_search` on spotdl's Downloader (idempotent)."""
+    from spotdl.download.downloader import Downloader  # noqa: PLC0415
+
+    if not getattr(Downloader.search, _WIDENED_ATTR, False):
+        Downloader.search = _widened_search(Downloader.search)
+
+
 def _song_label(song) -> str:
     """Format 'Artist - Title' from a Song or Song-like object for log output."""
     j = song.json
@@ -302,6 +354,7 @@ def _make_spotdl(settings: dict):
     client_id = os.environ["SPOTIFY_CLIENT_ID"]
     client_secret = os.environ["SPOTIFY_CLIENT_SECRET"]
     _install_name_cap()
+    _install_first_artist_search()
     _spotdl_instance = Spotdl(
         client_id=client_id,
         client_secret=client_secret,

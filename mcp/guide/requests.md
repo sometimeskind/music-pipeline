@@ -58,7 +58,8 @@ finds the album by its release group once the tick has queued it.
 
 A request Usenet misses (or whose releases all fail) falls back to spotdl from its MusicBrainz
 tracklist: `fallback`, and `filled` once the library holds every track. spotdl finds each track
-on YouTube Music by its ISRC, else its artists, title and length, and the scan imports a download
+on YouTube Music by its ISRC, else its artists, title and length (a joint credit that finds nothing
+is searched again by its first credited artist alone, `[ALONE]`), and the scan imports a download
 only when AcoustID's fingerprint lookup names that track's own MusicBrainz recording (`[VERIFIED]`;
 anything else is `[REJECT] … fingerprint`, kept in `quarantine/rejected/request/` and never
 downloaded again). So a track AcoustID doesn't know stays a gap: `list_requests` shows how many
