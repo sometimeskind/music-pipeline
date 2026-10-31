@@ -6,7 +6,9 @@ before applying, so it prints nothing that changes between two runs.  The
 albums to remove are named by release group after ``--`` (an MBID or a
 musicbrainz.org URL), or ``--through N`` takes Later's first N albums in
 ``.m3u`` order: the ones listened to.  Albums are appended by
-``music-requests add --later``.
+``music-requests add --later``.  ``auto-requests`` lists the albums the next
+album tick requests automatically (homelab#2535, :mod:`music_fetch.later_requests`):
+read-only, and it reads nothing but the music database.
 """
 
 from __future__ import annotations
@@ -19,6 +21,7 @@ import psycopg
 
 from music_fetch import album_requests as req
 from music_fetch import later_queue as later
+from music_fetch import later_requests
 from music_fetch import state as statedb
 from music_fetch.album_requests_cli import _connect
 
@@ -95,6 +98,8 @@ def _parser() -> argparse.ArgumentParser:
         description="The Later queue (homelab#2478); remove is a dry run unless --apply")
     sub = parser.add_subparsers(dest="command", required=True)
     sub.add_parser("list", help="every album on Later, in .m3u order, then the pending ones")
+    sub.add_parser("auto-requests", help="the incomplete Later albums the album tick requests automatically "
+                                         "(read-only)")
     p = sub.add_parser("remove", help="take albums off Later (their files stay)")
     p.add_argument("--apply", action="store_true", help="write it (a dry run without)")
     p.add_argument("--through", type=int, metavar="N", help="Later's first N albums, in .m3u order")
@@ -114,6 +119,10 @@ def run(args: argparse.Namespace) -> None:
                 logger.info("%s", _listed(entry))
             logger.info("%d album(s) on Later, %d pending", len(found),
                         sum(1 for e in found if e["state"] == later.PENDING))
+            return
+        if args.command == "auto-requests":
+            for line in later_requests.lines(later_requests.plan(conn, rows)):
+                logger.info("%s", line)
             return
         out, lines = remove_dry_run(conn, rows, groups, args.through)
         for line in lines:

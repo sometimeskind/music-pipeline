@@ -176,6 +176,50 @@ def test_a_request_record_an_album_playlist_lists_again_drops_the_request_tracks
     assert list(record["playlists"]) == ["later"] and "origin" not in record
 
 
+def _former_later(status: str, **fields) -> dict:
+    """A row of the later album playlist, which left playlists.conf at the cutover (homelab#2535)."""
+    return {**state.new_record("sp1", status=status, blocklist=[], name="The Album (Deluxe)", artist="Band",
+                               tracks_count=5, playlists={"later": [["Song 1", "Band", "sp1-1", None, 1, 1]]}),
+            "release_group": RG, "unresolved": None, **fields}
+
+
+def test_a_request_row_off_a_retired_playlist_takes_the_request_tracklist():
+    record = _former_later(albums.FALLBACK, fallback_tracks={"later": ["sp1-1"]}, fallback_from=albums.MISSING)
+    s = State(albums={"sp1": record})
+    albums.feed_requests(s, [_request()], ["discoveries-albums"])
+    assert record["playlists"] == {req.SOURCE: _request().tracks} and record["origin"] == albums.REQUEST
+    assert record["fallback_tracks"] == {}  # spotdl no longer reads later: those were dead
+    assert record["tracks_count"] == 3 and record["name"] == "The Album"  # the request's fields
+    assert record["status"] == albums.FALLBACK and albums._request_fallback(record)
+    assert record["tracklist_release"] == R12
+
+
+def test_a_held_request_row_keeps_a_retired_playlists_tracklist():
+    """Operator, 2026-10-30: a held album's tracklist isn't swapped, which could change what counts as held."""
+    for status in albums.HELD:
+        record = _former_later(status)
+        albums.feed_requests(State(albums={"sp1": record}), [_request()], [])
+        assert list(record["playlists"]) == ["later"] and "origin" not in record and record["tracks_count"] == 5
+
+
+def test_a_request_row_keeps_a_configured_album_playlists_tracks():
+    record = _former_later(albums.MISSING)
+    albums.feed_requests(State(albums={"sp1": record}), [_request()], ["later"])
+    assert list(record["playlists"]) == ["later"] and "origin" not in record
+
+
+def test_without_the_album_playlists_the_feed_drops_nothing():
+    record = _former_later(albums.MISSING)
+    albums.feed_requests(State(albums={"sp1": record}), [_request()])
+    assert list(record["playlists"]) == ["later"]
+
+
+def test_a_grabbed_wants_record_keeps_its_tracks_whatever_the_album_playlists():
+    s = State(albums={"sp1": _wants_record("sp1", status=albums.GRABBED)})
+    albums.feed_requests(s, [_request()], [])
+    assert list(s.albums["sp1"]["playlists"]) == ["chill"]
+
+
 def _missing_request(status: str = albums.MISSING, **fields) -> dict:
     return {"status": status, "origin": albums.REQUEST, "name": "The Album", "artist": "Band",
             "release_group": RG, "unresolved": None, "spotify_album_ids": [], "names": [], "blocklist": [],
