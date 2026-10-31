@@ -650,6 +650,8 @@ def album_tick_task(settings) -> None:
         logger.info("No album or spotdl playlists in playlists.conf")
         return
 
+    # One rate-limited MusicBrainz for the request fallback and Later's automatic requests (homelab#2535).
+    musicbrainz = album_requests.musicbrainz()
     with MusicLibrary(scan.LIBRARY_DB) as lib:
         have, missing, complete = _album_library_hooks(lib)
         albums.tick(
@@ -665,8 +667,9 @@ def album_tick_task(settings) -> None:
             want_playlists=want_playlists,
             wants=_album_wants_hook(lib),
             library=_album_library_feed_hook(lib),
-            request_songs=functools.partial(album_requests.release_songs, album_requests.musicbrainz()),
+            request_songs=functools.partial(album_requests.release_songs, musicbrainz),
             recordings=_album_request_recordings(lib),
+            later_get=musicbrainz,
         )
 
 

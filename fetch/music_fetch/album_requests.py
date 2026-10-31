@@ -401,11 +401,12 @@ def album_requests() -> list[Request]:
 
 
 def add(conn: psycopg.Connection, found: Tracklist, by: str, key: str | None = None,
-        record: Mapping | None = None) -> bool:
+        record: Mapping | None = None, note: str = "") -> bool:
     """Insert the request for *found* with its ``album_requested`` event, in
     one transaction; False when the release group is requested already (a
     concurrent request).  *key*/*record*: the album row that has the release
-    group, if any."""
+    group, if any.  *note* ends the event's message (an automatic request's
+    reason, homelab#2535)."""
     data = {"year": found.year, "album_type": found.album_type, "duration": found.duration}
     preferred = found.release if found.how == "preferred" else None
     with conn.transaction():
@@ -419,7 +420,7 @@ def add(conn: psycopg.Connection, found: Tracklist, by: str, key: str | None = N
             return False
         events.insert(conn, "album_requested",
                       f"[REQUEST] {found.artist} — {found.name} ({found.release_group}): {len(found.tracks)} "
-                      f"track(s) from release {found.release}" + (" (preferred)" if preferred else ""),
+                      f"track(s) from release {found.release}" + (" (preferred)" if preferred else "") + note,
                       source="requests", release_group=found.release_group,
                       spotify_album_id=statedb.primary_spotify(record) if record else None,
                       data={"album": f"{found.artist} — {found.name}", "key": key, "requested_by": by,

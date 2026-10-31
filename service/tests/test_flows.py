@@ -636,7 +636,7 @@ def test_album_tick_task_writes_no_removal_queue():
     assert args[1:4] == (spotify.return_value, prowlarr.return_value, sabnzbd.return_value)
     assert callable(args[4]) and args[5] is settings and len(args) == 6
     assert set(tick.call_args.kwargs) == {"on_completion", "missing", "mixed", "want_playlists", "wants", "library",
-                                          "request_songs", "recordings"}
+                                          "request_songs", "recordings", "later_get"}
     assert tick.call_args.kwargs["want_playlists"] == []  # an album playlist has no want list to feed
     assert [c[0] for c in mock_ingest.method_calls] == []  # no schedule_unlink, no save_pending_removals
 

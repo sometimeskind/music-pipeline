@@ -93,7 +93,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Callable, Collection, Protocol
 
-from music_fetch import album_requests, events, overrides, resolve, store
+from music_fetch import album_requests, events, later_requests, overrides, resolve, store
 from music_fetch import state as statedb
 from music_fetch.ids import spotify_key
 from music_fetch.metrics import _gauge, _push
@@ -1412,6 +1412,7 @@ def tick(
     library: LibraryAlbums | None = None,
     request_songs: RequestSongs | None = None,
     recordings: Recordings | None = None,
+    later_get: album_requests.Get | None = None,
 ) -> TickResult:
     """One album-mode pass: refresh changed playlists, queue the requested
     albums (:func:`feed_requests`), the albums of the spotdl playlists *want_playlists* (*wants*, :func:`feed_wants`) and the
@@ -1419,7 +1420,10 @@ def tick(
     triggers (*on_completion*, ``on`` only), reset a few mixed albums for a
     reimport (*mixed*, :func:`auto_reimport`), top the queue up, then hand
     what Usenet can't supply to spotdl (*missing*, and for requests
-    *request_songs* and *recordings*, ``on`` only)."""
+    *request_songs* and *recordings*, ``on`` only).  First, Later's albums
+    that aren't held whole and were never requested are requested from
+    MusicBrainz by *later_get* (:mod:`music_fetch.later_requests`, ``on``
+    only; ``dry-run`` logs the count)."""
     settings = settings or Settings.from_env()
     result = TickResult()
     if settings.mode == "off":
@@ -1429,6 +1433,8 @@ def tick(
         # Read with the state: a tick never runs without its overrides and holds (homelab#2484),
         # or its requests (homelab#2478).
         fixes = album_fixes(overrides_file)
+        # Before the requests are read, so the ones it adds are fed this tick (homelab#2535).
+        later_requests.tick(state, later_get, apply=settings.mode == "on")
         requests = album_requests.album_requests()
     except statedb.Unavailable as exc:
         # Never run on the stale JSON (homelab#2410): skip, and let

@@ -99,3 +99,12 @@ the queue alone. An album whose record had no release group yet is queued by its
 instead: `get_later` shows it with no release group and a ref (its Spotify album ID). It gets
 its release group at a later scan, once an import or a MusicBrainz lookup gives its record one.
 Until then `remove_from_later` reaches it only with `through=N`, never by release group.
+
+**Incomplete Later albums are requested automatically** (homelab#2535). Each album tick
+requests every album on Later that the library doesn't hold whole, that has a release group and
+that has no request yet, at most 5 a tick: `list_requests` shows it with requested_by
+`auto:later`, and from then on it is searched and falls back like any request (`get_later`'s
+`requested` turns true). So never `request_album` an incomplete Later album by hand; one shown
+with a ref and no release group is requested once it gets one. An album MusicBrainz gives no
+tracklist for is retried after 7 days (a `failure` event, `[FAIL] Later: …`). Taking an album
+off Later doesn't withdraw its request.
