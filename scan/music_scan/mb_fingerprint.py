@@ -28,10 +28,15 @@ accepted on 2026-10-31).  Its losers' files stay superseded by ``merged_files``.
 
 It is a dry run without ``--apply``.  The lookups run first, without a lock
 (pyacoustid keeps to AcoustID's 3 requests a second, so the whole library takes
-hours); then ``--apply`` takes the pipeline lock and, item by item, re-reads the
-item, skips it when its ``mb_trackid`` changed meanwhile, and stores the new ID
-with a ``recording_replaced`` event in the same Postgres transaction (it refuses
-to run without ``MUSIC_DATABASE_URL``), then writes the file's tags.
+hours).  The pipeline's ticks go on meanwhile and may move, retire or purge a
+file, so each item is re-read from the library just before its lookup; one gone
+from the library, or whose file went away between the read and the fingerprint,
+is counted as gone and not checked.  ``[PROGRESS]`` every :data:`PROGRESS_EVERY`
+items says how far the run has got.  Then ``--apply`` takes the pipeline lock
+and, item by item, re-reads the item, skips it when its ``mb_trackid`` changed
+meanwhile, and stores the new ID with a ``recording_replaced`` event in the same
+Postgres transaction (it refuses to run without ``MUSIC_DATABASE_URL``), then
+writes the file's tags.
 ``mb_releasetrackid`` and the title stay as they were (titles are homelab#2544).
 
 Requires the ACOUSTID_APIKEY env var.
@@ -60,6 +65,7 @@ REQUEST_DELAY = 0.35
 RETRY_SECONDS = 5.0
 MAX_FAILURES_IN_A_ROW = 10
 LOOKUP_TIMEOUT = 30
+PROGRESS_EVERY = 500
 EVENT_KIND = "recording_replaced"
 SOURCE = "mb-fingerprint"
 # Flexible attributes that say the pipeline, not beets' guess, set mb_trackid.
@@ -174,23 +180,34 @@ def _lookup(lookup: Callable[[str], Recordings], path: str) -> Recordings:
         return lookup(path)
 
 
-def recheck(items: Iterable, lookup: Callable[[str], Recordings]) -> tuple[Counter, list[Flagged]]:
-    """Check each of *items* that has an ``mb_trackid`` against *lookup* (the
-    recordings for a file's audio, best first).  Logs one line per finding and
-    returns the counts and the flagged items."""
+def recheck(lib, ids: Iterable[int], lookup: Callable[[str], Recordings]) -> tuple[Counter, list[Flagged]]:
+    """Check each item of *ids* that has an ``mb_trackid`` against *lookup* (the
+    recordings for a file's audio, best first).  Each item is read from *lib*
+    just before its lookup, so a tick that moved its file meanwhile doesn't leave
+    a stale path.  Logs one line per finding and returns the counts and the
+    flagged items."""
+    ids = list(ids)
     counts: Counter = Counter({k: 0 for k in ("checked", "agree", "flagged", "replaceable", "ambiguous",
-                                              "keepers", "nomatch", "errors", "skipped")})
+                                              "keepers", "nomatch", "errors", "gone", "skipped")})
     flagged: list[Flagged] = []
     failures = 0
-    for item in items:
+    for n, item_id in enumerate(ids, 1):
+        if n > 1 and (n - 1) % PROGRESS_EVERY == 0:
+            logger.info("[PROGRESS] %d/%d, %d flagged so far", n - 1, len(ids), counts["flagged"])
+        item = lib.get_item(item_id)
+        if item is None:
+            counts["gone"] += 1
+            logger.info("[GONE] %s: no longer in the library; not checked", item_id)
+            continue
         guess = item.get("mb_trackid")
         if not guess:
             continue
         if item.get(FALLBACK_RECORDING):
             counts["skipped"] += 1  # AcoustID named it at its import (the request guard)
             continue
+        path = _path(item)
         try:
-            found = _lookup(lookup, _path(item))
+            found = _lookup(lookup, path)
         except LookupFailed as exc:
             counts["errors"] += 1
             failures += 1
@@ -199,9 +216,14 @@ def recheck(items: Iterable, lookup: Callable[[str], Recordings]) -> tuple[Count
                 raise SystemExit(f"--recheck: {failures} AcoustID lookups failed in a row; stopping "
                                  f"(checked {counts['checked']} so far, nothing written)") from exc
             continue
-        except ValueError as exc:
-            counts["errors"] += 1
-            logger.warning("[ERROR] %s: %s", _label(item), exc)
+        except (OSError, ValueError) as exc:
+            if not os.path.exists(path):  # a tick moved or removed it since the read
+                counts["gone"] += 1
+                logger.info("[GONE] %s: its file went away during the run; not checked (re-run with its ID)",
+                            _label(item))
+            else:
+                counts["errors"] += 1
+                logger.warning("[ERROR] %s: %s", _label(item), exc)
             continue
         failures = 0
         counts["checked"] += 1
@@ -294,18 +316,21 @@ def run_recheck(apply: bool = False, ids: list[int] | None = None,
                 logger.warning("No library item with id %s", ", ".join(map(str, missing)))
         else:
             items = list(lib.items())
-        logger.info("Rechecking %d item(s) with an mb_trackid against AcoustID",
-                    sum(1 for i in items if i.get("mb_trackid")))
-        counts, flagged = recheck(items, lookup)
+        # Only the IDs: each item is re-read just before its lookup (recheck).
+        todo = [i.id for i in items if i.get("mb_trackid")]
+        del items
+        logger.info("Rechecking %d item(s) with an mb_trackid against AcoustID", len(todo))
+        counts, flagged = recheck(lib, todo, lookup)
         counts["replaced"] = replace(lib, flagged) if apply else 0
     finally:
         lib._close()
 
     logger.info("[SUMMARY] checked %d: %d agree, %d flagged (%d replaceable, %d with several recordings, "
-                "%d merge keepers), %d no match, %d errors; %d request fallbacks skipped; %s",
+                "%d merge keepers), %d no match, %d errors; %d gone during the run, %d request fallbacks skipped; "
+                "%s",
                 counts["checked"], counts["agree"], counts["flagged"], counts["replaceable"],
                 counts["ambiguous"], counts["keepers"], counts["nomatch"], counts["errors"],
-                counts["skipped"],
+                counts["gone"], counts["skipped"],
                 f"{counts['replaced']} replaced" if apply else "dry run, nothing replaced (re-run with --apply)")
     return counts
 
