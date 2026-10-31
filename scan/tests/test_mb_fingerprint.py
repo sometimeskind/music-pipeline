@@ -65,6 +65,11 @@ class FakeLib:
         return self.by_id.get(item_id)
 
 
+def _recheck(items, lookup, lib=None):
+    """recheck over *items*, each re-read from *lib* (by default a library of *items*)."""
+    return mbf.recheck(lib or FakeLib(items), [i.id for i in items], lookup)
+
+
 def _library():
     return [
         FakeItem(6994, "Oh! Sweet Nuthin’ (5.1 mix)", mb_trackid=SURROUND, mb_releasetrackid=SURROUND),
@@ -97,7 +102,7 @@ def _lookup(table=None):
 
 def test_flags_each_guess_not_among_its_recordings(caplog):
     caplog.set_level("INFO")
-    counts, flagged = mbf.recheck(_library(), _lookup())
+    counts, flagged = _recheck(_library(), _lookup())
     assert {f.item_id: f.replacement for f in flagged} == {6994: STEREO, 6930: STEREO, 5672: LIVE, 5970: None}
     assert counts["checked"] == 4 and counts["flagged"] == 4 and counts["agree"] == 0
     # 5970 has two recordings; 6930, a merge keeper, is replaced like the others (homelab#2543, 2026-10-31).
@@ -115,14 +120,14 @@ def test_flags_each_guess_not_among_its_recordings(caplog):
 def test_a_guess_among_its_recordings_is_not_reported(caplog):
     caplog.set_level("INFO")
     # AcoustID links the fingerprint to the stereo and the 5.1 recording: the guess stands.
-    counts, flagged = mbf.recheck(_library()[:1], _lookup({6994: [(0.97, STEREO), (0.90, SURROUND)]}))
+    counts, flagged = _recheck(_library()[:1], _lookup({6994: [(0.97, STEREO), (0.90, SURROUND)]}))
     assert flagged == [] and counts["agree"] == 1 and caplog.text == ""
 
 
 @pytest.mark.parametrize("found,best", [([], "no recording"), ([(0.6, STEREO)], "best stereo-rec 0.60")])
 def test_nothing_confident_is_nomatch_and_left_alone(caplog, found, best):
     caplog.set_level("INFO")
-    counts, flagged = mbf.recheck(_library()[:1], _lookup({6994: found}))
+    counts, flagged = _recheck(_library()[:1], _lookup({6994: found}))
     assert flagged == [] and counts["nomatch"] == 1
     assert (f"[NOMATCH] 6994 — Oh! Sweet Nuthin’ (5.1 mix): AcoustID has nothing at 0.85 or more ({best}); "
             "mb_trackid surround-rec left alone") in caplog.text
@@ -131,7 +136,7 @@ def test_nothing_confident_is_nomatch_and_left_alone(caplog, found, best):
 def test_a_request_fallback_and_an_item_without_an_id_are_not_looked_up():
     items = [FakeItem(1, "Fallback", mb_trackid=STEREO, fallback_recording=STEREO), FakeItem(2, "No ID")]
     lookup = _lookup({})
-    counts, flagged = mbf.recheck(items, lookup)
+    counts, flagged = _recheck(items, lookup)
     assert lookup.calls == [] and flagged == [] and counts["skipped"] == 1 and counts["checked"] == 0
 
 
@@ -145,13 +150,13 @@ def test_a_failed_lookup_is_retried_once_then_an_error(monkeypatch):
             raise mbf.LookupFailed("503")
         return [(0.97, STEREO)]
 
-    counts, flagged = mbf.recheck(_library()[:1], flaky)
+    counts, flagged = _recheck(_library()[:1], flaky)
     assert len(tries) == 2 and counts["errors"] == 0 and [f.replacement for f in flagged] == [STEREO]
 
     def down(path):
         raise mbf.LookupFailed("503")
 
-    counts, _ = mbf.recheck(_library()[:1], down)
+    counts, _ = _recheck(_library()[:1], down)
     assert counts["errors"] == 1 and counts["checked"] == 0
 
 
@@ -164,18 +169,75 @@ def test_lookups_failing_in_a_row_stop_the_run(monkeypatch):
 
     items = [FakeItem(n, f"T{n}", mb_trackid=STEREO) for n in range(1, 6)]
     with pytest.raises(SystemExit, match="3 AcoustID lookups failed in a row"):
-        mbf.recheck(items, down)
+        _recheck(items, down)
 
 
-def test_a_file_without_a_fingerprint_is_an_error_not_a_failure_in_a_row(monkeypatch):
+@pytest.mark.parametrize("exc", [ValueError("no fingerprint: decode error"), PermissionError("denied")])
+def test_a_file_without_a_fingerprint_is_an_error_not_a_failure_in_a_row(monkeypatch, tmp_path, exc):
     monkeypatch.setattr(mbf, "MAX_FAILURES_IN_A_ROW", 2)
 
     def unreadable(path):
-        raise ValueError("no fingerprint: decode error")
+        raise exc
 
     items = [FakeItem(n, f"T{n}", mb_trackid=STEREO) for n in range(1, 6)]
-    counts, _ = mbf.recheck(items, unreadable)
-    assert counts["errors"] == 5
+    for i in items:  # the files are there
+        i.path = bytes(tmp_path / f"T-{i.id}.m4a")
+        (tmp_path / f"T-{i.id}.m4a").touch()
+    counts, _ = _recheck(items, unreadable)
+    assert counts["errors"] == 5 and counts["gone"] == 0
+
+
+# --- a whole-library run takes hours, and the pipeline's ticks go on meanwhile ---
+
+
+def test_an_item_is_read_just_before_its_lookup(caplog):
+    """A tick's canon [RETAG] moved 5672's album after the run started (homelab#2543, 2026-10-31):
+    its lookup uses the path the item has then, not the one it had at the start."""
+    caplog.set_level("INFO")
+    items = _library()
+    lib = FakeLib(items)
+    paths = []
+
+    def lookup(path):
+        paths.append(path)
+        if path.endswith("-6994.m4a"):  # meanwhile, a tick moves 5672 and retires 5970
+            lib.by_id[5672].path = b"/lib/The Big Country (remastered)-5672.m4a"
+            del lib.by_id[5970]
+        return _lookup()(path)
+
+    counts, flagged = _recheck(items, lookup, lib)
+    assert paths[-1] == "/lib/The Big Country (remastered)-5672.m4a"
+    assert [f.item_id for f in flagged] == [6994, 6930, 5672]
+    assert counts["checked"] == 3 and counts["gone"] == 1
+    assert "[GONE] 5970: no longer in the library; not checked" in caplog.text
+
+
+@pytest.mark.parametrize("exc", [FileNotFoundError(2, "No such file or directory"),
+                                 ValueError("no fingerprint: fpcalc exited with status 2")])
+def test_a_file_that_goes_away_mid_lookup_is_gone_not_a_crash(caplog, exc):
+    """The file moved between the item's read and its fingerprint (audioread raises
+    FileNotFoundError; fpcalc's failure is a ValueError): counted as gone, and the run goes on."""
+    caplog.set_level("INFO")
+    items = _library()
+
+    def lookup(path):
+        if path.endswith("-6994.m4a"):
+            raise exc
+        return _lookup()(path)
+
+    counts, flagged = _recheck(items, lookup)
+    assert counts["gone"] == 1 and counts["errors"] == 0 and counts["checked"] == 3
+    assert [f.item_id for f in flagged] == [6930, 5672, 5970]
+    assert ("[GONE] 6994 — Oh! Sweet Nuthin’ (5.1 mix): its file went away during the run; not checked "
+            "(re-run with its ID)") in caplog.text
+
+
+def test_progress_is_logged_every_so_many_items(monkeypatch, caplog):
+    caplog.set_level("INFO")
+    monkeypatch.setattr(mbf, "PROGRESS_EVERY", 2)
+    _recheck(_library(), _lookup())
+    assert [r.getMessage() for r in caplog.records if r.getMessage().startswith("[PROGRESS]")] == [
+        "[PROGRESS] 2/4, 2 flagged so far"]
 
 
 def test_apply_refuses_without_the_database(monkeypatch):
@@ -203,7 +265,7 @@ def _events(url):
 def test_replace_stores_each_replaceable_guess_with_its_event(pg_url, monkeypatch):
     monkeypatch.delenv("PREFECT_API_URL", raising=False)
     items = _library()
-    _, flagged = mbf.recheck(items, _lookup())
+    _, flagged = _recheck(items, _lookup())
     assert mbf.replace(FakeLib(items), flagged) == 3
     by_id = {i.id: i for i in items}
     assert by_id[6994]["mb_trackid"] == STEREO and by_id[6994].stored and by_id[6994].written
@@ -224,7 +286,7 @@ def test_replace_stores_each_replaceable_guess_with_its_event(pg_url, monkeypatc
 def test_replace_skips_an_item_changed_since_its_lookup(pg_url, monkeypatch, caplog):
     monkeypatch.delenv("PREFECT_API_URL", raising=False)
     items = _library()
-    _, flagged = mbf.recheck(items, _lookup())
+    _, flagged = _recheck(items, _lookup())
     items[0]["mb_trackid"] = "set-by-hand"
     lib = FakeLib(items)
     del lib.by_id[5672]  # it left the library meanwhile
@@ -238,7 +300,7 @@ def test_replace_skips_an_item_changed_since_its_lookup(pg_url, monkeypatch, cap
 def test_a_store_that_fails_leaves_no_event(pg_url, monkeypatch):
     monkeypatch.delenv("PREFECT_API_URL", raising=False)
     items = _library()
-    _, flagged = mbf.recheck(items, _lookup())
+    _, flagged = _recheck(items, _lookup())
 
     def locked():
         raise RuntimeError("database is locked")
