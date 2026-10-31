@@ -490,11 +490,11 @@ def _album_library_hooks(lib):
 
         return release.identify(folder)
 
-    def tag_ids(playlist: str, tracks: list[list], since: float, tracks_count: int) -> None:
+    def tag_ids(playlist: str, tracks: list[list], since: float, tracks_count: int, key: str) -> None:
         scan.tag_album_ids(lib, playlist, tracks, since, tracks_count)
         retire_held()
         canon_albums(playlist, since)
-        supersede(playlist, since, tracks_count, tracks)
+        supersede(playlist, since, tracks_count, tracks, key)
         embed_covers(playlist, since)
 
     def retire_held() -> None:
@@ -521,16 +521,20 @@ def _album_library_hooks(lib):
         except Exception:
             canon.logger.exception("Canonical albums failed; the next scan or music-canon-albums retries it")
 
-    def supersede(playlist: str, since: float, tracks_count: int, tracks: list[list]) -> None:
+    def supersede(playlist: str, since: float, tracks_count: int, tracks: list[list], key: str) -> None:
         # After canon, which files the loose items' slots (#266).  The .m3u
-        # files listed the loose items, so regenerate.
+        # files listed the loose items, so regenerate.  The release is the
+        # items claim stamped with this record (homelab#2531): the time window
+        # alone also holds another album's import that finished meanwhile, whose
+        # Spotify album then decided which loose items were "on the album".
         from music_scan import supersede as sup  # noqa: PLC0415
         from music_scan.navidrome import trigger_scan  # noqa: PLC0415
 
         try:
             with concurrency("pipeline", occupy=1):
                 fresh = [i for i in lib.items_by_source(playlist)
-                         if i.get("via") == "usenet" and (i.added or 0) >= since]
+                         if i.get("via") == "usenet" and (i.added or 0) >= since
+                         and str(i.get("album_record") or "") == str(key)]
                 n = sup.after_import(lib, fresh, tracks_count, tracks)
                 if n:
                     scan.regen_playlists()

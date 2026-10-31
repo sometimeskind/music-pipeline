@@ -18,8 +18,9 @@ Only identity decides which album item replaces a loose one (#255), first hit wi
 4. disc and track: the loose item sits on the album's Spotify album (its
    ``spotify_album_id``, set by canon from Spotify's numbering) at the slot an
    album item with no Spotify ID holds, and the release has Spotify's track
-   count (``tag_album_ids``' guard: editions renumber tracks).  Disjoint
-   ISRCs veto it.
+   count (``tag_album_ids``' guard: editions renumber tracks), and the two
+   have the same title once edition notes are dropped (homelab#2531: a number
+   is not identity).  Disjoint ISRCs veto it.
 
 A loose item canon moved onto the album from a twin release (#214) holds the
 twin's Spotify ID, which no album item has, so the album's tracklist (the
@@ -28,7 +29,9 @@ record's entries) resolves it (#274):
 5. a shared ISRC with a tracklist entry: the album item holding that entry's
    Spotify ID (not by title words);
 6. disc and track: the entry at the loose item's slot (canon numbered it
-   from the album), each slot once.  Disjoint ISRCs veto it.
+   from the album), each slot once, when the loose item's title is the
+   entry's or its album item's, edition notes dropped (homelab#2531).
+   Disjoint ISRCs veto it.
 
 A loose item on the album no ID rung matches can still be the same recording,
 numbered differently (the release numbered it 15, Spotify 16) or with no IDs on
@@ -69,7 +72,7 @@ import time
 from collections import Counter
 from pathlib import Path
 
-from music_scan.identity import PlaylistTrack, item_isrcs, item_spotify_ids, split_list
+from music_scan.identity import PlaylistTrack, item_isrcs, item_spotify_ids, same_base_title, split_list
 
 logger = logging.getLogger(__name__)
 
@@ -165,6 +168,10 @@ class _Tracklist:
         if isrcs and known and not isrcs & known:
             return None, None, (f"its ISRCs {';'.join(sorted(isrcs))} differ from track {slot[0]}-{slot[1]}'s "
                                 f"({';'.join(sorted(known))}, album item {album.id})")
+        title = loose.title or ""
+        if not (same_base_title(e.name or "", title) or same_base_title(album.title or "", title)):
+            return None, None, (f"track {slot[0]}-{slot[1]} is {e.name!r} (album item {album.id}), "
+                                "another title")
         if slot in self.taken:
             return None, None, f"another loose item already took track {slot[0]}-{slot[1]}"
         self.taken.add(slot)
@@ -245,12 +252,18 @@ def plan(release: list, library: list, tracks_count: int, tracks=(),
             if how:
                 match = album
                 break
+        numbered_why = ""
         if match is None and on_album and numbered:
             album = numbered.get(_slot(loose))
             if album is not None and not (item_isrcs(album) and item_isrcs(loose)
                                           and not item_isrcs(album) & item_isrcs(loose)):
-                # One loose item per slot: another one there is another copy, kept.
-                match, how = numbered.pop(_slot(loose)), "disc/track"
+                if same_base_title(album.title or "", loose.title or ""):
+                    # One loose item per slot: another one there is another copy, kept.
+                    match, how = numbered.pop(_slot(loose)), "disc/track"
+                else:
+                    # A number is not identity (homelab#2531); the same-audio rung may still match.
+                    disc, track = _slot(loose)
+                    numbered_why = f"album item {album.id} at its disc/track {disc}-{track} is {album.title!r}; "
         if match is None and on_album:
             if not item_spotify_ids(loose):
                 why = "it has no Spotify ID"
@@ -261,7 +274,7 @@ def plan(release: list, library: list, tracks_count: int, tracks=(),
             if match is None:
                 match, how, audio = _same_audio(loose, release, titled, frames_of, on_album=True)
                 if match is None:
-                    kept.append(Kept(loose, f"{why}; {audio}"))
+                    kept.append(Kept(loose, f"{numbered_why}{why}; {audio}"))
         elif match is None and not loose.get("album_record") and albums[_album_key(loose)] == 1:
             match, how, audio = _same_audio(loose, release, titled, frames_of, on_album=False)
             if match is None and audio:
