@@ -12,7 +12,6 @@ from music_fetch.spotdl_ops import SyncResult
 @pytest.fixture(autouse=True)
 def _state_dirs(tmp_path: Path, monkeypatch):
     """Playlist stores and .m3u files land in tmp_path, never under /root (homelab#1914)."""
-    monkeypatch.setattr(store, "STORE_DIR", tmp_path / "store")
     monkeypatch.setattr(ingest, "PLAYLISTS_DIR", tmp_path / "playlists")
 
 
@@ -21,7 +20,6 @@ def _seed_albums(records: dict) -> None:
     from music_fetch import albums, state
 
     rows = albums.State(albums={key: {**state.new_record(key), **record} for key, record in records.items()})
-    rows.in_db = True
     rows.save()
 
 
@@ -107,7 +105,6 @@ def test_sync_playlists_processes_in_config_order(tmp_path: Path) -> None:
     with mock.patch.object(ingest, "SPOTDL_DIR", spotdl_dir), \
          mock.patch.object(ingest, "CONF_PATH", conf), \
          mock.patch.object(ingest, "COOKIE_FILE", tmp_path / "cookies.txt"), \
-         mock.patch.object(ingest, "FAILURES_FILE", tmp_path / ".failures.json"), \
          mock.patch("music_fetch.ingest.sync_playlist", side_effect=fake_sync), \
          mock.patch("music_fetch.ingest.time.sleep"):
         ingest.sync_playlists(IngestMetrics(), resolves=lambda song: False)
@@ -137,7 +134,6 @@ def test_run_reconciles_then_syncs_with_the_scan_hooks(tmp_path: Path) -> None:
         yield hooks
 
     with mock.patch.object(ingest, "COOKIE_FILE", cookie_file), \
-         mock.patch.object(ingest, "FAILURES_FILE", tmp_path / ".failures.json"), \
          mock.patch.dict("os.environ", {"SPOTIFY_CLIENT_ID": "id", "SPOTIFY_CLIENT_SECRET": "secret"}), \
          mock.patch("shutil.disk_usage", return_value=mock.Mock(free=10 * 1024**3)), \
          mock.patch("music_scan.scan.sync_hooks", fake_hooks), \
@@ -185,7 +181,6 @@ def test_run_reconcile_failure_sets_reconcile_error_reason(tmp_path: Path) -> No
             pass
 
     with mock.patch.object(ingest, "COOKIE_FILE", cookie_file), \
-         mock.patch.object(ingest, "FAILURES_FILE", tmp_path / ".failures.json"), \
          mock.patch.dict("os.environ", {"SPOTIFY_CLIENT_ID": "id", "SPOTIFY_CLIENT_SECRET": "secret"}), \
          mock.patch("shutil.disk_usage", return_value=mock.Mock(free=10 * 1024**3)), \
          mock.patch("music_fetch.ingest.reconcile_playlists", side_effect=RuntimeError("conf error")), \
@@ -330,8 +325,7 @@ def test_reconcile_leaves_later_m3u_to_the_later_queue(tmp_path: Path) -> None:
         (playlists_dir / f"{name}.m3u").write_text("/library/x.m4a\n", encoding="utf-8")
     conf = _make_conf(tmp_path, ["kept  https://open.spotify.com/playlist/abc0000000000000000000"])
     with mock.patch.object(ingest, "CONF_PATH", conf), mock.patch.object(ingest, "SPOTDL_DIR", tmp_path / "spotdl"), \
-         mock.patch.object(store, "names", return_value=["keep", "later"]), mock.patch.object(store, "remove"), \
-         mock.patch.object(ingest.state, "in_db", return_value=True):
+         mock.patch.object(store, "names", return_value=["keep", "later"]), mock.patch.object(store, "remove"):
         assert reconcile_playlists() == ["keep", "later"]
     assert (playlists_dir / "later.m3u").exists()
     assert not (playlists_dir / "keep.m3u").exists()
@@ -467,7 +461,6 @@ def _run_sync_playlists(tmp_path: Path, results: list, cookie_file_exists: bool 
     with mock.patch.object(ingest, "SPOTDL_DIR", spotdl_dir), \
          mock.patch.object(ingest, "CONF_PATH", conf), \
          mock.patch.object(ingest, "COOKIE_FILE", cookie_file), \
-         mock.patch.object(ingest, "FAILURES_FILE", tmp_path / ".failures.json"), \
          mock.patch("music_fetch.ingest.sync_playlist", side_effect=lambda **_kwargs: next(queued)), \
          mock.patch("music_fetch.ingest.time.sleep"):
         ingest.sync_playlists(metrics, resolves=lambda song: False)
@@ -623,7 +616,6 @@ def test_sync_playlists_asks_the_library_per_playlist(tmp_path: Path) -> None:
     with mock.patch.object(ingest, "SPOTDL_DIR", spotdl_dir), \
          mock.patch.object(ingest, "CONF_PATH", conf), \
          mock.patch.object(ingest, "COOKIE_FILE", tmp_path / "cookies.txt"), \
-         mock.patch.object(ingest, "FAILURES_FILE", tmp_path / ".failures.json"), \
          mock.patch("music_fetch.ingest.sync_playlist", side_effect=fake_sync), \
          mock.patch("music_fetch.ingest.time.sleep"):
         ingest.sync_playlists(metrics, resolves=lambda song: False,
@@ -770,7 +762,6 @@ def test_sync_playlists_fetches_album_fallback_tracks_in_playlist_order(tmp_path
     with mock.patch.object(ingest, "SPOTDL_DIR", spotdl_dir), \
          mock.patch.object(ingest, "CONF_PATH", conf), \
          mock.patch.object(ingest, "COOKIE_FILE", tmp_path / "cookies.txt"), \
-         mock.patch.object(ingest, "FAILURES_FILE", tmp_path / ".failures.json"), \
          mock.patch.dict("os.environ", {"SYNC_TRACK_LIMIT": "10"}), \
          mock.patch("music_fetch.ingest.sync_playlist", side_effect=fake_sync), \
          mock.patch("music_fetch.ingest.download_fallback", side_effect=fake_fallback), \
@@ -809,7 +800,6 @@ def test_spent_budget_still_checks_the_later_playlists(tmp_path: Path) -> None:
     with mock.patch.object(ingest, "SPOTDL_DIR", spotdl_dir), \
          mock.patch.object(ingest, "CONF_PATH", conf), \
          mock.patch.object(ingest, "COOKIE_FILE", tmp_path / "cookies.txt"), \
-         mock.patch.object(ingest, "FAILURES_FILE", tmp_path / ".failures.json"), \
          mock.patch.dict("os.environ", {"SYNC_TRACK_LIMIT": "2"}), \
          mock.patch("music_fetch.ingest.sync_playlist", side_effect=fake_sync), \
          mock.patch("music_fetch.ingest.time.sleep"):
@@ -862,7 +852,6 @@ def _sync(tmp_path: Path, lines: list[str], result=None, calls=None, fetched=Non
     with mock.patch.object(ingest, "SPOTDL_DIR", spotdl_dir), \
          mock.patch.object(ingest, "CONF_PATH", conf), \
          mock.patch.object(ingest, "COOKIE_FILE", tmp_path / "cookies.txt"), \
-         mock.patch.object(ingest, "FAILURES_FILE", tmp_path / ".failures.json"), \
          mock.patch("music_fetch.ingest.sync_playlist", side_effect=fake_sync), \
          mock.patch("music_fetch.ingest.fetch_songs", side_effect=fetched), \
          mock.patch("music_fetch.ingest.download_fallback", side_effect=fake_fallback), \
@@ -924,7 +913,6 @@ def test_sync_failure_keeps_the_earlier_store(tmp_path: Path) -> None:
     with mock.patch.object(ingest, "SPOTDL_DIR", spotdl_dir), \
          mock.patch.object(ingest, "CONF_PATH", _make_conf(tmp_path, [f"pl  {PL_URL}"])), \
          mock.patch.object(ingest, "COOKIE_FILE", tmp_path / "cookies.txt"), \
-         mock.patch.object(ingest, "FAILURES_FILE", tmp_path / ".failures.json"), \
          mock.patch("music_fetch.ingest.sync_playlist", side_effect=RuntimeError("429 Too Many Requests")), \
          mock.patch("music_fetch.ingest.time.sleep"):
         with pytest.raises(RuntimeError):
@@ -1030,7 +1018,6 @@ def test_sync_playlists_downloads_the_requests_fallback_into_unverified_after_th
     with mock.patch.object(ingest, "SPOTDL_DIR", spotdl_dir), \
          mock.patch.object(ingest, "CONF_PATH", conf), \
          mock.patch.object(ingest, "COOKIE_FILE", tmp_path / "cookies.txt"), \
-         mock.patch.object(ingest, "FAILURES_FILE", tmp_path / ".failures.json"), \
          mock.patch.object(album_requests, "UNVERIFIED", tmp_path / "unverified"), \
          mock.patch.dict("os.environ", {"SYNC_TRACK_LIMIT": "10"}), \
          mock.patch("music_fetch.ingest.sync_playlist", side_effect=fake_sync), \

@@ -74,11 +74,8 @@ def test_mid_track_silence_window_rules() -> None:
 
 @pytest.fixture
 def dirs(tmp_path: Path, monkeypatch) -> tuple[Path, Path]:
-    from music_fetch import store
-
     inbox, rejected = tmp_path / "inbox" / "spotdl", tmp_path / "quarantine" / "rejected"
     (inbox / "wedding").mkdir(parents=True)
-    monkeypatch.setattr(store, "STORE_DIR", inbox / ".store")  # where it lives in production
     return inbox, rejected
 
 

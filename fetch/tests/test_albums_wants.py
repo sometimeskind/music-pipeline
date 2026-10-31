@@ -8,7 +8,6 @@ import pytest
 
 import music_fetch.albums as albums
 from music_fetch import state as statedb
-from music_fetch import store
 from music_fetch.albums import Settings, State, feed_wants, held_tracks, refresh_playlists, tick, top_up
 from music_fetch.usenet import Release
 
@@ -23,7 +22,6 @@ def _no_push():
 
 @pytest.fixture(autouse=True)
 def _isolated(tmp_path: Path, monkeypatch):
-    monkeypatch.setattr(store, "STORE_DIR", tmp_path / "store")
     monkeypatch.setattr(albums, "OVERRIDES_FILE", tmp_path / "album-overrides.conf")
 
 
@@ -49,7 +47,6 @@ def hook(groups: dict[str, list[tuple[str, list[dict]]]], calls: list | None = N
 def seed(records: dict) -> None:
     """Write *records* (key → record) to the music database as the album store, each keyed by its Spotify album ID."""
     state = State(albums={key: {**statedb.new_record(key), **record} for key, record in records.items()})
-    state.in_db = True
     state.save()
 
 

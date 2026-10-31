@@ -160,8 +160,8 @@ def stuck(records: dict[str, dict], now: datetime) -> dict:
 def requests(state) -> dict:
     """The album requests (homelab#2478) whose album ended ``missing`` or
     ``failed``, or is in ``fallback`` with tracks spotdl hasn't got (each
-    entry's ``album.fallback_left``); none while the JSON files are the
-    state, and an ``error`` when the database can't be read."""
+    entry's ``album.fallback_left``), and an ``error`` when the database
+    can't be read."""
     import psycopg  # noqa: PLC0415
 
     from music_fetch import album_requests  # noqa: PLC0415
@@ -170,7 +170,7 @@ def requests(state) -> dict:
     out: dict[str, list[dict]] = {"missing": [], "failed": [], "fallback": []}
     try:
         with statedb.session() as conn:
-            found = [] if conn is None else album_requests.listing(conn, state)
+            found = album_requests.listing(conn, state)
     except (statedb.Unavailable, psycopg.Error) as exc:
         return {"error": f"the music database: {type(exc).__name__}", **{k: listed(v) for k, v in out.items()}}
     for entry in found:
@@ -205,12 +205,12 @@ def path_clashes(lib: mcp_reads.Library) -> dict:
     return listed([{"id": i["id"], "path": i["path"], "album": i.get("album")} for i in lib.items(ids)])
 
 
-def empty_slots(path: Path) -> dict:
-    """The last scan's empty playlist slots (``scan.EMPTY_SLOTS_NAME``), playlists with none left out."""
+def empty_slots() -> dict:
+    """The last scan's empty playlist slots (the ``empty-slots`` document), playlists with none left out."""
     from music_fetch import state  # noqa: PLC0415
 
     try:
-        report = state.load_doc(state.EMPTY_SLOTS, path)
+        report = state.load_doc(state.EMPTY_SLOTS)
     except state.Unavailable:
         logger.warning("Could not read the empty slots", exc_info=True)
         return {"error": "the music database is unavailable"}

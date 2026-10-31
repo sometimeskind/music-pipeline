@@ -4,21 +4,16 @@ the album tick requests, once each, and music-later auto-requests' listing."""
 from __future__ import annotations
 
 import logging
-import os
 import sys
 from pathlib import Path
 
 import pytest
 
 from music_fetch import album_requests as req
-from music_fetch import albums, later_cli, later_queue, later_requests, state, store
+from music_fetch import albums, later_cli, later_queue, later_requests, state
 
 sys.path.insert(0, str(Path(__file__).parent))  # importable however pytest imports this file
-from pg_fixture import pg_url  # noqa: E402, F401 — a fixture
 from mb_fake import OTHER_RG, R12, RG, FakeMB  # noqa: E402
-
-needs_pg = pytest.mark.skipif(not os.environ.get("MUSIC_TEST_DATABASE_URL"),
-                              reason="MUSIC_TEST_DATABASE_URL is unset")
 
 HELD_RG = "7c3f5a2e-1b4d-4e6f-8a9b-0c1d2e3f4a5b"
 ASKED_RG = "9a8b7c6d-5e4f-4a3b-8c2d-1e0f9a8b7c6d"
@@ -27,15 +22,7 @@ SPOTIFY_REF = "0123456789abcdefABCDEF"  # a Spotify album ID: the row has no rel
 
 @pytest.fixture(autouse=True)
 def _isolated(tmp_path: Path, monkeypatch):
-    monkeypatch.setattr(store, "STORE_DIR", tmp_path / "store")
     monkeypatch.setattr(albums, "OVERRIDES_FILE", tmp_path / "album-overrides.conf")
-    monkeypatch.setattr(state, "SWITCH", tmp_path / ".state-in-db")
-
-
-@pytest.fixture
-def switched(tmp_path: Path, pg_url):
-    (tmp_path / ".state-in-db").touch()
-    return pg_url
 
 
 def _later_row(group: str | None, status: str, name: str) -> dict:
@@ -83,8 +70,7 @@ def _events(kind: str) -> list[tuple[str, str, dict]]:
             "SELECT release_group::text, message, data FROM events WHERE kind = %s ORDER BY id", (kind,))]
 
 
-@needs_pg
-def test_the_plan_takes_the_incomplete_unrequested_albums_with_a_release_group(switched):
+def test_the_plan_takes_the_incomplete_unrequested_albums_with_a_release_group():
     _setup()
     p = _plan()
     assert [e.release_group for e, _ in p.request] == [RG, OTHER_RG]  # queue order
@@ -93,8 +79,7 @@ def test_the_plan_takes_the_incomplete_unrequested_albums_with_a_release_group(s
     assert p.refused == []
 
 
-@needs_pg
-def test_a_tick_requests_them_once_as_auto_later(switched, caplog):
+def test_a_tick_requests_them_once_as_auto_later(caplog):
     _setup()
     mb = FakeMB()
     with caplog.at_level(logging.INFO, logger=later_requests.__name__):
@@ -121,8 +106,7 @@ def test_a_tick_requests_them_once_as_auto_later(switched, caplog):
     assert len(mb.calls) == calls and len(_events("album_requested")) == 1  # idempotent, no MusicBrainz read
 
 
-@needs_pg
-def test_a_musicbrainz_outage_stops_the_ticks_requests_without_a_trace(switched, caplog):
+def test_a_musicbrainz_outage_stops_the_ticks_requests_without_a_trace(caplog):
     _setup()
 
     def down(path: str, **params):
@@ -135,8 +119,7 @@ def test_a_musicbrainz_outage_stops_the_ticks_requests_without_a_trace(switched,
     assert [e.release_group for e, _ in _plan().request] == [RG, OTHER_RG]  # the next tick tries again
 
 
-@needs_pg
-def test_a_tick_requests_at_most_per_tick(switched, monkeypatch):
+def test_a_tick_requests_at_most_per_tick(monkeypatch):
     _setup()
     monkeypatch.setattr(later_requests, "PER_TICK", 1)
     with state.connect() as conn:
@@ -144,8 +127,7 @@ def test_a_tick_requests_at_most_per_tick(switched, monkeypatch):
     assert _requests().keys() == {ASKED_RG, RG} and _events("failure") == []
 
 
-@needs_pg
-def test_the_requests_the_tick_adds_are_fed_the_same_tick_and_fall_back_from_musicbrainz(switched):
+def test_the_requests_the_tick_adds_are_fed_the_same_tick_and_fall_back_from_musicbrainz():
     """The former later row in fallback (its Spotify fallback dead since the cutover) becomes
     a request's: its tracks the MusicBrainz tracklist, its fallback built from MusicBrainz."""
     _setup()
@@ -161,8 +143,7 @@ def test_the_requests_the_tick_adds_are_fed_the_same_tick_and_fall_back_from_mus
     assert list(held["playlists"]) == ["later"]  # not requested, and held: untouched
 
 
-@needs_pg
-def test_music_later_auto_requests_lists_the_plan_and_writes_nothing(switched, caplog):
+def test_music_later_auto_requests_lists_the_plan_and_writes_nothing(caplog):
     _setup()
     caplog.clear()
     with caplog.at_level(logging.INFO, logger=later_cli.__name__):
@@ -175,8 +156,14 @@ def test_music_later_auto_requests_lists_the_plan_and_writes_nothing(switched, c
     assert _requests().keys() == {ASKED_RG}
 
 
-def test_without_the_database_the_tick_does_nothing():
-    later_requests.tick(state.AlbumRows(), FakeMB(), apply=True)  # the JSON files are the state: no queue
+def test_with_the_database_down_the_tick_logs_and_carries_on(monkeypatch, caplog):
+    def down(url=None):
+        raise state.Unavailable("the music database is unreachable")
+
+    monkeypatch.setattr(state, "connect", down)
+    with caplog.at_level(logging.ERROR, logger=later_requests.__name__):
+        later_requests.tick(state.AlbumRows(), FakeMB(), apply=True)  # doesn't raise: the album tick goes on
+    assert any("next tick tries again" in r.getMessage() for r in caplog.records)
 
 
 def test_the_entry_held_by_ref_is_counted_from_its_row_status():

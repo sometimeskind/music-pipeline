@@ -9,8 +9,8 @@ integration tests (``tests/``, its own ``pytest.ini``) and the MCP adapter's
 
 With ``MUSIC_TEST_DATABASE_URL`` set (CI's postgres service; locally, a
 throwaway ``postgres`` container), one database is created and migrated per
-session and every test starts on it empty: :func:`_state_db` truncates every
-table but ``schema_migrations`` and sets ``MUSIC_DATABASE_URL``.  A test that
+session and every test starts on it empty: :func:`_state_db` truncates the
+tables the last test wrote and sets ``MUSIC_DATABASE_URL``.  A test that
 wants a database of its own (a migration test) takes ``pg_url``
 (``fetch/tests/pg_fixture.py``), which overrides it.
 
@@ -63,16 +63,13 @@ def _dirty_query(conn) -> str:
 
 
 @pytest.fixture(autouse=True)
-def _state_db(_state_db_conn, tmp_path_factory, monkeypatch):
+def _state_db(_state_db_conn, monkeypatch):
     """An empty, migrated state database for every test."""
     try:
         from music_fetch import db, events, state
     except ImportError:  # a test tree without the fetch package
         yield
         return
-    switch = tmp_path_factory.mktemp("switch") / ".state-in-db"
-    switch.touch()
-    monkeypatch.setattr(state, "SWITCH", switch)
     if _state_db_conn is None:
         def skip(url=None):
             pytest.skip("the state is the music database's: set MUSIC_TEST_DATABASE_URL")

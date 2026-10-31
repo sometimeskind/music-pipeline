@@ -302,7 +302,7 @@ def cut_over(conn: psycopg.Connection, apply: bool, get: req.Get | None = None, 
     found, skipped = tracklists(get or req.musicbrainz(), p.keep)
     for line in skipped:
         logger.info("%s", line)
-    from music_fetch.state_import import _locks  # noqa: PLC0415
+    from music_fetch.album_resolve import _locks  # noqa: PLC0415
 
     with _locks(True), conn.transaction():
         rows, entries, p = _plan(conn)  # again: a tick may have changed the rows meanwhile
@@ -331,7 +331,7 @@ def revert(conn: psycopg.Connection, apply: bool) -> None:
     if not apply:
         logger.info("Dry run; --apply to write")
         return
-    from music_fetch.state_import import _locks  # noqa: PLC0415
+    from music_fetch.album_resolve import _locks  # noqa: PLC0415
 
     with _locks(True), conn.transaction():
         rows = statedb.load_albums(conn)
@@ -361,8 +361,6 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--verbose", action="store_true", help="list every album queued and requested")
     args = parser.parse_args(argv)
     logging.basicConfig(level=logging.INFO, format="[%(asctime)s] %(message)s", datefmt="%Y-%m-%dT%H:%M:%S%z")
-    if not statedb.in_db():
-        raise SystemExit("The state is not in the music database (music-state-import): nothing to cut over")
     with statedb.connect() as conn:
         if args.revert:
             revert(conn, args.apply)

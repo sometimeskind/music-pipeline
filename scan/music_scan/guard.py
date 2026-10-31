@@ -203,13 +203,13 @@ def acoustid_recordings(path: Path) -> set[str]:
     return {rid for score, rid, *_ in results if rid and score >= FINGERPRINT_MIN_SCORE}
 
 
-def request_songs(state_file: Path | None = None) -> dict[str, dict]:
+def request_songs() -> dict[str, dict]:
     """``{recording URL: song}`` of every album request's fallback songs, from
     the album state; empty when it can't be read."""
     from music_fetch import albums  # noqa: PLC0415
 
     try:
-        records = albums.State.load(state_file or albums.STATE_FILE).albums
+        records = albums.State.load().albums
     except Exception as exc:
         logger.warning("  [GUARD] could not read the album state (%s); request fallbacks wait", exc)
         return {}

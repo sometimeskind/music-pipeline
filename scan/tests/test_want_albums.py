@@ -101,7 +101,6 @@ def stores(tmp_path: Path, monkeypatch):
     spotdl_dir.mkdir()
     (spotdl_dir / "keep.album").touch()
     (spotdl_dir / "mood.nosync").touch()
-    monkeypatch.setattr(store, "STORE_DIR", tmp_path / "store")
     monkeypatch.setattr(want_albums, "SPOTDL_DIR", spotdl_dir)
     monkeypatch.setattr(want_albums, "QUARANTINE", tmp_path / "quarantine")
     for name in ("pl", "keep", "mood"):

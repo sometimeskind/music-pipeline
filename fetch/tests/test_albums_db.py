@@ -25,15 +25,7 @@ RG = "6e0a6c2a-2d38-3d3c-9d38-4f0c2b5b7a11"
 
 @pytest.fixture(autouse=True)
 def _isolated(tmp_path: Path, monkeypatch):
-    monkeypatch.setattr(store, "STORE_DIR", tmp_path / "store")
     monkeypatch.setattr(albums, "OVERRIDES_FILE", tmp_path / "album-overrides.conf")
-    monkeypatch.setattr(state, "SWITCH", tmp_path / ".state-in-db")
-
-
-@pytest.fixture
-def switched(tmp_path: Path, pg_url):
-    (tmp_path / ".state-in-db").touch()
-    return pg_url
 
 
 def _song(name: str, album_id: str) -> dict:
@@ -90,24 +82,22 @@ def test_events_never_take_a_release_group_for_a_spotify_id():
     assert events.spotify_album("0ETFjACtuP2ADo6LFhL6HN") == "0ETFjACtuP2ADo6LFhL6HN"
 
 
-def test_the_tick_skips_while_the_database_is_down(tmp_path: Path, monkeypatch):
-    (tmp_path / ".state-in-db").touch()
+def test_the_tick_skips_while_the_database_is_down(monkeypatch):
     monkeypatch.setenv("MUSIC_DATABASE_URL", "postgresql://nowhere.invalid/music")
     monkeypatch.setattr(state.db, "CONNECT_TIMEOUT", 1)
     spotify = MagicMock()
     with patch.object(albums, "_push") as push:
         result = tick([("later", "url")], spotify, MagicMock(), MagicMock(), lambda k, r: False,
-                      Settings(mode="on"), tmp_path / ".albums.json")
+                      Settings(mode="on"))
     assert result.searched == 0 and not spotify.mock_calls
     assert "music_albums_last_tick_success 0" in push.call_args.args[0]
-    assert not (tmp_path / ".albums.json").exists()  # never the stale JSON
 
 
 # --- against Postgres ---
 
 
 @needs_pg
-def test_a_tick_maps_and_merges_editions(switched, tmp_path: Path):
+def test_a_tick_maps_and_merges_editions(pg_url, tmp_path: Path):
     with state.connect() as conn:
         rows = state.AlbumRows(albums={
             "sp1": {**state.new_record("sp1", status=albums.IMPORTED, blocklist=[], name="Album", artist="Artist",
@@ -120,10 +110,8 @@ def test_a_tick_maps_and_merges_editions(switched, tmp_path: Path):
     prowlarr.blocked.return_value = []
     with patch.object(albums, "_push"):
         tick([("later", "url")], _Spotify([_song("One", "sp2"), _song("Two", "sp2")]), prowlarr, MagicMock(),
-             lambda k, r: False, Settings(mode="dry-run"), tmp_path / ".albums.json",
-             library=None, wants=None)
+             lambda k, r: False, Settings(mode="dry-run"), library=None, wants=None)
     loaded = State.load()
-    assert loaded.in_db
     assert list(loaded.albums) == ["sp1"]
     record = loaded.albums["sp1"]
     assert record["spotify_album_ids"] == ["sp1", "sp2"]
@@ -131,13 +119,12 @@ def test_a_tick_maps_and_merges_editions(switched, tmp_path: Path):
     assert [t[0] for t in record["playlists"]["later"]] == ["One", "Two"]
     assert [t[0] for t in record["playlists"]["keep"]] == ["One"]
     assert store.load("later").songs[0]["album_id"] == "sp2"
-    assert not (tmp_path / ".albums.json").exists()
     # The next refresh finds sp2's songs on the merged record through its refs.
     loaded.playlists["later"]["snapshot_id"] = "old"
     with patch.object(albums, "_push"):
         loaded.save()
         tick([("later", "url")], _Spotify([_song("Three", "sp2")]), prowlarr, MagicMock(),
-             lambda k, r: False, Settings(mode="dry-run"), tmp_path / ".albums.json")
+             lambda k, r: False, Settings(mode="dry-run"))
     again = State.load()
     assert list(again.albums) == ["sp1"]
     assert [t[0] for t in again.albums["sp1"]["playlists"]["later"]] == ["Three"]

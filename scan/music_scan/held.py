@@ -58,18 +58,19 @@ def held_urls(quarantine_dir: Path = QUARANTINE_DIR, inbox_dir: Path = SPOTDL_DI
     return spotify_urls(quarantine_dir) | spotify_urls(inbox_dir) | spotify_urls(unverified_dir)
 
 
-def album_held(state_file: Path | None = None) -> frozenset[str]:
+def album_held() -> frozenset[str]:
     """The URLs of the tracks album mode holds for a spotdl playlist
     (:func:`music_fetch.albums.held_tracks`), only while ``ALBUM_MODE`` is
-    ``on``: in ``off`` or ``dry-run`` nothing grabs them.  An unreadable
-    state holds nothing."""
+    ``on``: in ``off`` or ``dry-run`` nothing grabs them.  A database that
+    is down holds nothing."""
     from music_fetch import albums  # noqa: PLC0415
+    from music_fetch import state as statedb  # noqa: PLC0415
 
     settings = albums.Settings.from_env()
     if settings.mode != "on":
         return frozenset()
     try:
-        state = albums.State.load(state_file or albums.STATE_FILE)
-    except (OSError, ValueError):
+        state = albums.State.load()
+    except statedb.Unavailable:
         return frozenset()
     return frozenset(SPOTIFY_TRACK_URL + track_id for track_id in albums.held_tracks(state, settings))

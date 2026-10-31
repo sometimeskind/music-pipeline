@@ -37,7 +37,6 @@ from music_fetch.spotdl_ops import _load_failures, download_fallback, fetch_song
 logger = logging.getLogger(__name__)
 
 SPOTDL_DIR = Path("/root/Music/inbox/spotdl")
-FAILURES_FILE = SPOTDL_DIR.parent / ".spotdl-failures.json"
 # music_scan.scan.PLAYLISTS: a playlist removed from config loses its .m3u.
 PLAYLISTS_DIR = Path("/root/Music/playlists")
 COOKIE_FILE = Path("/root/.config/spotdl/cookies.txt")
@@ -206,7 +205,7 @@ def reconcile_playlists() -> list[str]:
         store.remove(name)
         (SPOTDL_DIR / f"{name}.nosync").unlink(missing_ok=True)
         (SPOTDL_DIR / f"{name}.album").unlink(missing_ok=True)
-        if name != later_queue.PLAYLIST or not state.in_db():
+        if name != later_queue.PLAYLIST:
             # later.m3u outlives the later playlist: the Later queue writes it (homelab#2478).
             (PLAYLISTS_DIR / f"{name}.m3u").unlink(missing_ok=True)
         download_dir = SPOTDL_DIR / name
@@ -262,7 +261,7 @@ def _sync_requests(album_state: albums.State, held: frozenset[str], metrics: Ing
     output_dir.mkdir(parents=True, exist_ok=True)
     try:
         result = download_fallback(songs, output_dir=output_dir, cookie_file=COOKIE_FILE, track_limit=track_limit,
-                                   failures_file=FAILURES_FILE)
+                                   backoff=True)
     except Exception as exc:
         reason = classify_failure(str(exc))
         logger.error("ERROR: spotdl fallback for the album requests failed (reason=%s): %s", reason, exc)
@@ -340,7 +339,7 @@ def sync_playlists(
         return (song.get("url") or "") not in held and not resolves(song)
 
     # Read only: the album tick owns it (#205).
-    album_state = albums.State.load(SPOTDL_DIR / albums.STATE_FILE.name)
+    album_state = albums.State.load()
 
     for pl in playlists:
         name = pl.name
@@ -407,7 +406,7 @@ def sync_playlists(
                     output_dir=output_dir,
                     cookie_file=COOKIE_FILE,
                     track_limit=track_limit,
-                    failures_file=FAILURES_FILE,
+                    backoff=True,
                     in_library=playlist_in_library,
                 )
             else:
@@ -420,7 +419,7 @@ def sync_playlists(
                     output_dir=output_dir,
                     cookie_file=COOKIE_FILE,
                     track_limit=track_limit,
-                    failures_file=FAILURES_FILE,
+                    backoff=True,
                     in_library=playlist_in_library,
                 )
                 _save_store(name, result)
@@ -541,7 +540,7 @@ def run() -> None:
 
         try:
             logger.info("==> music-ingest starting")
-            failures = _load_failures(FAILURES_FILE)
+            failures = _load_failures()
             if failures:
                 logger.info("Backoff state (%d track(s)):", len(failures))
                 for url, entry in failures.items():

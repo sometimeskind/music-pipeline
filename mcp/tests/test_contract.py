@@ -48,7 +48,7 @@ def _free_port() -> int:
 def pipeline_url(tmp_path_factory):
     port = _free_port()
     env = os.environ | {"MCP_API_TOKEN": TOKEN, "MCP_INLINE_SECONDS": "5", "PYTHONUNBUFFERED": "1"}
-    env.pop("MUSIC_DATABASE_URL", None)  # no event store: the history reads' unavailable path
+    env.pop("MUSIC_DATABASE_URL", None)  # the harness makes its own, on MUSIC_TEST_DATABASE_URL's server
     proc = subprocess.Popen(
         [PYTHON, str(HARNESS), "--port", str(port), "--dir", str(tmp_path_factory.mktemp("pipeline"))],
         env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
@@ -136,12 +136,12 @@ async def test_structured_reads(pipeline_url):
 async def test_history_reads(pipeline_url):
     async with Client(server(pipeline_url, PILOT)) as c:
         history = (await c.call_tool("album_history", {"query": "ALB1"})).data
-        assert history["status"] == "unavailable" and history["error"]
+        assert history["status"] == "ok" and history["events"] == []  # the harness records none
         assert (await c.call_tool("album_history", {"query": "abbey"})).data["status"] == "ambiguous"
 
         digest = (await c.call_tool("digest_summary", {"since": "2026-10-28T05:00:00Z"})).data
         assert digest["status"] == "ok" and digest["since"] == "2026-10-28T05:00:00Z"
-        assert "error" in digest["history"]
+        assert "error" not in digest["history"]
         issues = digest["issues"]
         assert issues["mixed"]["total"] == 1 and issues["stuck"]["failed"]["total"] == 1
         assert issues["only_copies"]["total"] == 2 and issues["rejects"]["total"] == 1
@@ -249,7 +249,7 @@ async def test_the_override_tools(pipeline_url):
             with pytest.raises(ToolError):
                 await c.call_tool(tool, args)
     async with Client(server(pipeline_url, PILOT)) as c:
-        # No music database here: the read says so.
+        # The harness's database has no overrides imported: the read says so.
         listed = (await c.call_tool("list_overrides", {})).data
         assert listed["status"] == "unavailable" and listed["error"]
 
@@ -291,11 +291,11 @@ async def test_the_request_tools(pipeline_url):
             await c.call_tool("request_album", {"albums": [{"release_group": rg}]})
         with pytest.raises(ToolError):
             await c.call_tool("remove_from_later", {"through": 1})
-        # No music database here: the reads say so.
+        # The CLI is faked, so the request tools above wrote nothing.
         listed = (await c.call_tool("list_requests", {})).data
-        assert listed["status"] == "unavailable" and listed["error"]
+        assert listed["status"] == "ok" and listed["requests"] == []
         queue = (await c.call_tool("get_later", {})).data
-        assert queue["status"] == "unavailable" and queue["error"]
+        assert queue["status"] == "ok" and queue["albums"] == []
 
 
 async def test_bad_requests_reach_the_model_as_errors(pipeline_url):

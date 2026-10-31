@@ -80,7 +80,6 @@ def test_album_held_is_the_wants_records_tracks_only_when_on(tmp_path: Path, mon
         "A": {**statedb.new_record("A"), "status": "wanted", "origin": "wants",
               "playlists": {"disc": [["T", "Artist", "ID1"]]}},
         "W": {**statedb.new_record("W"), "status": "wanted", "playlists": {"albums": [["T", "Artist", "ID2"]]}}})
-    state.in_db = True
     state.save()
     assert held.album_held() == {"https://open.spotify.com/track/ID1"}
     monkeypatch.setenv("ALBUM_MODE", "dry-run")

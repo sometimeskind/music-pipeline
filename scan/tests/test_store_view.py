@@ -55,7 +55,6 @@ def env(tmp_path: Path, monkeypatch):
     monkeypatch.setattr("music_scan.scan.SPOTDL_DIR", spotdl_dir)
     monkeypatch.setattr("music_scan.scan.PLAYLISTS", playlists_dir)
     monkeypatch.setattr("music_scan.scan.MusicLibrary", mock.MagicMock(return_value=lib))
-    monkeypatch.setattr(store, "STORE_DIR", tmp_path / "store")
     return spotdl_dir, playlists_dir, lib
 
 

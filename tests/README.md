@@ -4,7 +4,7 @@ End-to-end tests that orchestrate real Docker containers to verify the full pipe
 
 ## How it works
 
-Tests run **on the host** using the Python Docker SDK (`docker-py`). Each test spins up the service container with isolated Docker volumes, injects test data, runs operations against the HTTP API or entry points, and asserts on filesystem state and log output.
+Tests run **on the host** using the Python Docker SDK (`docker-py`). Each test spins up the service container with isolated Docker volumes, injects test data, runs operations against the HTTP API or entry points, and asserts on filesystem state and log output. The state is the music database's (homelab#2502): the session starts a throwaway Postgres container, each test gets an empty database of its own, and a playlist store is seeded there (`put_store`), never as a file.
 
 The image under test is controlled by an environment variable so CI can point tests at a freshly-built local image before the push to GHCR:
 

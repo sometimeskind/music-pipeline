@@ -48,14 +48,14 @@ def _z(iso: str | None) -> str | None:
 
 
 def make_blueprint(jobs: mcp_jobs.JobQueue) -> Blueprint:
-    from music_fetch.albums import STATE_FILE, State  # noqa: PLC0415
+    from music_fetch.albums import State  # noqa: PLC0415
     from music_scan.library import LIBRARY_DB, LIBRARY_DIR  # noqa: PLC0415
 
     bp = Blueprint("mcp", __name__, url_prefix="/mcp-api")
     quarantine = Path(os.environ.get("MUSIC_QUARANTINE", "/root/Music/quarantine"))
 
     def records() -> dict[str, dict]:
-        return State.load(STATE_FILE).albums
+        return State.load().albums
 
     def library() -> mcp_reads.Library:
         return mcp_reads.Library(LIBRARY_DB, LIBRARY_DIR)
@@ -241,8 +241,6 @@ def make_blueprint(jobs: mcp_jobs.JobQueue) -> Blueprint:
     def digest_summary():
         import psycopg  # noqa: PLC0415
 
-        from music_scan.scan import EMPTY_SLOTS_NAME  # noqa: PLC0415
-
         now = datetime.now(timezone.utc)
         since = _since() or mcp_history.since_default(now)
         read("digest_summary", since=since)
@@ -251,14 +249,14 @@ def make_blueprint(jobs: mcp_jobs.JobQueue) -> Blueprint:
                 history = mcp_history.history(conn, since)
         except (mcp_history.Unavailable, psycopg.Error) as exc:
             history = {"error": unavailable(exc)}
-        state = State.load(STATE_FILE)
+        state = State.load()
         with library() as lib:
             issues = {
                 "mixed": mcp_history.mixed(state),
                 "stuck": mcp_history.stuck(state.albums, now),
                 "only_copies": mcp_history.only_copies(lib, quarantine / "replaced"),
                 "path_clashes": mcp_history.path_clashes(lib),
-                "empty_slots": mcp_history.empty_slots(STATE_FILE.parent / EMPTY_SLOTS_NAME),
+                "empty_slots": mcp_history.empty_slots(),
                 "rejects": mcp_history.rejects(quarantine),
             }
         requests = mcp_history.requests(state)
@@ -283,7 +281,6 @@ def make_blueprint(jobs: mcp_jobs.JobQueue) -> Blueprint:
                 if not overrides.imported(conn):
                     return jsonify({"status": "unavailable", "error": "the overrides are not imported yet: "
                                     "album-overrides.conf and track-pins.conf hold them (music-overrides import)"}), 503
-                assert conn is not None
                 found = overrides.listing(conn, statedb.load_albums(conn), kind)
         except (statedb.Unavailable, psycopg.Error) as exc:
             logger.warning("[MCP] reading the overrides failed: %s", exc)
@@ -308,9 +305,6 @@ def make_blueprint(jobs: mcp_jobs.JobQueue) -> Blueprint:
         read("list_requests", status=status)
         try:
             with statedb.session() as conn:
-                if conn is None:
-                    return jsonify({"status": "unavailable",
-                                    "error": "the state is not in the music database yet (music-state-import)"}), 503
                 found = album_requests.listing(conn, statedb.load_albums(conn), status)
         except (statedb.Unavailable, psycopg.Error) as exc:
             logger.warning("[MCP] reading the requests failed: %s", exc)
@@ -330,9 +324,6 @@ def make_blueprint(jobs: mcp_jobs.JobQueue) -> Blueprint:
         read("get_later")
         try:
             with statedb.session() as conn:
-                if conn is None:
-                    return jsonify({"status": "unavailable",
-                                    "error": "the state is not in the music database yet (music-state-import)"}), 503
                 found = later_queue.listing(conn, statedb.load_albums(conn))
         except (statedb.Unavailable, psycopg.Error) as exc:
             logger.warning("[MCP] reading the Later queue failed: %s", exc)

@@ -49,4 +49,6 @@ the dry-run workflow and the verify timings. `get_guide(topic)` serves it, and t
 
 `just test-mcp` runs the unit tests and the contract test. The adapter runs in its own venv,
 and the real Flask app (`service/tests/mcp_harness.py`) runs as a subprocess of the service's
-Python, so fastmcp and prefect never share an environment. CI runs the same `mcp/test.sh`.
+Python, so fastmcp and prefect never share an environment. The harness keeps its state in a
+database it creates on `MUSIC_TEST_DATABASE_URL`'s Postgres (`just test-mcp` starts a throwaway
+one). CI runs the same `mcp/test.sh`, against the job's postgres service.

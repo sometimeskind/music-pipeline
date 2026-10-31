@@ -83,7 +83,7 @@ def add_to_list(item, field: str, value: str | None) -> bool:
 
 
 class PlaylistTrack(NamedTuple):
-    """One entry of an album record's per-playlist track list in .albums.json.
+    """One entry of an album record's per-playlist track list in the album store.
 
     Stored as a list: ``[name, artist, song_id, isrc, disc, track]``.  Records
     written before #176 hold only ``[name, artist]``.

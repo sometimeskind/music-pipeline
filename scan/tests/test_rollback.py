@@ -44,14 +44,12 @@ def _on_disk(tmp_path: Path, i: FakeItem) -> FakeItem:
     return i
 
 
-def stores(tmp_path: Path, monkeypatch, **playlists: list[dict]) -> Path:
-    """Point the playlist stores at *tmp_path* and write one per ``name=songs`` (homelab#1914)."""
+def stores(tmp_path: Path, monkeypatch, **playlists: list[dict]) -> None:
+    """Write a playlist store per ``name=songs`` (homelab#1914)."""
     from music_fetch import store
 
-    monkeypatch.setattr(store, "STORE_DIR", tmp_path / "store")
     for name, songs in playlists.items():
         store.save(store.Store.from_songs(name, songs))
-    return store.STORE_DIR
 
 
 def record(status, name="Remain in Light (Deluxe Version)", artist="Talking Heads", **extra) -> dict:
@@ -62,14 +60,14 @@ def record(status, name="Remain in Light (Deluxe Version)", artist="Talking Head
 def test_entry_keys_cover_every_playlist_store(tmp_path, monkeypatch) -> None:
     from music_fetch import store
 
-    store_dir = stores(tmp_path, monkeypatch,
+    stores(tmp_path, monkeypatch,
                        later=[{"song_id": "s1", "isrc": "GB1"}, {"url": "https://open.spotify.com/track/s2"}],
                        keep=[{"song_id": "s3"}])
     # A local entry is no Spotify entry, and a .spotdl file is never read (homelab#1914).
     keep = store.load("keep")
     keep.entries.append({store.LOCAL: {"id": 7, "path": "/x.m4a", "title": "X", "artist": "Y"}})
     store.save(keep)
-    (store_dir.parent / "old.spotdl").write_text(json.dumps({"songs": [{"song_id": "s9", "isrc": "GB9"}]}))
+    (tmp_path / "old.spotdl").write_text(json.dumps({"songs": [{"song_id": "s9", "isrc": "GB9"}]}))
     assert entry_keys() == ({"s1", "s2", "s3"}, {"GB1"})
 
 

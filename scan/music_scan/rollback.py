@@ -188,12 +188,12 @@ def _describe(item) -> str:
 
 def run(apply: bool = False) -> int:
     """List (and with *apply*, quarantine) failed releases' unmatched items.  Returns the count."""
-    from music_fetch.albums import STATE_FILE, State  # noqa: PLC0415
+    from music_fetch.albums import State  # noqa: PLC0415
     from music_scan.library import LIBRARY_DB, MusicLibrary  # noqa: PLC0415
     from music_scan.navidrome import trigger_scan  # noqa: PLC0415
     from music_scan.scan import regen_playlists  # noqa: PLC0415
 
-    records = State.load(STATE_FILE).albums
+    records = State.load().albums
     with MusicLibrary(LIBRARY_DB) as lib:
         usenet = [i for i in lib.all_items() if i.get("via") == "usenet"]
         loose = unmatched(usenet, *entry_keys())

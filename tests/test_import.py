@@ -9,15 +9,13 @@ the real MusicBrainz path — a noise file has no match at any confidence level.
 
 from __future__ import annotations
 
-import json
-
 from conftest import (
     SERVICE_IMAGE,
     beet_ls,
     cat_in_volume,
     ls_in_volume,
     mkdir_in_volume,
-    put_bytes,
+    put_store,
     put_file,
     run_scan,
     scan_binds,
@@ -115,12 +113,7 @@ def test_playlist_import_m3u_generated(
     ids = [line.strip() for line in beet_ls(docker_client, volumes, "-f$id").splitlines() if line.strip().isdigit()]
     assert len(ids) == 1, f"expected one imported item, got {ids}"
     local = {"local": {"id": int(ids[0]), "path": "", "title": "7 Ghosts I", "artist": "Nine Inch Nails"}}
-    put_bytes(
-        docker_client,
-        volumes,
-        "/root/Music/inbox/spotdl/.store/test-playlist.json",
-        json.dumps({"version": 1, "playlist": "test-playlist", "entries": [local]}).encode(),
-    )
+    put_store(docker_client, volumes, "test-playlist", [local])
     run_scan(docker_client, volumes, binds=binds)
 
     m3u = cat_in_volume(docker_client, volumes, "/root/Music/playlists/test-playlist.m3u")
@@ -176,10 +169,4 @@ def _setup_playlist(client, vol_names: dict, playlist_name: str, audio_path) -> 
     playlist_dir = f"/root/Music/inbox/spotdl/{playlist_name}"
     mkdir_in_volume(client, vol_names, playlist_dir)
     put_file(client, vol_names, playlist_dir, audio_path)
-    mkdir_in_volume(client, vol_names, "/root/Music/inbox/spotdl/.store")
-    put_bytes(
-        client,
-        vol_names,
-        f"/root/Music/inbox/spotdl/.store/{playlist_name}.json",
-        json.dumps({"version": 1, "playlist": playlist_name, "entries": []}).encode(),
-    )
+    put_store(client, vol_names, playlist_name, [])

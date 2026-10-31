@@ -12,12 +12,11 @@ MusicBrainz network calls.
 from __future__ import annotations
 
 import io
-import json
 import zipfile
 
 import requests
 
-from conftest import service_in_container, wait_for_log
+from conftest import service_in_container, store_command, wait_for_log
 
 
 # ---------------------------------------------------------------------------
@@ -265,11 +264,11 @@ def test_upload_and_scan_generates_playlist(running_service_asis, fixture_audio)
     svc = running_service_asis
     playlist_name = "test-playlist"
 
-    # The zip must reproduce the spotdl inbox layout so the plugin assigns source=
-    # and regen_playlists() finds the playlist's store (homelab#1914).
+    # The playlist's store gives it a .m3u (homelab#1914), and the zip reproduces the
+    # spotdl inbox layout so the plugin assigns source=.
+    exit_code, output = service_in_container(svc["container"], store_command(playlist_name, []))
+    assert exit_code == 0, output
     _upload_zip(svc, {
-        f"spotdl/.store/{playlist_name}.json": json.dumps(
-            {"version": 1, "playlist": playlist_name, "entries": []}).encode(),
         f"spotdl/{playlist_name}/{fixture_audio.name}": fixture_audio.read_bytes(),
     })
 

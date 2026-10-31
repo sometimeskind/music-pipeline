@@ -54,7 +54,7 @@ class Entry(NamedTuple):
 
     @classmethod
     def from_track(cls, track: PlaylistTrack) -> "Entry":
-        """From an album record's per-playlist track (``.albums.json``)."""
+        """From an album record's per-playlist track (the album store's)."""
         return cls(track.name, track.artist, track.song_id or None, track.isrc or None)
 
     @property

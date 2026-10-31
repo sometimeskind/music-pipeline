@@ -86,11 +86,8 @@ def test_the_check_says_unchanged_or_lists_the_difference():
 
 
 @pytest.fixture
-def switched(tmp_path: Path, pg_url, monkeypatch):
-    monkeypatch.setattr(store, "STORE_DIR", tmp_path / "store")
+def music_db(tmp_path: Path, pg_url, monkeypatch):
     monkeypatch.setattr(albums, "OVERRIDES_FILE", tmp_path / "album-overrides.conf")
-    monkeypatch.setattr(state, "SWITCH", tmp_path / ".state-in-db")
-    (tmp_path / ".state-in-db").touch()
     # The check reads beets and the .m3u on disk; its parts are tested above.
     monkeypatch.setattr(cutover, "m3u_lines", lambda found: [k for k, _ in found])
     monkeypatch.setattr(cutover, "current_m3u", lambda: None)
@@ -126,7 +123,7 @@ def _run(caplog, *, apply: bool = True, revert: bool = False, get=None) -> list[
 
 
 @needs_pg
-def test_apply_queues_later_ahead_of_the_queue_and_requests_keep(switched, caplog):
+def test_apply_queues_later_ahead_of_the_queue_and_requests_keep(music_db, caplog):
     _setup([_song("B"), _song("A")], [_song("K"), _song("X")],
            _record("A", RG_A), _record("B", RG_B, albums.WANTED), _record("ASK", RG_ASKED, albums.IMPORTED),
            _record("K", RG, playlist="keep"), _record("X", OTHER_RG, playlist="keep"))
@@ -164,7 +161,7 @@ def test_apply_queues_later_ahead_of_the_queue_and_requests_keep(switched, caplo
 
 
 @needs_pg
-def test_apply_again_adds_only_what_is_missing_and_revert_takes_it_all_off(switched, caplog):
+def test_apply_again_adds_only_what_is_missing_and_revert_takes_it_all_off(music_db, caplog):
     _setup([_song("A"), _song("ASK")], [_song("K")],
            _record("A", RG_A), _record("ASK", RG_ASKED, albums.IMPORTED), _record("K", RG, playlist="keep"))
     _asked_on_later()
@@ -193,7 +190,7 @@ def test_apply_again_adds_only_what_is_missing_and_revert_takes_it_all_off(switc
 
 
 @needs_pg
-def test_without_a_store_it_refuses(switched, caplog):
+def test_without_a_store_it_refuses(music_db, caplog):
     with state.connect() as conn:
         state.save_albums(conn, state.AlbumRows(albums={"A": _record("A", RG_A)}))
     store.save(store.Store.from_songs("later", [_song("A")]))
@@ -216,7 +213,7 @@ def test_queue_times_are_a_second_apart_and_before_the_first():
 
 
 @needs_pg
-def test_an_album_with_no_release_group_keeps_its_place_by_ref_until_it_resolves(switched, caplog):
+def test_an_album_with_no_release_group_keeps_its_place_by_ref_until_it_resolves(music_db, caplog):
     _setup([_song("A"), _song("N"), _song("B")], [],
            _record("A", RG_A), _record("N", None), _record("B", RG_B))
     _run(caplog)
@@ -247,7 +244,7 @@ def test_an_album_with_no_release_group_keeps_its_place_by_ref_until_it_resolves
 
 
 @needs_pg
-def test_a_ref_entry_and_a_later_request_for_its_album_become_one(switched, caplog):
+def test_a_ref_entry_and_a_later_request_for_its_album_become_one(music_db, caplog):
     """The album was requested with later meanwhile: once its row resolves, the earlier entry stays."""
     _setup([_song("N")], [], _record("N", None))
     _run(caplog)
@@ -264,7 +261,7 @@ def test_a_ref_entry_and_a_later_request_for_its_album_become_one(switched, capl
 
 
 @needs_pg
-def test_a_ref_entry_is_removed_by_through(switched, caplog):
+def test_a_ref_entry_is_removed_by_through(music_db, caplog):
     from music_fetch import later_cli
 
     _setup([_song("N"), _song("A")], [], _record("N", None), _record("A", RG_A))

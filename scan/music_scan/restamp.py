@@ -128,13 +128,13 @@ def scan_step(lib) -> int:
     """Every scan, before canon: move the stamps of gone rows' items to the
     record holding their refs now.  Only once the keys are row ids; before the
     one-time move the stamps are the operator's to move.  Returns the count."""
-    from music_fetch.albums import STATE_FILE, State  # noqa: PLC0415
+    from music_fetch.albums import State  # noqa: PLC0415
 
     with statedb.session() as conn:
-        if conn is None or not statedb.keyed_by_row(conn):
+        if not statedb.keyed_by_row(conn):
             return 0
         gone = statedb.gone_rows(conn)
-    records = State.load(STATE_FILE).albums
+    records = State.load().albums
     moves, orphans = plan(lib.all_items(), records, gone)
     if moves:
         apply(lib, moves)
@@ -164,11 +164,9 @@ def main() -> None:
     parser.add_argument("--verbose", action="store_true", help="list every album whose items move")
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO, format="[%(asctime)s] %(message)s", datefmt="%Y-%m-%dT%H:%M:%S%z")
-    from music_fetch.state_import import _locks  # noqa: PLC0415
+    from music_fetch.album_resolve import _locks  # noqa: PLC0415
     from music_scan.library import LIBRARY_DB, MusicLibrary  # noqa: PLC0415
 
-    if not statedb.in_db():
-        raise SystemExit("The state is not in the music database (music-state-import): nothing to rekey")
     by_row = not args.revert
     with _locks(args.apply), statedb.connect() as conn, MusicLibrary(LIBRARY_DB) as lib:
         current = statedb.keyed_by_row(conn)

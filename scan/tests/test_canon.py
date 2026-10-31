@@ -21,14 +21,12 @@ def _song(sid, album_id="A1", name="Album", album_type="album", date="2019-09-17
             "tracks_count": tracks, "isrc": isrc, "cover_url": COVER, **extra}
 
 
-def _stores(tmp_path, monkeypatch, **playlists):
-    """Point the playlist stores at *tmp_path* and write one per ``name=songs`` (homelab#1914)."""
+def _stores(tmp_path, monkeypatch, **playlists) -> None:
+    """Write a playlist store per ``name=songs`` (homelab#1914)."""
     from music_fetch import store
 
-    monkeypatch.setattr(store, "STORE_DIR", tmp_path / "store")
     for name, songs in playlists.items():
         store.save(store.Store.from_songs(name, songs))
-    return store.STORE_DIR
 
 
 class FakeItem(dict):
@@ -99,11 +97,11 @@ def test_store_songs_are_every_playlist_stores_song_records(tmp_path, monkeypatc
     from music_scan.canon import store_songs
 
     assert store_songs() == []
-    store_dir = _stores(tmp_path, monkeypatch, a=[_song("T1"), _song("T2", track=2)], b=[_song("T3", "A2")])
+    _stores(tmp_path, monkeypatch, a=[_song("T1"), _song("T2", track=2)], b=[_song("T3", "A2")])
     with_local = store.load("b")
     with_local.entries.append({store.LOCAL: {"id": 9, "path": "/x.m4a", "title": "X", "artist": "Y"}})
     store.save(with_local)
-    (store_dir.parent / "a.spotdl").write_text(json.dumps({"songs": [_song("OLD")]}), encoding="utf-8")
+    (tmp_path / "a.spotdl").write_text(json.dumps({"songs": [_song("OLD")]}), encoding="utf-8")
 
     assert [s["song_id"] for s in store_songs()] == ["T1", "T2", "T3"]
 
@@ -149,7 +147,7 @@ def _album(**kw):
 def _resolver(mb, tmp_path, upc=None, cached=True, **kw):
     from music_scan.mb_release import Resolver
 
-    return Resolver(cache_file=tmp_path / "mb.json" if cached else None, mb=mb, upc_of=lambda _: upc, **kw)
+    return Resolver(cache=cached, mb=mb, upc_of=lambda _: upc, **kw)
 
 
 def test_url_rung_wins(tmp_path):
@@ -230,14 +228,14 @@ def test_spotify_rate_limit_or_mb_error_leaves_the_album_pending(tmp_path):
 
     from music_scan.mb_release import Resolver
 
-    r = Resolver(cache_file=tmp_path / "mb.json", mb=FakeMB(), upc_of=limited)
+    r = Resolver(mb=FakeMB(), upc_of=limited)
     assert r.fields(_album()) is None and "SP" not in r.cache
 
     class Down(FakeMB):
         def get(self, path, **params):
             raise OSError("down")
 
-    r = Resolver(cache_file=tmp_path / "mb.json", mb=Down(), upc_of=lambda _: None)
+    r = Resolver(mb=Down(), upc_of=lambda _: None)
     assert r.fields(_album()) is None
 
 
@@ -336,7 +334,7 @@ def test_editions_merge_into_one_spotify_album_and_rerun_is_zero(tmp_path, ffmpe
 
     jp, std, loose, songs = _editions(tmp_path, lib)
     placements = placements_from([(songs, True)])
-    resolver = Resolver(cache_file=tmp_path / "mb.json", mb=FakeMB(url="SPOTREL"), upc_of=lambda _: None)
+    resolver = Resolver(mb=FakeMB(url="SPOTREL"), upc_of=lambda _: None)
     art = _jpeg(tmp_path / "c.jpg")
 
     dry = canonicalize(lib.all_items(), placements, resolver, apply=False, fetch=lambda u: art)
@@ -375,14 +373,14 @@ def test_pending_musicbrainz_leaves_mb_tags_until_a_later_scan(tmp_path, ffmpeg,
     monkeypatch.setattr(cover, "download", lambda url: art)
     mb = FakeMB(url="LATE")
     monkeypatch.setattr(canon, "Resolver", lambda budget=None: Resolver(
-        cache_file=tmp_path / "mb.json", mb=mb, upc_of=lambda _: None, budget=0))
+        mb=mb, upc_of=lambda _: None, budget=0))
 
     canon.after_scan(lib, since=0)
     item = lib.get_item(jp.id)
     assert item.album == "Album" and item.get("mb_album_via") == "pending" and item.mb_albumid == "JPREL"
 
     monkeypatch.setattr(canon, "Resolver", lambda budget=None: Resolver(
-        cache_file=tmp_path / "mb.json", mb=mb, upc_of=lambda _: None))
+        mb=mb, upc_of=lambda _: None))
     canon.after_scan(lib, since=10**12)  # nothing new: the pending item is picked up from the queue
     item = lib.get_item(jp.id)
     assert item.get("mb_album_via") == "url" and item.mb_albumid == "LATE"
@@ -401,7 +399,7 @@ def test_backfill_dry_run_apply_then_zero(tmp_path, ffmpeg, lib, monkeypatch, ca
     _stores(tmp_path, monkeypatch)
     monkeypatch.setattr(canon, "read_pages", lambda refresh=False: {"later": songs})
     monkeypatch.setattr(canon, "Resolver", lambda budget=None: Resolver(
-        cache_file=tmp_path / "mb.json", mb=FakeMB(), upc_of=lambda _: None))
+        mb=FakeMB(), upc_of=lambda _: None))
     art = _jpeg(tmp_path / "c.jpg")
     monkeypatch.setattr(cover, "download", lambda url: art)
     events = []
@@ -525,7 +523,7 @@ def _finder(tmp_path, hits, **kw):
         searched.append(isrc)
         return hits
 
-    return AlbumsByIsrc(cache_file=tmp_path / "isrc.json", search=search, interval=0, **kw), searched
+    return AlbumsByIsrc(search=search, interval=0, **kw), searched
 
 
 def test_single_moves_to_the_same_artists_album_and_keeps_the_current_one(tmp_path):
@@ -767,7 +765,7 @@ def test_after_scan_takes_an_item_linked_after_its_import(tmp_path, ffmpeg, lib,
     _stores(tmp_path, monkeypatch, p=[_song("T1", name="Take Care (Deluxe)")])
     monkeypatch.setattr(cover, "download", lambda url: _jpeg(tmp_path / "c.jpg"))
     monkeypatch.setattr(canon, "Resolver", lambda budget=None: Resolver(
-        cache_file=tmp_path / "mb.json", mb=FakeMB(url="REL"), upc_of=lambda _: None))
+        mb=FakeMB(url="REL"), upc_of=lambda _: None))
 
     with caplog.at_level(logging.INFO):
         assert canon.after_scan(lib, since=10**12) == 1
@@ -916,7 +914,6 @@ def test_backfill_moves_3092_back_to_mellon_collie(tmp_path, ffmpeg, lib, monkey
     caplog.set_level(logging.INFO)
     _, _, the_1979 = _pumpkins(tmp_path, lib, moved=True)
     records = albums_state.State(albums=_pumpkins_records())
-    records.in_db = True
     records.save()
     monkeypatch.setattr(library, "LIBRARY_DB", tmp_path / "library.db")
     monkeypatch.setattr(library, "LIBRARY_DIR", tmp_path / "library")

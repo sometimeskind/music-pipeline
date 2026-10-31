@@ -380,17 +380,16 @@ def test_downloader_settings_do_not_force_js_runtime() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_miss_track_written_to_failures_file(tmp_path: Path, simple_songs) -> None:
-    """A [MISS] track gets a backoff entry in the failures file."""
+def test_miss_track_gets_a_backoff_entry(tmp_path: Path, simple_songs) -> None:
+    """A [MISS] track gets a backoff entry."""
     output_dir, cookie_file = _setup_sync(tmp_path)
-    failures_file = tmp_path / ".spotdl-failures.json"
 
     song = _make_mock_song("https://open.spotify.com/track/1", title="Missing")
     simple_songs.return_value = [song]
     mock_spotdl = _mock_spotdl([(song, None)], errors=[_lookup_error(song.url)])
 
     with mock.patch("music_fetch.spotdl_ops._make_spotdl", return_value=mock_spotdl):
-        _sync(output_dir=output_dir, cookie_file=cookie_file, failures_file=failures_file)
+        _sync(output_dir=output_dir, cookie_file=cookie_file, backoff=True)
     data = _backoff()
     assert song.url in data
     assert data[song.url]["kind"] == "miss"
@@ -403,14 +402,13 @@ def test_fail_track_written_with_fail_kind(tmp_path: Path, simple_songs) -> None
     from datetime import datetime, timedelta, timezone
 
     output_dir, cookie_file = _setup_sync(tmp_path)
-    failures_file = tmp_path / ".spotdl-failures.json"
 
     song = _make_mock_song("https://open.spotify.com/track/1")
     simple_songs.return_value = [song]
     mock_spotdl = _mock_spotdl([(song, None)], errors=[_download_error(song.url)])
 
     with mock.patch("music_fetch.spotdl_ops._make_spotdl", return_value=mock_spotdl):
-        _sync(output_dir=output_dir, cookie_file=cookie_file, failures_file=failures_file)
+        _sync(output_dir=output_dir, cookie_file=cookie_file, backoff=True)
 
     data = _backoff()
     assert data[song.url]["kind"] == "fail"
@@ -424,7 +422,6 @@ def test_fail_track_in_backoff_is_skipped(tmp_path: Path, simple_songs) -> None:
     from datetime import datetime, timedelta, timezone
 
     output_dir, cookie_file = _setup_sync(tmp_path)
-    failures_file = tmp_path / ".spotdl-failures.json"
 
     url = "https://open.spotify.com/track/failing"
     future = (datetime.now(timezone.utc) + timedelta(hours=12)).replace(microsecond=0).isoformat()
@@ -436,7 +433,7 @@ def test_fail_track_in_backoff_is_skipped(tmp_path: Path, simple_songs) -> None:
 
     with mock.patch("music_fetch.spotdl_ops._make_spotdl", return_value=mock_spotdl):
         result = _sync(
-            output_dir=output_dir, cookie_file=cookie_file, failures_file=failures_file,
+            output_dir=output_dir, cookie_file=cookie_file, backoff=True,
         )
 
     assert result.attempted == 0
@@ -448,7 +445,6 @@ def test_kind_change_resets_attempts(tmp_path: Path, simple_songs) -> None:
     from datetime import datetime, timedelta, timezone
 
     output_dir, cookie_file = _setup_sync(tmp_path)
-    failures_file = tmp_path / ".spotdl-failures.json"
 
     url = "https://open.spotify.com/track/flip"
     past = (datetime.now(timezone.utc) - timedelta(days=1)).replace(microsecond=0).isoformat()
@@ -459,7 +455,7 @@ def test_kind_change_resets_attempts(tmp_path: Path, simple_songs) -> None:
     mock_spotdl = _mock_spotdl([(song, None)], errors=[_download_error(url)])
 
     with mock.patch("music_fetch.spotdl_ops._make_spotdl", return_value=mock_spotdl):
-        _sync(output_dir=output_dir, cookie_file=cookie_file, failures_file=failures_file)
+        _sync(output_dir=output_dir, cookie_file=cookie_file, backoff=True)
 
     data = _backoff()
     assert data[url]["kind"] == "fail"
@@ -471,7 +467,6 @@ def test_legacy_entry_without_kind_is_miss(tmp_path: Path, simple_songs) -> None
     from datetime import datetime, timedelta, timezone
 
     output_dir, cookie_file = _setup_sync(tmp_path)
-    failures_file = tmp_path / ".spotdl-failures.json"
 
     url = "https://open.spotify.com/track/legacy"
     past = (datetime.now(timezone.utc) - timedelta(days=1)).replace(microsecond=0).isoformat()
@@ -482,7 +477,7 @@ def test_legacy_entry_without_kind_is_miss(tmp_path: Path, simple_songs) -> None
     mock_spotdl = _mock_spotdl([(song, None)], errors=[_lookup_error(url)])
 
     with mock.patch("music_fetch.spotdl_ops._make_spotdl", return_value=mock_spotdl):
-        _sync(output_dir=output_dir, cookie_file=cookie_file, failures_file=failures_file)
+        _sync(output_dir=output_dir, cookie_file=cookie_file, backoff=True)
 
     data = _backoff()
     assert data[url]["kind"] == "miss"
@@ -496,7 +491,6 @@ def test_miss_track_in_backoff_is_skipped(tmp_path: Path, simple_songs, caplog) 
     from datetime import datetime, timedelta, timezone
 
     output_dir, cookie_file = _setup_sync(tmp_path)
-    failures_file = tmp_path / ".spotdl-failures.json"
 
     backed_off_url = "https://open.spotify.com/track/backed"
     future = (datetime.now(timezone.utc) + timedelta(days=6)).replace(microsecond=0).isoformat()
@@ -512,7 +506,7 @@ def test_miss_track_in_backoff_is_skipped(tmp_path: Path, simple_songs, caplog) 
          caplog.at_level(logging.INFO, logger="music_fetch.spotdl_ops"):
         result = _sync(
             output_dir=output_dir, cookie_file=cookie_file,
-            failures_file=failures_file, track_limit=10,
+            backoff=True, track_limit=10,
         )
 
     # Only the fresh track should have been sent
@@ -529,7 +523,6 @@ def test_miss_track_past_backoff_is_retried(tmp_path: Path, simple_songs) -> Non
     from datetime import datetime, timedelta, timezone
 
     output_dir, cookie_file = _setup_sync(tmp_path)
-    failures_file = tmp_path / ".spotdl-failures.json"
 
     retry_url = "https://open.spotify.com/track/retry"
     past = (datetime.now(timezone.utc) - timedelta(days=1)).replace(microsecond=0).isoformat()
@@ -541,7 +534,7 @@ def test_miss_track_past_backoff_is_retried(tmp_path: Path, simple_songs) -> Non
 
     with mock.patch("music_fetch.spotdl_ops._make_spotdl", return_value=mock_spotdl):
         result = _sync(
-            output_dir=output_dir, cookie_file=cookie_file, failures_file=failures_file,
+            output_dir=output_dir, cookie_file=cookie_file, backoff=True,
         )
 
     assert result.attempted == 1
@@ -564,7 +557,6 @@ def test_ok_track_removes_failures_entry(tmp_path: Path, simple_songs) -> None:
     from datetime import datetime, timedelta, timezone
 
     output_dir, cookie_file = _setup_sync(tmp_path)
-    failures_file = tmp_path / ".spotdl-failures.json"
 
     track_url = "https://open.spotify.com/track/recovered"
     past = (datetime.now(timezone.utc) - timedelta(days=1)).replace(microsecond=0).isoformat()
@@ -576,16 +568,15 @@ def test_ok_track_removes_failures_entry(tmp_path: Path, simple_songs) -> None:
     mock_spotdl.download_songs.return_value = [(song, Path("/tmp/recovered.m4a"))]
 
     with mock.patch("music_fetch.spotdl_ops._make_spotdl", return_value=mock_spotdl):
-        _sync(output_dir=output_dir, cookie_file=cookie_file, failures_file=failures_file)
+        _sync(output_dir=output_dir, cookie_file=cookie_file, backoff=True)
 
     data = _backoff()
     assert track_url not in data
 
 
 def test_removed_track_clears_failures_entry(tmp_path: Path, simple_songs) -> None:
-    """Tracks removed from the Spotify playlist are pruned from the failures file."""
+    """Tracks removed from the Spotify playlist are pruned from the backoff."""
     output_dir, cookie_file = _setup_sync(tmp_path)
-    failures_file = tmp_path / ".spotdl-failures.json"
 
     removed_url = "https://open.spotify.com/track/gone"
     previous = [{"url": removed_url, "name": "Gone", "artists": []}]
@@ -596,31 +587,11 @@ def test_removed_track_clears_failures_entry(tmp_path: Path, simple_songs) -> No
     mock_spotdl.download_songs.return_value = []
 
     with mock.patch("music_fetch.spotdl_ops._make_spotdl", return_value=mock_spotdl):
-        result = _sync(output_dir=output_dir, cookie_file=cookie_file, previous=previous, failures_file=failures_file)
+        result = _sync(output_dir=output_dir, cookie_file=cookie_file, previous=previous, backoff=True)
 
     assert result.removed_urls == {removed_url}
     data = _backoff()
     assert removed_url not in data
-
-
-def test_corrupt_failures_file_treated_as_empty(tmp_path: Path, simple_songs) -> None:
-    """A corrupt or unreadable failures file is handled gracefully — treated as empty."""
-    output_dir, cookie_file = _setup_sync(tmp_path)
-    failures_file = tmp_path / ".spotdl-failures.json"
-    failures_file.write_text("not valid json", encoding="utf-8")
-
-    song = _make_mock_song("https://open.spotify.com/track/1", title="Normal")
-    mock_spotdl = mock.Mock()
-    simple_songs.return_value = [song]
-    mock_spotdl.download_songs.return_value = [(song, Path("/tmp/1.m4a"))]
-
-    with mock.patch("music_fetch.spotdl_ops._make_spotdl", return_value=mock_spotdl):
-        result = _sync(
-            output_dir=output_dir, cookie_file=cookie_file, failures_file=failures_file,
-        )
-
-    assert result.attempted == 1  # proceeded normally despite corrupt file
-    assert result.downloaded == 1
 
 
 def test_budget_limited_tracks_are_counted_not_logged(tmp_path: Path, caplog, simple_songs) -> None:
@@ -802,10 +773,9 @@ def test_cause_capture_installed_once_on_singleton(tmp_path: Path, simple_songs)
     assert "HTTP Error 403" in second.fail_reasons[song.url]
 
 
-def test_failures_file_round_trips_reason(tmp_path: Path, simple_songs) -> None:
+def test_backoff_round_trips_reason(tmp_path: Path, simple_songs) -> None:
     """[FAIL] and [MISS] entries persist their reason so investigations don't need a pod exec."""
     output_dir, cookie_file = _setup_sync(tmp_path)
-    failures_file = tmp_path / ".spotdl-failures.json"
 
     missing = _make_mock_song("https://open.spotify.com/track/miss")
     failed = _make_mock_song("https://open.spotify.com/track/fail")
@@ -816,7 +786,7 @@ def test_failures_file_round_trips_reason(tmp_path: Path, simple_songs) -> None:
     )
 
     with mock.patch("music_fetch.spotdl_ops._make_spotdl", return_value=mock_spotdl):
-        _sync(output_dir=output_dir, cookie_file=cookie_file, failures_file=failures_file)
+        _sync(output_dir=output_dir, cookie_file=cookie_file, backoff=True)
 
     data = _backoff()
     assert data[missing.url]["kind"] == "miss"
@@ -826,12 +796,11 @@ def test_failures_file_round_trips_reason(tmp_path: Path, simple_songs) -> None:
     assert "(caused by _DownloadError: ERROR: unable to download video data: HTTP Error 403: Forbidden" in data[failed.url]["reason"]
 
 
-def test_failures_file_legacy_entry_without_reason(tmp_path: Path, simple_songs) -> None:
+def test_backoff_legacy_entry_without_reason(tmp_path: Path, simple_songs) -> None:
     """Entries written before 'reason' existed still load, back off, and gain a reason on the next failure."""
     from datetime import datetime, timedelta, timezone
 
     output_dir, cookie_file = _setup_sync(tmp_path)
-    failures_file = tmp_path / ".spotdl-failures.json"
 
     backed_off = _make_mock_song("https://open.spotify.com/track/backed")
     due = _make_mock_song("https://open.spotify.com/track/due")
@@ -845,7 +814,7 @@ def test_failures_file_legacy_entry_without_reason(tmp_path: Path, simple_songs)
     mock_spotdl = _mock_spotdl([(due, None)], errors=[_download_error(due.url)])
 
     with mock.patch("music_fetch.spotdl_ops._make_spotdl", return_value=mock_spotdl):
-        result = _sync(output_dir=output_dir, cookie_file=cookie_file, failures_file=failures_file)
+        result = _sync(output_dir=output_dir, cookie_file=cookie_file, backoff=True)
 
     assert result.attempted == 1  # the legacy entry without a reason still backs off
     data = _backoff()
@@ -948,7 +917,6 @@ def test_track_already_in_library_is_linked_not_downloaded(tmp_path: Path, caplo
     have = _make_mock_song("https://open.spotify.com/track/have", title="Elsewhere")
     new = _make_mock_song("https://open.spotify.com/track/new", title="New")
     simple_songs.return_value = [have, known, new]
-    failures_file = tmp_path / ".failures.json"
     _set_backoff({have.url: {
         "kind": "miss", "attempts": 1, "retry_after": "2000-01-01T00:00:00+00:00",
     }})
@@ -963,7 +931,7 @@ def test_track_already_in_library_is_linked_not_downloaded(tmp_path: Path, caplo
          caplog.at_level(logging.INFO, logger="music_fetch.spotdl_ops"):
         result = _sync(
             output_dir=output_dir, cookie_file=cookie_file, previous=[known.json],
-            failures_file=failures_file, in_library=in_library,
+            backoff=True, in_library=in_library,
         )
 
     assert asked == [have.url, new.url]  # known tracks aren't asked about
@@ -999,7 +967,6 @@ def test_rate_limit_inside_download_fails_the_sync_without_backoff(tmp_path: Pat
     import music_fetch.spotify_limit as spotify_limit
 
     output_dir, cookie_file = _setup_sync(tmp_path)
-    failures_file = tmp_path / "failures.json"
     songs = [_make_mock_song(f"https://open.spotify.com/track/{i}") for i in range(2)]
     simple_songs.return_value = songs
     mock_spotdl = mock.Mock()
@@ -1018,7 +985,7 @@ def test_rate_limit_inside_download_fails_the_sync_without_backoff(tmp_path: Pat
          mock.patch.object(spotify_limit, "_push"), \
          mock.patch("music_fetch.spotdl_ops._make_spotdl", return_value=mock_spotdl), \
          pytest.raises(spotify_limit.SpotifyRateLimited):
-        sync_playlist(PLAYLIST_URL, "mypl", [], lambda song: True, output_dir, cookie_file, failures_file=failures_file)
+        sync_playlist(PLAYLIST_URL, "mypl", [], lambda song: True, output_dir, cookie_file, backoff=True)
 
     assert _backoff() == {}
 
@@ -1029,7 +996,6 @@ def test_download_fallback_applies_have_backoff_and_budget(tmp_path: Path) -> No
     from music_fetch.spotdl_ops import download_fallback
 
     songs = [{"url": f"https://open.spotify.com/track/{i}", "name": f"T{i}", "artists": ["A"]} for i in range(4)]
-    failures_file = tmp_path / "failures.json"
     _set_backoff({songs[1]["url"]: {"kind": "fail", "attempts": 1, "retry_after": "2999-01-01T00:00:00+00:00"}})
     sent: list = []
 
@@ -1044,7 +1010,7 @@ def test_download_fallback_applies_have_backoff_and_budget(tmp_path: Path) -> No
          mock.patch("spotdl.types.song.Song.from_dict", side_effect=lambda d: _make_mock_song(d["url"], d["name"])):
         result = download_fallback(
             songs, output_dir=tmp_path / "later", cookie_file=tmp_path / "c.txt", track_limit=1,
-            failures_file=failures_file, in_library=lambda song: song["name"] == "T0",
+            backoff=True, in_library=lambda song: song["name"] == "T0",
         )
 
     assert [s.url for s in sent] == [songs[2]["url"]]  # T0 [HAVE], T1 [BACK], T3 [DEFER]
@@ -1160,7 +1126,7 @@ def test_zero_budget_checks_the_playlist_and_defers_every_download(tmp_path: Pat
          caplog.at_level(logging.INFO, logger="music_fetch.spotdl_ops"):
         result = _sync(
             output_dir=output_dir, cookie_file=cookie_file, previous=[gone.json],
-            track_limit=0, failures_file=tmp_path / ".failures.json", in_library=lambda song: song["url"] == have.url,
+            track_limit=0, backoff=True, in_library=lambda song: song["url"] == have.url,
         )
 
     mock_spotdl.download_songs.assert_not_called()
@@ -1224,7 +1190,6 @@ def test_pinned_track_downloads_from_its_source_url(tmp_path: Path, caplog) -> N
     from music_fetch.spotdl_ops import download_fallback
 
     songs = [{"url": f"https://open.spotify.com/track/{i}", "name": f"T{i}", "artists": ["A"]} for i in range(3)]
-    failures_file = tmp_path / "failures.json"
     _set_backoff({songs[2]["url"]: {"kind": "miss", "attempts": 2, "retry_after": "2999-01-01T00:00:00+00:00"}})
     pins_file = tmp_path / "track-pins.conf"
     pins_file.write_text("2  https://music.youtube.com/watch?v=pinnedVideo&si=share\n", encoding="utf-8")
@@ -1243,7 +1208,7 @@ def test_pinned_track_downloads_from_its_source_url(tmp_path: Path, caplog) -> N
          mock.patch("spotdl.types.song.Song.from_dict", side_effect=lambda d: _make_mock_song(d["url"], d["name"])):
         result = download_fallback(
             songs, output_dir=tmp_path / "later", cookie_file=tmp_path / "c.txt", track_limit=1,
-            failures_file=failures_file,
+            backoff=True,
         )
 
     assert [s.url for s in sent] == [songs[2]["url"]]
@@ -1419,13 +1384,12 @@ def test_removed_urls_are_the_previous_songs_spotify_dropped(tmp_path: Path, sim
 def test_sync_writes_no_file(tmp_path: Path, simple_songs) -> None:
     """The store is the caller's to write and the backoff is the database's: no .spotdl or other file appears."""
     output_dir, cookie_file = _setup_sync(tmp_path)
-    failures_file = tmp_path / ".failures.json"
     ok, missing = (_make_mock_song(f"https://open.spotify.com/track/{n}") for n in ("ok", "miss"))
     simple_songs.return_value = [ok, missing]
     spotdl = _mock_spotdl([(ok, Path("/tmp/ok.m4a")), (missing, None)], errors=[_lookup_error(missing.url)])
 
     with mock.patch("music_fetch.spotdl_ops._make_spotdl", return_value=spotdl):
-        _sync(output_dir=output_dir, cookie_file=cookie_file, failures_file=failures_file)
+        _sync(output_dir=output_dir, cookie_file=cookie_file, backoff=True)
 
     assert sorted(p.relative_to(tmp_path) for p in tmp_path.rglob("*")) == [Path("mypl")]
     assert missing.url in _backoff()

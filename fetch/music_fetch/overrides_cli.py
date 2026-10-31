@@ -54,8 +54,6 @@ def select_album(rows: statedb.AlbumRows, query: str) -> tuple[str, dict]:
 
 
 def _connect(write: bool) -> psycopg.Connection:
-    if not statedb.in_db():
-        raise ov.Refused("the state is not in the music database yet (music-state-import)")
     conn = statedb.connect()
     if write and not ov.imported(conn):
         conn.close()

@@ -51,13 +51,12 @@ def _regen(tmp_path: Path, lib, songs_by_playlist: dict[str, list[dict]], album:
     from music_fetch import store
     from music_scan.scan import regen_playlists
 
-    spotdl_dir, playlists_dir, store_dir = tmp_path / "spotdl", tmp_path / "playlists", tmp_path / "store"
+    spotdl_dir, playlists_dir = tmp_path / "spotdl", tmp_path / "playlists"
     spotdl_dir.mkdir(exist_ok=True)
     wrapper = mock.MagicMock()
     wrapper.__enter__ = mock.MagicMock(return_value=lib)
     wrapper.__exit__ = mock.MagicMock(return_value=False)
-    with mock.patch.object(store, "STORE_DIR", store_dir), \
-         mock.patch("music_scan.scan.SPOTDL_DIR", spotdl_dir), \
+    with mock.patch("music_scan.scan.SPOTDL_DIR", spotdl_dir), \
          mock.patch("music_scan.scan.PLAYLISTS", playlists_dir), \
          mock.patch("music_scan.scan.MusicLibrary", return_value=wrapper):
         for name, songs in songs_by_playlist.items():
@@ -211,7 +210,7 @@ def _regen_later(tmp_path: Path, lib, stores: dict[str, list[dict]], queue: list
                  old: str | None = None) -> str | None:
     """Regen with the Later queue's available albums *queue* (``scan._later_albums``), or its read failing.
     With no *stores*, the state is in the database and has no playlist store (after the cutover)."""
-    from music_fetch import state, store
+    from music_fetch import store
 
     def later_albums():
         if isinstance(queue, Exception):
@@ -227,8 +226,7 @@ def _regen_later(tmp_path: Path, lib, stores: dict[str, list[dict]], queue: list
         if stores:
             _regen(tmp_path, lib, stores, {"later"})
         else:
-            with mock.patch.object(state, "in_db", return_value=True), \
-                 mock.patch.object(store, "names", return_value=[]):
+            with mock.patch.object(store, "names", return_value=[]):
                 _regen(tmp_path, lib, {}, set())
     path = playlists_dir / "later.m3u"
     return path.read_text() if path.exists() else None

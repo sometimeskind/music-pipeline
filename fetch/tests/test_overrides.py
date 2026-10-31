@@ -11,7 +11,7 @@ from pathlib import Path
 
 import pytest
 
-from music_fetch import albums, overrides, overrides_cli, spotdl_ops, state, state_import, store
+from music_fetch import albums, overrides, overrides_cli, spotdl_ops, state
 from music_fetch.overrides import HOLD, SEARCH, AlbumOverride
 
 sys.path.insert(0, str(Path(__file__).parent))  # importable however pytest imports this file
@@ -49,19 +49,11 @@ not-a-pin
 
 @pytest.fixture(autouse=True)
 def _isolated(tmp_path: Path, monkeypatch):
-    monkeypatch.setattr(store, "STORE_DIR", tmp_path / "store")
     monkeypatch.setattr(albums, "OVERRIDES_FILE", tmp_path / "album-overrides.conf")
     monkeypatch.setattr(spotdl_ops, "PINS_FILE", tmp_path / "track-pins.conf")
-    monkeypatch.setattr(state, "SWITCH", tmp_path / ".state-in-db")
     monkeypatch.setattr(overrides, "LIBRARY_DB", tmp_path / "library.db")
     (tmp_path / "album-overrides.conf").write_text(ALBUMS_CONF, encoding="utf-8")
     (tmp_path / "track-pins.conf").write_text(PINS_CONF, encoding="utf-8")
-
-
-@pytest.fixture
-def switched(tmp_path: Path, pg_url):
-    (tmp_path / ".state-in-db").touch()
-    return pg_url
 
 
 def _record(key: str, name: str = "Album", **fields) -> dict:
@@ -133,7 +125,7 @@ def _override_rows(conn) -> list[tuple]:
 
 
 @needs_pg
-def test_a_write_records_its_event_in_the_same_transaction(switched, monkeypatch):
+def test_a_write_records_its_event_in_the_same_transaction(pg_url, monkeypatch):
     monkeypatch.setenv("MUSIC_EVENT_CALLER", "someone")
     rows = state.AlbumRows(albums={"sp1": _record("sp1")})
     _save(rows)
@@ -152,7 +144,7 @@ def test_a_write_records_its_event_in_the_same_transaction(switched, monkeypatch
 
 
 @needs_pg
-def test_an_override_follows_a_merge_and_an_album_that_comes_back(switched):
+def test_an_override_follows_a_merge_and_an_album_that_comes_back(pg_url):
     rows = state.AlbumRows(albums={"sp1": _record("sp1"), "sp2": _record("sp2", name="Album (Deluxe)")})
     _save(rows)
     with state.connect() as conn:
@@ -182,7 +174,7 @@ def test_an_override_follows_a_merge_and_an_album_that_comes_back(switched):
 
 
 @needs_pg
-def test_the_import_resolves_through_the_refs_and_keeps_an_entry_with_no_row(switched, tmp_path: Path):
+def test_the_import_resolves_through_the_refs_and_keeps_an_entry_with_no_row(pg_url, tmp_path: Path):
     rows = state.AlbumRows(albums={
         "4FR8Z6TvIsC56NLyNomNRE": {**_record("4FR8Z6TvIsC56NLyNomNRE"),
                                    "spotify_album_ids": ["4FR8Z6TvIsC56NLyNomNRE", "otherEdition"]},
@@ -226,22 +218,7 @@ def test_the_import_resolves_through_the_refs_and_keeps_an_entry_with_no_row(swi
 
 
 @needs_pg
-def test_a_state_reimport_keeps_the_overrides_and_their_marker(switched):
-    rows = state.AlbumRows(albums={"sp1": _record("sp1")})
-    _save(rows)
-    with state.connect() as conn:
-        overrides.set_album(conn, HOLD, "sp1", rows.albums["sp1"], reason="kept")
-        state.put(conn, state.OVERRIDES_IMPORTED, {"at": "then"})
-        plan = state_import.Plan(rows=state.AlbumRows(albums={"sp1": _record("sp1")}), stores={}, failures={},
-                                 kv={}, report=state_import.resolve.Report())
-        state_import.write(conn, plan, replace=True)
-        assert overrides.imported(conn)
-        new_id = state.load_albums(conn).albums["sp1"]["_id"]
-        assert _override_rows(conn) == [(HOLD, new_id, ["sp1"], None)]
-
-
-@needs_pg
-def test_the_cli_refuses_a_write_before_the_import_and_dry_runs_repeat(switched, caplog):
+def test_the_cli_refuses_a_write_before_the_import_and_dry_runs_repeat(pg_url, caplog):
     rows = state.AlbumRows(albums={"6OxEdoTceemiC0d7GgdXEz": {**_record("6OxEdoTceemiC0d7GgdXEz", name="〠"),
                                                               "status": albums.MISSING, "query": "artist",
                                                               "searched_at": "2026-10-28T00:00:00+00:00"}})
