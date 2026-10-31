@@ -245,6 +245,11 @@ def _replace_item(body: dict, _: Albums) -> dict:
     return {"id": item, "youtube_url": youtube_url(body.get("youtube_url"))}
 
 
+def _unlink(body: dict, _: Albums) -> dict:
+    _only(body, "id", "track")
+    return {"id": _id(body.get("id"), "id"), "track": track_ref(body.get("track"))}
+
+
 # ---- search overrides, holds and pins (homelab#2484): music-overrides ----
 
 MAX_TEXT = 500
@@ -458,6 +463,10 @@ TOOLS: dict[str, Tool] = {t.name: t for t in [
     Tool("replace_item", WRITE, _replace_item,
          lambda a, apply: [_apply(["music-audit-lengths", "--replace", str(a["id"]), "--youtube", a["youtube_url"]],
                                   apply)],
+         ("pipeline",)),
+    # One Spotify ID off one item (homelab#2530); the ID is base62, never a flag.
+    Tool("unlink_spotify_id", WRITE, _unlink,
+         lambda a, apply: [_apply(["music-audit-dupes", "--unlink", str(a["id"]), a["track"]], apply)],
          ("pipeline",)),
     Tool("embed_covers", WRITE, _none, lambda a, apply: [_apply(["music-embed-covers"], apply)], ("pipeline",)),
     Tool("canon_albums", WRITE, _canon_albums, _canon_argv, ("pipeline",)),

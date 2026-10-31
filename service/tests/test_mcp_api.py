@@ -313,6 +313,18 @@ def test_replace_item_passes_the_canonical_watch_url(client, env):
                            headers=WRITE).status_code == 400, bad
 
 
+def test_unlink_spotify_id_reduces_a_track_url_to_its_id(client, env):
+    resp = client.post("/mcp-api/run/unlink_spotify_id",
+                       json={"id": 9674, "track": "https://open.spotify.com/track/2o49Twc3qrNMOt8gq9W06L?si=x"},
+                       headers=WRITE)
+    assert resp.status_code == 200, resp.json
+    assert resp.json["args"] == {"id": 9674, "track": "2o49Twc3qrNMOt8gq9W06L"}
+    assert env["commands"].ran[-1] == ["music-audit-dupes", "--unlink", "9674", "2o49Twc3qrNMOt8gq9W06L"]
+    for bad in [{"id": 9674, "track": "--apply"}, {"id": 9674, "track": "https://open.spotify.com/album/0ETFjACtuP2ADo6LFhL6HN"},
+                {"id": 0, "track": "2o49Twc3qrNMOt8gq9W06L"}, {"id": 9674}, {"id": 9674, "track": "2o49Twc3qrNMOt8gq9W06L", "x": 1}]:
+        assert client.post("/mcp-api/run/unlink_spotify_id", json=bad, headers=WRITE).status_code == 400, bad
+
+
 def test_album_urls_resolve_like_the_cli(client):
     # An album URL with no valid ID is refused, not searched for as text.
     resp = client.post("/mcp-api/run/reset_album", json={"query": "https://open.spotify.com/album/ALB3"}, headers=WRITE)
