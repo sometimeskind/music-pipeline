@@ -1,7 +1,9 @@
 """Every unit test runs on the music database, the pipeline's only state (homelab#2502).
 
 Loaded for ``pytest fetch/tests scan/tests service/tests scripts/tests`` from the
-repo root (CI) and as ``/app/conftest.py`` in the dev image.  The Docker
+repo root (CI; the root ``pytest.ini`` makes it pytest's rootdir, else it is
+``fetch/`` and this file is never loaded) and as ``/app/conftest.py`` in the
+dev image.  The Docker
 integration tests (``tests/``, its own ``pytest.ini``) and the MCP adapter's
 (``mcp/``, its own venv) have their own roots, so neither loads it.
 
