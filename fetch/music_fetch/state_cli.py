@@ -29,6 +29,7 @@ import contextlib
 import logging
 import sys
 from collections import Counter
+from collections.abc import Iterator
 from pathlib import Path
 
 import psycopg
@@ -53,22 +54,22 @@ class Refused(Exception):
 # ---------------------------------------------------------------------------
 
 
-def _locks(names: tuple[str, ...], apply: bool):
+@contextlib.contextmanager
+def _locks(names: tuple[str, ...], apply: bool) -> Iterator[None]:
     """The flows' slots *names*, in order (``albums`` before ``pipeline``, as
     the Music MCP's jobs take them); none for a dry run.  Each helper skips its
-    lock when ``MUSIC_LOCKS_HELD`` names it or PREFECT_API_URL is unset."""
-    stack = contextlib.ExitStack()
-    if not apply:
-        return stack
-    if "albums" in names:
-        from music_fetch.albums import _state_lock  # noqa: PLC0415
+    lock when ``MUSIC_LOCKS_HELD`` names it or PREFECT_API_URL is unset.  A
+    lock that times out releases the ones taken before it."""
+    with contextlib.ExitStack() as stack:
+        if apply and "albums" in names:
+            from music_fetch.albums import _state_lock  # noqa: PLC0415
 
-        stack.enter_context(_state_lock(True))
-    if "pipeline" in names:
-        from music_scan.audit import pipeline_lock  # noqa: PLC0415 — the image holds both packages
+            stack.enter_context(_state_lock(True))
+        if apply and "pipeline" in names:
+            from music_scan.audit import pipeline_lock  # noqa: PLC0415 — the image holds both packages
 
-        stack.enter_context(pipeline_lock())
-    return stack
+            stack.enter_context(pipeline_lock())
+        yield
 
 
 def _connect() -> psycopg.Connection:
@@ -254,4 +255,7 @@ def main(argv: list[str] | None = None) -> None:
         run(args)
     except (Refused, statedb.Unavailable) as exc:
         logger.error("%s", exc)
+        sys.exit(1)
+    except TimeoutError:
+        logger.error("A run held the lock too long (a nightly or scan); nothing was written: try again between runs")
         sys.exit(1)

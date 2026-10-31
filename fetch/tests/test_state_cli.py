@@ -98,6 +98,30 @@ def test_a_write_takes_its_locks_in_order_and_a_dry_run_none(monkeypatch):
     assert taken == ["albums", "pipeline", "albums", "pipeline"]
 
 
+def test_a_lock_that_times_out_releases_the_one_before_it(monkeypatch, caplog):
+    held: list[str] = []
+
+    @contextlib.contextmanager
+    def albums_lock():
+        held.append("albums")
+        try:
+            yield
+        finally:
+            held.remove("albums")
+
+    def busy():
+        raise TimeoutError
+
+    monkeypatch.setattr(albums, "_state_lock", lambda apply: albums_lock())
+    from music_scan import audit
+    monkeypatch.setattr(audit, "pipeline_lock", busy)
+    (state.SWITCH).touch()
+    with pytest.raises(SystemExit):
+        _run(["drop-store", "--apply", "--", "mix"], caplog)
+    assert held == []
+    assert "nothing was written" in caplog.text
+
+
 # --- against Postgres ---
 
 
