@@ -30,6 +30,11 @@ keeps its own fields, and takes the others' Spotify IDs, playlists' tracks
 and blocklisted releases, the higher attempt count and the strongest origin
 (an album playlist's, then a request's, then wants, then library).
 
+When both had imported, the survivor holds two releases' items once the scan
+restamps the absorbed record's: the scan's
+:func:`music_scan.release.retire_merged` keeps the survivor's own release and
+retires the other's copies as an import would (homelab#2545).
+
 The pass is idempotent: run it again after the cache or the library learns
 more, and it resolves and merges what it now can (``music-album-resolve``).
 """
