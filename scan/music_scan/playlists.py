@@ -228,6 +228,7 @@ class ReplacedFile(NamedTuple):
     spotify_ids: frozenset[str]
     isrcs: frozenset[str]
     mb_trackid: str | None
+    length: float | None = None  # seconds: a recording ID holds only at its length (homelab#2540)
 
     @property
     def words(self) -> frozenset[str]:
@@ -255,7 +256,7 @@ def _file_tags(path: Path) -> ReplacedFile | None:
         if spotdl.isrc:
             isrcs.add(spotdl.isrc)
         return ReplacedFile(path, mf.title or "", mf.artist or mf.albumartist or "", frozenset(ids), frozenset(isrcs),
-                            mf.mb_trackid or None)
+                            mf.mb_trackid or None, mf.length or None)
     except Exception:
         logger.debug("Could not read tags of %s", path, exc_info=True)
         return None

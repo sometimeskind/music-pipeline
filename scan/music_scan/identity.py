@@ -265,22 +265,37 @@ class Recordings:
 
     It also knows the files merges moved to ``quarantine/replaced/`` onto these
     items (:data:`MERGED_FILES`): the merge decided the keeper holds their
-    recording, whatever their own tags say (#303)."""
+    recording, whatever their own tags say (#303).
+
+    A Spotify ID or ISRC holds a recording outright.  A MusicBrainz recording ID
+    (``mb:``) holds it only from an item whose length agrees
+    (:func:`same_mb_recording`, homelab#2540): beets' recording is a best guess
+    per file, and a sibling recording at another length is not a copy."""
 
     def __init__(self, items=()) -> None:
         self.ids: set[str] = set()
+        self.mb_lengths: dict[str, list] = {}
         self.merged: set[str] = set()
         for item in items:
-            self.ids |= item_recording_ids(item)
+            for key in item_recording_ids(item):
+                if key.startswith("mb:"):
+                    self.mb_lengths.setdefault(key, []).append(item.get("length"))
+                else:
+                    self.ids.add(key)
             self.merged.update(merged_files(item))
 
-    def holds(self, ids: frozenset[str]) -> bool:
-        """True when a key of *ids* (one recording's :func:`recording_ids`) is held."""
-        return not self.ids.isdisjoint(ids)
+    def holds(self, ids: frozenset[str], length=None) -> bool:
+        """True when a key of *ids* (one recording's :func:`recording_ids`) is
+        held: a Spotify ID or ISRC by any item, a MusicBrainz recording ID by an
+        item whose length agrees with *length* (unknown agrees)."""
+        if not self.ids.isdisjoint(ids):
+            return True
+        return any(lengths_agree(length, held) for key in ids if key.startswith("mb:")
+                   for held in self.mb_lengths.get(key, ()))
 
     def holds_merged(self, name: str) -> bool:
         """True when a merge moved the replaced file *name* onto one of these items."""
         return name in self.merged
 
     def holds_item(self, item) -> bool:
-        return self.holds(item_recording_ids(item))
+        return self.holds(item_recording_ids(item), item.get("length"))

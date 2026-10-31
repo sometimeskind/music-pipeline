@@ -632,8 +632,9 @@ def _file_origin(f: Path) -> str:
 def split_replaced(files: list[Path], library) -> tuple[list[Path], list[Path]]:
     """``(superseded, only_copies)``: which replaced *files* hold a recording
     *library* (a :class:`music_scan.identity.Recordings` of the library's
-    items) holds by their identity tags (Spotify ID, ISRC, ``mb_trackid``),
-    and which hold one it doesn't (#287).  A merge's loser is superseded while
+    items) holds by their identity tags (Spotify ID, ISRC, or ``mb_trackid``
+    from an item whose length agrees with the file's, homelab#2540), and which
+    hold one it doesn't (#287).  A merge's loser is superseded while
     its keeper is in the library, whatever its tags
     (:meth:`~music_scan.identity.Recordings.holds_merged`, #303).  Any other unreadable file, or one with no
     identity tags, is an only copy: nothing says the library has it."""
@@ -645,7 +646,7 @@ def split_replaced(files: list[Path], library) -> tuple[list[Path], list[Path]]:
             held.append(f)
             continue
         rf = _file_tags(f)
-        (held if rf is not None and library.holds(rf.recording_ids) else only).append(f)
+        (held if rf is not None and library.holds(rf.recording_ids, rf.length) else only).append(f)
     return held, only
 
 

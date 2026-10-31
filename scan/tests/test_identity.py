@@ -130,6 +130,19 @@ def test_a_remaster_is_another_track() -> None:
     assert ItemIndex([remaster]).match(None, "GBREM1800001", "Miserabilia (Best Of)", "Artist") == (remaster, BY_ISRC)
 
 
+def test_recordings_hold_a_mb_recording_only_at_its_length() -> None:
+    """homelab#2540: 6994 (the 5.1 mix, 456 s) holds the recording beets guessed for
+    the stereo 6930 (445 s); a file of the stereo is not held by it."""
+    library = Recordings([_item(mb_trackid="d0063aee", length=456.0)])
+    assert not library.holds(recording_ids(mb_trackid="d0063aee"), 445.2)
+    assert library.holds(recording_ids(mb_trackid="d0063aee"), 455.0)
+    assert library.holds(recording_ids(mb_trackid="d0063aee"))  # no length to veto with
+    assert not library.holds_item(_item(mb_trackid="d0063aee", length=445.2))
+    # A Spotify ID or ISRC holds a recording whatever the lengths.
+    library = Recordings([_item(isrc="USX1", mb_trackid="d0063aee", length=456.0)])
+    assert library.holds(recording_ids(isrcs=["USX1"], mb_trackid="d0063aee"), 445.2)
+
+
 def test_recordings_hold_a_recording_by_spotify_id_isrc_or_mb_recording_id_never_by_title() -> None:
     """The identity rule of homelab#1889 (#287)."""
     library = Recordings([_item(spotify_ids="SP1"), _item(isrc="usx1;GBX2"), _item(mb_trackid="ABC-REC")])
