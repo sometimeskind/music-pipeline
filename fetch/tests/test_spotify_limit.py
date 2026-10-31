@@ -11,22 +11,32 @@ import threading
 import time
 from datetime import datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from pathlib import Path
 from unittest import mock
 
 import pytest
 import spotipy
 
 import music_fetch.spotify_limit as spotify_limit
+from music_fetch import state
 from music_fetch.spotify_limit import FailFastAdapter, SpotifyRateLimited
 
 
 @pytest.fixture(autouse=True)
-def _limit_state(tmp_path: Path):
-    with mock.patch.object(spotify_limit, "STATE_FILE", tmp_path / ".spotify-rate-limit.json"), \
-         mock.patch.object(spotify_limit, "_limit", None), \
+def _limit_state():
+    with mock.patch.object(spotify_limit, "_limit", None), \
          mock.patch.object(spotify_limit, "_push") as push:
         yield push
+
+
+def _recorded():
+    """The limit recorded in the music database, or None."""
+    with state.session() as conn:
+        return state.get(conn, state.SPOTIFY_LIMIT)
+
+
+def _record(value) -> None:
+    with state.session() as conn:
+        state.put(conn, state.SPOTIFY_LIMIT, value)
 
 
 @pytest.fixture
@@ -76,7 +86,7 @@ def test_long_retry_after_fails_fast(server, _limit_state) -> None:
     assert time.monotonic() - start < 5
     assert len(hits) == 1
 
-    saved = json.loads(spotify_limit.STATE_FILE.read_text())
+    saved = _recorded()
     until = datetime.fromisoformat(saved["until"])
     assert saved["retry_after"] == 62939
     assert abs((until - datetime.now(timezone.utc)).total_seconds() - 62939) < 5
@@ -92,7 +102,7 @@ def test_short_retry_after_is_waited_out(server, _limit_state) -> None:
 
     assert client.playlist("p", fields="snapshot_id") == {"snapshot_id": "s1"}
     assert len(hits) == 2
-    assert not spotify_limit.STATE_FILE.exists()
+    assert _recorded() is None
     _limit_state.assert_not_called()
 
 
@@ -112,7 +122,7 @@ def test_after_a_trip_no_request_reaches_spotify(server) -> None:
 def test_limit_recorded_by_an_earlier_run_is_honoured(server) -> None:
     httpd, _queue, hits = server
     until = datetime.now(timezone.utc) + timedelta(hours=3)
-    spotify_limit.STATE_FILE.write_text(json.dumps({"until": until.isoformat(), "retry_after": 10800}))
+    _record({"until": until.isoformat(), "retry_after": 10800})
     client = _client(httpd)
 
     with pytest.raises(SpotifyRateLimited, match="Retry-After 10800s"):
@@ -123,7 +133,7 @@ def test_limit_recorded_by_an_earlier_run_is_honoured(server) -> None:
 def test_expired_limit_lets_requests_through(server) -> None:
     httpd, _queue, hits = server
     until = datetime.now(timezone.utc) - timedelta(minutes=1)
-    spotify_limit.STATE_FILE.write_text(json.dumps({"until": until.isoformat(), "retry_after": 60}))
+    _record({"until": until.isoformat(), "retry_after": 60})
     client = _client(httpd)
 
     assert client.playlist("p", fields="snapshot_id") == {"snapshot_id": "s1"}
@@ -132,7 +142,7 @@ def test_expired_limit_lets_requests_through(server) -> None:
 
 def test_unreadable_state_is_ignored(server) -> None:
     httpd, _queue, hits = server
-    spotify_limit.STATE_FILE.write_text("{not json")
+    _record({"until": "not a time"})
     client = _client(httpd)
 
     assert client.playlist("p", fields="snapshot_id") == {"snapshot_id": "s1"}

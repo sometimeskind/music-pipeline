@@ -23,7 +23,7 @@ def _store(playlist: str, duration: int | None, url: str = URL) -> None:
     song = {"url": url, "name": "Song", "artists": ["Artist"]}
     if duration is not None:
         song["duration"] = duration
-    store.Store.from_songs(playlist, [song]).save(store.path(playlist))
+    store.save(store.Store.from_songs(playlist, [song]))
 
 
 # ---------------------------------------------------------------------------
@@ -151,8 +151,8 @@ def test_expected_durations_read_every_store_never_a_spotdl_file(dirs) -> None:
     from music_fetch import store
 
     inbox, _ = dirs
-    store.Store.from_songs("keep", [{"url": URL, "duration": 30}, {"url": "https://x/2"},
-                                    {"duration": 40}]).save(store.path("keep"))
+    store.save(store.Store.from_songs("keep", [{"url": URL, "duration": 30}, {"url": "https://x/2"},
+                                    {"duration": 40}]))
     _store("wedding", 200, url="https://x/3")
     (inbox / "old.spotdl").write_text(json.dumps({"songs": [{"url": URL, "duration": 1}]}))
     assert guard.expected_durations() == {"keep": {URL: 30}, "wedding": {"https://x/3": 200}}

@@ -27,6 +27,7 @@ just fetch && just scan  # or `just sync`
 ## Testing
 
 - All unit tests (fetch, scan, service, scripts) run together in one dev container built from `service/Dockerfile`. That is what `just test` does.
+- They run on Postgres, the state's only home (homelab#2502): the root `conftest.py` makes one migrated database per session on `MUSIC_TEST_DATABASE_URL` (CI's postgres service; `just test` starts a throwaway one) and empties it before every test. Seed and check state through `music_fetch.state` and the stores' own functions, never a file on disk. Without the variable a test that reaches the database is skipped.
 - Integration tests in `tests/` at the repo root run against the real service image: `just test-service`.
 - Each Dockerfile has a `prod` stage (pushed to GHCR, runtime deps only) and a `dev` stage (adds test deps, built locally, never pushed). Only `service/Dockerfile` produces the published image; its build context is the repo root. `fetch/` and `scan/` Dockerfiles are dev-only.
 

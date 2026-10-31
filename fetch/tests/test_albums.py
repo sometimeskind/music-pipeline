@@ -9,6 +9,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 import music_fetch.albums as albums
+from music_fetch import state as statedb
 from music_fetch import store
 from music_fetch.albums import Settings, State, reduce_to_albums, refresh_playlists, tick, top_up
 from music_fetch.usenet import Release
@@ -33,6 +34,12 @@ def _store_dir(tmp_path: Path, monkeypatch):
 def _no_overrides(tmp_path: Path):
     with patch.object(albums, "OVERRIDES_FILE", tmp_path / "album-overrides.conf"):
         yield
+
+
+def seed(state: State) -> None:
+    """Write *state* to the music database as the album store."""
+    state.in_db = True
+    state.save()
 
 
 def song(name: str, album_id: str, album: str = "Album", artist: str = "Artist", url: str | None = None) -> dict:
@@ -129,7 +136,7 @@ def test_refresh_forgets_a_playlist_that_left_the_conf() -> None:
 
 def test_refresh_writes_the_store_and_logs_albums_that_left(tmp_path: Path, caplog) -> None:
     old = song("Gone", "Z", album="Old Album", url="https://open.spotify.com/track/gone")
-    store.Store.from_songs("later", [old]).save(store.path("later"))
+    store.save(store.Store.from_songs("later", [old]))
     state = State()
     caplog.set_level("INFO", logger="music_fetch.albums")
     refresh_playlists(state, [("later", "url")], FakeSpotify("s2", [song("One", "A")]), albums.TickResult())
@@ -171,17 +178,17 @@ def test_refresh_removing_an_albums_last_track_drops_the_album(caplog) -> None:
 
 def test_refresh_keeps_the_stores_local_entries() -> None:
     local = {"local": {"id": 7, "path": "/library/local.m4a", "title": "Local", "artist": "Artist"}}
-    store.Store("later", [{"song": song("Old", "Z")}, local]).save(store.path("later"))
+    store.save(store.Store("later", [{"song": song("Old", "Z")}, local]))
     refresh_playlists(State(), [("later", "url")], FakeSpotify("s1", [song("One", "A")]), albums.TickResult())
     assert store.load("later").entries == [{"song": song("One", "A")}, local]
 
 
 def test_refresh_store_failure_fails_before_the_snapshot_is_recorded(monkeypatch) -> None:
     """A store that can't be written fails the tick; the next one re-reads the playlist."""
-    def broken(self, path):
+    def broken(playlist):
         raise OSError("disk full")
 
-    monkeypatch.setattr(store.Store, "save", broken)
+    monkeypatch.setattr(store, "save", broken)
     state = State()
     with pytest.raises(OSError):
         refresh_playlists(state, [("later", "url")], FakeSpotify("s1", [song("One", "A")]), albums.TickResult())
@@ -703,10 +710,14 @@ def test_restart_mid_import_resumes_it_instead_of_a_loose_scan(roots) -> None:
     assert not any(f in record for f in albums.IMPORT_FIELDS)
 
 
-def test_park_interrupted_imports_never_stops_the_service_starting(tmp_path: Path, caplog) -> None:
-    assert albums.park_interrupted_imports(tmp_path / "absent.json") == 0
-    (tmp_path / "broken.json").write_text("{", encoding="utf-8")
-    assert albums.park_interrupted_imports(tmp_path / "broken.json") == 0
+def test_park_interrupted_imports_never_stops_the_service_starting(monkeypatch, caplog) -> None:
+    assert albums.park_interrupted_imports() == 0
+
+    def down(url=None):
+        raise statedb.Unavailable("the music database is unreachable")
+
+    monkeypatch.setattr(statedb, "connect", down)
+    assert albums.park_interrupted_imports() == 0
     assert "Moving interrupted album imports back failed" in caplog.text
 
 
@@ -724,13 +735,13 @@ def test_lost_completions_only_for_stale_grabs() -> None:
 def test_tick_recovers_lost_triggers_only_when_on(tmp_path: Path) -> None:
     state = grabbed_state()
     state.albums["a0"]["grabbed_at"] = albums._iso(datetime.now(timezone.utc) - timedelta(hours=2))
-    state.save(tmp_path / "state.json")
+    seed(state)
     prowlarr, sab = fakes()
     sab.finished.return_value = {"nzo1": {"ok": False, "storage": "", "fail_message": "x"}}
     calls = []
     for mode in ("dry-run", "on"):
         tick([], FakeSpotify("s", []), prowlarr, sab, never_have, Settings(mode=mode),
-             tmp_path / "state.json", on_completion=lambda st, c: calls.append((mode, c.nzo_id)))
+             on_completion=lambda st, c: calls.append((mode, c.nzo_id)))
     assert calls == [("on", "nzo1")]
 
 
@@ -1134,6 +1145,8 @@ def demoted_state() -> State:
                                      "fallback_at": "2026-10-10T23:15:02+00:00", "fallback_tracks": {"later": ["s1"]}}
     state.albums["filled"] = base | {"status": albums.FILLED, "fallback_from": albums.MISSING,
                                      "fallback_at": "2026-10-10T23:15:02+00:00", "fallback_tracks": {}}
+    for key, record in state.albums.items():
+        record["spotify_album_ids"] = [key]
     return state
 
 
@@ -1167,17 +1180,15 @@ def test_requeued_album_is_searched_by_the_next_tick() -> None:
     assert state.albums["new"]["status"] == albums.GRABBED
 
 
-def test_requeue_main_is_a_dry_run_without_apply(tmp_path: Path, monkeypatch) -> None:
-    path = tmp_path / "albums.json"
-    demoted_state().save(path)
-    monkeypatch.setattr(albums, "STATE_FILE", path)
+def test_requeue_main_is_a_dry_run_without_apply(monkeypatch) -> None:
+    seed(demoted_state())
     monkeypatch.delenv("PREFECT_API_URL", raising=False)
     monkeypatch.setattr("sys.argv", ["music-album-requeue", "--since", "2026-10-10T22:00"])
     albums.requeue_main()
-    assert State.load(path).albums["new"]["status"] == albums.FALLBACK
+    assert State.load().albums["new"]["status"] == albums.FALLBACK
     monkeypatch.setattr("sys.argv", ["music-album-requeue", "--since", "2026-10-10T22:00", "--apply"])
     albums.requeue_main()
-    assert State.load(path).albums["new"]["status"] == albums.WANTED
+    assert State.load().albums["new"]["status"] == albums.WANTED
 
 
 def test_complete_musicbrainz_outage_retries_without_blame(roots, caplog) -> None:
@@ -1547,18 +1558,17 @@ def test_auto_reimport_env_setting(monkeypatch) -> None:
 
 
 def test_tick_resets_mixed_albums_before_the_top_up_and_pushes_the_counts(tmp_path: Path) -> None:
-    state_file = tmp_path / ".albums.json"
-    _mixed_state(1).save(state_file)
+    seed(_mixed_state(1))
     prowlarr, sab = fakes([])
     with patch.object(albums, "_push") as push, patch.object(albums, "refresh_playlists"), \
             patch.object(albums, "lost_completions", return_value=[]), \
             patch.object(albums, "top_up") as top:
         tick([], FakeSpotify("s", []), prowlarr, sab, never_have, Settings(mode="on"),
-             state_file=state_file, mixed=_all_mixed)
+             mixed=_all_mixed)
     assert top.call_args.args[0].albums["K0"]["reimport"]
     body = push.call_args.args[0]
     assert "music_albums_mixed 1" in body and "music_albums_auto_reimports_24h 1" in body
-    assert State.load(state_file).mixed == ["K0"]
+    assert State.load().mixed == ["K0"]
 
 
 def test_tick_grabs_even_when_the_mixed_hook_fails(tmp_path: Path) -> None:
@@ -1567,11 +1577,10 @@ def test_tick_grabs_even_when_the_mixed_hook_fails(tmp_path: Path) -> None:
     def broken(key, record):
         raise RuntimeError("library locked")
 
-    state_file = tmp_path / ".albums.json"
-    _mixed_state(1).save(state_file)
+    seed(_mixed_state(1))
     with patch.object(albums, "refresh_playlists"), patch.object(albums, "top_up") as top:
         tick([], FakeSpotify("s", []), prowlarr, sab, never_have, Settings(mode="on"),
-             state_file=state_file, mixed=broken)
+             mixed=broken)
     top.assert_called_once()
 
 

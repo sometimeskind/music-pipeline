@@ -204,11 +204,11 @@ def _sid(name: str) -> str:
 
 def _write_store(name: str, songs: list[tuple[str, str]]) -> None:
     """A store of *songs* (title, artist), each with Spotify ID ``ID-<title>``."""
-    store.Store.from_songs(name, [
+    store.save(store.Store.from_songs(name, [
         {"name": title, "artists": [artist], "url": f"https://open.spotify.com/track/{_sid(title)}",
          "song_id": _sid(title)}
         for title, artist in songs
-    ]).save(store.path(name))
+    ]))
 
 
 def _regen_lib(items: list) -> mock.MagicMock:
@@ -754,11 +754,11 @@ def test_regen_playlists_matches_by_id_before_words(tmp_path: Path, caplog) -> N
     (#176).  An entry no item holds by ID or ISRC stays empty: words never fill."""
     lib_root = tmp_path / "library"
     studio, live, remaster = lib_root / "Studio.m4a", lib_root / "Live.m4a", lib_root / "Remaster.m4a"
-    store.Store.from_songs("pl", [
+    store.save(store.Store.from_songs("pl", [
         {"name": "Song", "artists": ["Art"], "url": "https://open.spotify.com/track/LIVE"},
         {"name": "Song", "artists": ["Art"], "url": "u", "song_id": "X", "isrc": "GBREM0000001"},
         {"name": "Other", "artists": ["Art"], "url": "u2"},
-    ]).save(store.path("pl"))
+    ]))
     items = [
         _make_mock_item("Song", "Art", studio, spotify_ids="STUDIO"),
         _make_mock_item("Song", "Art", live, spotify_url="https://open.spotify.com/track/LIVE"),
@@ -897,7 +897,7 @@ def test_have_or_link_keeps_the_full_ladder_inside_the_playlist(real_lib) -> Non
 
 def _slot_regen(tmp_path: Path, songs: list[dict], all_items: list, metrics=None):
     """Run regen_playlists for one playlist ``pl`` whose store holds *songs*."""
-    store.Store.from_songs("pl", songs).save(store.path("pl"))
+    store.save(store.Store.from_songs("pl", songs))
     counts, playlists_dir, mock_lib = _run_regen(tmp_path, all_items, metrics)
     lines = (playlists_dir / "pl.m3u").read_text(encoding="utf-8").splitlines()
     return counts, lines, mock_lib

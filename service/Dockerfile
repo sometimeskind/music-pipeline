@@ -59,6 +59,7 @@ COPY fetch/tests/ /app/fetch_tests/
 COPY scan/tests/ /app/scan_tests/
 COPY service/tests/ /app/tests/
 COPY scripts/ /app/scripts/
+COPY conftest.py pytest.ini /app/
 WORKDIR /app
 ENTRYPOINT []
 CMD ["pytest", "fetch_tests/", "scan_tests/", "tests/", "scripts/tests/"]

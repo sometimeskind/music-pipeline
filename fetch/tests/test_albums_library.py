@@ -210,9 +210,9 @@ def test_tick_feeds_the_library_after_the_wants(tmp_path: Path) -> None:
         return [A]
 
     tick([], MagicMock(), prowlarr, MagicMock(), have, Settings(mode="dry-run", library="on"),
-         state_file=tmp_path / "state.json", want_playlists=["disc"], wants=wants, library=library)
+         want_playlists=["disc"], wants=wants, library=library)
     assert order == ["wants", "library"]
-    assert State.load(tmp_path / "state.json").albums["A"]["origin"] == albums.LIBRARY
+    assert State.load().albums["A"]["origin"] == albums.LIBRARY
 
 
 @pytest.mark.parametrize("value, expected", [("on", "on"), ("DRY-RUN", "dry-run"), ("", "off"), ("yes", "off")])

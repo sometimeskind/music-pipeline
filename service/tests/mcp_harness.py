@@ -75,24 +75,45 @@ def seed(root: Path) -> dict:
     stores.mkdir(parents=True, exist_ok=True)
     state = spotdl / ".albums.json"
     # Abbey Road was mixed at the last album tick; the last scan left one empty slot on chill.
-    state.write_text(json.dumps({"albums": ALBUMS, "mixed": ["ALB1"]}))
-    (spotdl / ".empty-slots.json").write_text(json.dumps({
-        "at": "2026-10-29T03:40:00+00:00",
-        "playlists": {"chill": {"total": 1, "entries": ["Someone — Absent"]}, "other": {"total": 0, "entries": []}}}))
-    (stores / "chill.json").write_text(json.dumps({
-        "playlist": "chill", "updated": "2026-10-27T03:10:00Z", "source": "spotify", "entries": [
-            {"song": {"name": "Come Together", "artists": ["The Beatles"], "album_name": "Abbey Road",
-                      "song_id": "S1", "isrc": "GB1"}},
-            {"song": {"name": "Loose one", "artists": ["The Beatles"], "song_id": "SX", "isrc": "GB9"}},
-            {"song": {"name": "Absent", "artists": ["Someone"], "song_id": "SY"}},
-            {"local": {"id": items[1].id, "title": "Something", "artist": "The Beatles"}},
-        ]}))
+    empty_slots = {"at": "2026-10-29T03:40:00+00:00",
+                   "playlists": {"chill": {"total": 1, "entries": ["Someone — Absent"]},
+                                 "other": {"total": 0, "entries": []}}}
+    chill = [
+        {"song": {"name": "Come Together", "artists": ["The Beatles"], "album_name": "Abbey Road",
+                  "song_id": "S1", "isrc": "GB1"}},
+        {"song": {"name": "Loose one", "artists": ["The Beatles"], "song_id": "SX", "isrc": "GB9"}},
+        {"song": {"name": "Absent", "artists": ["Someone"], "song_id": "SY"}},
+        {"local": {"id": items[1].id, "title": "Something", "artist": "The Beatles"}},
+    ]
+    _seed_state(state, stores, empty_slots, chill)
     quarantine = root / "quarantine"
     for rel in ["Artist/one.m4a", "rejected/chill/two.m4a", "replaced/3-three.m4a", "replaced/4-four.m4a"]:
         (quarantine / rel).parent.mkdir(parents=True, exist_ok=True)
         (quarantine / rel).write_bytes(b"x")
     return {"root": root, "db": db, "libdir": libdir, "state": state, "stores": stores,
             "quarantine": quarantine, "jobs_file": spotdl / ".mcp-jobs.json", "items": items}
+
+
+def _seed_state(state: Path, stores: Path, empty_slots: dict, chill: list[dict]) -> None:
+    """The album store, the empty-slots report and the chill playlist's store: in
+    the music database once the state is there (the tests), else as the JSON files
+    (the MCP adapter's contract test runs this as a server, with no database)."""
+    from datetime import datetime
+
+    from music_fetch import albums, state as statedb
+
+    with statedb.session() as conn:
+        if conn is not None:
+            rows = albums.State(albums={key: {**statedb.new_record(key), **record} for key, record in ALBUMS.items()},
+                                mixed=["ALB1"], in_db=True)
+            statedb.save_albums(conn, rows)
+            statedb.put(conn, statedb.EMPTY_SLOTS, empty_slots)
+            statedb.save_store(conn, "chill", chill, "spotify", datetime.fromisoformat("2026-10-27T03:10:00+00:00"))
+            return
+    state.write_text(json.dumps({"albums": ALBUMS, "mixed": ["ALB1"]}))
+    (state.parent / ".empty-slots.json").write_text(json.dumps(empty_slots))
+    (stores / "chill.json").write_text(json.dumps({
+        "playlist": "chill", "updated": "2026-10-27T03:10:00Z", "source": "spotify", "entries": chill}))
 
 
 def patches(seeded: dict) -> tuple[list[tuple[object, str, object]], dict[str, str]]:

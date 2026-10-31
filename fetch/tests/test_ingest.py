@@ -16,6 +16,15 @@ def _state_dirs(tmp_path: Path, monkeypatch):
     monkeypatch.setattr(ingest, "PLAYLISTS_DIR", tmp_path / "playlists")
 
 
+def _seed_albums(records: dict) -> None:
+    """Write *records* (key → record) to the music database as the album store."""
+    from music_fetch import albums, state
+
+    rows = albums.State(albums={key: {**state.new_record(key), **record} for key, record in records.items()})
+    rows.in_db = True
+    rows.save()
+
+
 # ---------------------------------------------------------------------------
 # classify_failure
 # ---------------------------------------------------------------------------
@@ -237,7 +246,7 @@ def test_reconcile_leaves_an_existing_playlist_alone(tmp_path: Path) -> None:
     spotdl_dir = tmp_path / "spotdl"
     (spotdl_dir / "my-playlist").mkdir(parents=True)
     (spotdl_dir / "my-playlist" / "track.m4a").touch()
-    store.Store.from_songs("my-playlist", [{"url": "u"}]).save(store.path("my-playlist"))
+    store.save(store.Store.from_songs("my-playlist", [{"url": "u"}]))
     conf = _make_conf(tmp_path, ["my-playlist  https://open.spotify.com/playlist/abc0000000000000000000"])
 
     with mock.patch.object(ingest, "CONF_PATH", conf), mock.patch.object(ingest, "SPOTDL_DIR", spotdl_dir):
@@ -293,7 +302,7 @@ def test_reconcile_detects_removed_playlist(tmp_path: Path) -> None:
     (spotdl_dir / "kept").mkdir()
     playlists_dir.mkdir()
     for name in ("gone", "kept"):
-        store.Store.from_songs(name, [{"url": f"u-{name}"}]).save(store.path(name))
+        store.save(store.Store.from_songs(name, [{"url": f"u-{name}"}]))
         (playlists_dir / f"{name}.m3u").write_text("/library/x.m4a\n", encoding="utf-8")
     conf = _make_conf(tmp_path, ["kept  https://open.spotify.com/playlist/abc0000000000000000000"])
 
@@ -412,7 +421,7 @@ def test_reconcile_deletes_nosync_for_removed_playlist(tmp_path: Path) -> None:
 
     spotdl_dir = tmp_path / "spotdl"
     spotdl_dir.mkdir()
-    store.Store.from_songs("gone", []).save(store.path("gone"))
+    store.save(store.Store.from_songs("gone", []))
     (spotdl_dir / "gone.nosync").touch()
     conf = _make_conf(tmp_path, [])
 
@@ -741,11 +750,10 @@ def test_sync_playlists_fetches_album_fallback_tracks_in_playlist_order(tmp_path
     later_songs = [{"url": f"u{i}", "song_id": f"s{i}", "name": f"T{i}", "artists": ["A"]} for i in range(3)]
     # The album playlist's fallback songs are read from its store.
     for name, songs in (("later", later_songs), ("keep", [])):
-        store.Store.from_songs(name, songs).save(store.path(name))
+        store.save(store.Store.from_songs(name, songs))
     for name in ("later", "keep"):
         (spotdl_dir / f"{name}.album").touch()
-    state = albums.State(albums={"a0": {"status": albums.FALLBACK, "fallback_tracks": {"later": ["s2", "s0"]}}})
-    state.save(spotdl_dir / ".albums.json")
+    _seed_albums({"a0": {"status": albums.FALLBACK, "fallback_tracks": {"later": ["s2", "s0"]}}})
 
     calls: list[tuple[str, int | None]] = []
 
@@ -884,7 +892,7 @@ def test_sync_writes_each_playlists_store_from_its_conf_url(tmp_path: Path) -> N
 def test_sync_keeps_an_earlier_stores_records_and_local_entries(tmp_path: Path) -> None:
     full_b = song("B", album_name="Full record")
     full_c = song("C", album_name="Downloaded")
-    store.Store("pl", [{"song": song("A")}, {"song": full_b}, LOCAL]).save(store.path("pl"))
+    store.save(store.Store("pl", [{"song": song("A")}, {"song": full_b}, LOCAL]))
     calls: list = []
     _sync(tmp_path, [f"pl  {PL_URL}"], _result(songs=[song("B"), song("C")], records={TRACK + "C": full_c}),
           calls=calls)
@@ -907,7 +915,7 @@ def test_sync_downloads_what_the_store_wants(tmp_path: Path) -> None:
 def test_sync_failure_keeps_the_earlier_store(tmp_path: Path) -> None:
     import unittest.mock as mock
 
-    store.Store.from_songs("pl", [song("A")]).save(store.path("pl"))
+    store.save(store.Store.from_songs("pl", [song("A")]))
     spotdl_dir = tmp_path / "spotdl"
     spotdl_dir.mkdir()
     from music_fetch.metrics import IngestMetrics
@@ -930,7 +938,7 @@ def test_sync_builds_a_nosync_store_from_spotify_once(tmp_path: Path, caplog) ->
     caplog.set_level("INFO")
     full_a = song("A", album_name="Full record")
     # A store seeded before the freeze lists only what was downloaded: B is on Spotify but not in it.
-    store.Store("pl", [{"song": full_a}, LOCAL]).save(store.path("pl"))
+    store.save(store.Store("pl", [{"song": full_a}, LOCAL]))
     fetched_urls: list[str] = []
     calls: list = []
     metrics = _sync(tmp_path, [f"pl  {PL_URL}  nosync"], calls=calls, sentinels=["pl.nosync"],
@@ -961,7 +969,7 @@ def test_sync_downloads_a_nosync_playlists_want_list_without_rewriting_it(tmp_pa
     caplog.set_level("INFO")
     frozen = store.Store.from_songs("frozen", [song("A"), song("B"), song("H"), song("C")])
     frozen.source = store.SPOTIFY
-    frozen.save(store.path("frozen"))
+    store.save(frozen)
     calls: list = []
     fallbacks: list = []
     with mock.patch.dict("os.environ", {"SYNC_TRACK_LIMIT": "10"}):
@@ -1004,9 +1012,8 @@ def test_sync_playlists_downloads_the_requests_fallback_into_unverified_after_th
     conf = tmp_path / "playlists.conf"
     conf.write_text("aaaaaaah  https://open.spotify.com/playlist/A000000000000000000000\n", encoding="utf-8")
     songs = [{"url": album_requests.recording_url(f"r{i}"), "song_id": f"r{i}", "name": f"T{i}"} for i in range(3)]
-    state = albums.State(albums={"7": {"status": albums.FALLBACK, "origin": albums.REQUEST, "album_songs": songs,
-                                       "fallback_tracks": {album_requests.SOURCE: ["r0", "r1", "r2"]}}})
-    state.save(spotdl_dir / ".albums.json")
+    _seed_albums({"7": {"status": albums.FALLBACK, "origin": albums.REQUEST, "album_songs": songs,
+                        "fallback_tracks": {album_requests.SOURCE: ["r0", "r1", "r2"]}}})
 
     calls: list[tuple[str, int | None]] = []
 

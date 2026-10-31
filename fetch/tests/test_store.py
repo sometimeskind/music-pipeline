@@ -12,20 +12,17 @@ def song(sid: str, **extra) -> dict:
     return {"url": URL + sid, "song_id": sid, "name": f"Song {sid}", "artists": ["Artist"], **extra}
 
 
-def test_store_round_trip(tmp_path) -> None:
+def test_store_round_trip() -> None:
     s = store.Store.from_songs("pl", [song("A"), song("B")])
-    s.save(tmp_path / "pl.json")
-    loaded = store.Store.load(tmp_path / "pl.json")
+    store.save(s)
+    loaded = store.load("pl")
     assert loaded is not None
     assert loaded.name == "pl" and loaded.songs == [song("A"), song("B")]
-    assert loaded.updated
-    assert not (tmp_path / "pl.json.tmp").exists()
+    assert loaded.updated and loaded.updated == s.updated
 
 
-def test_store_load_missing_or_broken(tmp_path) -> None:
-    assert store.Store.load(tmp_path / "none.json") is None
-    (tmp_path / "bad.json").write_text("{", encoding="utf-8")
-    assert store.Store.load(tmp_path / "bad.json") is None
+def test_store_load_missing() -> None:
+    assert store.load("none") is None
 
 
 def test_merge_spotify_takes_order_and_membership_from_spotify() -> None:
@@ -47,30 +44,25 @@ def test_want_list() -> None:
     assert wanted == [URL + "A", URL + "E", URL + "F"]
 
 
-def test_names_lists_the_stores_sorted(tmp_path, monkeypatch) -> None:
-    monkeypatch.setattr(store, "STORE_DIR", tmp_path / "store")
+def test_names_lists_the_stores_sorted() -> None:
     assert store.names() == []
     for name in ("later", "aaaaaaah", "wedding"):
-        store.Store.from_songs(name, [song("A")]).save(store.path(name))
-    (tmp_path / "store" / "later.json.tmp").write_text("{", encoding="utf-8")  # a crashed write
+        store.save(store.Store.from_songs(name, [song("A")]))
     assert store.names() == ["aaaaaaah", "later", "wedding"]
 
 
-def test_remove_deletes_one_store(tmp_path, monkeypatch) -> None:
-    monkeypatch.setattr(store, "STORE_DIR", tmp_path / "store")
-    store.Store.from_songs("gone", [song("A")]).save(store.path("gone"))
-    store.Store.from_songs("kept", [song("B")]).save(store.path("kept"))
+def test_remove_deletes_one_store() -> None:
+    store.save(store.Store.from_songs("gone", [song("A")]))
+    store.save(store.Store.from_songs("kept", [song("B")]))
     store.remove("gone")
     store.remove("never-had-one")  # missing is fine
     assert store.names() == ["kept"]
     assert store.load("gone") is None
 
 
-def test_songs_by_playlist_skips_local_entries_and_broken_stores(tmp_path, monkeypatch) -> None:
-    monkeypatch.setattr(store, "STORE_DIR", tmp_path / "store")
-    store.Store("pl", [{"song": song("A")}, LOCAL, {"song": song("B")}]).save(store.path("pl"))
-    store.Store.from_songs("empty", []).save(store.path("empty"))
-    (tmp_path / "store" / "bad.json").write_text("{", encoding="utf-8")
+def test_songs_by_playlist_skips_local_entries() -> None:
+    store.save(store.Store("pl", [{"song": song("A")}, LOCAL, {"song": song("B")}]))
+    store.save(store.Store.from_songs("empty", []))
     assert store.songs_by_playlist() == {"empty": [], "pl": [song("A"), song("B")]}
 
 

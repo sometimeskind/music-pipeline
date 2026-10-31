@@ -7,6 +7,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 import music_fetch.albums as albums
+from music_fetch import state as statedb
 from music_fetch import store
 from music_fetch.albums import Settings, State, feed_wants, held_tracks, refresh_playlists, tick, top_up
 from music_fetch.usenet import Release
@@ -43,6 +44,13 @@ def hook(groups: dict[str, list[tuple[str, list[dict]]]], calls: list | None = N
             calls.append(name)
         return [(k, i, s) for i, (k, s) in enumerate(groups.get(name, []))]
     return wants
+
+
+def seed(records: dict) -> None:
+    """Write *records* (key → record) to the music database as the album store, each keyed by its Spotify album ID."""
+    state = State(albums={key: {**statedb.new_record(key), **record} for key, record in records.items()})
+    state.in_db = True
+    state.save()
 
 
 def album_record(status: str = albums.WANTED) -> dict:
@@ -370,15 +378,14 @@ def test_a_failed_wants_record_sends_only_its_wanted_tracks_back(roots, caplog) 
 
 
 def test_tick_feeds_before_the_top_up_and_pushes_the_origin(tmp_path: Path) -> None:
-    state_file = tmp_path / ".albums.json"
-    State(albums={"W": album_record()}).save(state_file)
+    seed({"W": album_record()})
     seen = []
     with patch.object(albums, "_push") as push, \
             patch.object(albums, "top_up", side_effect=lambda state, *a, **k: seen.append(list(state.albums))):
         tick([], MagicMock(), MagicMock(), MagicMock(), lambda k, r: False, Settings(mode="on"),
-             state_file=state_file, want_playlists=["disc"], wants=hook({"disc": [("A", [song(1), song(2)])]}))
+             want_playlists=["disc"], wants=hook({"disc": [("A", [song(1), song(2)])]}))
     assert seen == [["W", "A"]]
-    assert State.load(state_file).albums["A"]["origin"] == albums.WANTS
+    assert State.load().albums["A"]["origin"] == albums.WANTS
     body = push.call_args.args[0]
     assert 'music_albums{status="wanted"} 2' in body
     assert 'music_albums_status{status="wanted",origin="album"} 1' in body
@@ -386,18 +393,16 @@ def test_tick_feeds_before_the_top_up_and_pushes_the_origin(tmp_path: Path) -> N
     assert body.count("# TYPE music_albums_status gauge") == 1
 
 
-def test_tick_without_a_wants_hook_feeds_nothing(tmp_path: Path) -> None:
+def test_tick_without_a_wants_hook_feeds_nothing() -> None:
     with patch.object(albums, "feed_wants") as feed, patch.object(albums, "top_up"):
-        tick([], MagicMock(), MagicMock(), MagicMock(), lambda k, r: False, Settings(mode="on"),
-             state_file=tmp_path / ".albums.json")
+        tick([], MagicMock(), MagicMock(), MagicMock(), lambda k, r: False, Settings(mode="on"))
     feed.assert_not_called()
 
 
 def test_want_min_zero_turns_the_feed_off_and_drops_the_waiting_records(tmp_path: Path) -> None:
-    state_file = tmp_path / ".albums.json"
-    State(albums={"A": wants_record(), "B": wants_record(albums.GRABBED)}).save(state_file)
+    seed({"A": wants_record(), "B": wants_record(albums.GRABBED)})
     calls: list = []
     with patch.object(albums, "top_up"):
         tick([], MagicMock(), MagicMock(), MagicMock(), lambda k, r: False, Settings(mode="on", want_min=0),
-             state_file=state_file, want_playlists=["disc"], wants=hook({"disc": [("C", [song(1, "C")])]}, calls))
-    assert calls == [] and list(State.load(state_file).albums) == ["B"]
+             want_playlists=["disc"], wants=hook({"disc": [("C", [song(1, "C")])]}, calls))
+    assert calls == [] and list(State.load().albums) == ["B"]

@@ -283,12 +283,23 @@ def test_remove_from_later_normalises_its_release_groups(client, env):
     assert client.post("/mcp-api/run/remove_from_later", json={"through": 1}, headers=READ).status_code == 403
 
 
-def test_get_later_needs_the_state_in_the_database(client):
+@pytest.fixture
+def state_down(monkeypatch):
+    """The music database, which holds the state, is down."""
+    from music_fetch import state
+
+    def down(url=None):
+        raise state.Unavailable("the music database is unreachable")
+
+    monkeypatch.setattr(state, "connect", down)
+
+
+def test_get_later_needs_the_database(client, state_down):
     resp = client.get("/mcp-api/later", headers=READ)
     assert resp.status_code == 503 and resp.get_json()["status"] == "unavailable"
 
 
-def test_list_requests_needs_the_state_in_the_database(client):
+def test_list_requests_needs_the_database(client, state_down):
     resp = client.get("/mcp-api/requests", headers=READ)
     assert resp.status_code == 503 and resp.get_json()["status"] == "unavailable"
     assert client.get("/mcp-api/requests?status=lost", headers=READ).status_code == 400
@@ -448,37 +459,30 @@ RG = "6e0a6c2a-2d38-3d3c-9d38-4f0c2b5b7a11"
 
 @pytest.fixture
 def no_event_store(monkeypatch):
-    from music_fetch import db, events
+    """The event store can't be read, while the state still can."""
+    from music_service import mcp_history
 
-    monkeypatch.delenv(db.ENV, raising=False)
-    events._reset()
+    def unavailable():
+        raise mcp_history.Unavailable("the event store is unavailable: OperationalError")
+
+    monkeypatch.setattr(mcp_history, "connect", unavailable)
 
 
 @pytest.fixture
 def event_store(monkeypatch):
-    """A fresh database on the test server as MUSIC_DATABASE_URL (as fetch_tests/test_events.py)."""
-    import uuid
+    """The events module, recording into the test's database (the state's)."""
+    from music_fetch import events
 
-    import psycopg
-
-    from music_fetch import db, events
-
-    name = f"music_test_{uuid.uuid4().hex[:12]}"
-    with psycopg.connect(TEST_DB, autocommit=True) as admin:
-        admin.execute(f'CREATE DATABASE "{name}"')
-    monkeypatch.setenv(db.ENV, psycopg.conninfo.make_conninfo(TEST_DB, dbname=name))
     monkeypatch.setattr(events.metrics, "_push", lambda body, job: None)
     events._reset()
     yield events
     events._reset()
-    with psycopg.connect(TEST_DB, autocommit=True) as admin:
-        admin.execute(f'DROP DATABASE "{name}" WITH (FORCE)')
 
 
 def test_album_history_without_the_event_store_is_unavailable(client, no_event_store):
     resp = client.get("/mcp-api/album_history?query=ALB1", headers=READ)
     assert resp.status_code == 503
-    assert resp.get_json()["status"] == "unavailable" and "MUSIC_DATABASE_URL" in resp.get_json()["error"]
+    assert resp.get_json()["status"] == "unavailable" and "event store is unavailable" in resp.get_json()["error"]
     # The album resolves before the store is read.
     assert client.get("/mcp-api/album_history?query=abbey", headers=READ).get_json()["status"] == "ambiguous"
     assert client.get("/mcp-api/album_history?query=ALB1&since=yesterday", headers=READ).status_code == 400
@@ -488,7 +492,7 @@ def test_digest_summary_without_the_event_store_still_reports_the_issues(client,
     resp = client.get("/mcp-api/digest_summary", headers=READ)
     body = resp.get_json()
     assert resp.status_code == 200 and body["status"] == "ok"
-    assert "MUSIC_DATABASE_URL" in body["history"]["error"]
+    assert "event store is unavailable" in body["history"]["error"]
     issues = body["issues"]
     assert issues["mixed"] == {"total": 1, "listed": [{"key": "ALB1", "album": "The Beatles — Abbey Road",
                                                        "origin": "album"}]}
@@ -515,13 +519,11 @@ def test_digest_summary_lists_path_clashes(env, client, no_event_store):
 
 @needs_pg
 def test_album_history_reads_an_albums_events_newest_first(env, client, event_store, monkeypatch):
-    import json as _json
-
     from music_fetch import albums
 
-    state = _json.loads(albums.STATE_FILE.read_text())
-    state["albums"]["ALB1"]["release_files"] = {"mb": {"mb_releasegroupid": RG}}
-    albums.STATE_FILE.write_text(_json.dumps(state))
+    state = albums.State.load()
+    state.albums["ALB1"]["release_files"] = {"mb": {"mb_releasegroupid": RG}}
+    state.save()
     event_store.record("grab", "[GRAB] one", source="albums", spotify_album_id="ALB1")
     event_store.record("retire", "[RETIRE] two", source="release", release_group=RG, item_id=7)
     event_store.record("grab", "[GRAB] other album", source="albums", spotify_album_id="ALB2")
