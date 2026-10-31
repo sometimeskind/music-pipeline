@@ -330,7 +330,9 @@ def release_songs(get: Get, record: Mapping) -> list[dict]:
             recording = track.get("recording") or {}
             if not recording.get("id"):
                 continue
-            credits = track.get("artist-credit") or recording.get("artist-credit") or ()
+            # Each credited name on its own, so the search can try the first alone (homelab#2533).
+            credits = (track.get("artist-credit") or recording.get("artist-credit")
+                       or release.get("artist-credit") or ())
             artists = [c.get("name") or (c.get("artist") or {}).get("name", "") for c in credits] or [album_artist]
             isrcs = recording.get("isrcs") or []
             songs.append({
