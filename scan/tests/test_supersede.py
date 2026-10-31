@@ -473,3 +473,60 @@ def test_a_best_of_keeps_its_tracks(tmp_path, ffmpeg, lib):
     pairs, kept = supersede.plan([album, sixteen], [love, other, album, sixteen], tracks_count=18,
                                  tracks=APPLES, decoder=FPS.__getitem__)
     assert pairs == [] and kept == []
+
+
+def _blue_rev(tmp_path, lib, loose_title="Pictures Of You - Remastered"):
+    """homelab#2531: Blue Rev's release (14 tracks, no Spotify IDs yet) and, in the same
+    window, a Disintegration import with more items, whose Spotify album (DIS) so became
+    the release's; a spotdl copy of a Disintegration track sat on DIS at disc/track 1-2."""
+    blue = {"album": "Blue Rev", "albumartist": "Alvvays", "artist": "Alvvays", "tracktotal": 14, "disc": 0,
+            "spotify_album_id": "BLUE", "via": "usenet", "sources": "cool"}
+    dis = {"album": "Disintegration (Deluxe Edition)", "albumartist": "The Cure", "artist": "The Cure",
+           "tracktotal": 12, "disc": 1, "spotify_album_id": "DIS", "via": "usenet", "sources": "cool"}
+    root = tmp_path / "library"
+    release = [_add(lib, root / "Alvvays" / "Blue Rev" / "02 - Easy on Your Own_.m4a", title="Easy on Your Own?",
+                    track=2, isrc="US3R42246502", **blue)]
+    release += [_add(lib, root / "The Cure" / "Disintegration" / f"01-{n:02d} - Track {n}.m4a", title=f"Track {n}",
+                     track=n, spotify_ids=f"DIS{n}", **dis) for n in (1, 3, 4)]
+    loose = _add(lib, root / "The Cure" / "Disintegration" / "02 - Pictures Of You - Remastered.m4a",
+                 title=loose_title, track=2, disc=0, via="spotdl", sources="aaaaaaah", spotify_ids="PICTURES",
+                 spotify_album_id="DIS", album="Disintegration (Deluxe Edition)", artist="The Cure",
+                 albumartist="The Cure")
+    return release, loose
+
+
+def test_another_title_at_the_slot_is_never_superseded_by_number(tmp_path, ffmpeg, lib, caplog):
+    """homelab#2531: a number is not identity.  The disc/track rung matched the loose
+    Pictures Of You to Blue Rev's Easy on Your Own? and merged its Spotify ID onto it."""
+    from music_scan import supersede
+
+    caplog.set_level(logging.INFO)
+    release, loose = _blue_rev(tmp_path, lib)
+    pairs, kept = supersede.plan(release, lib.all_items(), tracks_count=14)
+    assert pairs == [] and [k.item.id for k in kept] == [loose.id]
+    supersede.log(pairs, kept, apply=False)
+    assert f"album item {release[0].id} at its disc/track 1-2 is 'Easy on Your Own?'" in caplog.text
+
+
+def test_the_same_title_at_the_slot_still_supersedes_by_number(tmp_path, ffmpeg, lib):
+    """Edition notes aside, the same title at the slot is still the disc/track rung's match."""
+    from music_scan import supersede
+
+    release, loose = _blue_rev(tmp_path, lib, loose_title="Easy On Your Own? - 2022 Remaster")
+    pairs, _ = supersede.plan(release, lib.all_items(), tracks_count=14)
+    assert [(p.album.id, [i.id for i in p.loose], p.how) for p in pairs] == [
+        (release[0].id, [loose.id], ["disc/track"])]
+
+
+def test_a_twins_loose_copy_with_another_title_is_not_superseded_by_its_slot(tmp_path, ffmpeg, lib, caplog):
+    """homelab#2531: the tracklist's disc/track rung needs the title too."""
+    from music_scan import supersede
+
+    caplog.set_level(logging.INFO)
+    loose, album = _kaputt(tmp_path, lib, loose_isrc=None)
+    loose.title = "Blue Eyes"
+    loose.store()
+    pairs, kept = supersede.plan([album], lib.all_items(), tracks_count=9, tracks=[KAPUTT_6])
+    assert pairs == [] and [k.item.id for k in kept] == [loose.id]
+    supersede.log(pairs, kept, apply=False)
+    assert f"track 1-6 is 'Kaputt' (album item {album.id}), another title" in caplog.text
