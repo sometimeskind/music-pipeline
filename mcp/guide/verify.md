@@ -11,7 +11,8 @@ Say what should change and when, and offer to check then.
   files. There is no timer. A scan-time fix (an extra retired as now held, a purge, playlist
   slots) can wait until about 03:05 UTC, unless `trigger_scan` starts one now.
 - **A write's own effect** shows in its job output at once: `merge_items` (`[MERGE] keep …`),
-  `replace_item`, `embed_covers`. Check the item afterwards with `get_item`, or the album with
+  `replace_item`, `embed_covers`. `unlink_spotify_id` regenerates the `.m3u` files itself, so
+  `get_playlist` shows the slot on its new item at once. Check the item afterwards with `get_item`, or the album with
   `get_album`.
 - **Overrides, holds and pins** apply from the next run that reads them: a search override at
   the next tick (`get_album`'s `query` changes once it searches; a `missing` album is searched

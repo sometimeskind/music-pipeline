@@ -481,6 +481,88 @@ def _patch_run(monkeypatch, items, tmp_path):
     return events
 
 
+# --- --unlink: a Spotify ID an item holds wrongly (homelab#2530) ---------------
+
+PICTURES = "2o49Twc3qrNMOt8gq9W06L"
+
+
+def _pictures_of_you(tmp_path):
+    """Easy on Your Own? holds Pictures Of You's ID from a wrong merge; the real track holds its ISRC."""
+    alvvays = FakeItem(9674, "Easy on Your Own?", artist="Alvvays", spotify_ids=PICTURES, isrc="US3R42246502",
+                       sources="cool,aaaaaaah", via="usenet")
+    cure = FakeItem(9778, "Pictures of You", artist="The Cure", isrc="GBAKW8901034;GBUM71000205", via="usenet")
+    return [_on_disk(tmp_path, i) for i in (alvvays, cure)]
+
+
+SONGS = {"aaaaaaah": [{"song_id": PICTURES, "name": "Pictures Of You", "artists": ["The Cure"],
+                       "isrc": "GBUM71000205"}],
+         "cool": [{"song_id": "1111111111111111111111", "name": "Easy On Your Own?", "artists": ["Alvvays"]}]}
+
+
+def test_unlink_dry_run_reports_the_entries_new_item_and_changes_nothing(tmp_path, caplog) -> None:
+    items = _pictures_of_you(tmp_path)
+    caplog.set_level("INFO")
+    assert dupes.unlink_spotify_id(items, 9674, PICTURES, False, SONGS) is False
+    assert items[0].get("spotify_ids") == PICTURES and not items[0].stored
+    assert f"spotify_ids {PICTURES} → (none)" in caplog.text
+    assert "aaaaaaah: Pictures Of You — The Cure (ISRC GBUM71000205) → 9778 by ISRC" in caplog.text
+    assert "Dry run" in caplog.text
+
+
+def test_unlink_apply_takes_only_that_id_off(tmp_path, monkeypatch) -> None:
+    from music_fetch import events as ev
+
+    recorded = []
+    monkeypatch.setattr(ev, "record", lambda kind, message, **kw: recorded.append((kind, kw["item_id"])) or True)
+    items = _pictures_of_you(tmp_path)
+    items[0]["spotify_ids"] = f"OWN0000000000000000000,{PICTURES}"
+    assert dupes.unlink_spotify_id(items, 9674, PICTURES, True, SONGS) is True
+    assert items[0].get("spotify_ids") == "OWN0000000000000000000" and items[0].stored
+    assert not items[1].stored
+    assert recorded == [("wrong_version", 9674)]
+    song = SONGS["aaaaaaah"][0]
+    assert ItemIndex(items).match_song(song, words=False)[0] is items[1]
+
+
+def test_unlink_says_when_the_slot_goes_empty_or_stays(tmp_path, caplog) -> None:
+    items = _pictures_of_you(tmp_path)
+    caplog.set_level("INFO")
+    dupes.unlink_spotify_id(items[:1], 9674, PICTURES, False, SONGS)
+    assert "→ no item: the slot goes empty" in caplog.text
+    caplog.clear()
+    items[0]["isrc"] = "GBUM71000205"
+    dupes.unlink_spotify_id(items[:1], 9674, PICTURES, False, SONGS)
+    assert "→ 9674 still, by ISRC" in caplog.text
+    caplog.clear()
+    dupes.unlink_spotify_id(items, 9674, PICTURES, False, {})
+    assert f"no playlist store lists {PICTURES}" in caplog.text
+
+
+@pytest.mark.parametrize("item_id,sid,why", [
+    (999, PICTURES, "no library item with id 999"),
+    (9778, PICTURES, f"item 9778 does not hold Spotify ID {PICTURES}"),
+    (9674, "OWN0000000000000000000", "is item 9674's spotify_url"),
+])
+def test_unlink_refuses_before_changing_anything(monkeypatch, tmp_path, item_id, sid, why) -> None:
+    items = _pictures_of_you(tmp_path)
+    items[0]["spotify_url"] = "https://open.spotify.com/track/OWN0000000000000000000"
+    items[0]["spotify_ids"] = f"OWN0000000000000000000,{PICTURES}"
+    events = _patch_run(monkeypatch, items, tmp_path)
+    with pytest.raises(SystemExit, match=why):
+        dupes.run(apply=True, unlink=(item_id, sid))
+    assert not any(i.stored for i in items) and events == []
+
+
+def test_unlink_run_dry_run_then_apply_regens_and_rescans(monkeypatch, tmp_path) -> None:
+    items = _pictures_of_you(tmp_path)
+    events = _patch_run(monkeypatch, items, tmp_path)
+    dupes.run(unlink=(9674, PICTURES))
+    assert not items[0].stored and events == [] and PUSHED == []
+    dupes.run(apply=True, unlink=(9674, PICTURES))
+    assert items[0].get("spotify_ids") == "" and items[0].stored
+    assert events == ["m3u", "rescan"] and PUSHED == []
+
+
 # --- fingerprint backfill -----------------------------------------------------
 
 def test_fingerprint_missing_dry_run_counts_only(monkeypatch) -> None:

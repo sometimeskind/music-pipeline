@@ -37,6 +37,7 @@ CASES = {
                        {"ids": ["--apply", "-x"], "since": None}],  # hostile IDs stay positional
     "merge_items": [{"pairs": [[1, 2]]}, {"pairs": [[1, 2], [3, 4]]}],
     "replace_item": [{"id": 10001, "youtube_url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ"}],
+    "unlink_spotify_id": [{"id": 9674, "track": "2o49Twc3qrNMOt8gq9W06L"}],
     "embed_covers": [{}],
     "canon_albums": [{"refresh": False, "search_budget": None, "mb_budget": None},
                      {"refresh": True, "search_budget": 5, "mb_budget": 0}],

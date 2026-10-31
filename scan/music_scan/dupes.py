@@ -53,6 +53,15 @@ imported drop (any ``via`` but spotdl/usenet, as supersede's ``[MANUAL]``) unles
 extra merged into its own record's release item) is merged too, with an
 ``[ALBUM]`` warning that its album loses the track (:func:`album_loss`).
 
+``--unlink ITEM_ID SPOTIFY_ID`` takes one Spotify track ID off one item's
+``spotify_ids`` (homelab#2530): an item that wrongly holds a playlist entry's
+ID takes its slot, since an entry resolves by Spotify ID before ISRC, even when
+the right item is in the library and holds the entry's ISRC.  It is a dry run
+without ``--apply``, refuses an ID the item doesn't hold or the item's
+``spotify_url`` ID (its file was downloaded for that entry), and reports where
+each playlist entry with the ID resolves before and after.  The apply records a
+``wrong_version`` event, regenerates the ``.m3u`` files and rescans Navidrome.
+
 ``--fingerprint`` fingerprints items that have no ``acoustid_fingerprint`` (dry
 run counts them; with ``--apply`` it computes and stores them in the database
 only, leaving the files alone).  Run it before the first audit.  New asis
@@ -68,6 +77,7 @@ from __future__ import annotations
 import argparse
 import dataclasses
 import logging
+import re
 import shutil
 import struct
 import time
@@ -519,6 +529,67 @@ def merge_chosen(items: list, ids: list[int], apply: bool, allow_manual: bool,
     return merge(keeper, drops, replaced_dir, why="chosen")
 
 
+def _resolves(items: list, sid: str, isrc: str | None, unlinked: int) -> tuple[int | None, str]:
+    """The item a playlist entry resolves to once item *unlinked* no longer holds *sid*, as
+    ``mcp_reads.resolver`` picks it: the lowest item ID holding its Spotify ID, else its ISRC."""
+    if held := [i.id for i in items if i.id != unlinked and sid in item_spotify_ids(i)]:
+        return min(held), "Spotify ID"
+    if isrc and (held := [i.id for i in items if isrc in item_isrcs(i)]):
+        return min(held), "ISRC"
+    return None, ""
+
+
+def unlink_spotify_id(items: list, item_id: int, sid: str, apply: bool,
+                      songs: dict[str, list[dict]]) -> bool:
+    """Take the Spotify track ID *sid* off item *item_id*'s ``spotify_ids``; with *apply*
+    only.  *songs* are the playlist stores' song records, by playlist, for the report.
+    Raises :class:`SystemExit` on a refused unlink, before anything changes."""
+    item = next((i for i in items if i.id == item_id), None)
+    if item is None:
+        raise SystemExit(f"--unlink: no library item with id {item_id}")
+    if sid == spotify_id(item.get("spotify_url")):
+        raise SystemExit(f"--unlink: {sid} is item {item_id}'s spotify_url: its file was downloaded for that "
+                         "entry, so it is that entry's recording or a wrong download (replace it instead)")
+    held = split_list(item.get("spotify_ids"))
+    if sid not in held:
+        raise SystemExit(f"--unlink: item {item_id} does not hold Spotify ID {sid} "
+                         f"(spotify_ids: {', '.join(held) or 'none'})")
+    after = [s for s in held if s != sid]
+    logger.info("[UNLINK] %s — %s (%s): spotify_ids %s → %s", item.id, item.title, _rel(item),
+                ",".join(held), ",".join(after) or "(none)")
+
+    entries = 0
+    for playlist, listed in sorted(songs.items()):
+        for song in listed:
+            if (song.get("song_id") or spotify_id(song.get("url"))) != sid:
+                continue
+            entries += 1
+            artists = song.get("artists") or []
+            label = f"{song.get('name')} — {', '.join(artists) if isinstance(artists, list) else artists}"
+            to, by = _resolves(items, sid, song.get("isrc"), item.id)
+            if to is None:
+                where = "no item: the slot goes empty"
+            elif to == item.id:
+                where = f"{to} still, by {by}: the item holds the entry's ISRC, so it may be the recording"
+            else:
+                where = f"{to} by {by}"
+            logger.info("    %s: %s (ISRC %s) → %s", playlist, label, song.get("isrc") or "none", where)
+    if not entries:
+        logger.info("    no playlist store lists %s", sid)
+    if not apply:
+        logger.info("Dry run — nothing unlinked. Re-run with --apply.")
+        return False
+
+    item["spotify_ids"] = ",".join(after)
+    item.store()
+    message = f"[UNLINK] {item.id} — {item.title}: Spotify ID {sid} taken off ({','.join(held)} → {','.join(after)})"
+    events.record("wrong_version", message, source="dupes",
+                  spotify_album_id=events.spotify_album(item.get("spotify_album_id")),
+                  release_group=item.get("mb_releasegroupid"), item_id=item.id,
+                  data={**events.item_fields(item), "song_id": sid, "spotify_ids": held, "unlinked": True})
+    return True
+
+
 def fingerprint_missing(items: list, apply: bool, ids: list[int] | None = None) -> int:
     """Fingerprint items with no ``acoustid_fingerprint``, or the items *ids* whatever they
     have (a stale one); with *apply*, store them.  Returns the count."""
@@ -563,9 +634,10 @@ def push_metrics(certain: int, uncertain: int) -> None:
 
 
 def run(apply: bool = False, fingerprints: list[int] | None = None, merge_ids: list[int] | None = None,
-        allow_manual: bool = False) -> tuple[list[Group], list[Group]]:
+        allow_manual: bool = False, unlink: tuple[int, str] | None = None) -> tuple[list[Group], list[Group]]:
     """Audit, and with *apply* merge; with *fingerprints* (a list, empty for every item
-    missing one) fingerprint instead; with *merge_ids* merge those items instead."""
+    missing one) fingerprint instead; with *merge_ids* merge those items instead; with
+    *unlink* (item ID, Spotify track ID) take that ID off that item instead."""
     from music_scan.library import LIBRARY_DB, MusicLibrary  # noqa: PLC0415
     from music_scan.navidrome import trigger_scan  # noqa: PLC0415
     from music_scan.scan import regen_playlists  # noqa: PLC0415
@@ -574,6 +646,19 @@ def run(apply: bool = False, fingerprints: list[int] | None = None, merge_ids: l
         items = lib.all_items()
         if fingerprints is not None:
             fingerprint_missing(items, apply, fingerprints)
+            return [], []
+        if unlink is not None:
+            from music_fetch import store  # noqa: PLC0415
+
+            songs = store.songs_by_playlist()
+            if not apply:
+                unlink_spotify_id(items, *unlink, False, songs)
+                return [], []
+            with pipeline_lock():
+                unlink_spotify_id(items, *unlink, True, songs)
+                counts = regen_playlists()
+            logger.info("Unlinked; playlists regenerated: %s", ", ".join(f"{k} {v}" for k, v in sorted(counts.items())))
+            trigger_scan()
             return [], []
         durations = spotify_durations()
         if merge_ids is not None:
@@ -618,10 +703,22 @@ def main() -> None:
                              "operator confirmed (merged only with --apply)")
     parser.add_argument("--allow-manual", action="store_true",
                         help="with --merge: drop a manually imported item too")
+    parser.add_argument("--unlink", nargs=2, metavar=("ITEM_ID", "SPOTIFY_ID"),
+                        help="instead: take one Spotify track ID off one item's spotify_ids "
+                             "(changed only with --apply)")
     args = parser.parse_args()
-    if args.fingerprint is not None and args.merge is not None:
-        parser.error("--fingerprint and --merge are separate runs")
+    if sum(a is not None for a in (args.fingerprint, args.merge, args.unlink)) > 1:
+        parser.error("--fingerprint, --merge and --unlink are separate runs")
     if args.allow_manual and args.merge is None:
         parser.error("--allow-manual goes with --merge")
+    unlink = None
+    if args.unlink is not None:
+        item_id, sid = args.unlink
+        if not item_id.isdigit() or int(item_id) <= 0:
+            parser.error(f"--unlink: {item_id!r} is not an item ID")
+        if not re.fullmatch(r"[0-9A-Za-z]{22}", sid):
+            parser.error(f"--unlink: {sid!r} is not a Spotify track ID")
+        unlink = (int(item_id), sid)
     logging.basicConfig(level=logging.INFO, format="[%(asctime)s] %(message)s", datefmt="%Y-%m-%dT%H:%M:%S%z")
-    run(apply=args.apply, fingerprints=args.fingerprint, merge_ids=args.merge, allow_manual=args.allow_manual)
+    run(apply=args.apply, fingerprints=args.fingerprint, merge_ids=args.merge, allow_manual=args.allow_manual,
+        unlink=unlink)

@@ -36,17 +36,18 @@ Spotify ID itself. An album query (find_albums, get_album,
 reset_album, the override and hold tools) is the key, any of the album's Spotify IDs, its
 release group, the exact "artist — album", or a part matching one album; a query matching
 several returns "ambiguous" with the candidates and does nothing. A track (pin_track,
-unpin_track) is a Spotify track ID or URL. An album is requested (request_album) and taken
+unpin_track, unlink_spotify_id) is a Spotify track ID or URL. An album is requested (request_album) and taken
 off Later (remove_from_later) by its MusicBrainz release group, an MBID or musicbrainz.org
 URL; search_releases finds one from what the user typed (never search MusicBrainz with a
 title read from the library). An item ID is a
-beets item (an integer: get_item, merge_items pairs, replace_item, audit_dupes fingerprint_ids);
+beets item (an integer: get_item, merge_items pairs, replace_item, unlink_spotify_id,
+audit_dupes fingerprint_ids);
 get_album also shows beets album IDs, which no tool takes. A playlist entry resolves to an item
 by Spotify track ID (song_id) or ISRC. replace_item takes a YouTube video ID or URL. A tool run
 that outlasts the inline wait returns a job_id: poll get_job.
 
 Tiers. Read tools anyone signed in may use. Write tools (reset_album, requeue_albums,
-merge_items, replace_item, embed_covers, canon_albums, set_search_override,
+merge_items, replace_item, unlink_spotify_id, embed_covers, canon_albums, set_search_override,
 clear_search_override, hold_album, release_album, pin_track, unpin_track, request_album,
 remove_from_later) are a dry run unless
 apply=true, and
@@ -342,6 +343,19 @@ def build_server(
         """music-audit-lengths --replace: swap one item's file for a pinned YouTube video, in
         place (a wrong take, a radio edit, silence)."""
         return await run("replace_item", {"id": id, "youtube_url": youtube_url, "apply": apply}, write=True)
+
+    @mcp.tool(annotations={"destructiveHint": True})
+    async def unlink_spotify_id(
+        id: ItemId,  # noqa: A002 (the contract's name)
+        track: Annotated[str, Field(description="the Spotify track ID (or open.spotify.com/track URL) the item "
+                                                "holds wrongly: the playlist entry's song_id")],
+        apply: Apply = False,
+    ) -> dict:
+        """music-audit-dupes --unlink: take one Spotify track ID off one item's spotify_ids, when
+        the item holds a playlist entry's ID wrongly (a wrong merge) and so takes its slot. The
+        dry run shows where each entry with that ID resolves afterwards (by ISRC, or empty);
+        the apply regenerates the .m3u files."""
+        return await run("unlink_spotify_id", {"id": id, "track": track, "apply": apply}, write=True)
 
     @mcp.tool(annotations={"destructiveHint": True})
     async def embed_covers(apply: Apply = False) -> dict:
