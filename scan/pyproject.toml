@@ -26,5 +26,3 @@ music-cutover = "music_scan.cutover:main"
 where = ["."]
 include = ["music_scan*"]
 
-[tool.pytest.ini_options]
-testpaths = ["tests"]

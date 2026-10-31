@@ -23,5 +23,3 @@ music-state = "music_fetch.state_cli:main"
 where = ["."]
 include = ["music_fetch*"]
 
-[tool.pytest.ini_options]
-testpaths = ["tests"]

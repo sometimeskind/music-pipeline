@@ -23,8 +23,5 @@ music-pipeline = "music_service.cli:main"
 where = ["."]
 include = ["music_service*"]
 
-[tool.pytest.ini_options]
-testpaths = ["tests"]
-
 [tool.pyright]
 reportMissingImports = false
