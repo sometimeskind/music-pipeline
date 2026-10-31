@@ -64,7 +64,10 @@ jobs:
       - name: Run MCP adapter tests (unit + contract)
         # The adapter in its own venv (fastmcp and prefect never share one); its contract
         # test runs the real /mcp-api/* app on this job's Python, where the service is
-        # installed above (homelab#2412).
+        # installed above (homelab#2412). The harness makes its own database on this job's
+        # postgres service: the state is the database's (homelab#2502).
+        env:
+          MUSIC_TEST_DATABASE_URL: postgresql://postgres:test@127.0.0.1:5432/postgres
         run: SERVICE_PYTHON="$(which python)" MCP_VENV="$RUNNER_TEMP/mcp-venv" sh mcp/test.sh
 
   # The build plus integration tests bill 5–7 minutes a run, and every PR push ran them

@@ -31,7 +31,7 @@ from pathlib import Path
 from typing import Callable
 
 from music_fetch import store
-from music_fetch.albums import STATE_FILE, State, _spotify_album, _track_id, _wants, album_key
+from music_fetch.albums import State, _spotify_album, _track_id, _wants, album_key
 from music_scan.held import album_held, held_urls
 from music_scan.identity import ItemIndex, item_recording_ids
 from music_scan.library import LIBRARY_DB, MusicLibrary
@@ -168,7 +168,7 @@ class LibraryAlbum:
     """Library items, one per recording."""
     wanted: list[dict] = dataclasses.field(default_factory=list)
     record: dict | None = None
-    """The album's ``.albums.json`` record, if any."""
+    """The album's record in the album store, if any."""
     on: dict[str, list[dict]] = dataclasses.field(default_factory=dict)
     """Every store track on the album, held or wanted, by playlist (:func:`library_view`)."""
 
@@ -304,7 +304,7 @@ def run_library(minimum: int = DEFAULT_MIN) -> list[LibraryAlbum]:
     tracks held back for the inbox or album mode: those are references
     too), by Spotify album."""
     try:
-        records = State.load(SPOTDL_DIR / STATE_FILE.name).albums
+        records = State.load().albums
     except (OSError, ValueError):
         records = {}
     with MusicLibrary(LIBRARY_DB) as lib:
@@ -344,7 +344,7 @@ def run(playlist: str | None = None, all_stores: bool = False, minimum: int = DE
         names = spotdl_playlists(SPOTDL_DIR)
     with MusicLibrary(LIBRARY_DB) as lib:
         index = ItemIndex(lib.all_items())
-    held = held_urls(QUARANTINE, SPOTDL_DIR) | album_held(SPOTDL_DIR / STATE_FILE.name)
+    held = held_urls(QUARANTINE, SPOTDL_DIR) | album_held()
     reports: list[Report] = []
     for name in names:
         playlist_store = store.load(name)

@@ -14,7 +14,7 @@ from pathlib import Path
 
 import pytest
 
-from music_fetch import albums, ingest, state, state_cli
+from music_fetch import albums, state, state_cli
 
 sys.path.insert(0, str(Path(__file__).parent))  # importable however pytest imports this file
 from pg_fixture import pg_url  # noqa: E402, F401 — a fixture
@@ -30,18 +30,6 @@ FAILURES = {
 }
 
 
-@pytest.fixture(autouse=True)
-def _isolated(tmp_path: Path, monkeypatch):
-    monkeypatch.setattr(state, "SWITCH", tmp_path / ".state-in-db")
-    monkeypatch.setattr(state_cli, "FAILURES_FILE", tmp_path / ".spotdl-failures.json")
-
-
-@pytest.fixture
-def switched(tmp_path: Path, pg_url):
-    (tmp_path / ".state-in-db").touch()
-    return pg_url
-
-
 def _run(argv: list[str], caplog) -> list[str]:
     caplog.clear()
     with caplog.at_level(logging.INFO, logger=state_cli.__name__):
@@ -55,27 +43,6 @@ def _events() -> list[tuple]:
 
 
 # --- no database ---
-
-
-def test_the_backoff_file_is_ingests(monkeypatch):
-    monkeypatch.undo()
-    assert state_cli.FAILURES_FILE == ingest.FAILURES_FILE
-
-
-def test_before_the_switch_clear_backoff_deletes_the_file_on_apply_only(caplog):
-    path = state_cli.FAILURES_FILE
-    path.write_text("{}", encoding="utf-8")
-    assert _run(["clear-backoff"], caplog)[-1] == "Dry run; --apply to write"
-    assert path.exists()
-    assert _run(["clear-backoff", "--apply"], caplog)[-1] == "Applied"
-    assert not path.exists()
-    assert _run(["clear-backoff", "--apply"], caplog)[-1] == "Nothing to clear"
-
-
-def test_before_the_switch_the_store_edits_refuse(caplog):
-    with pytest.raises(SystemExit):
-        _run(["drop-store", "--apply", "--", "mix"], caplog)
-    assert "not in the music database yet" in caplog.text
 
 
 def test_a_write_takes_its_locks_in_order_and_a_dry_run_none(monkeypatch):
@@ -115,7 +82,6 @@ def test_a_lock_that_times_out_releases_the_one_before_it(monkeypatch, caplog):
     monkeypatch.setattr(albums, "_state_lock", lambda apply: albums_lock())
     from music_scan import audit
     monkeypatch.setattr(audit, "pipeline_lock", busy)
-    (state.SWITCH).touch()
     with pytest.raises(SystemExit):
         _run(["drop-store", "--apply", "--", "mix"], caplog)
     assert held == []
@@ -126,7 +92,7 @@ def test_a_lock_that_times_out_releases_the_one_before_it(monkeypatch, caplog):
 
 
 @needs_pg
-def test_clear_backoff_empties_the_table_with_its_event(switched, caplog):
+def test_clear_backoff_empties_the_table_with_its_event(pg_url, caplog):
     with state.connect() as conn:
         state.save_failures(conn, FAILURES)
     lines = _run(["backoff"], caplog)
@@ -147,7 +113,7 @@ def test_clear_backoff_empties_the_table_with_its_event(switched, caplog):
 
 
 @needs_pg
-def test_drop_store_deletes_one_store_and_says_what_is_lost(switched, caplog):
+def test_drop_store_deletes_one_store_and_says_what_is_lost(pg_url, caplog):
     entries = [{"song": {"song_id": "s1"}}, {"song": {"song_id": "s2"}},
                {"local": {"id": 7, "path": "/x", "title": "T", "artist": "A"}}]
     with state.connect() as conn:
@@ -174,7 +140,7 @@ def test_drop_store_deletes_one_store_and_says_what_is_lost(switched, caplog):
 
 
 @needs_pg
-def test_clear_snapshot_makes_the_next_tick_reread_the_playlist(switched, caplog):
+def test_clear_snapshot_makes_the_next_tick_reread_the_playlist(pg_url, caplog):
     rows = state.AlbumRows(playlists={"albums-a": {"snapshot_id": "snap1", "other": 1}, "albums-b": {}})
     with state.connect() as conn:
         state.save_albums(conn, rows)

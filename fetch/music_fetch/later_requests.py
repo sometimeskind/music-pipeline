@@ -174,8 +174,6 @@ def tick(rows: statedb.AlbumRows, get: album_requests.Get | None, apply: bool) -
     a failure here mustn't stop the tick, and the next one tries again."""
     try:
         with statedb.session() as conn:
-            if conn is None:
-                return  # the JSON files are the state: no Later queue
             if not apply or get is None:
                 logger.info("[LATER-REQ] dry run: %s", plan(conn, rows).counts())
                 return

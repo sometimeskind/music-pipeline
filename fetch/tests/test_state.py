@@ -59,12 +59,8 @@ def test_is_spotify_album():
     assert not state.is_spotify_album("")
 
 
-def test_json_round_trip_strips_the_database_fields():
-    data = {"playlists": {"p": {"snapshot_id": "s"}}, "albums": {"sp1": {"status": "wanted"}, "a/b": {"status": "have"}},
-            "indexer": [], "mixed": ["sp1"]}
-    rows = state.rows_from_json(data)
-    assert rows.albums["sp1"]["spotify_album_ids"] == ["sp1"] and rows.albums["a/b"]["names"] == ["a/b"]
-    assert state.rows_to_json(rows) == data
+def test_new_record_refs_and_album_key():
+    assert state.new_record("sp1")["spotify_album_ids"] == ["sp1"] and state.new_record("a/b")["names"] == ["a/b"]
     with pytest.raises(ValueError):
         state.album_key({"status": "wanted"})
 
@@ -258,84 +254,56 @@ def test_kv_documents(pg_url):
         assert state.get_all(conn, state.MB_RELEASES) == {"sp2": {"rung": "isrc"}}
 
 
-# --- the switch: the JSON files until the import, then the database ---
+# --- the database is the only state (homelab#2502) ---
 
 
-@pytest.fixture
-def switched(tmp_path, monkeypatch, pg_url):
-    """The state switched to the test database."""
-    switch = tmp_path / ".state-in-db"
-    switch.touch()
-    monkeypatch.setattr(state, "SWITCH", switch)
-    return pg_url
-
-
-def test_unswitched_needs_no_database(tmp_path, monkeypatch):
-    monkeypatch.setattr(state, "SWITCH", tmp_path / ".state-in-db")
-    monkeypatch.setenv(db.ENV, "postgresql://nowhere.invalid/music")
-    with state.session() as conn:
-        assert conn is None
-    path = tmp_path / "doc.json"
-    state.save_doc(state.EMPTY_SLOTS, path, {"at": "x"})
-    assert state.load_doc(state.EMPTY_SLOTS, path) == {"at": "x"}
-
-
-def test_switched_and_down_is_unavailable(tmp_path, monkeypatch):
-    switch = tmp_path / ".state-in-db"
-    switch.touch()
-    monkeypatch.setattr(state, "SWITCH", switch)
+def test_down_is_unavailable(monkeypatch):
     monkeypatch.delenv(db.ENV, raising=False)
     with pytest.raises(state.Unavailable):
         with state.session():
             pass
-    cache = state.KeyedCache(state.MB_RELEASES, tmp_path / "cache.json")
+    cache = state.KeyedCache(state.MB_RELEASES)
     assert cache.load() == {}  # a cache is best-effort
     cache.save({"sp1": {}})
-    assert not (tmp_path / "cache.json").exists()
 
 
 @needs_pg
-def test_switched_playlist_stores(switched, tmp_path, monkeypatch):
+def test_the_store_module_reads_and_writes_the_rows():
     from music_fetch import store
 
-    monkeypatch.setattr(store, "STORE_DIR", tmp_path / "store")
     playlist = store.Store("later", [{"song": {"url": "u1"}}], source=store.SPOTIFY)
     store.save(playlist)
     assert playlist.updated
     assert store.names() == ["later"]
     assert store.load("later").entries == [{"song": {"url": "u1"}}]
     assert store.songs_by_playlist() == {"later": [{"url": "u1"}]}
-    assert not (tmp_path / "store").exists()  # nothing written to the JSON side
     store.remove("later")
     assert store.load("later") is None and store.names() == []
 
 
 @needs_pg
-def test_switched_backoff_and_rate_limit(switched, tmp_path, monkeypatch):
+def test_backoff_and_rate_limit(monkeypatch):
     from datetime import datetime, timezone
 
     from music_fetch import spotdl_ops, spotify_limit
 
-    spotdl_ops._save_failures(tmp_path / "failures.json", {"u1": {"attempts": 1}})
-    assert spotdl_ops._load_failures(tmp_path / "failures.json") == {"u1": {"attempts": 1}}
-    assert not (tmp_path / "failures.json").exists()
-    monkeypatch.setattr(spotify_limit, "STATE_FILE", tmp_path / "limit.json")
+    spotdl_ops._save_failures({"u1": {"attempts": 1}})
+    assert spotdl_ops._load_failures() == {"u1": {"attempts": 1}}
     monkeypatch.setattr(spotify_limit, "_limit", None)
     spotify_limit.trip(600)
-    until, seconds = spotify_limit._load(tmp_path / "limit.json")
+    until, seconds = spotify_limit._load()
     assert seconds == 600 and until > datetime.now(timezone.utc)
-    assert not (tmp_path / "limit.json").exists()
 
 
 @needs_pg
-def test_switched_cache_writes_only_changed_keys(switched, tmp_path):
-    cache = state.KeyedCache(state.MB_RELEASES, tmp_path / "cache.json")
+def test_cache_writes_only_changed_keys():
+    cache = state.KeyedCache(state.MB_RELEASES)
     data = cache.load()
     data.update(sp1={"rung": "url"}, sp2={"rung": "none"})
     cache.save(data)
     with state.connect() as conn:
         conn.execute("UPDATE kv SET value = '{\"rung\": \"isrc\"}' WHERE key = 'sp1'")  # another process
-        again = state.KeyedCache(state.MB_RELEASES, tmp_path / "cache.json")
+        again = state.KeyedCache(state.MB_RELEASES)
         loaded = again.load()
         loaded["sp2"] = {"rung": "upc"}
         again.save(loaded)
@@ -343,12 +311,10 @@ def test_switched_cache_writes_only_changed_keys(switched, tmp_path):
     cache.save({**data, "sp3": {"rung": "url"}})  # sp1 unchanged here, so the other process's write stays
     with state.connect() as conn:
         assert state.get(conn, state.MB_RELEASES, "sp1") == {"rung": "isrc"}
-    assert not (tmp_path / "cache.json").exists()
 
 
 @needs_pg
-def test_switched_documents(switched, tmp_path):
-    state.save_doc(state.CANON_PAGES, tmp_path / "pages.json", {"read_at": 1.0, "playlists": {}})
-    assert state.load_doc(state.CANON_PAGES, tmp_path / "pages.json") == {"read_at": 1.0, "playlists": {}}
-    assert state.load_doc(state.EMPTY_SLOTS, tmp_path / "slots.json") is None
-    assert not (tmp_path / "pages.json").exists()
+def test_documents():
+    state.save_doc(state.CANON_PAGES, {"read_at": 1.0, "playlists": {}})
+    assert state.load_doc(state.CANON_PAGES) == {"read_at": 1.0, "playlists": {}}
+    assert state.load_doc(state.EMPTY_SLOTS) is None

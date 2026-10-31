@@ -39,16 +39,12 @@ A deleted row (a merge's loser, an album that left its playlists) leaves its
 refs in ``album_rows_gone``, so an item still stamped with its id finds the
 record that holds one of them now (:func:`gone_rows`, ``music_scan.restamp``).
 
-Which copy is the state: the JSON files until ``music-state-import --apply``
-has written the database, then the database.  The switch is the dot file
-:data:`SWITCH`, which the import writes after its transaction commits, so a
-process that has not been switched never needs Postgres, and the previous
-image (the rollback) never sees it.  :func:`session` yields None while the JSON
-is the state.
+The database is the only copy of the state: the JSON dot files it replaced,
+and the switch that chose between them, were retired after a release on the
+database (homelab#2502).
 
-Postgres down once switched: :func:`connect` raises :class:`Unavailable`, and
-the caller skips its run cleanly rather than run without its state, or on the
-stale JSON (homelab#2410).
+Postgres down: :func:`connect` raises :class:`Unavailable`, and the caller
+skips its run cleanly rather than run without its state (homelab#2410).
 """
 
 from __future__ import annotations
@@ -57,11 +53,9 @@ import contextlib
 import dataclasses
 import json
 import logging
-import os
 import re
 from collections.abc import Iterable, Iterator, Mapping
 from datetime import datetime, timezone
-from pathlib import Path
 from typing import Any
 
 import psycopg
@@ -90,8 +84,8 @@ CANON_ISRC = "canon-isrc"            # .canon-isrc.json, keyed by ISRC
 CANON_PAGES = "canon-pages"          # .canon-pages.json, one document
 SPOTIFY_LIMIT = "spotify-rate-limit"  # .spotify-rate-limit.json, one document
 EMPTY_SLOTS = "empty-slots"          # .empty-slots.json, one document
-# Written by music-state-import --apply with the state it imports: from then on
-# the pipeline reads and writes the database, and the JSON is the rollback copy.
+# Written by music-state-import --apply (homelab#2410) with the state it imported
+# from the JSON; that import is retired (homelab#2502) and nothing reads it.
 IMPORTED = "state-imported"
 # Written by music-overrides import --apply (homelab#2484): from then on the
 # overrides, holds and pins are the tables', and the ConfigMap's files are ignored.
@@ -106,37 +100,21 @@ KV_NAMES = (MB_RELEASES, CANON_ISRC, CANON_PAGES, SPOTIFY_LIMIT, EMPTY_SLOTS, IM
             ALBUM_KEYS, CUTOVER)
 
 
-# Present once music-state-import --apply has moved the state into the
-# database.  A dot file beside the JSON it replaces (pipeline-state-files-in-dot-dirs).
-SWITCH = Path("/root/Music/inbox/spotdl/.state-in-db")
-
-
 class Unavailable(RuntimeError):
     """The ``music`` database is not configured or not reachable."""
 
 
-def in_db() -> bool:
-    """Whether the database, not the JSON files, holds the state.  An unreadable
-    path reads as not switched (``os.path.exists``): the tests run as a user who
-    can't see /root, and the pod runs as root, which owns pipeline-state."""
-    return os.path.exists(SWITCH)
-
-
 def check() -> None:
-    """Raise :class:`Unavailable` when the state is in the database and the
-    database is down: a run that needs the state skips (homelab#2410)."""
+    """Raise :class:`Unavailable` when the database is down: a run that needs
+    the state skips (homelab#2410)."""
     with session():
         pass
 
 
 @contextlib.contextmanager
-def session() -> Iterator[psycopg.Connection | None]:
-    """A connection to the state database once :func:`in_db`, else None (the
-    JSON files are the state).  Raises :class:`Unavailable` when switched and
-    the database is down."""
-    if not in_db():
-        yield None
-        return
+def session() -> Iterator[psycopg.Connection]:
+    """A connection to the state database, closed afterwards.  Raises
+    :class:`Unavailable` when the database is down."""
     conn = connect()
     try:
         yield conn
@@ -229,25 +207,6 @@ def new_record(key: str, **fields: Any) -> dict:
     spotify = is_spotify_album(key)
     return {**fields, "release_group": None, "unresolved": PENDING,
             "spotify_album_ids": [key] if spotify else [], "names": [] if spotify else [key]}
-
-
-# The fields album mode's JSON never held: written to the database, stripped from the JSON.
-DB_FIELDS = ("_id", "release_group", "unresolved", "spotify_album_ids", "names")
-
-
-def rows_from_json(data: Mapping) -> AlbumRows:
-    """``.albums.json``'s content as album rows: each record unresolved, its key its Spotify album ID (or name)."""
-    albums = {key: {**record, **new_record(key)} for key, record in (data.get("albums") or {}).items()}
-    return AlbumRows(playlists=dict(data.get("playlists") or {}), albums=albums,
-                     indexer=list(data.get("indexer") or []), mixed=list(data.get("mixed") or []))
-
-
-def rows_to_json(rows: AlbumRows) -> dict:
-    """*rows* as ``.albums.json`` held them, for the previous image (the rollback) to read."""
-    return {"playlists": rows.playlists,
-            "albums": {key: {k: v for k, v in record.items() if k not in DB_FIELDS}
-                       for key, record in rows.albums.items()},
-            "indexer": rows.indexer, "mixed": rows.mixed}
 
 
 def _fingerprint(record: Mapping, mixed: bool) -> str:
@@ -425,7 +384,7 @@ def store_names(conn: psycopg.Connection) -> list[str]:
 
 
 def load_store(conn: psycopg.Connection, playlist: str) -> dict | None:
-    """Playlist *playlist*'s store as its JSON file held it, or None."""
+    """Playlist *playlist*'s store (``playlist``, ``source``, ``updated``, ``entries``), or None."""
     row = conn.execute("SELECT source, updated_at, entries FROM playlist_stores WHERE playlist = %s",
                        (playlist,)).fetchone()
     if row is None:
@@ -521,76 +480,45 @@ def delete(conn: psycopg.Connection, name: str, keys: Iterable[str] = ("",)) -> 
 
 class KeyedCache:
     """A keyed kv document (*name*, e.g. :data:`MB_RELEASES`) as a dict:
-    :meth:`load` reads it from the database once the state is there, else
-    from its JSON file *path*; :meth:`save` writes back the keys that changed
-    (the whole file, before the switch).  A cache is best-effort: a database
-    that is down reads as empty and skips the save, with a warning."""
+    :meth:`load` reads it, :meth:`save` writes back the keys that changed.  A
+    cache is best-effort: a database that is down reads as empty and skips the
+    save, with a warning."""
 
-    def __init__(self, name: str, path: Path) -> None:
+    def __init__(self, name: str) -> None:
         _check(name)
         self.name = name
-        self.path = path
         self._saved: dict[str, str] = {}
 
     def load(self) -> dict[str, Any]:
         try:
             with session() as conn:
-                if conn is not None:
-                    data = get_all(conn, self.name)
-                    self._saved = {k: _dumps(v) for k, v in data.items()}
-                    return data
+                data = get_all(conn, self.name)
         except Unavailable as exc:
             logger.warning("Ignoring the %s cache: %s", self.name, exc)
             return {}
-        try:
-            return json.loads(self.path.read_text(encoding="utf-8"))
-        except FileNotFoundError:
-            return {}
-        except (OSError, ValueError):
-            logger.warning("Ignoring unreadable %s cache %s", self.name, self.path)
-            return {}
+        self._saved = {k: _dumps(v) for k, v in data.items()}
+        return data
 
     def save(self, data: Mapping[str, Any]) -> None:
         try:
             with session() as conn:
-                if conn is not None:
-                    dumped = {k: _dumps(v) for k, v in data.items()}
-                    put_many(conn, self.name, {k: data[k] for k, d in dumped.items() if self._saved.get(k) != d})
-                    self._saved = dumped
-                    return
+                dumped = {k: _dumps(v) for k, v in data.items()}
+                put_many(conn, self.name, {k: data[k] for k, d in dumped.items() if self._saved.get(k) != d})
         except (Unavailable, psycopg.Error) as exc:
             logger.warning("Could not save the %s cache: %s", self.name, exc)
             return
-        try:
-            self.path.write_text(json.dumps(data, indent=1, sort_keys=True), encoding="utf-8")
-        except OSError as exc:
-            logger.warning("Could not save the %s cache %s: %s", self.name, self.path, exc)
+        self._saved = dumped
 
 
-def load_doc(name: str, path: Path) -> Any:
-    """One-document kv *name* (``.canon-pages``, ``.empty-slots``): the
-    database's once the state is there, else *path*'s JSON; None when absent
-    or unreadable.  Raises :class:`Unavailable` when switched and down."""
+def load_doc(name: str) -> Any:
+    """One-document kv *name* (:data:`CANON_PAGES`, :data:`EMPTY_SLOTS`), or
+    None.  Raises :class:`Unavailable` when the database is down."""
     with session() as conn:
-        if conn is not None:
-            return get(conn, name)
-    try:
-        return json.loads(path.read_text(encoding="utf-8"))
-    except FileNotFoundError:
-        return None
-    except (OSError, ValueError):
-        logger.warning("Ignoring unreadable %s", path)
-        return None
+        return get(conn, name)
 
 
-def save_doc(name: str, path: Path, value: Any) -> None:
-    """Write one-document kv *name*: to the database once the state is there,
-    else to *path* through a temporary file.  Raises :class:`Unavailable` or
-    OSError on failure."""
+def save_doc(name: str, value: Any) -> None:
+    """Write one-document kv *name*.  Raises :class:`Unavailable` or
+    :class:`psycopg.Error` on failure."""
     with session() as conn:
-        if conn is not None:
-            put(conn, name, value)
-            return
-    tmp = path.with_suffix(".tmp")
-    tmp.write_text(json.dumps(value, ensure_ascii=False), encoding="utf-8")
-    tmp.replace(path)
+        put(conn, name, value)

@@ -25,12 +25,6 @@ def _no_push():
 
 
 @pytest.fixture(autouse=True)
-def _store_dir(tmp_path: Path, monkeypatch):
-    """The album tick writes each album playlist's store (homelab#1914)."""
-    monkeypatch.setattr(store, "STORE_DIR", tmp_path / "store")
-
-
-@pytest.fixture(autouse=True)
 def _no_overrides(tmp_path: Path):
     with patch.object(albums, "OVERRIDES_FILE", tmp_path / "album-overrides.conf"):
         yield
@@ -38,7 +32,6 @@ def _no_overrides(tmp_path: Path):
 
 def seed(state: State) -> None:
     """Write *state* to the music database as the album store."""
-    state.in_db = True
     state.save()
 
 
@@ -423,24 +416,24 @@ def test_results_reset_the_empty_run() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_tick_off_touches_nothing(tmp_path: Path) -> None:
+def test_tick_off_touches_nothing() -> None:
     spotify = FakeSpotify("s1", [song("One", "A")])
     prowlarr, sab = fakes()
-    tick([("later", "url")], spotify, prowlarr, sab, never_have, Settings(mode="off"), tmp_path / "state.json")
-    assert not (tmp_path / "state.json").exists()
+    tick([("albums", "url")], spotify, prowlarr, sab, never_have, Settings(mode="off"))
+    assert State.load().albums == {} and State.load().playlists == {}
     assert spotify.song_reads == 0
 
 
-def test_tick_persists_state(tmp_path: Path) -> None:
+def test_tick_persists_state() -> None:
     prowlarr, sab = fakes()
-    tick([("later", "url")], FakeSpotify("s1", [song("One", "A"), song("Two", "A")]), prowlarr, sab,
-         never_have, Settings(mode="dry-run"), tmp_path / "state.json")
-    saved = State.load(tmp_path / "state.json")
+    tick([("albums", "url")], FakeSpotify("s1", [song("One", "A"), song("Two", "A")]), prowlarr, sab,
+         never_have, Settings(mode="dry-run"))
+    saved = State.load()
     assert saved.albums["A"]["status"] == albums.DRY_RUN
-    assert saved.playlists["later"]["snapshot_id"] == "s1"
+    assert saved.playlists["albums"]["snapshot_id"] == "s1"
 
 
-def test_tick_fails_on_a_spotify_rate_limit(tmp_path: Path) -> None:
+def test_tick_fails_on_a_spotify_rate_limit() -> None:
     """A long 429 fails the tick (MusicAlbumTickFailing) instead of sleeping (#195)."""
     from music_fetch.spotify_limit import SpotifyRateLimited
 
@@ -448,8 +441,7 @@ def test_tick_fails_on_a_spotify_rate_limit(tmp_path: Path) -> None:
     spotify.snapshot_id = MagicMock(side_effect=SpotifyRateLimited(NOW, 62939))
     prowlarr, sab = fakes()
     with patch.object(albums, "push_metrics") as push, pytest.raises(SpotifyRateLimited):
-        tick([("later", "url")], spotify, prowlarr, sab, never_have,
-             Settings(mode="dry-run"), tmp_path / "state.json")
+        tick([("albums", "url")], spotify, prowlarr, sab, never_have, Settings(mode="dry-run"))
     push.assert_called_once()
     assert push.call_args.args[1] is False
     prowlarr.search.assert_not_called()

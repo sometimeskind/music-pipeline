@@ -504,15 +504,7 @@ def test_parse_dedupes_and_refuses_conflicting_preferences():
 
 @pytest.fixture(autouse=True)
 def _isolated(tmp_path: Path, monkeypatch):
-    monkeypatch.setattr(store, "STORE_DIR", tmp_path / "store")
     monkeypatch.setattr(albums, "OVERRIDES_FILE", tmp_path / "album-overrides.conf")
-    monkeypatch.setattr(state, "SWITCH", tmp_path / ".state-in-db")
-
-
-@pytest.fixture
-def switched(tmp_path: Path, pg_url):
-    (tmp_path / ".state-in-db").touch()
-    return pg_url
 
 
 def _run(argv: list[str], mb: FakeMB, caplog) -> list[str]:
@@ -522,13 +514,8 @@ def _run(argv: list[str], mb: FakeMB, caplog) -> list[str]:
     return [r.getMessage() for r in caplog.records if r.name == "music_fetch.album_requests_cli"]
 
 
-def test_music_requests_refuses_before_the_state_is_in_the_database(caplog):
-    with pytest.raises(req.Refused, match="music-state-import"):
-        _run(["list"], FakeMB(), caplog)
-
-
 @needs_pg
-def test_the_dry_run_then_the_apply_add_a_request(switched, caplog, monkeypatch):
+def test_the_dry_run_then_the_apply_add_a_request(pg_url, caplog, monkeypatch):
     monkeypatch.setenv("MUSIC_EVENT_CALLER", "sub-tom")
     mb = FakeMB()
     dry = _run(["add", RG], mb, caplog)
@@ -556,7 +543,7 @@ def test_the_dry_run_then_the_apply_add_a_request(switched, caplog, monkeypatch)
 
 
 @needs_pg
-def test_a_refused_request_writes_nothing(switched, caplog):
+def test_a_refused_request_writes_nothing(pg_url, caplog):
     with pytest.raises(req.Refused):
         _run(["add", "--apply", RG, f"{OTHER_RG}"], FakeMB(), caplog)
     with state.connect() as conn:
@@ -564,7 +551,7 @@ def test_a_refused_request_writes_nothing(switched, caplog):
 
 
 @needs_pg
-def test_the_tick_queues_a_request_and_the_listing_follows_its_album(switched, tmp_path: Path, caplog):
+def test_the_tick_queues_a_request_and_the_listing_follows_its_album(pg_url, tmp_path: Path, caplog):
     with state.connect() as conn:
         state.save_albums(conn, state.AlbumRows(albums={"sp1": _wants_record("sp1")}))
     _run(["add", "--apply", f"{RG}={R14}"], FakeMB(), caplog)

@@ -234,7 +234,6 @@ def test_spotify_durations_read_every_store_first_listing_wins(tmp_path, monkeyp
     ``.spotdl`` file is never read."""
     from music_fetch import store
 
-    monkeypatch.setattr(store, "STORE_DIR", tmp_path / "store")
     store.save(store.Store.from_songs("a", [{"song_id": "S1", "duration": 200}, {"song_id": "S2"},
                                  {"url": "https://open.spotify.com/track/S3", "duration": 180.5}]))
     store.save(store.Store.from_songs("b", [{"song_id": "S1", "duration": 999}, {"song_id": "S4", "duration": 90}]
@@ -484,9 +483,6 @@ def _patch_run(monkeypatch, items, tmp_path):
     monkeypatch.setattr(library, "MusicLibrary", lambda *_: lib)
     monkeypatch.setattr(navidrome, "trigger_scan", lambda: events.append("rescan"))
     monkeypatch.setattr(scan, "regen_playlists", lambda: events.append("m3u") or {"aaaaaaah": 2})
-    from music_fetch import store
-
-    monkeypatch.setattr(store, "STORE_DIR", tmp_path / "store")
     monkeypatch.setattr(dupes, "REPLACED", tmp_path / "replaced")
     monkeypatch.setattr(dupes, "decode", _decoder)
     monkeypatch.setattr(dupes, "pipeline_lock", contextlib.nullcontext)

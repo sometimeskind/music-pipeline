@@ -34,7 +34,7 @@ tracks) counts only when the item is already filed under it, so Ice Spice *Munch
 stays on *Like..? (Deluxe)* but no track moves onto a remix EP or a reissue.
 Several candidates: an album before an EP, then the one the item is already filed
 under, then one a playlist names, then the earliest, then the album ID.  The searches are cached in
-:data:`ISRC_CACHE` and paced :data:`SPOTIFY_INTERVAL` apart; a search that is
+the state's ``canon-isrc`` document and paced :data:`SPOTIFY_INTERVAL` apart; a search that is
 not done yet (budget spent, rate limit) leaves the item as it is and marks it
 ``canon_wait`` so the next scan picks it up.
 
@@ -105,7 +105,8 @@ from bisect import bisect_left, bisect_right
 from collections import Counter
 from collections.abc import Callable, Iterable
 from datetime import datetime, timedelta, timezone
-from pathlib import Path
+
+import psycopg
 
 from music_fetch import events, state
 from music_scan.identity import item_spotify_ids, spotify_id
@@ -114,14 +115,13 @@ from music_scan.mb_release import MB_ALBUM_FIELDS, Resolver, SpotifyAlbum
 logger = logging.getLogger(__name__)
 
 TYPE_RANK = {"album": 0, "single": 1, "compilation": 2}
-# The backfill's page reads, reused by an --apply within a day of the dry run.
-PAGES_CACHE = Path("/root/Music/inbox/spotdl/.canon-pages.json")
+# The backfill's page reads (the state's canon-pages document), reused by an --apply
+# within a day of the dry run.
 PAGES_MAX_AGE = 24 * 3600
 # MusicBrainz lookups per scan run; the rest wait in the queue for the next.
 IMPORT_BUDGET = 20
 PENDING = "pending"
 # Single → album searches by ISRC: cache, retry for a miss, pacing, import budget.
-ISRC_CACHE = Path("/root/Music/inbox/spotdl/.canon-isrc.json")
 ISRC_RETRY_DAYS = 7
 SPOTIFY_INTERVAL = 1.0
 IMPORT_SEARCH_BUDGET = 20
@@ -382,20 +382,19 @@ class AlbumsByIsrc:
 
     def __init__(
         self,
-        cache_file: Path | None = ISRC_CACHE,
+        cache: bool = True,
         budget: int | None = None,
         search: Callable[[str], list[dict]] = spotify_search_isrc,
         interval: float = SPOTIFY_INTERVAL,
     ) -> None:
-        self.cache_file = cache_file
         self.budget = budget
         self.search = search
         self.interval = interval
         self.calls = 0
         self.limited = False
         self._last = 0.0
-        # The music database's canon-isrc document once the state is there (homelab#2410).
-        self._store = None if cache_file is None else state.KeyedCache(state.CANON_ISRC, cache_file)
+        # The music database's canon-isrc document (homelab#2410); *cache* False keeps none.
+        self._store = state.KeyedCache(state.CANON_ISRC) if cache else None
         self.cache: dict[str, dict] = {} if self._store is None else self._store.load()
 
     def save(self) -> None:
@@ -952,8 +951,8 @@ def _records() -> dict[str, dict]:
     from music_fetch import albums  # noqa: PLC0415
 
     try:
-        return albums.State.load(albums.STATE_FILE).albums
-    except (OSError, ValueError) as exc:
+        return albums.State.load().albums
+    except state.Unavailable as exc:
         logger.warning("Could not read the album records (%s); no item kept on its record's album", exc)
         return {}
 
@@ -1015,7 +1014,7 @@ def after_scan(lib, since: float) -> int:
 # ----------------------------------------------------------------------
 
 
-def read_pages(refresh: bool = False, cache_file: Path = PAGES_CACHE) -> dict[str, list[dict]]:
+def read_pages(refresh: bool = False) -> dict[str, list[dict]]:
     """Every configured playlist's songs from Spotify's item pages (one call per
     100 tracks), cached for a day so a dry run and its --apply read Spotify once."""
     from music_fetch import ingest  # noqa: PLC0415
@@ -1024,11 +1023,11 @@ def read_pages(refresh: bool = False, cache_file: Path = PAGES_CACHE) -> dict[st
 
     if not refresh:
         try:
-            cached = state.load_doc(state.CANON_PAGES, cache_file)
+            cached = state.load_doc(state.CANON_PAGES)
             if cached and time.time() - cached["read_at"] < PAGES_MAX_AGE:
                 logger.info("Using the playlist pages read %s ago", f"{(time.time() - cached['read_at']) / 60:.0f} min")
                 return cached["playlists"]
-        except (OSError, ValueError, KeyError, state.Unavailable):
+        except (KeyError, TypeError, state.Unavailable, psycopg.Error):
             pass
     reader = SpotifyPlaylists(ingest.COOKIE_FILE)
     pages: dict[str, list[dict]] = {}
@@ -1036,9 +1035,9 @@ def read_pages(refresh: bool = False, cache_file: Path = PAGES_CACHE) -> dict[st
         pages[pl.name] = reader.songs(pl.url)
         logger.info("Read %s: %d track(s)", pl.name, len(pages[pl.name]))
     try:
-        state.save_doc(state.CANON_PAGES, cache_file, {"read_at": time.time(), "playlists": pages})
-    except (OSError, state.Unavailable) as exc:
-        logger.warning("Could not cache the playlist pages in %s: %s", cache_file, exc)
+        state.save_doc(state.CANON_PAGES, {"read_at": time.time(), "playlists": pages})
+    except (state.Unavailable, psycopg.Error) as exc:
+        logger.warning("Could not cache the playlist pages: %s", exc)
     return pages
 
 
@@ -1090,7 +1089,7 @@ def report(plan: Plan, resolver: Resolver | None, albums: AlbumsByIsrc | None = 
 def run(apply: bool = False, refresh: bool = False, mb_budget: int | None = None,
         search_budget: int | None = None) -> Plan:
     from music_fetch import ingest  # noqa: PLC0415
-    from music_fetch.albums import STATE_FILE, State  # noqa: PLC0415
+    from music_fetch.albums import State  # noqa: PLC0415
     from music_scan import supersede  # noqa: PLC0415
     from music_scan.audit import pipeline_lock  # noqa: PLC0415
     from music_scan.library import LIBRARY_DB, LIBRARY_DIR, MusicLibrary  # noqa: PLC0415
@@ -1107,7 +1106,7 @@ def run(apply: bool = False, refresh: bool = False, mb_budget: int | None = None
     albums = AlbumsByIsrc(budget=search_budget)
     # --apply moves and merges files (#266): no import may run meanwhile.
     with (pipeline_lock() if apply else contextlib.nullcontext()), MusicLibrary(LIBRARY_DB, LIBRARY_DIR) as lib:
-        records = State.load(STATE_FILE).albums
+        records = State.load().albums
         # Items canon moved off their record's album before #278 go back: by import time too.
         homes = record_homes(lib.all_items(), records, by_time=True)
         plan = canonicalize(lib.all_items(), placements, resolver, apply=apply, albums=albums, homes=homes,

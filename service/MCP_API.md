@@ -70,7 +70,7 @@ One album: ambiguous or not found as above, otherwise:
  "items": [{"id": 10001, "title": "Come Together", "artist": "The Beatles", "track": 1, "path": "The Beatles/Abbey Road/01 - Come Together.m4a", "via": "usenet"}]}
 ```
 
-`key` is the album-store key, which is the Spotify album ID; `record` is the album record as the album store holds it (the `music` database once switched, homelab#2410; `.albums.json` before), with `release_group` and `unresolved`; the items are those whose `spotify_album_id` is the key.
+`key` is the album-store key, which is the Spotify album ID; `record` is the album record as the album store holds it (the `music` database, homelab#2410), with `release_group` and `unresolved`; the items are those whose `spotify_album_id` is the key.
 
 ### `GET /mcp-api/items/<id>` (`get_item`)
 
@@ -153,8 +153,8 @@ What happened since `since` (default: 24 hours ago), and the library issues stan
 
 - `history.events` holds each kind's latest 25 in the window, oldest first; `counts` every kind's total. A `merge`, `moved`, `local` or `recording_replaced` event also carries its `item_id` and `data`, which the digest judges: a merge or a move between unrelated recordings or albums, an extra left to `music-audit-dupes`, a guessed recording ID `music-mb-fingerprint --recheck` replaced (`data.old`, `data.new`, `data.score`, homelab#2543). With the event store unavailable, `history` is `{"error": "…"}` and the rest still answers.
 - `issues.stuck`: `failed` and `missing` albums (a feed's, which never fall back), grabs SABnzbd hasn't finished in 12 hours, and fallbacks spotdl hasn't filled in 14.
-- `issues.mixed` is the last album tick's; `only_copies` are the files in `quarantine/replaced/` holding a recording the library doesn't; `path_clashes` the items canon tagged in place (`canon_clash`); `empty_slots` the last scan's (`inbox/spotdl/.empty-slots.json`), playlists with none left out; `rejects` the length guard's files still in `quarantine/rejected/`.
-- `requests` (homelab#2478) are the album requests whose album ended `missing` or `failed`, each as `list_requests` shows it. A request that misses stays `missing` until the MusicBrainz-built fallback: it never goes to spotdl. Both are empty while the JSON files are the state; with the database down they are empty and an `error` says so.
+- `issues.mixed` is the last album tick's; `only_copies` are the files in `quarantine/replaced/` holding a recording the library doesn't; `path_clashes` the items canon tagged in place (`canon_clash`); `empty_slots` the last scan's (the `empty-slots` document), playlists with none left out; `rejects` the length guard's files still in `quarantine/rejected/`.
+- `requests` (homelab#2478) are the album requests whose album ended `missing` or `failed`, each as `list_requests` shows it. A request that misses stays `missing` until the MusicBrainz-built fallback: it never goes to spotdl. With the database down both are empty and an `error` says so.
 
 ## Overrides (any tier, homelab#2484)
 
@@ -188,7 +188,7 @@ The album requests in the `music` database (`music_fetch.album_requests`), oldes
                "album": {"key": "2120", "status": "missing", "origin": "request", "searched_at": "…", "query": "…"}}]}
 ```
 
-Before `music-state-import` has run, or with the database down: `503 {"status": "unavailable", "error": "…"}`.
+With the database down: `503 {"status": "unavailable", "error": "…"}`.
 
 ## The Later queue (any tier, homelab#2478)
 
@@ -206,7 +206,7 @@ The Later queue in the `music` database (`music_fetch.later_queue`): the albums 
              "requested": true, "added_at": "2026-10-30T09:00:00Z", "available_at": null}]}
 ```
 
-Before `music-state-import` has run, or with the database down: `503 {"status": "unavailable", "error": "…"}`.
+With the database down: `503 {"status": "unavailable", "error": "…"}`.
 
 ## Jobs
 
@@ -254,7 +254,7 @@ A write tool's **apply** takes Prefect's `pipeline` lock (and first `albums`, fo
 
 ## Test harness
 
-`service/tests/mcp_harness.py` serves this API over a seeded beets library, album store, playlist store and quarantine, with faked CLI commands (no CLI runs): `python service/tests/mcp_harness.py --port N --dir D` (`/app/tests/mcp_harness.py` in the dev image). `MCP_API_TOKEN` defaults to `mcp-secret`. The adapter's contract test runs against it.
+`service/tests/mcp_harness.py` serves this API over a seeded beets library, album store, playlist store and quarantine, with faked CLI commands (no CLI runs): `python service/tests/mcp_harness.py --port N --dir D` (`/app/tests/mcp_harness.py` in the dev image). The stores are in a new database it creates on `MUSIC_TEST_DATABASE_URL`'s server (or in `MUSIC_DATABASE_URL`'s, when set), so it needs one. `MCP_API_TOKEN` defaults to `mcp-secret`. The adapter's contract test runs against it.
 
 ## Read-tier CLI dry runs (any tier)
 

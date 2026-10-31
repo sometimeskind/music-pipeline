@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 import logging
 import time
 
@@ -83,9 +82,12 @@ def spotdl_sync_task(metrics) -> None:
     downloaded (#187); see :func:`music_scan.scan.sync_hooks`.
     """
     logger = get_run_logger()
-    if ingest.FAILURES_FILE.exists():
-        try:
-            failures = json.loads(ingest.FAILURES_FILE.read_text(encoding="utf-8"))
+    try:
+        failures = ingest._load_failures()
+    except Exception as exc:
+        logger.warning("Could not read the backoff state: %s", exc)
+    else:
+        if failures:
             logger.info("Backoff state: %d track(s) backed off", len(failures))
             for url, entry in failures.items():
                 logger.info(
@@ -95,10 +97,8 @@ def spotdl_sync_task(metrics) -> None:
                     entry.get("retry_after", "?")[:10],
                     url,
                 )
-        except Exception:
-            logger.warning("Could not read backoff state from %s", ingest.FAILURES_FILE)
-    else:
-        logger.info("Backoff state: empty")
+        else:
+            logger.info("Backoff state: empty")
     with scan.sync_hooks() as hooks:
         ingest.sync_playlists(metrics, **hooks)
     not_downloaded = metrics.tracks_attempted - metrics.tracks_downloaded
@@ -700,7 +700,7 @@ def album_import_flow(nzo_id: str, ok: bool, path: str = "", fail_message: str =
 
     logger = get_run_logger()
     settings = albums.Settings.from_env()
-    # Waits for a tick: both read and write .albums.json.
+    # Waits for a tick: both read and write the album store.
     with concurrency("albums", occupy=1):
         state = albums.State.load()
         success = False

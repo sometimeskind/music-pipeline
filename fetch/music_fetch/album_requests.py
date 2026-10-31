@@ -393,11 +393,10 @@ def load(conn: psycopg.Connection) -> list[Request]:
 
 
 def album_requests() -> list[Request]:
-    """The requests the album tick feeds (:func:`albums.feed_requests`): none
-    while the JSON files are the state.  Raises :class:`state.Unavailable`
-    when the database holds the state and is down."""
+    """The requests the album tick feeds (:func:`albums.feed_requests`).
+    Raises :class:`state.Unavailable` when the database is down."""
     with statedb.session() as conn:
-        return [] if conn is None else load(conn)
+        return load(conn)
 
 
 def add(conn: psycopg.Connection, found: Tracklist, by: str, key: str | None = None,

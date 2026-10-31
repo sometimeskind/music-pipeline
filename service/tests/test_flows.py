@@ -197,7 +197,6 @@ def _flow_ingest_pushes(tmp_path, monkeypatch, *, preflight=None, linked=0):
     pushes: list[tuple[str, str]] = []
     monkeypatch.setattr("music_fetch.metrics._push", lambda body, job: pushes.append((body, job)))
     monkeypatch.setattr(ingest, "COOKIE_FILE", cookies)
-    monkeypatch.setattr(ingest, "FAILURES_FILE", tmp_path / "failures.json")
     monkeypatch.setattr(ingest, "CONF_PATH", tmp_path / "playlists.conf")
     monkeypatch.setattr(ingest, "preflight", lambda: preflight)
     monkeypatch.setattr(ingest, "reconcile_playlists", lambda: [])

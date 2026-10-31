@@ -10,7 +10,7 @@ from pathlib import Path
 
 import pytest
 
-from music_fetch import album_requests_cli, albums, later_cli, later_queue, state, store
+from music_fetch import album_requests_cli, albums, later_cli, later_queue, state
 
 sys.path.insert(0, str(Path(__file__).parent))  # importable however pytest imports this file
 from pg_fixture import pg_url  # noqa: E402, F401 — a fixture
@@ -25,14 +25,11 @@ RG3 = "7c3f5a2e-1b4d-4e6f-8a9b-0c1d2e3f4a5b"
 
 @pytest.fixture(autouse=True)
 def _isolated(tmp_path: Path, monkeypatch):
-    monkeypatch.setattr(store, "STORE_DIR", tmp_path / "store")
     monkeypatch.setattr(albums, "OVERRIDES_FILE", tmp_path / "album-overrides.conf")
-    monkeypatch.setattr(state, "SWITCH", tmp_path / ".state-in-db")
 
 
 @pytest.fixture
-def switched(tmp_path: Path, pg_url, monkeypatch):
-    (tmp_path / ".state-in-db").touch()
+def music_db(tmp_path: Path, pg_url, monkeypatch):
     monkeypatch.setenv("MUSIC_EVENT_CALLER", "sub-tom")
     return pg_url
 
@@ -77,7 +74,7 @@ def _available() -> list[str]:
 
 
 @needs_pg
-def test_a_request_with_later_is_appended_and_pending_until_held(switched, caplog):
+def test_a_request_with_later_is_appended_and_pending_until_held(music_db, caplog):
     mb = FakeMB()
     dry = _run(album_requests_cli, ["add", "--later", RG], caplog, get=mb)
     assert dry == _run(album_requests_cli, ["add", "--later", RG], caplog, get=mb)
@@ -99,14 +96,14 @@ def test_a_request_with_later_is_appended_and_pending_until_held(switched, caplo
 
 
 @needs_pg
-def test_without_later_nothing_is_queued(switched, caplog):
+def test_without_later_nothing_is_queued(music_db, caplog):
     applied = _run(album_requests_cli, ["add", "--apply", RG], caplog, get=FakeMB())
     assert applied[-1] == "Applied: 1 request(s) added"
     assert _queue() == []
 
 
 @needs_pg
-def test_an_album_requested_already_is_only_appended(switched, caplog):
+def test_an_album_requested_already_is_only_appended(music_db, caplog):
     mb = FakeMB()
     _run(album_requests_cli, ["add", "--apply", RG], caplog, get=mb)
     applied = _run(album_requests_cli, ["add", "--later", "--apply", RG], caplog, get=mb)
@@ -115,7 +112,7 @@ def test_an_album_requested_already_is_only_appended(switched, caplog):
 
 
 @needs_pg
-def test_an_album_held_already_is_available_at_once(switched, caplog):
+def test_an_album_held_already_is_available_at_once(music_db, caplog):
     _rows(_album(RG, albums.HAVE))
     dry = _run(album_requests_cli, ["add", "--later", RG], caplog, get=FakeMB())
     assert "  Later: appended; the library holds it, so it joins the end of Later at the next scan" in dry
@@ -125,7 +122,7 @@ def test_an_album_held_already_is_available_at_once(switched, caplog):
 
 
 @needs_pg
-def test_later_lists_albums_in_arrival_order_not_request_order(switched):
+def test_later_lists_albums_in_arrival_order_not_request_order(music_db):
     """homelab#2478: an album that downloads late lands at the end, not behind the listening position."""
     _rows(_album(RG, albums.WANTED, "First"), _album(RG2, albums.WANTED, "Second"), _album(RG3, albums.HAVE, "Third"))
     with state.connect() as conn, conn.transaction():
@@ -147,7 +144,7 @@ def test_later_lists_albums_in_arrival_order_not_request_order(switched):
 
 
 @needs_pg
-def test_a_reset_doesnt_move_an_album(switched):
+def test_a_reset_doesnt_move_an_album(music_db):
     _rows(_album(RG, albums.HAVE), _album(RG2, albums.HAVE))
     with state.connect() as conn, conn.transaction():
         later_queue.add(conn, [RG, RG2], state.load_albums(conn), {})
@@ -161,7 +158,7 @@ def test_a_reset_doesnt_move_an_album(switched):
 
 
 @needs_pg
-def test_a_pending_album_is_listed_after_the_available_ones(switched):
+def test_a_pending_album_is_listed_after_the_available_ones(music_db):
     _rows(_album(RG, albums.WANTED), _album(RG2, albums.IMPORTED))
     with state.connect() as conn, conn.transaction():
         later_queue.add(conn, [RG, RG2], state.load_albums(conn), {})
@@ -172,7 +169,7 @@ def test_a_pending_album_is_listed_after_the_available_ones(switched):
 
 
 @needs_pg
-def test_music_later_removes_by_release_group_and_through(switched, caplog):
+def test_music_later_removes_by_release_group_and_through(music_db, caplog):
     _rows(_album(RG, albums.HAVE, "First"), _album(RG2, albums.HAVE, "Second"), _album(RG3, albums.WANTED, "Third"))
     with state.connect() as conn, conn.transaction():
         later_queue.add(conn, [RG, RG2, RG3], state.load_albums(conn), {})
@@ -201,7 +198,7 @@ def test_music_later_removes_by_release_group_and_through(switched, caplog):
 
 
 @needs_pg
-def test_music_later_refuses_a_through_past_the_end_and_an_empty_call(switched, caplog):
+def test_music_later_refuses_a_through_past_the_end_and_an_empty_call(music_db, caplog):
     _rows(_album(RG, albums.HAVE))
     with state.connect() as conn, conn.transaction():
         later_queue.add(conn, [RG], state.load_albums(conn), {})
@@ -213,8 +210,3 @@ def test_music_later_refuses_a_through_past_the_end_and_an_empty_call(switched, 
         _run(later_cli, ["remove", "--through", "0"], caplog)
     with pytest.raises(later_cli.req.Refused, match="not a MusicBrainz"):
         _run(later_cli, ["remove", "--", "nonsense"], caplog)
-
-
-def test_music_later_refuses_before_the_state_is_in_the_database(caplog):
-    with pytest.raises(later_cli.req.Refused, match="music-state-import"):
-        _run(later_cli, ["list"], caplog)

@@ -18,7 +18,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable, Iterator
 
-from music_fetch import albums, later_queue, state, store
+import psycopg
+
+from music_fetch import later_queue, state, store
 from music_fetch.album_requests import UNVERIFIED
 from music_scan import playlists
 from music_scan.guard import REASONS, guard_inbox, verify_requests
@@ -44,9 +46,8 @@ PLAYLISTS = Path("/root/Music/playlists")
 INBOX = Path("/root/Music/inbox")
 LIBRARY = Path("/root/Music/library")
 LIBRARY_DB = Path("/root/.config/beets/library.db")
-# The last scan's empty playlist slots, by name, beside the album store (SPOTDL_DIR):
-# the Music MCP's digest_summary reports them (homelab#2413).
-EMPTY_SLOTS_NAME = ".empty-slots.json"
+# The last scan's empty playlist slots are the state's empty-slots document: the
+# Music MCP's digest_summary reports them (homelab#2413), the first of each listed.
 EMPTY_SLOTS_LISTED = 25
 
 
@@ -360,7 +361,7 @@ def sync_hooks() -> Iterator[dict]:
         index = ItemIndex(lib.all_items())
         yield {
             "resolves": lambda song: index.match_song(song, words=False)[0] is not None,
-            "held": held_urls(QUARANTINE, SPOTDL_DIR) | album_held(SPOTDL_DIR / albums.STATE_FILE.name),
+            "held": held_urls(QUARANTINE, SPOTDL_DIR) | album_held(),
             "in_library": lambda pl, song: link_song(index, pl, song),
         }
 
@@ -380,7 +381,7 @@ def regen_playlists(metrics: ScanMetrics | None = None) -> dict[str, int]:
     item by Spotify ID or ISRC, so a track imported by any route reaches every
     playlist that lists it at the next scan, with no download and no tag
     write (#228).  *metrics*, when given (the scan), takes the empty-slot
-    count per playlist, and :data:`EMPTY_SLOTS_NAME` the first
+    count per playlist, and the state's ``empty-slots`` document the first
     :data:`EMPTY_SLOTS_LISTED` empty entries of each.
 
     An ``album`` playlist lists every local track of every album on it instead
@@ -389,15 +390,11 @@ def regen_playlists(metrics: ScanMetrics | None = None) -> dict[str, int]:
     empties a playlist.
 
     ``later.m3u`` is the Later queue's available albums (homelab#2478,
-    :func:`later_view`) once the state is in the database; a playlist store
-    named ``later`` is not read for it.  When the queue can't be read,
+    :func:`later_view`); a playlist store named ``later`` is not read for it.  When the queue can't be read,
     ``later.m3u`` keeps its last content.
     """
     PLAYLISTS.mkdir(parents=True, exist_ok=True)
     names = store.names()
-    if not names and not state.in_db():
-        logger.debug("No playlist stores found — no playlists to generate")
-        return {}
 
     counts: dict[str, int] = {}
     empty: dict[str, int] = {}
@@ -409,15 +406,13 @@ def regen_playlists(metrics: ScanMetrics | None = None) -> dict[str, int]:
         by_record = playlists.by_stamp(all_items)
         stamps = playlists.record_stamps(_album_records())
         queue: list[Path] | None = None
-        queue_failed = False
         try:
             queue = later_view(library, by_album, by_record)
         except Exception:
-            queue_failed = True
             logger.error("  [LATER] the Later queue can't be read — %s.m3u is left as it was", later_queue.PLAYLIST,
                          exc_info=True)
         for name in names:
-            if name == later_queue.PLAYLIST and (queue is not None or queue_failed):
+            if name == later_queue.PLAYLIST:
                 continue  # the Later queue writes later.m3u
             try:
                 view = store_view(name, library, by_album, stamps)
@@ -447,32 +442,26 @@ def _write_m3u(name: str, paths: list[Path]) -> int:
     return len(lines)
 
 
-def _later_albums() -> list[tuple[str, dict]] | None:
+def _later_albums() -> list[tuple[str, dict]]:
     """The Later queue's available albums, ``(key, record)`` in ``.m3u`` order,
     once the entries named by ref whose rows now have a release group have it
     (:func:`later_queue.resolve_refs`) and the pending albums the library now
     holds whole have become available (:func:`later_queue.mark_available`).
-    None while the JSON files are the state; raises when the database can't
-    be read."""
+    Raises when the database can't be read."""
     with state.session() as conn:
-        if conn is None:
-            return None
         rows = state.load_albums(conn)
         later_queue.resolve_refs(conn, rows)
         later_queue.mark_available(conn, rows)
         return later_queue.albums(conn, rows)
 
 
-def later_view(library: ItemIndex, by_album: dict[str, list], by_record: dict[str, list]) -> list[Path] | None:
+def later_view(library: ItemIndex, by_album: dict[str, list], by_record: dict[str, list]) -> list[Path]:
     """The Later queue's ``.m3u`` paths (homelab#2478, :mod:`music_fetch.later_queue`):
     each available album's local tracks (:func:`album_tracks`), album by album
     in ``available_at`` order, each file once.  An import's album becomes
     available here (:func:`_later_albums`), so it joins the end at the scan
-    that follows it.  None while the JSON files are the state; raises when
-    the database can't be read."""
+    that follows it.  Raises when the database can't be read."""
     found = _later_albums()
-    if found is None:
-        return None
     paths = later_paths(found, library, by_album, by_record)
     if found:
         logger.info("  [LATER] %s: %d album(s), %d track(s) from the Later queue", later_queue.PLAYLIST, len(found),
@@ -504,11 +493,10 @@ def _save_empty_slots(empty: dict[str, int], missing: dict[str, list[str]]) -> N
     report = {"at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
               "playlists": {name: {"total": n, "entries": missing.get(name, [])[:EMPTY_SLOTS_LISTED]}
                             for name, n in sorted(empty.items())}}
-    path = SPOTDL_DIR / EMPTY_SLOTS_NAME
     try:
-        state.save_doc(state.EMPTY_SLOTS, path, report)
-    except (OSError, state.Unavailable) as exc:
-        logger.warning("Could not save the empty slots to %s: %s", path, exc)
+        state.save_doc(state.EMPTY_SLOTS, report)
+    except (state.Unavailable, psycopg.Error) as exc:
+        logger.warning("Could not save the empty slots: %s", exc)
 
 
 def add_source(lib: MusicLibrary, have_source: str, new_source: str, tracks: list[list]) -> int:

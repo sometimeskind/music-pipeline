@@ -12,8 +12,8 @@ same MusicBrainz album IDs, or none.  This finds that release, rungs in order:
    playlist pages carry no UPC);
 4. ``[MB-NONE]`` none: the caller clears the album-level MusicBrainz tags.
 
-Results are cached per Spotify album in :data:`CACHE_FILE`.  That file is also
-the queue: a run resolves at most *budget* albums (MusicBrainz allows one
+Results are cached per Spotify album in the state's ``mb-releases`` document
+(:mod:`music_fetch.state`).  That cache is also the queue: a run resolves at most *budget* albums (MusicBrainz allows one
 request a second), and the rest stay pending, their MusicBrainz tags untouched,
 until a later run.  A miss is retried after :data:`RETRY_DAYS`, so a link added
 to MusicBrainz later (Harmony) is picked up.
@@ -30,7 +30,6 @@ import urllib.parse
 import urllib.request
 from collections.abc import Callable, Iterable
 from datetime import datetime, timedelta, timezone
-from pathlib import Path
 
 from music_fetch import state
 from music_scan.backfill import MB_INTERVAL, MB_USER_AGENT
@@ -40,8 +39,6 @@ logger = logging.getLogger(__name__)
 MB_API = "https://musicbrainz.org/ws/2/"
 SPOTIFY_ALBUM_URL = "https://open.spotify.com/album/"
 HARMONY_URL = "https://harmony.pulsewidth.org.uk/release?url=" + urllib.parse.quote(SPOTIFY_ALBUM_URL, safe="")
-# On pipeline-state, next to .albums.json.
-CACHE_FILE = Path("/root/Music/inbox/spotdl/.mb-releases.json")
 RETRY_DAYS = 7
 ISRC_SAMPLE = 3
 TIMEOUT = 30
@@ -213,19 +210,18 @@ class Resolver:
 
     def __init__(
         self,
-        cache_file: Path | None = CACHE_FILE,
+        cache: bool = True,
         budget: int | None = None,
         mb: MusicBrainz | None = None,
         upc_of: Callable[[str], str | None] = spotify_upc,
     ) -> None:
-        self.cache_file = cache_file
         self.budget = budget
         self.mb = mb or MusicBrainz()
         self.upc_of = upc_of
         self.looked_up = 0
         self.rungs: dict[str, int] = {}
-        # The music database's mb-releases document once the state is there (homelab#2410).
-        self._store = None if cache_file is None else state.KeyedCache(state.MB_RELEASES, cache_file)
+        # The music database's mb-releases document (homelab#2410); *cache* False keeps none.
+        self._store = state.KeyedCache(state.MB_RELEASES) if cache else None
         self.cache: dict[str, dict] = {} if self._store is None else self._store.load()
 
     def save(self) -> None:

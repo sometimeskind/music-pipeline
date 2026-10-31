@@ -3,13 +3,21 @@
 Tests orchestrate real Docker containers from the host. The image under test is
 controlled by the SERVICE_IMAGE environment variable so CI can point tests at a
 freshly-built local image before the push to GHCR.
+
+The state is the music database's (homelab#2502): a throwaway Postgres runs for the
+session, on a free port of the host's loopback, and every test gets a database of its
+own (``volumes["database_url"]``). Containers that read the state run on the host's
+network with ``MUSIC_DATABASE_URL`` (:func:`db_env`).
 """
 
 from __future__ import annotations
 
 import io
+import json
 import os
 import tarfile
+import time
+import uuid
 from pathlib import Path, PurePosixPath
 
 import docker
@@ -29,6 +37,8 @@ BEETS_CONFIG = str(REPO_ROOT / "config" / "beets" / "integration-test-config.yam
 SPOTDL_CONFIG = str(REPO_ROOT / "config" / "spotdl" / "config.json")
 PLAYLISTS_CONF = str(REPO_ROOT / "config" / "playlists.conf")
 COOKIES_PATH = REPO_ROOT / "cookies.txt"
+# CI's (.github/workflows/service.yml) and scripts/test-postgres.sh's: move all three with the CNPG major.
+POSTGRES_IMAGE = "postgres:17.11@sha256:31ba9c94a03ada9988f2bb493a22a75eef3a185884533e5cdbcd498ea835b08f"
 
 # ---------------------------------------------------------------------------
 # Audio fixture — synthetic silent MP3 generated at test time by ffmpeg.
@@ -60,12 +70,36 @@ def docker_client():
 # ---------------------------------------------------------------------------
 
 
+@pytest.fixture(scope="session")
+def postgres(docker_client):
+    """The session's Postgres container and its port on 127.0.0.1."""
+    c = docker_client.containers.run(
+        POSTGRES_IMAGE, detach=True, environment={"POSTGRES_PASSWORD": "test"},
+        ports={"5432/tcp": ("127.0.0.1", None)},
+    )
+    try:
+        deadline = time.monotonic() + 60
+        # -h 127.0.0.1: the init phase's server listens on the socket only.
+        while c.exec_run(["pg_isready", "-q", "-h", "127.0.0.1", "-U", "postgres"]).exit_code != 0:
+            assert time.monotonic() < deadline, "Postgres did not start within 60s"
+            time.sleep(0.5)
+        c.reload()
+        yield c, c.ports["5432/tcp"][0]["HostPort"]
+    finally:
+        c.remove(force=True)
+
+
 @pytest.fixture
-def volumes(docker_client):
-    """Fresh Docker volumes for each test, torn down afterwards."""
+def volumes(docker_client, postgres):
+    """Fresh Docker volumes and an empty database for each test, torn down afterwards."""
+    pg, port = postgres
+    name = f"music_it_{uuid.uuid4().hex[:12]}"
+    created = pg.exec_run(["psql", "-q", "-U", "postgres", "-c", f'CREATE DATABASE "{name}"'])
+    assert created.exit_code == 0, created.output.decode()
     music = docker_client.volumes.create()
     beets = docker_client.volumes.create()
-    yield {"music": music.name, "beets": beets.name}
+    yield {"music": music.name, "beets": beets.name,
+           "database_url": f"postgresql://postgres:test@127.0.0.1:{port}/{name}"}
     docker_client.volumes.get(music.name).remove(force=True)
     docker_client.volumes.get(beets.name).remove(force=True)
 
@@ -208,6 +242,29 @@ def put_bytes(
         helper.remove(force=True)
 
 
+def db_env(vol_names: dict) -> dict:
+    """The environment that points a host-network container at the test's database."""
+    return {"MUSIC_DATABASE_URL": vol_names["database_url"]}
+
+
+def store_command(playlist: str, entries: list[dict]) -> list[str]:
+    """A command that writes *playlist*'s store (its *entries*) to the database, as ingest would."""
+    code = ("import json, sys; from music_fetch import store; "
+            "store.save(store.Store(sys.argv[1], json.loads(sys.argv[2])))")
+    return ["python3", "-c", code, playlist, json.dumps(entries)]
+
+
+def put_store(client, vol_names: dict, playlist: str, entries: list[dict]) -> None:
+    """Write *playlist*'s store to the test's database."""
+    client.containers.run(
+        SERVICE_IMAGE,
+        command=store_command(playlist, entries),
+        network_mode="host",
+        environment=db_env(vol_names),
+        remove=True,
+    )
+
+
 def mkdir_in_volume(client, vol_names: dict, container_path: str) -> None:
     """Create a directory (and parents) inside the music volume."""
     client.containers.run(
@@ -240,7 +297,8 @@ def run_scan(
     c = client.containers.create(
         image or SERVICE_IMAGE,
         command=["music-scan"],
-        environment={"PUSHGATEWAY_URL": "", **(env or {})},
+        network_mode="host",
+        environment={"PUSHGATEWAY_URL": "", **db_env(vol_names), **(env or {})},
         volumes=binds if binds is not None else scan_binds(vol_names),
     )
     c.start()
@@ -329,7 +387,7 @@ def _start_service(docker_client, volumes, beets_config_path):
             command=["music-pipeline"],
             detach=True,
             network_mode="host",
-            environment=_SERVICE_ENV_BASE,
+            environment={**_SERVICE_ENV_BASE, **db_env(volumes)},
             volumes={
                 volumes["music"]: {"bind": "/root/Music", "mode": "rw"},
                 volumes["beets"]: {"bind": "/root/.config/beets", "mode": "rw"},

@@ -8,7 +8,6 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 import music_fetch.albums as albums
-from music_fetch import store
 from music_fetch.albums import Settings, State, feed_library, feed_wants, held_tracks, origin_counts, tick
 
 
@@ -20,7 +19,6 @@ def _no_push():
 
 @pytest.fixture(autouse=True)
 def _isolated(tmp_path: Path, monkeypatch):
-    monkeypatch.setattr(store, "STORE_DIR", tmp_path / "store")
     monkeypatch.setattr(albums, "OVERRIDES_FILE", tmp_path / "album-overrides.conf")
 
 

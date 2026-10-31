@@ -87,7 +87,6 @@ def test_disc_track_on_the_album_supersedes_the_loose_copy_and_its_playlists_fol
     from music_fetch import store
 
     m3u = tmp_path / "playlists"
-    monkeypatch.setattr(store, "STORE_DIR", tmp_path / "store")
     store.save(store.Store.from_songs("aaaaaah", [
         {"name": "Simple Twist of Fate", "artists": ["Bob Dylan"], "url": "https://open.spotify.com/track/TWIST"}],
     ))

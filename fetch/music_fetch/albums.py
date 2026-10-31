@@ -66,11 +66,9 @@ release found then is the album, and retires the spotdl copies.
 grab) or ``on``.  Indexer use is capped by a rolling-24h budget counted from our
 own timestamps, because the indexer's reset window is unknown.
 
-State lives in the music database once ``music-state-import`` has moved it
-there (homelab#2410, :mod:`music_fetch.state`), and in one JSON file next to
-the playlist stores (on the persistent pipeline-state volume) before that:
-losing it would forget blocklists and the grab budget.  In the database the
-album rows are keyed by MusicBrainz release group, and two Spotify editions of
+State lives in the music database (homelab#2410, :mod:`music_fetch.state`;
+one JSON file next to the playlist stores before that, retired in homelab#2502):
+losing it would forget blocklists and the grab budget.  The album rows are keyed by MusicBrainz release group, and two Spotify editions of
 one release group are one record (:mod:`music_fetch.resolve`, run every tick).
 A record's key is its row id once ``music-album-rekey --apply`` has run
 (homelab#2478), else its primary Spotify album ID (else its release group, else
@@ -101,7 +99,6 @@ from music_fetch.usenet import Release, clean_album, edition, normalise, rank, r
 
 logger = logging.getLogger(__name__)
 
-STATE_FILE = Path("/root/Music/inbox/spotdl/.albums.json")
 # Search text for albums whose names no normalisation reaches (#197), and
 # holds; mounted from the homelab repo next to playlists.conf until
 # ``music-overrides import`` moves them to the music database (homelab#2484).
@@ -353,33 +350,18 @@ class State(statedb.AlbumRows):
     ``{"t": iso, "kind": "hit" | "grab" | "reimport"}``, pruned to the last
     WINDOW ("reimport" counts automatic reimports, #288, not indexer use), and
     ``mixed`` the keys of the imported albums mixed from several releases at
-    the last tick.  *in_db*: loaded from the music database, and saved there."""
-
-    in_db: bool = False
+    the last tick."""
 
     @classmethod
-    def load(cls, path: Path = STATE_FILE) -> "State":
-        """The album store: the music database's once the state is there (raises
-        :class:`state.Unavailable` when it is down), else *path*'s JSON."""
+    def load(cls) -> "State":
+        """The album store, from the music database (raises :class:`state.Unavailable` when it is down)."""
         with statedb.session() as conn:
-            if conn is not None:
-                rows = statedb.load_albums(conn)
-                return cls(**{f.name: getattr(rows, f.name) for f in dataclasses.fields(rows)}, in_db=True)
-        if not path.exists():
-            return cls()
-        rows = statedb.rows_from_json(json.loads(path.read_text(encoding="utf-8")))
+            rows = statedb.load_albums(conn)
         return cls(**{f.name: getattr(rows, f.name) for f in dataclasses.fields(rows)})
 
-    def save(self, path: Path = STATE_FILE) -> None:
-        if self.in_db:
-            with statedb.session() as conn:
-                if conn is None:
-                    raise statedb.Unavailable("the state left the database while a tick held it")
-                statedb.save_albums(conn, self)
-            return
-        tmp = path.with_suffix(".tmp")
-        tmp.write_text(json.dumps(statedb.rows_to_json(self), indent=2, ensure_ascii=False), encoding="utf-8")
-        tmp.replace(path)
+    def save(self) -> None:
+        with statedb.session() as conn:
+            statedb.save_albums(conn, self)
 
     def refs(self) -> dict[str, str]:
         """Every Spotify album ID (and local name) of a record → that record's key."""
@@ -1378,13 +1360,11 @@ def resolve_keys(state: State, fixes: list[overrides.AlbumOverride] | None = Non
                  library_db: Path = resolve.LIBRARY_DB) -> resolve.Report | None:
     """Key the records the database can't key yet by release group, and merge
     two editions of one (homelab#2410, :mod:`music_fetch.resolve`): a new
-    album, or one an import has just identified.  In the database only; a
-    failure leaves the records as they are for the next tick."""
-    if not state.in_db:
-        return None
+    album, or one an import has just identified.  A failure leaves the
+    records as they are for the next tick."""
     try:
         with statedb.session() as conn:
-            cache = statedb.get_all(conn, statedb.MB_RELEASES) if conn is not None else {}
+            cache = statedb.get_all(conn, statedb.MB_RELEASES)
         library = resolve.library_groups(library_db) if os.path.isfile(library_db) else {}
         report = resolve.resolve(state, cache, library, _search_overrides(state, fixes))
     except Exception:
@@ -1402,7 +1382,6 @@ def tick(
     sabnzbd,
     have: Have,
     settings: Settings | None = None,
-    state_file: Path = STATE_FILE,
     on_completion: Callable[[State, "Completion"], object] | None = None,
     overrides_file: Path | None = None,
     missing: Missing | None = None,
@@ -1429,7 +1408,7 @@ def tick(
     if settings.mode == "off":
         return result
     try:
-        state = State.load(state_file)
+        state = State.load()
         # Read with the state: a tick never runs without its overrides and holds (homelab#2484),
         # or its requests (homelab#2478).
         fixes = album_fixes(overrides_file)
@@ -1437,7 +1416,7 @@ def tick(
         later_requests.tick(state, later_get, apply=settings.mode == "on")
         requests = album_requests.album_requests()
     except statedb.Unavailable as exc:
-        # Never run on the stale JSON (homelab#2410): skip, and let
+        # Never run without the state (homelab#2410): skip, and let
         # MusicAlbumTickFailing say so once the outage outlasts 2h.
         logger.warning("[DB-DOWN] Album tick skipped — the music database is down: %s", exc)
         _push("\n".join([_gauge("music_albums_last_tick_success", 0),
@@ -1472,7 +1451,7 @@ def tick(
             fallbacks(state, missing, spotify.album_songs, request_songs, recordings)
         success = True
     finally:
-        state.save(state_file)
+        state.save()
         push_metrics(state, success)
     counts = status_counts(state)
     logger.info(
@@ -1860,14 +1839,14 @@ def park_interrupted(state: State, complete_root: Path = USENET_COMPLETE, inbox_
     return parked
 
 
-def park_interrupted_imports(state_file: Path = STATE_FILE) -> int:
+def park_interrupted_imports() -> int:
     """:func:`park_interrupted` over the saved state, at service start: before
     the API, the file watcher or a flow can start a scan.  Never raises."""
     try:
-        state = State.load(state_file)
+        state = State.load()
         parked = park_interrupted(state)
         if parked:
-            state.save(state_file)
+            state.save()
         return parked
     except Exception:
         logger.exception("Moving interrupted album imports back failed; a scan may import their files loose")
@@ -1941,7 +1920,7 @@ def reset_record(record: dict, reimport: bool = False, keep_blocklist: bool = Fa
 
 def _state_lock(apply: bool):
     """The ``albums`` slot the tick and the import flow hold while they read and
-    write .albums.json; a dry run needs none, nor a run whose MCP job already
+    write the album store; a dry run needs none, nor a run whose MCP job already
     holds it (``MUSIC_LOCKS_HELD``, homelab#2412)."""
     from contextlib import nullcontext  # noqa: PLC0415
     held = "albums" in os.environ.get("MUSIC_LOCKS_HELD", "").split(",")
@@ -1967,7 +1946,7 @@ def reset_main() -> None:
     parser.add_argument("--reimport", action="store_true",
                         help="start over from one release: clear the blocklist and attempts, grab it although the "
                              "library has its tracks, and retire the copies there on import (#279)")
-    parser.add_argument("--apply", action="store_true", help="write .albums.json (default: dry run)")
+    parser.add_argument("--apply", action="store_true", help="write the album store (default: dry run)")
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO, format="[%(asctime)s] %(message)s", datefmt="%Y-%m-%dT%H:%M:%S%z")
     with _state_lock(args.apply):
@@ -2035,7 +2014,7 @@ def requeue_main() -> None:
                         help="album keys (or open.spotify.com album URLs) to requeue")
     parser.add_argument("--since", type=datetime.fromisoformat,
                         help="requeue every fallback from a miss at or after this ISO time (UTC if no offset)")
-    parser.add_argument("--apply", action="store_true", help="write .albums.json (default: dry run)")
+    parser.add_argument("--apply", action="store_true", help="write the album store (default: dry run)")
     args = parser.parse_args()
     if not args.keys and args.since is None:
         parser.error("give album ids, --since, or both")
@@ -2044,7 +2023,7 @@ def requeue_main() -> None:
         since = since.replace(tzinfo=timezone.utc)
     logging.basicConfig(level=logging.INFO, format="[%(asctime)s] %(message)s", datefmt="%Y-%m-%dT%H:%M:%S%z")
     with _state_lock(args.apply):
-        state = State.load(STATE_FILE)
+        state = State.load()
         found = requeue(state, since, args.keys)
         for key, before in found:
             n = sum(len(ids) for ids in before.get("fallback_tracks", {}).values())
@@ -2054,7 +2033,7 @@ def requeue_main() -> None:
         if not found:
             return
         if args.apply:
-            state.save(STATE_FILE)
+            state.save()
             logger.info("Saved; the next album tick searches them again")
         else:
             logger.info("Dry run; --apply to write")

@@ -84,12 +84,7 @@ def test_a_value_two_records_claim_moves_nowhere():
     assert moves == [] and orphans == 1
 
 
-def test_the_scan_moves_nothing_before_the_keys_are_row_ids(monkeypatch):
-    @contextlib.contextmanager
-    def unswitched():
-        yield None
-
-    monkeypatch.setattr(state, "session", unswitched)
+def test_the_scan_moves_nothing_before_the_keys_are_row_ids():
     items = [FakeItem(1, album_record="sp1")]
     assert restamp.scan_step(FakeLib(items)) == 0
     assert items[0]["album_record"] == "sp1"

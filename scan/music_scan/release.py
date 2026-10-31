@@ -718,7 +718,7 @@ def list_replaced(records: dict[str, dict], replaced_dir: Path, library) -> dict
 def audit_main() -> None:
     import argparse  # noqa: PLC0415
 
-    from music_fetch.albums import STATE_FILE, State, find_albums  # noqa: PLC0415
+    from music_fetch.albums import State, find_albums  # noqa: PLC0415
     from music_scan.audit import REPLACED  # noqa: PLC0415
     from music_scan.identity import Recordings  # noqa: PLC0415
     from music_scan.library import LIBRARY_DB, MusicLibrary  # noqa: PLC0415
@@ -739,7 +739,7 @@ def audit_main() -> None:
     if args.replaced == "" and (args.apply or args.only_copies):
         parser.error("--replaced without a query only lists; give it an album to delete that album's copies")
     logging.basicConfig(level=logging.INFO, format="[%(asctime)s] %(message)s", datefmt="%Y-%m-%dT%H:%M:%S%z")
-    records = State.load(STATE_FILE).albums
+    records = State.load().albums
     if args.replaced == "":
         with MusicLibrary(LIBRARY_DB) as lib:
             library = Recordings(lib.all_items())

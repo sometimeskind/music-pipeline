@@ -17,9 +17,6 @@ have that run write its copy back over the edit: the backoff the nightly's
 lock in the transaction).  Each write records a ``state_edited`` event in its
 transaction.  Run it between runs: a lock held by a long nightly can outlast
 the wait (``pipeline``: 30 minutes, then it fails).
-
-Once the state is in the music database (:func:`state.in_db`).  Before that
-only ``clear-backoff`` works, by deleting the JSON file (a local compose run).
 """
 
 from __future__ import annotations
@@ -30,7 +27,6 @@ import logging
 import sys
 from collections import Counter
 from collections.abc import Iterator
-from pathlib import Path
 
 import psycopg
 
@@ -41,8 +37,6 @@ from music_fetch.store import LOCAL
 logger = logging.getLogger(__name__)
 
 SOURCE = "state"
-# The backoff's file before the switch; ingest.FAILURES_FILE, without importing spotdl.
-FAILURES_FILE = Path("/root/Music/inbox/.spotdl-failures.json")
 
 
 class Refused(Exception):
@@ -73,8 +67,6 @@ def _locks(names: tuple[str, ...], apply: bool) -> Iterator[None]:
 
 
 def _connect() -> psycopg.Connection:
-    if not statedb.in_db():
-        raise Refused("the state is not in the music database yet (music-state-import)")
     return statedb.connect()
 
 
@@ -113,16 +105,6 @@ def clear_backoff(conn: psycopg.Connection, apply: bool) -> list[str]:
             kinds = Counter(e.get("kind", "miss") for e in failures.values())
             events.insert(conn, "state_edited", f"[STATE] backoff cleared: {len(failures)} track(s)",
                           source=SOURCE, data={"what": "backoff", "tracks": len(failures), "kinds": dict(kinds)})
-    return lines
-
-
-def clear_backoff_file(path: Path, apply: bool) -> list[str]:
-    """Before the switch: the backoff is *path*; clearing it deletes it."""
-    if not path.exists():
-        return [f"No backoff file at {path}", "Nothing to clear"]
-    lines = [f"Clear: delete {path}; the next run tries every backed-off track again"]
-    if apply:
-        path.unlink(missing_ok=True)
     return lines
 
 
@@ -228,20 +210,17 @@ def _parser() -> argparse.ArgumentParser:
 
 def run(args: argparse.Namespace) -> None:
     apply = getattr(args, "apply", False)
-    if args.command == "clear-backoff" and not statedb.in_db():
-        lines = clear_backoff_file(FAILURES_FILE, apply)
-    else:
-        with _locks(LOCKS.get(args.command, ()), apply), _connect() as conn:
-            if args.command == "backoff":
-                lines = list_backoff(conn)
-            elif args.command == "stores":
-                lines = list_stores(conn)
-            elif args.command == "clear-backoff":
-                lines = clear_backoff(conn, apply)
-            elif args.command == "drop-store":
-                lines = drop_store(conn, args.playlist, apply)
-            else:
-                lines = clear_snapshot(conn, args.playlist, apply)
+    with _locks(LOCKS.get(args.command, ()), apply), _connect() as conn:
+        if args.command == "backoff":
+            lines = list_backoff(conn)
+        elif args.command == "stores":
+            lines = list_stores(conn)
+        elif args.command == "clear-backoff":
+            lines = clear_backoff(conn, apply)
+        elif args.command == "drop-store":
+            lines = drop_store(conn, args.playlist, apply)
+        else:
+            lines = clear_snapshot(conn, args.playlist, apply)
     for line in lines:
         logger.info("%s", line)
     if args.command in LOCKS and not lines[-1].startswith("Nothing"):

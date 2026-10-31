@@ -9,14 +9,18 @@ them and builds the app around a :class:`JobQueue` whose commands are faked
 
 ``MCP_API_TOKEN`` defaults to ``mcp-secret``.  A faked command prints
 ``ran <argv>`` and exits 0 unless :attr:`Commands.outputs` says otherwise.
+
+The state is the music database's (homelab#2502): the tests seed the one the
+root conftest gives them; the server seeds ``MUSIC_DATABASE_URL``'s, or else a
+new database it creates on ``MUSIC_TEST_DATABASE_URL``'s server.
 """
 
 from __future__ import annotations
 
 import argparse
 import contextlib
-import json
 import os
+import uuid
 from pathlib import Path
 
 # A credential the store holds and no read may return (#343): Prowlarr's download link carries its API key.
@@ -71,9 +75,7 @@ def seed(root: Path) -> dict:
     lib._close()
 
     spotdl = root / "spotdl"
-    stores = spotdl / ".store"
-    stores.mkdir(parents=True, exist_ok=True)
-    state = spotdl / ".albums.json"
+    spotdl.mkdir(parents=True, exist_ok=True)
     # Abbey Road was mixed at the last album tick; the last scan left one empty slot on chill.
     empty_slots = {"at": "2026-10-29T03:40:00+00:00",
                    "playlists": {"chill": {"total": 1, "entries": ["Someone — Absent"]},
@@ -85,45 +87,34 @@ def seed(root: Path) -> dict:
         {"song": {"name": "Absent", "artists": ["Someone"], "song_id": "SY"}},
         {"local": {"id": items[1].id, "title": "Something", "artist": "The Beatles"}},
     ]
-    _seed_state(state, stores, empty_slots, chill)
+    _seed_state(empty_slots, chill)
     quarantine = root / "quarantine"
     for rel in ["Artist/one.m4a", "rejected/chill/two.m4a", "replaced/3-three.m4a", "replaced/4-four.m4a"]:
         (quarantine / rel).parent.mkdir(parents=True, exist_ok=True)
         (quarantine / rel).write_bytes(b"x")
-    return {"root": root, "db": db, "libdir": libdir, "state": state, "stores": stores,
+    return {"root": root, "db": db, "libdir": libdir,
             "quarantine": quarantine, "jobs_file": spotdl / ".mcp-jobs.json", "items": items}
 
 
-def _seed_state(state: Path, stores: Path, empty_slots: dict, chill: list[dict]) -> None:
-    """The album store, the empty-slots report and the chill playlist's store: in
-    the music database once the state is there (the tests), else as the JSON files
-    (the MCP adapter's contract test runs this as a server, with no database)."""
+def _seed_state(empty_slots: dict, chill: list[dict]) -> None:
+    """The album store, the empty-slots report and the chill playlist's store, in the music database."""
     from datetime import datetime
 
     from music_fetch import albums, state as statedb
 
     with statedb.session() as conn:
-        if conn is not None:
-            rows = albums.State(albums={key: {**statedb.new_record(key), **record} for key, record in ALBUMS.items()},
-                                mixed=["ALB1"], in_db=True)
-            statedb.save_albums(conn, rows)
-            statedb.put(conn, statedb.EMPTY_SLOTS, empty_slots)
-            statedb.save_store(conn, "chill", chill, "spotify", datetime.fromisoformat("2026-10-27T03:10:00+00:00"))
-            return
-    state.write_text(json.dumps({"albums": ALBUMS, "mixed": ["ALB1"]}))
-    (state.parent / ".empty-slots.json").write_text(json.dumps(empty_slots))
-    (stores / "chill.json").write_text(json.dumps({
-        "playlist": "chill", "updated": "2026-10-27T03:10:00Z", "source": "spotify", "entries": chill}))
+        rows = albums.State(albums={key: {**statedb.new_record(key), **record} for key, record in ALBUMS.items()},
+                            mixed=["ALB1"])
+        statedb.save_albums(conn, rows)
+        statedb.put(conn, statedb.EMPTY_SLOTS, empty_slots)
+        statedb.save_store(conn, "chill", chill, "spotify", datetime.fromisoformat("2026-10-27T03:10:00+00:00"))
 
 
 def patches(seeded: dict) -> tuple[list[tuple[object, str, object]], dict[str, str]]:
     """The (module, attribute, value) patches and the environment that point the service at *seeded*."""
-    import music_fetch.albums as albums
-    import music_fetch.store as store
     import music_scan.library as library
 
-    return ([(library, "LIBRARY_DB", seeded["db"]), (library, "LIBRARY_DIR", seeded["libdir"]),
-             (albums, "STATE_FILE", seeded["state"]), (store, "STORE_DIR", seeded["stores"])],
+    return ([(library, "LIBRARY_DB", seeded["db"]), (library, "LIBRARY_DIR", seeded["libdir"])],
             {"MUSIC_QUARANTINE": str(seeded["quarantine"])})
 
 
@@ -139,12 +130,31 @@ def make_app(seeded: dict, commands: Commands | None = None):
     return app, jobs
 
 
+def _database() -> None:
+    """Point ``MUSIC_DATABASE_URL`` at a new database on ``MUSIC_TEST_DATABASE_URL``'s
+    server, unless it is set: the server's state must start empty."""
+    import psycopg
+
+    from music_fetch import db
+
+    if os.environ.get(db.ENV):
+        return
+    server = os.environ.get("MUSIC_TEST_DATABASE_URL")
+    if not server:
+        raise SystemExit(f"the harness needs a database: set {db.ENV} or MUSIC_TEST_DATABASE_URL")
+    name = f"music_mcp_harness_{uuid.uuid4().hex[:12]}"
+    with psycopg.connect(server, autocommit=True) as admin:
+        admin.execute(f'CREATE DATABASE "{name}"')
+    os.environ[db.ENV] = psycopg.conninfo.make_conninfo(server, dbname=name)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--port", type=int, default=8080)
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--dir", type=Path, required=True, help="where to write the fixtures")
     args = parser.parse_args()
+    _database()
     seeded = seed(args.dir)
     attrs, env = patches(seeded)
     for module, name, value in attrs:

@@ -172,8 +172,6 @@ def search_lines(found: list[req.Found], query: str) -> list[str]:
 
 
 def _connect() -> psycopg.Connection:
-    if not statedb.in_db():
-        raise req.Refused("the state is not in the music database yet (music-state-import)")
     return statedb.connect()
 
 

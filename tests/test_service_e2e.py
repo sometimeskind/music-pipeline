@@ -28,6 +28,7 @@ from conftest import (
     BEETS_CONFIG,
     COOKIES_PATH,
     SPOTDL_CONFIG,
+    db_env,
     service_in_container,
     wait_for_log,
 )
@@ -71,6 +72,7 @@ def _start_service_e2e(docker_client, volumes, beets_config_path: str, playlists
                 "SPOTIFY_CLIENT_ID": os.environ["SPOTIFY_CLIENT_ID"],
                 "SPOTIFY_CLIENT_SECRET": os.environ.get("SPOTIFY_CLIENT_SECRET", ""),
                 "LIBRARY_REMOTE": "/remote",
+                **db_env(volumes),
             },
             volumes={
                 volumes["music"]: {"bind": "/root/Music", "mode": "rw"},

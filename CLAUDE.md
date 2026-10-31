@@ -28,12 +28,12 @@ just fetch && just scan  # or `just sync`
 
 - All unit tests (fetch, scan, service, scripts) run together in one dev container built from `service/Dockerfile`. That is what `just test` does.
 - They run on Postgres, the state's only home (homelab#2502): the root `conftest.py` makes one migrated database per session on `MUSIC_TEST_DATABASE_URL` (CI's postgres service; `just test` starts a throwaway one) and empties it before every test. Seed and check state through `music_fetch.state` and the stores' own functions, never a file on disk. Without the variable a test that reaches the database is skipped.
-- Integration tests in `tests/` at the repo root run against the real service image: `just test-service`.
+- Integration tests in `tests/` at the repo root run against the real service image: `just test-service`. Their conftest starts its own Postgres and gives each test a database; containers that read the state run on the host's network with `MUSIC_DATABASE_URL`.
 - Each Dockerfile has a `prod` stage (pushed to GHCR, runtime deps only) and a `dev` stage (adds test deps, built locally, never pushed). Only `service/Dockerfile` produces the published image; its build context is the repo root. `fetch/` and `scan/` Dockerfiles are dev-only.
 
 ## Design Decisions to Preserve
 
-- **The playlist store is the only playlist state** (homelab#1914): one per playlist (`music_fetch.store`), its entries in Spotify order: a `playlist_stores` row in the `music` database once switched (README, State), else a JSON file in `inbox/spotdl/.store/`. Every `.m3u` is resolved from it against the whole library by Spotify ID or ISRC; "downloaded" is never recorded. `.spotdl` files, the unlink queue and `reconcile` are retired: don't reintroduce a second copy of membership.
+- **The playlist store is the only playlist state** (homelab#1914): one per playlist (`music_fetch.store`), its entries in Spotify order: a `playlist_stores` row in the `music` database (README, State). Every `.m3u` is resolved from it against the whole library by Spotify ID or ISRC; "downloaded" is never recorded. `.spotdl` files, the unlink queue and `reconcile` are retired: don't reintroduce a second copy of membership.
 - **`sources=<playlist>` is provenance only**: the playlists a track was imported or linked for, never cleared. Never read it to decide what a playlist lists or whether a copy is still wanted; use the store (`scan.store_listings()`).
 - **Soft deletes**: a track removed on Spotify leaves the next store, and so the `.m3u`. Its file stays in the library.
 - **Strict MusicBrainz threshold** (`strong_rec_thresh: 0.10` in `config/beets/config.yaml`): low-confidence matches go to `/root/Music/quarantine/` for manual review, after a second `--asis` pass for files with sufficient embedded tags.

@@ -10,12 +10,6 @@ import pytest
 from music_fetch import store
 
 
-@pytest.fixture(autouse=True)
-def _store_dir(tmp_path: Path, monkeypatch):
-    """Every test gets its own, empty playlist store directory (homelab#1914)."""
-    monkeypatch.setattr(store, "STORE_DIR", tmp_path / "store")
-
-
 def _relative_path(track_path: Path, playlists_dir: Path) -> str:
     """Replicate the relative-path logic used in regen_playlists."""
     return os.path.relpath(track_path, playlists_dir)

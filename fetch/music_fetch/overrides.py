@@ -168,8 +168,8 @@ def pin_source(ref: str) -> str:
 # ---------------------------------------------------------------------------
 
 
-def imported(conn: psycopg.Connection | None) -> bool:
-    return conn is not None and statedb.get(conn, statedb.OVERRIDES_IMPORTED) is not None
+def imported(conn: psycopg.Connection) -> bool:
+    return statedb.get(conn, statedb.OVERRIDES_IMPORTED) is not None
 
 
 def load_album_overrides(conn: psycopg.Connection) -> list[AlbumOverride]:
@@ -187,10 +187,9 @@ def load_pins(conn: psycopg.Connection) -> list[Pin]:
 def album_overrides(path: Path) -> list[AlbumOverride]:
     """The overrides and holds the tick applies: the table's once imported,
     else *path*'s (album-overrides.conf).  Raises :class:`state.Unavailable`
-    when the state is in the database and the database is down."""
+    when the database is down."""
     with statedb.session() as conn:
         if imported(conn):
-            assert conn is not None
             return load_album_overrides(conn)
     return parse_albums(path)
 
@@ -202,7 +201,6 @@ def pins(path: Path) -> dict[str, str]:
     tracks) has no Spotify URL, so it is not here yet."""
     with statedb.session() as conn:
         if imported(conn):
-            assert conn is not None
             listed = load_pins(conn)
         else:
             listed = parse_pins(path)

@@ -9,7 +9,6 @@ We use spotdl's internal classes directly instead of subprocess so that:
 from __future__ import annotations
 
 import dataclasses
-import json
 import logging
 from collections import Counter
 import os
@@ -199,26 +198,15 @@ def _record_failure(failures: dict, url: str, kind: str, reason: str = "") -> tu
     return attempts, days
 
 
-def _load_failures(failures_file: Path) -> dict:
-    """The backoff: the music database's once the state is there (homelab#2410), else *failures_file*'s."""
+def _load_failures() -> dict:
+    """The spotdl backoff, from the music database (homelab#2410)."""
     with state.session() as conn:
-        if conn is not None:
-            return state.load_failures(conn)
-    if not failures_file.exists():
-        return {}
-    try:
-        return json.loads(failures_file.read_text(encoding="utf-8"))
-    except (json.JSONDecodeError, OSError):
-        logger.warning("Could not read %s — treating as empty", failures_file)
-        return {}
+        return state.load_failures(conn)
 
 
-def _save_failures(failures_file: Path, data: dict) -> None:
+def _save_failures(data: dict) -> None:
     with state.session() as conn:
-        if conn is not None:
-            state.save_failures(conn, data)
-            return
-    failures_file.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
+        state.save_failures(conn, data)
 
 
 # spotdl's own cap is in characters; this is the length at which it would start
@@ -432,21 +420,21 @@ def _download_batch(
     spotdl_obj,
     truly_new: list,
     track_limit: int | None,
-    failures_file: Path | None,
+    backoff: bool,
     in_library: Callable[[dict], bool] | None,
     removed_urls: set[str] = frozenset(),
     pins: Mapping[str, str] | None = None,
 ) -> _Batch:
     """Download the want list of *truly_new* in order: skip those the library has
     ([HAVE]) or that are backed off (one [BACK] count line), defer those over
-    *track_limit* (the budget line), then log each outcome and record [MISS]/[FAIL]
-    backoff in *failures_file*.  Nothing is logged per track unless the track is
+    *track_limit* (the budget line), then log each outcome and, with *backoff*,
+    record [MISS]/[FAIL] backoff in the music database.  Nothing is logged per track unless the track is
     acted on (#320); the per-track [BACK] and [DEFER] lines are DEBUG.  A
     *track_limit* of 0 checks and defers everything.
     A pinned track (*pins*, default track-pins.conf, #247) downloads from its
     source URL instead of spotdl's search ([PIN])."""
     pins = load_pins() if pins is None else pins
-    failures: dict = _load_failures(failures_file) if failures_file is not None else {}
+    failures: dict = _load_failures() if backoff else {}
     truly_new, linked_songs, backed_off = want_list(truly_new, in_library, failures, pins=pins)
     # Tracks the library already has under another playlist or from Usenet (#187).
     linked: dict[str, dict] = {song.url: song.json for song in linked_songs}
@@ -546,8 +534,8 @@ def _download_batch(
                           data={"track": _song_label(song), "url": song.url, "reason": reason,
                                 "attempts": attempts, "days": days})
 
-    if failures_file is not None:
-        _save_failures(failures_file, failures)
+    if backoff:
+        _save_failures(failures)
 
     return _Batch(len(truly_new), list(results), linked, n_missed, n_failed, fail_reasons)
 
@@ -557,7 +545,7 @@ def download_fallback(
     output_dir: Path,
     cookie_file: Path,
     track_limit: int | None = None,
-    failures_file: Path | None = None,
+    backoff: bool = False,
     in_library: Callable[[dict], bool] | None = None,
 ) -> SyncResult:
     """Download an album playlist's fallback tracks (#205): the store's *songs*
@@ -571,7 +559,7 @@ def download_fallback(
     from spotdl.types.song import Song  # noqa: PLC0415
 
     spotdl_obj = _make_spotdl(_make_downloader_settings(cookie_file=cookie_file, output_dir=output_dir))
-    batch = _download_batch(spotdl_obj, [Song.from_dict(s) for s in songs], track_limit, failures_file, in_library)
+    batch = _download_batch(spotdl_obj, [Song.from_dict(s) for s in songs], track_limit, backoff, in_library)
     return batch.result(set())
 
 
@@ -592,7 +580,7 @@ def sync_playlist(
     output_dir: Path,
     cookie_file: Path,
     track_limit: int | None = None,
-    failures_file: Path | None = None,
+    backoff: bool = False,
     in_library: Callable[[dict], bool] | None = None,
 ) -> SyncResult:
     """Sync playlist *name* from its Spotify playlist at *url* (homelab#1914).
@@ -665,7 +653,7 @@ def sync_playlist(
         name, len(seen), n_skipped, len(wanted), n_known, len(wanted) - n_known, len(removed_urls),
     )
 
-    batch = _download_batch(spotdl_obj, wanted, track_limit, failures_file, in_library, removed_urls)
+    batch = _download_batch(spotdl_obj, wanted, track_limit, backoff, in_library, removed_urls)
 
     # Downloaded songs carry the full metadata spotdl fetched for them; known tracks keep
     # their earlier record; linked tracks keep the page data.

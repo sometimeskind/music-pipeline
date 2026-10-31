@@ -165,7 +165,7 @@ def run(n: int = DEFAULT_N, seed: int = 0) -> list[tuple[Album, list[Outcome]]]:
     from music_scan.library import MusicLibrary  # noqa: PLC0415
     from music_scan.scan import LIBRARY_DB  # noqa: PLC0415
 
-    records = albums.State.load(albums.STATE_FILE).albums
+    records = albums.State.load().albums
     with MusicLibrary(LIBRARY_DB) as lib:
         found = candidates(records, list(lib.all_items()))
         logger.info("[SAMPLE] %d album(s) held whole with a release group and one release; sampling %d (seed %d)",

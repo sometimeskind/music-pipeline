@@ -7,7 +7,7 @@ holds its lock for hours, later runs skip as busy, and no failure alert fires.
 :func:`install` mounts an adapter on the shared spotipy session that:
 
 - waits out a ``Retry-After`` of up to :data:`MAX_RETRY_AFTER_SECONDS` as before;
-- on a longer one, records the limit's end (process-wide and in :data:`STATE_FILE`),
+- on a longer one, records the limit's end (process-wide and in the music database),
   pushes it as ``music_spotify_rate_limited_until_seconds`` and raises
   :class:`SpotifyRateLimited`;
 - refuses every later request while a recorded limit is active, so a run started
@@ -17,11 +17,10 @@ holds its lock for hours, later runs skip as busy, and no failure alert fires.
 
 from __future__ import annotations
 
-import json
 import logging
 from datetime import datetime, timedelta, timezone
-from pathlib import Path
 
+import psycopg
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
@@ -31,8 +30,6 @@ from music_fetch.metrics import _gauge, _push
 logger = logging.getLogger(__name__)
 
 MAX_RETRY_AFTER_SECONDS = 120
-# On pipeline-state, next to .albums.json, so it outlives the flow-run process.
-STATE_FILE = Path("/root/Music/inbox/spotdl/.spotify-rate-limit.json")
 
 _limit: tuple[datetime, int] | None = None  # (until, retry_after) for this process
 
@@ -49,24 +46,19 @@ class SpotifyRateLimited(RuntimeError):
         super().__init__(msg)
 
 
-def _load(state_file: Path) -> tuple[datetime, int] | None:
-    """The recorded limit: the music database's once the state is there (homelab#2410), else *state_file*'s."""
+def _load() -> tuple[datetime, int] | None:
+    """The limit recorded in the music database (homelab#2410), so it outlives the flow-run process."""
     try:
         with state.session() as conn:
-            if conn is not None:
-                data = state.get(conn, state.SPOTIFY_LIMIT)
-                if data is None:
-                    return None
-            else:
-                data = json.loads(state_file.read_text(encoding="utf-8"))
+            data = state.get(conn, state.SPOTIFY_LIMIT)
+        if data is None:
+            return None
         return datetime.fromisoformat(data["until"]), int(data["retry_after"])
-    except FileNotFoundError:
-        return None
     except state.Unavailable as exc:
         logger.warning("Could not read the recorded Spotify rate limit: %s", exc)
         return None
     except (ValueError, KeyError, TypeError):
-        logger.warning("Ignoring unreadable Spotify rate-limit state %s", state_file)
+        logger.warning("Ignoring an unreadable recorded Spotify rate limit")
         return None
 
 
@@ -79,19 +71,15 @@ def check() -> None:
 def trip(retry_after: float) -> SpotifyRateLimited:
     """Record a long rate limit and return the exception to raise."""
     global _limit  # noqa: PLW0603
-    state_file = STATE_FILE
     seconds = int(retry_after)
     until = (datetime.now(timezone.utc) + timedelta(seconds=seconds)).replace(microsecond=0)
     _limit = (until, seconds)
     record = {"until": until.isoformat(), "retry_after": seconds}
     try:
         with state.session() as conn:
-            if conn is not None:
-                state.put(conn, state.SPOTIFY_LIMIT, record)
-            else:
-                state_file.write_text(json.dumps(record), encoding="utf-8")
-    except (OSError, state.Unavailable) as exc:
-        logger.warning("Could not record the Spotify rate limit in %s: %s", state_file, exc)
+            state.put(conn, state.SPOTIFY_LIMIT, record)
+    except (state.Unavailable, psycopg.Error) as exc:
+        logger.warning("Could not record the Spotify rate limit: %s", exc)
     _push(_gauge("music_spotify_rate_limited_until_seconds", int(until.timestamp())), "music_spotify")
     exc = SpotifyRateLimited(until, seconds)
     logger.error("%s", exc)
@@ -138,7 +126,7 @@ def install(client) -> None:
     bump that drops it fails CI rather than silently restoring the long sleep.
     """
     global _limit  # noqa: PLW0603
-    recorded = _load(STATE_FILE)
+    recorded = _load()
     if recorded is not None and (_limit is None or recorded[0] > _limit[0]):
         _limit = recorded
 
