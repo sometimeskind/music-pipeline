@@ -81,6 +81,10 @@ EVENT_KINDS = (
     # data.kind says which.
     "override_set",
     "override_cleared",
+    # Migration 10: a hand edit of the state with music-state (homelab#2503):
+    # the backoff cleared, a playlist store dropped, an album playlist's
+    # snapshot cleared; data.what says which.
+    "state_edited",
 )
 
 MIGRATIONS: list[str] = [
@@ -293,6 +297,17 @@ MIGRATIONS: list[str] = [
     ALTER TABLE later_queue ADD COLUMN ref text UNIQUE;
     ALTER TABLE later_queue ADD CONSTRAINT later_queue_named_check
         CHECK (release_group IS NOT NULL OR ref IS NOT NULL);
+    """,
+    # 10: the state_edited kind (homelab#2503, music-state).
+    """
+    ALTER TABLE events DROP CONSTRAINT events_kind_check;
+    ALTER TABLE events ADD CONSTRAINT events_kind_check CHECK (kind IN (
+        'import_done', 'import_wrong', 'import_incomplete', 'import_lost',
+        'retire', 'local', 'merge', 'clash', 'mixed',
+        'grab', 'autoreset', 'fallback', 'failure', 'reject', 'mcp_job',
+        'album_requested', 'later_added', 'later_removed', 'spotify_id_resolved',
+        'filled', 'wrong_version', 'moved', 'override_set', 'override_cleared',
+        'state_edited'));
     """,
 ]
 

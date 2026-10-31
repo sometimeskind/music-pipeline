@@ -63,12 +63,12 @@ list-failures:
 cookies:
     python3 scripts/export-cookies.py
 
-# Clear all MISS backoff state — all tracks will be retried on the next run
+# Clear the spotdl backoff — all backed-off tracks will be retried on the next run
 clear-failures:
-    docker compose run --rm service sh -c "rm -f /root/Music/inbox/.spotdl-failures.json && echo Cleared"
-# Clear all backoff state in the k8s deployment (see #151) — all tracks will be retried on the next run
+    docker compose run --rm service music-state clear-backoff --apply
+# Clear the spotdl backoff in the k8s deployment (see #151, homelab#2503) — all backed-off tracks will be retried on the next run
 clear-failures-k8s:
-    kubectl exec -n music $(kubectl get pods -n music -l app=music-pipeline -o jsonpath='{.items[0].metadata.name}') -- sh -c "rm -f /root/Music/inbox/.spotdl-failures.json && echo Cleared"
+    kubectl -n music exec deploy/music-pipeline -c music-pipeline -- music-state clear-backoff --apply
 
 # Fingerprint all beets items lacking mb_trackid via AcoustID. Requires ACOUSTID_APIKEY env var.
 # Safe to re-run: skips items that already have mb_trackid.
