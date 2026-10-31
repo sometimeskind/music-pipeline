@@ -248,6 +248,9 @@ def test_scan_flow_runs_all_scan_steps_in_order():
         with patch("music_scan.process.run_beet_update") as mock_update, \
              patch("music_scan.navidrome.trigger_scan") as mock_navidrome, \
              patch("music_scan.library.MusicLibrary"), \
+             patch("music_scan.canon._records", return_value={}), \
+             patch("music_scan.release.retire_merged",
+                   side_effect=lambda lib, records, listed: call_order.append("retire-merged") or 0), \
              patch("music_scan.release.retire_held", side_effect=lambda lib: call_order.append("retire-held") or 0), \
              patch("music_scan.canon.after_scan") as mock_canon:
             mock_update.side_effect = lambda: call_order.append("beet-update")
@@ -259,6 +262,7 @@ def test_scan_flow_runs_all_scan_steps_in_order():
         "beet-import",
         "quarantine",
         "asis-import",
+        "retire-merged",  # homelab#2545: before retire_held, which then sees the new extras
         "retire-held",
         "canon-albums",
         "beet-update",

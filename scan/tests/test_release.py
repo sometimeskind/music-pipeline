@@ -749,3 +749,122 @@ def test_an_album_requests_album_is_never_mixed() -> None:
     imported whole; a release that failed for it before (its blocklist) mixes nothing."""
     record = {"status": "imported", "origin": "request", "blocklist": ["r0"], "fallback_from": "failed"}
     assert release.mixed_reasons("7", record, [], set()) == []
+
+
+# homelab#2545: a release-group merge of two imported records.
+def _at(t: int) -> str:
+    from datetime import datetime, timezone
+
+    return datetime.fromtimestamp(t, timezone.utc).isoformat(timespec="seconds")
+
+
+def _ed(id_, rel, n, **f):
+    """Track *n* of release *rel* on record 1470: ISRC USPR0000n."""
+    return FakeItem(id_, **{"via": "usenet", "album_record": "1470", "release": rel, "isrc": f"USPR0000{n:02d}",
+                            "title": f"Track {n}", "length": 200.0 + n, **f})
+
+
+def _purple(imported_at: int, **f) -> dict:
+    return {"name": "Purple Rain (Deluxe)", "artist": "Prince", "status": "imported",
+            "imported_at": _at(imported_at), "playlists": {"keep": []}, "spotify_album_ids": ["PR"], **f}
+
+
+def _editions():
+    """The standard edition (9 tracks, imported first) and the deluxe (12, later)."""
+    std = [_ed(n, "std@1000", n) for n in range(1, 10)]
+    deluxe = [_ed(100 + n, "dlx@2000", n) for n in range(1, 13)]
+    return std, deluxe
+
+
+def test_retire_merged_keeps_the_survivors_own_release_imported_last(quarantined) -> None:
+    """Purple Rain (homelab#2545): the survivor imported the deluxe, the
+    absorbed record the standard edition before it.  The standard's tracks the
+    deluxe holds go; nothing is left on the record but the deluxe."""
+    std, deluxe = _editions()
+    records = {"1470": _purple(2100)}
+    lib = FakeLib([*std, *deluxe])
+    assert release.retire_merged(lib, records, _listed()) == 9
+    assert quarantined == std
+    assert not any(i.get(release.EXTRA) for i in deluxe)
+    lib.items = deluxe  # quarantined: out of the library, so the next scan has nothing to do
+    assert release.merged(lib.all_items(), records) == []
+
+
+def test_retire_merged_keeps_the_survivors_release_when_the_absorbed_one_came_later(quarantined) -> None:
+    """The survivor imported the standard edition; the absorbed record's
+    deluxe, imported after it, loses the tracks the standard holds and keeps
+    its bonus tracks on the album as local-only extras."""
+    std, deluxe = _editions()
+    lib = FakeLib([*std, *deluxe])
+    assert release.retire_merged(lib, {"1470": _purple(1100)}, _listed()) == 9
+    assert quarantined == deluxe[:9]
+    for item in deluxe[9:]:
+        assert item[release.EXTRA] == "1" and item["album_record"] == "1470" and item["canon_wait"] == "1"
+    assert not any(i.get(release.EXTRA) for i in std)
+    lib.items = [*std, *deluxe[9:]]
+    assert release.merged(lib.all_items(), {"1470": _purple(1100)}) == []  # the extras don't count
+
+
+def test_retire_merged_keeps_a_copy_whose_recording_id_matches_only_at_another_length(quarantined) -> None:
+    """homelab#2540's guard holds here too: a sibling-guessed recording ID at
+    another length is another recording, so the copy stays as an extra."""
+    survivor = [FakeItem(1, album_record="1470", release="dlx@2000", mb_trackid="rec-1", length=300.0)]
+    other = FakeItem(2, album_record="1470", release="std@1000", mb_trackid="rec-1", length=320.0)
+    lib = FakeLib([*survivor, other])
+    assert release.retire_merged(lib, {"1470": _purple(2100)}, _listed()) == 0
+    assert quarantined == [] and other[release.EXTRA] == "1"
+
+
+def test_retire_merged_takes_the_best_copy_of_a_record_waiting_for_a_better_one(quarantined) -> None:
+    std, deluxe = _editions()
+    record = _purple(5000, status="wanted", best_copy={"guid": "std", "release": "std@1000", "missing": 1})
+    assert release.retire_merged(FakeLib([*std, *deluxe]), {"1470": record}, _listed()) == 9
+    assert quarantined == deluxe[:9]
+
+
+@pytest.mark.parametrize("record", [
+    _purple(2100, status="grabbed"),                 # mid-import: the import retires them
+    _purple(2100, import_started=3000),
+    _purple(2100, status="wanted"),                  # reset for a reimport
+])
+def test_retire_merged_leaves_a_record_its_import_will_retire(quarantined, record) -> None:
+    std, deluxe = _editions()
+    assert release.retire_merged(FakeLib([*std, *deluxe]), {"1470": record}, _listed()) == 0
+    assert quarantined == [] and not any(i.get(release.EXTRA) for i in [*std, *deluxe])
+
+
+def test_retire_merged_leaves_a_record_whose_own_release_nothing_tells(quarantined, caplog) -> None:
+    std, deluxe = _editions()
+    for record in ({**_purple(0), "imported_at": None}, _purple(500)):  # no imported_at; both started after it
+        assert release.retire_merged(FakeLib([*std, *deluxe]), {"1470": record}, _listed()) == 0
+    assert quarantined == [] and caplog.text.count("[MULTI]") == 2
+
+
+def test_retire_merged_leaves_records_of_one_release_and_other_records_alone(quarantined) -> None:
+    std, deluxe = _editions()
+    extra = _ed(50, "std@1000", 3, album_extra="1")
+    other = [_ed(200 + n, "x@1500", n, album_record="9") for n in range(1, 3)]
+    records = {"1470": _purple(2100), "9": {**_purple(1600), "name": "Other"}}
+    assert release.merged([*deluxe, extra, *other], records) == []
+    assert release.retire_merged(FakeLib([*deluxe, extra, *other]), records, _listed()) == 0
+    assert quarantined == []
+
+
+def test_list_merged_lists_what_the_scan_retires_and_moves_nothing(quarantined, caplog) -> None:
+    import logging
+
+    std, deluxe = _editions()
+    with caplog.at_level(logging.INFO):
+        assert release.list_merged([*std, *deluxe], {"1470": _purple(1100)}, _listed()) == 1
+    assert quarantined == [] and not any(i.stored for i in [*std, *deluxe])
+    assert "keep std@1000: 9 item(s)" in caplog.text
+    assert "9 → quarantine/replaced/, 3 stay as local-only extras" in caplog.text
+    assert "[LOCAL] 110 " in caplog.text and "[RETIRE] 101 " in caplog.text
+
+
+def test_own_release_is_the_newest_started_by_imported_at() -> None:
+    releases = {"a@1000": 3, "b@2000": 3, "c@3000": 3, "odd": 1}
+    assert release.own_release(_purple(2500), releases) == "b@2000"
+    assert release.own_release(_purple(2000), releases) == "b@2000"
+    assert release.own_release(_purple(999), releases) is None
+    assert release.own_release(_purple(999, best_copy={"release": "c@3000"}), releases) == "c@3000"

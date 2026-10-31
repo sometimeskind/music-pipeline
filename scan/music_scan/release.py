@@ -53,6 +53,11 @@ record is that album, imported whole.  This module holds the library side of
   after ``tag_album_ids`` and before canon, and every scan before its canon,
   so IDs that arrive later count too.  Either way the extras leave before
   canon moves the release's items onto paths they may hold.
+- :func:`retire_merged` does :func:`retire`'s work, every scan, for a record a
+  release-group merge left holding two imported releases (homelab#2545): the
+  record's own release (:func:`own_release`) stays, and the other's copies go
+  as its import would have sent them.  ``music-album-audit-releases
+  --merged`` lists them (:func:`list_merged`).
 - :func:`title_twins` finds the extras left that share a title (edition
   suffixes dropped) with a track of their record's kept release (#306): no ID
   agrees, so by homelab#1889 they are other recordings, but often another
@@ -88,6 +93,7 @@ records (#303).  It never deletes an only copy.  The scan pushes what is left th
 
 from __future__ import annotations
 
+import dataclasses
 import json
 import logging
 import os
@@ -363,6 +369,117 @@ def retire(lib, key: str, record: dict, keep: str | None, drop: str | None, list
             item.store()
     quarantine(gone)
     return len(gone)
+
+
+def _started(release: str) -> int | None:
+    """The import start a ``release`` stamp (``<guid>@<start>``) carries."""
+    _, _, start = str(release).rpartition("@")
+    try:
+        return int(start)
+    except ValueError:
+        return None
+
+
+def own_release(record: dict, releases) -> str | None:
+    """Which of *releases* (``release`` stamps) is *record*'s own: its
+    ``best_copy`` while it waits for a better copy, else the newest whose
+    import started by the record's ``imported_at`` (homelab#2545).  A merge
+    keeps the survivor's fields, its ``imported_at`` included, so a release the
+    absorbed record imported later started after it, and one it imported
+    earlier started before the survivor's own.  None when nothing tells."""
+    from datetime import datetime  # noqa: PLC0415
+
+    best = (record.get("best_copy") or {}).get("release")
+    if best in releases:
+        return best
+    try:
+        done = datetime.fromisoformat(record["imported_at"]).timestamp()
+    except (KeyError, TypeError, ValueError):
+        return None
+    before = [(s, r) for r in releases if (s := _started(r)) is not None and s <= done]
+    return max(before)[1] if before else None
+
+
+@dataclasses.dataclass
+class Merged:
+    """An album record holding items of several releases (:func:`merged`)."""
+    key: str
+    record: dict
+    releases: Counter  # release stamp → its items on the record (extras left out)
+    keep: str | None   # the record's own release, None when nothing tells (:func:`own_release`)
+
+
+def merged(items, records: dict[str, dict]) -> list[Merged]:
+    """The settled album records whose items (extras left out) are of two or
+    more releases: a release-group merge of two imported records
+    (:mod:`music_fetch.resolve`, homelab#2545) leaves both releases on the
+    survivor once the scan restamps the absorbed record's items, and nothing
+    else does (every import retires the record's other copies).  A record
+    mid-import, or reset for a reimport, is left out: its import retires them."""
+    from music_fetch.albums import IMPORTED  # noqa: PLC0415
+    from music_fetch.resolve import in_flight  # noqa: PLC0415
+
+    by_record: dict[str, Counter] = {}
+    for item in items:
+        if item.get("album_record") and item.get("release") and not item.get(EXTRA):
+            by_record.setdefault(str(item.get("album_record")), Counter())[item.get("release")] += 1
+    out = []
+    for key, releases in sorted(by_record.items()):
+        record = records.get(key)
+        if len(releases) < 2 or record is None or in_flight(record):
+            continue
+        if record.get("status") != IMPORTED and not record.get("best_copy"):
+            continue
+        out.append(Merged(key, record, releases, own_release(record, releases)))
+    return out
+
+
+def retire_merged(lib, records: dict[str, dict], listed) -> int:
+    """Every scan, after the restamp and before :func:`retire_held`: retire
+    the other releases of each :func:`merged` record as its import would have
+    (:func:`retire` with the record's own release kept, homelab#2545).  A copy
+    of a recording the own release holds goes to ``quarantine/replaced/``, the
+    rest stay on the album as local-only extras.  A record whose own release
+    nothing tells is logged ``[MULTI]`` and left alone.  Returns the count
+    quarantined."""
+    n = 0
+    for m in merged(lib.all_items(), records):
+        label = f"{m.record.get('artist')} — {m.record.get('name')} ({m.key})"
+        others = ", ".join(f"{r} ({c})" for r, c in sorted(m.releases.items()) if r != m.keep)
+        if m.keep is None:
+            logger.warning("  [MULTI] %s: items of %d releases (%s), and nothing tells which is its own; "
+                           "left to music-album-audit-releases --merged", label, len(m.releases), others)
+            continue
+        logger.info("  [MERGED] %s: keeps its own release %s (%d); retiring %s", label, m.keep,
+                    m.releases[m.keep], others)
+        n += retire(lib, m.key, m.record, m.keep, None, listed)
+    return n
+
+
+def list_merged(items, records: dict[str, dict], listed) -> int:
+    """``music-album-audit-releases --merged``: what :func:`retire_merged`
+    would do, record by record, without moving anything.  Returns the records
+    listed."""
+    found = merged(items, records)
+    for m in found:
+        logger.info("[MERGED] %s — %s (%s): items of %d releases", m.record.get("artist"), m.record.get("name"),
+                    m.key, len(m.releases))
+        for r, c in sorted(m.releases.items()):
+            logger.info("    %s %s: %d item(s)", "keep" if r == m.keep else "    ", r, c)
+        if m.keep is None:
+            logger.info("    nothing tells which release is its own (no best_copy, no imported_at after one "
+                        "started): left alone")
+            continue
+        gone, extras = superseded(items, m.key, m.keep, copies(items, m.key, m.record, m.keep, None, listed))
+        new_extras = [i for i in extras if not i.get(EXTRA)]
+        for item in gone:
+            logger.info("    [RETIRE] %s %s — %s (%s)", item.id, item.get("artist"), item.get("title"), _origin(item))
+        for item in new_extras:
+            logger.info("    [LOCAL] %s %s — %s (%s)", item.id, item.get("artist"), item.get("title"), _origin(item))
+        logger.info("    %d → quarantine/replaced/, %d stay as local-only extras", len(gone), len(new_extras))
+    logger.info("%d album record(s) hold items of several releases; every scan retires the others, keeping "
+                "each record's own (dry run: nothing moved)", len(found))
+    return len(found)
 
 
 def retire_held(lib, decoder=None) -> int:
@@ -726,6 +843,7 @@ def audit_main() -> None:
     parser = argparse.ArgumentParser(
         prog="music-album-audit-releases",
         description="List imported albums mixed from several releases before #279, each with its reset command; "
+                    "with --merged, the records a release-group merge left holding several releases; "
                     "with --replaced, list (and with --apply delete) one album's copies in quarantine/replaced/; "
                     "with --replaced and no query, list every only copy there by album")
     parser.add_argument("--replaced", metavar="QUERY", nargs="?", const="",
@@ -735,11 +853,23 @@ def audit_main() -> None:
                         help="with --replaced: delete the files whose recording the library holds")
     parser.add_argument("--only-copies", action="store_true",
                         help="with --replaced --apply: delete the only copies too (#287)")
+    parser.add_argument("--merged", action="store_true",
+                        help="list the album records holding items of several releases (a release-group merge of "
+                             "two imported records) and what the next scan retires of each (read-only, "
+                             "homelab#2545)")
     args = parser.parse_args()
+    if args.merged and (args.replaced is not None or args.apply or args.only_copies):
+        parser.error("--merged only lists; every scan retires what it lists")
     if args.replaced == "" and (args.apply or args.only_copies):
         parser.error("--replaced without a query only lists; give it an album to delete that album's copies")
     logging.basicConfig(level=logging.INFO, format="[%(asctime)s] %(message)s", datefmt="%Y-%m-%dT%H:%M:%S%z")
     records = State.load().albums
+    if args.merged:
+        from music_scan.scan import store_listings  # noqa: PLC0415
+
+        with MusicLibrary(LIBRARY_DB) as lib:
+            list_merged(list(lib.all_items()), records, store_listings())
+        return
     if args.replaced == "":
         with MusicLibrary(LIBRARY_DB) as lib:
             library = Recordings(lib.all_items())

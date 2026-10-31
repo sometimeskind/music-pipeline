@@ -193,6 +193,27 @@ def restamp_task() -> None:
         logger.exception("Restamping album records failed; the next scan retries it")
 
 
+@task(name="retire-merged-releases", log_prints=True)
+def retire_merged_task() -> None:
+    """Retire the other releases of an album record a release-group merge left
+    holding two (homelab#2545), keeping the record's own, as its import would
+    have.  After the restamp, which moves the absorbed record's items onto it,
+    and before retire_held and canon."""
+    logger = get_run_logger()
+    from music_scan import release  # noqa: PLC0415
+    from music_scan.canon import _records  # noqa: PLC0415
+    from music_scan.library import MusicLibrary  # noqa: PLC0415
+    try:
+        records = _records()
+        with MusicLibrary(scan.LIBRARY_DB) as lib:
+            n = release.retire_merged(lib, records, scan.store_listings())
+    except Exception:
+        logger.exception("Retiring merged albums' other releases failed; the next scan retries it")
+        return
+    if n:
+        logger.info("Retired %d item(s) of merged albums' other releases → quarantine/replaced/", n)
+
+
 @task(name="retire-held-extras", log_prints=True)
 def retire_held_task() -> None:
     """Retire the local-only extras whose recording their album's release now
@@ -305,6 +326,7 @@ def _run_scan_tasks() -> None:
             metrics.quarantined_tracks = quarantine_task()
         metrics.tracks_imported = len(imported) + asis_import_task()
         restamp_task()
+        retire_merged_task()
         retire_held_task()
         canon_task(since)
         beet_update_task()
