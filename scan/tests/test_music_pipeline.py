@@ -824,6 +824,35 @@ def test_handle_duplicates_same_recording_id_is_never_split() -> None:
     task.set_choice.assert_called_once_with(beets_importer.Action.SKIP)
 
 
+def test_handle_duplicates_a_recording_id_at_another_length_is_not_the_same_recording() -> None:
+    """homelab#2540: beets names a singleton's recording by a best guess, so a stereo
+    download can share a 5.1 mix's ID.  11 s apart, it is imported, never skipped."""
+    plugin, item, task = _incoming(SpotdlTags(URL_X, "GBA"))
+    item.length = 445.2
+    task.chosen_info.return_value = {"track_id": "mb-1"}
+    surround = _lib_dup(7, isrc="GBB", mb_trackid="mb-1", length=456.0)
+    session = _session({"mb_trackid:mb-1": [surround]})
+    task.find_duplicates.return_value = [surround]
+
+    plugin.handle_duplicates(session=session, task=task)
+
+    task.set_choice.assert_not_called()
+    assert surround._data["sources"] == "playlist-a"
+    assert any("[SPLIT]" in c.args[0] for c in plugin._log.warning.call_args_list)
+
+
+def test_handle_duplicates_a_recording_id_within_two_seconds_is_the_same_recording() -> None:
+    plugin, item, task = _incoming(SpotdlTags(URL_X, "GBA"))
+    item.length = 445.2
+    task.chosen_info.return_value = {"track_id": "mb-1"}
+    remaster = _lib_dup(7, isrc="GBB", mb_trackid="mb-1", length=446.4)
+    session = _session({"mb_trackid:mb-1": [remaster]})
+
+    plugin.handle_duplicates(session=session, task=task)
+
+    task.set_choice.assert_called_once_with(beets_importer.Action.SKIP)
+
+
 def test_handle_duplicates_protects_a_manual_import_matched_by_identity() -> None:
     plugin, item, task = _incoming(SpotdlTags(URL_X, "GBA"))
     manual = _lib_dup(7, via="", isrc="GBA")

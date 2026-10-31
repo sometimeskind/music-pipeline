@@ -130,6 +130,22 @@ def test_no_id_match_keeps_both_and_reports(tmp_path, ffmpeg, lib, caplog, field
     assert "[KEEP]" in caplog.text
 
 
+def test_a_recording_id_at_another_length_does_not_supersede(tmp_path, ffmpeg, lib):
+    """homelab#2540: a shared MusicBrainz recording ID counts only with lengths that agree."""
+    from music_scan import supersede
+
+    loose, album, tangled = _dylan(tmp_path, lib, mb_trackid="REC-OLD", tracktotal=0)
+    loose.length, album.length = 200.0, 212.0
+    loose.store()
+    album.store()
+    pairs, _ = supersede.plan([album, tangled], lib.all_items(), tracks_count=10)
+    assert pairs == []
+    album.length = 201.0
+    album.store()
+    pairs, _ = supersede.plan([album, tangled], lib.all_items(), tracks_count=10)
+    assert [(p.album.id, p.how) for p in pairs] == [(album.id, ["recording id"])]
+
+
 def test_a_manual_import_is_never_superseded(tmp_path, ffmpeg, lib):
     from music_scan import supersede
 

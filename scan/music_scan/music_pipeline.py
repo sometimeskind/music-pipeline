@@ -110,7 +110,7 @@ from music_fetch.album_requests import SOURCE as REQUEST_SOURCE
 from music_fetch.album_requests import url_recording
 
 from music_scan.identity import (
-    add_isrcs, add_to_list, fingerprint, item_isrcs, item_spotify_ids, split_list, spotify_id,
+    add_isrcs, add_to_list, fingerprint, item_isrcs, item_spotify_ids, same_mb_recording, split_list, spotify_id,
 )
 
 # The two locations where spotdl downloads land at beet-import time.
@@ -234,10 +234,12 @@ class Incoming(NamedTuple):
     spotify_id: str | None
     isrcs: frozenset[str]
     mb_trackid: str | None
+    length: float | None = None
 
 
 def _find_same_recording(lib, incoming: Incoming) -> list:
-    """Library items that share a Spotify track ID, ISRC or MusicBrainz recording ID."""
+    """Library items that share a Spotify track ID, ISRC or MusicBrainz recording ID,
+    the last with lengths that agree (homelab#2540: beets' recording is a best guess)."""
     found: dict = {}
     queries = []
     if incoming.spotify_id:
@@ -247,7 +249,9 @@ def _find_same_recording(lib, incoming: Incoming) -> list:
     for code in incoming.isrcs:
         queries.append((f"isrc:{code}", lambda i, c=code: c in item_isrcs(i)))
     if incoming.mb_trackid:
-        queries.append((f"mb_trackid:{incoming.mb_trackid}", lambda i: i.get("mb_trackid") == incoming.mb_trackid))
+        queries.append((f"mb_trackid:{incoming.mb_trackid}",
+                        lambda i: same_mb_recording(i.get("mb_trackid"), i.get("length"),
+                                                    incoming.mb_trackid, incoming.length)))
     for query, same in queries:
         for item in lib.items(query):
             if same(item):
@@ -257,7 +261,7 @@ def _find_same_recording(lib, incoming: Incoming) -> list:
 
 def _different_recording(incoming: Incoming, dup) -> bool:
     """True when both sides have ISRCs, none shared, and no shared recording ID."""
-    if incoming.mb_trackid and dup.get("mb_trackid") == incoming.mb_trackid:
+    if same_mb_recording(incoming.mb_trackid, incoming.length, dup.get("mb_trackid"), dup.get("length")):
         return False
     dup_isrcs = item_isrcs(dup)
     return bool(incoming.isrcs and dup_isrcs and not incoming.isrcs & dup_isrcs)
@@ -432,7 +436,7 @@ class MusicPipelinePlugin(BeetsPlugin):
         isrcs = {*split_list(tags.isrc, ";"), *split_list(info.get("isrc"), ";"), *item_isrcs(item)}
         mb_trackid = (info.get("track_id") or info.get("mb_trackid") or item.get("mb_trackid")
                       or url_recording(tags.url) or None)
-        return Incoming(spotify_id(tags.url), frozenset(isrcs), mb_trackid)
+        return Incoming(spotify_id(tags.url), frozenset(isrcs), mb_trackid, getattr(item, "length", None))
 
     def _incoming_spotdl_tags(self, item) -> SpotdlTags:
         """spotdl tags of an inbox item: cached at task creation, else read again."""
