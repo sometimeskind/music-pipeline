@@ -88,9 +88,9 @@ def test_disc_track_on_the_album_supersedes_the_loose_copy_and_its_playlists_fol
 
     m3u = tmp_path / "playlists"
     monkeypatch.setattr(store, "STORE_DIR", tmp_path / "store")
-    store.Store.from_songs("aaaaaah", [
+    store.save(store.Store.from_songs("aaaaaah", [
         {"name": "Simple Twist of Fate", "artists": ["Bob Dylan"], "url": "https://open.spotify.com/track/TWIST"}],
-    ).save(store.path("aaaaaah"))
+    ))
     monkeypatch.setattr(scan, "PLAYLISTS", m3u)
     monkeypatch.setattr(scan, "LIBRARY_DB", tmp_path / "library.db")
     monkeypatch.setattr(scan, "SPOTDL_DIR", tmp_path / "spotdl")

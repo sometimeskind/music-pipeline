@@ -27,7 +27,7 @@ def _stores(tmp_path, monkeypatch, **playlists):
 
     monkeypatch.setattr(store, "STORE_DIR", tmp_path / "store")
     for name, songs in playlists.items():
-        store.Store.from_songs(name, songs).save(store.path(name))
+        store.save(store.Store.from_songs(name, songs))
     return store.STORE_DIR
 
 
@@ -98,15 +98,14 @@ def test_store_songs_are_every_playlist_stores_song_records(tmp_path, monkeypatc
     from music_fetch import store
     from music_scan.canon import store_songs
 
+    assert store_songs() == []
     store_dir = _stores(tmp_path, monkeypatch, a=[_song("T1"), _song("T2", track=2)], b=[_song("T3", "A2")])
     with_local = store.load("b")
     with_local.entries.append({store.LOCAL: {"id": 9, "path": "/x.m4a", "title": "X", "artist": "Y"}})
-    with_local.save(store.path("b"))
+    store.save(with_local)
     (store_dir.parent / "a.spotdl").write_text(json.dumps({"songs": [_song("OLD")]}), encoding="utf-8")
 
     assert [s["song_id"] for s in store_songs()] == ["T1", "T2", "T3"]
-    _stores(tmp_path / "none", monkeypatch)
-    assert store_songs() == []
 
 
 # ----------------------------------------------------------------------
@@ -396,10 +395,7 @@ def test_backfill_dry_run_apply_then_zero(tmp_path, ffmpeg, lib, monkeypatch, ca
     from music_scan import canon, cover, library, navidrome, scan
     from music_scan.mb_release import Resolver
 
-    from music_fetch import albums as albums_state
-
     _, _, _, songs = _editions(tmp_path, lib)
-    monkeypatch.setattr(albums_state, "STATE_FILE", tmp_path / "no-albums.json")
     monkeypatch.setattr(library, "LIBRARY_DB", tmp_path / "library.db")
     monkeypatch.setattr(library, "LIBRARY_DIR", tmp_path / "library")
     _stores(tmp_path, monkeypatch)
@@ -919,9 +915,9 @@ def test_backfill_moves_3092_back_to_mellon_collie(tmp_path, ffmpeg, lib, monkey
 
     caplog.set_level(logging.INFO)
     _, _, the_1979 = _pumpkins(tmp_path, lib, moved=True)
-    state = tmp_path / ".albums.json"
-    albums_state.State(albums=_pumpkins_records()).save(state)
-    monkeypatch.setattr(albums_state, "STATE_FILE", state)
+    records = albums_state.State(albums=_pumpkins_records())
+    records.in_db = True
+    records.save()
     monkeypatch.setattr(library, "LIBRARY_DB", tmp_path / "library.db")
     monkeypatch.setattr(library, "LIBRARY_DIR", tmp_path / "library")
     _stores(tmp_path, monkeypatch)

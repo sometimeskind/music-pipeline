@@ -105,7 +105,7 @@ def stores(tmp_path: Path, monkeypatch):
     monkeypatch.setattr(want_albums, "SPOTDL_DIR", spotdl_dir)
     monkeypatch.setattr(want_albums, "QUARANTINE", tmp_path / "quarantine")
     for name in ("pl", "keep", "mood"):
-        store.Store.from_songs(name, SONGS[:3]).save(store.path(name))
+        store.save(store.Store.from_songs(name, SONGS[:3]))
     return spotdl_dir
 
 

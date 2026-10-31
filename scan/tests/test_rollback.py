@@ -50,7 +50,7 @@ def stores(tmp_path: Path, monkeypatch, **playlists: list[dict]) -> Path:
 
     monkeypatch.setattr(store, "STORE_DIR", tmp_path / "store")
     for name, songs in playlists.items():
-        store.Store.from_songs(name, songs).save(store.path(name))
+        store.save(store.Store.from_songs(name, songs))
     return store.STORE_DIR
 
 
@@ -68,7 +68,7 @@ def test_entry_keys_cover_every_playlist_store(tmp_path, monkeypatch) -> None:
     # A local entry is no Spotify entry, and a .spotdl file is never read (homelab#1914).
     keep = store.load("keep")
     keep.entries.append({store.LOCAL: {"id": 7, "path": "/x.m4a", "title": "X", "artist": "Y"}})
-    keep.save(store.path("keep"))
+    store.save(keep)
     (store_dir.parent / "old.spotdl").write_text(json.dumps({"songs": [{"song_id": "s9", "isrc": "GB9"}]}))
     assert entry_keys() == ({"s1", "s2", "s3"}, {"GB1"})
 

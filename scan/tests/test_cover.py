@@ -82,7 +82,7 @@ def _store(tmp_path: Path, monkeypatch, songs: list[dict], name: str = "later") 
     from music_fetch import store
 
     monkeypatch.setattr(store, "STORE_DIR", tmp_path / "store")
-    store.Store.from_songs(name, songs).save(store.path(name))
+    store.save(store.Store.from_songs(name, songs))
     return store.STORE_DIR
 
 
@@ -169,8 +169,7 @@ def test_covers_by_id_reads_song_ids_and_urls_from_every_store(tmp_path, monkeyp
         {"song_id": "T3", "cover_url": None},
         {"song_id": "T4", "cover_url": "Missing thumbnails"},
     ])
-    store.Store.from_songs("other", [{"song_id": "T5", "cover_url": COVER_URL + "5"}]).save(store.path("other"))
-    (store_dir / "broken.json").write_text("{", encoding="utf-8")
+    store.save(store.Store.from_songs("other", [{"song_id": "T5", "cover_url": COVER_URL + "5"}]))
     # homelab#1914: a .spotdl file is never read.
     (store_dir.parent / "later.spotdl").write_text(
         json.dumps({"songs": [{"song_id": "OLD", "cover_url": COVER_URL + "old"}]}), encoding="utf-8")

@@ -61,8 +61,8 @@ def env(tmp_path: Path, monkeypatch):
 
 def _whole_list() -> None:
     """The store the nightly wrote: the whole Spotify list."""
-    store.Store.from_songs("pl", [_song("Tagged", "T1"), _song("Words", "W1"), _song("Elsewhere", "E1"),
-                                  _song("Nowhere", "N1")]).save(store.path("pl"))
+    store.save(store.Store.from_songs("pl", [_song("Tagged", "T1"), _song("Words", "W1"), _song("Elsewhere", "E1"),
+                                  _song("Nowhere", "N1")]))
 
 
 def _m3u(playlists_dir: Path, name: str = "pl") -> list[str]:
@@ -109,8 +109,8 @@ def test_existing_local_entries_follow_the_view_in_store_order(env) -> None:
     from music_scan.scan import regen_playlists
 
     _, playlists_dir, _ = env
-    store.Store("pl", [{"song": _song("Tagged", "T1")}, _local(3, "Extra"), _local(2, "Words")]
-                ).save(store.path("pl"))
+    store.save(store.Store("pl", [{"song": _song("Tagged", "T1")}, _local(3, "Extra"), _local(2, "Words")]
+                ))
     counts = regen_playlists()
     assert _m3u(playlists_dir) == ["../library/tagged.m4a", "../library/extra.m4a", "../library/words.m4a"]
     assert counts == {"pl": 3}
@@ -123,7 +123,7 @@ def test_a_local_entry_stays_whatever_its_items_tags(env) -> None:
     from music_scan.scan import regen_playlists
 
     _, playlists_dir, _ = env
-    store.Store("pl", [{"song": _song("Tagged", "T1")}, _local(4, "Elsewhere")]).save(store.path("pl"))
+    store.save(store.Store("pl", [{"song": _song("Tagged", "T1")}, _local(4, "Elsewhere")]))
     regen_playlists()
     assert _m3u(playlists_dir) == ["../library/tagged.m4a", "../library/elsewhere.m4a"]
 
@@ -132,7 +132,7 @@ def test_a_local_entry_whose_item_is_gone_is_left_out(env) -> None:
     from music_scan.scan import regen_playlists
 
     _, playlists_dir, _ = env
-    store.Store("pl", [{"song": _song("Tagged", "T1")}, _local(99, "Gone")]).save(store.path("pl"))
+    store.save(store.Store("pl", [{"song": _song("Tagged", "T1")}, _local(99, "Gone")]))
     regen_playlists()
     assert _m3u(playlists_dir) == ["../library/tagged.m4a"]
     # Not resolved by the view, so the entry stays in the store.
@@ -145,8 +145,8 @@ def test_a_local_entry_the_store_now_resolves_is_dropped(env, caplog) -> None:
     from music_scan.scan import regen_playlists
 
     _, playlists_dir, lib = env
-    store.Store("pl", [{"song": _song("Extra", "X1")}, {"song": _song("Tagged", "T1")},
-                       _local(2, "Words"), _local(3, "Extra")]).save(store.path("pl"))
+    store.save(store.Store("pl", [{"song": _song("Extra", "X1")}, {"song": _song("Tagged", "T1")},
+                       _local(2, "Words"), _local(3, "Extra")]))
     extra = lib.all_items.return_value[2]
     extra.get.side_effect = lambda k, d=None: {"spotify_ids": "X1", "sources": "pl"}.get(k, d)
     with caplog.at_level(logging.INFO, logger="music_scan.scan"):
@@ -161,23 +161,18 @@ def test_a_local_entry_the_store_now_resolves_is_dropped(env, caplog) -> None:
 
 def test_a_playlist_with_no_store_is_skipped(env, caplog) -> None:
     """Only playlists with a store are regenerated: a .spotdl alone is not one,
-    and an unreadable store is no store; their .m3u are left as they were."""
+    and its .m3u is left as it was."""
     from music_scan.scan import regen_playlists
 
     spotdl_dir, playlists_dir, _ = env
     (spotdl_dir / "old.spotdl").write_text(json.dumps({"songs": [_song("Tagged", "T1")]}), encoding="utf-8")
     (playlists_dir / "old.m3u").write_text("kept\n", encoding="utf-8")
-    store.STORE_DIR.mkdir(parents=True)
-    store.path("broken").write_text("{not json", encoding="utf-8")
-    (playlists_dir / "broken.m3u").write_text("kept too\n", encoding="utf-8")
     _whole_list()
     with caplog.at_level(logging.INFO, logger="music_scan.scan"):
         counts = regen_playlists()
 
     assert counts == {"pl": 2}
     assert (playlists_dir / "old.m3u").read_text(encoding="utf-8") == "kept\n"
-    assert (playlists_dir / "broken.m3u").read_text(encoding="utf-8") == "kept too\n"
-    assert "[STORE] broken: its store can't be read" in caplog.text
 
 
 def test_no_stores_writes_nothing(env) -> None:
@@ -195,7 +190,7 @@ def test_a_failing_store_leaves_the_old_m3u(env, caplog) -> None:
 
     _, playlists_dir, _ = env
     _whole_list()
-    store.Store.from_songs("other", [_song("Elsewhere", "E1")]).save(store.path("other"))
+    store.save(store.Store.from_songs("other", [_song("Elsewhere", "E1")]))
     (playlists_dir / "pl.m3u").write_text("../library/old.m4a\n", encoding="utf-8")
     real = scan.store_view
 
@@ -231,7 +226,7 @@ def test_an_album_playlist_is_its_stores_album_view(env) -> None:
 
     spotdl_dir, playlists_dir, _ = env
     (spotdl_dir / "pl.album").touch()
-    store.Store("pl", [{"song": _song("Elsewhere", "E1")}, _local(3, "Extra")]).save(store.path("pl"))
+    store.save(store.Store("pl", [{"song": _song("Elsewhere", "E1")}, _local(3, "Extra")]))
     album = playlists_dir.parent / "library" / "album" / "01.m4a"
     with mock.patch("music_scan.playlists.album_paths", return_value=([album], [], 1)) as album_paths:
         counts = regen_playlists()
@@ -248,13 +243,15 @@ def test_regen_records_the_empty_slots(env) -> None:
     from music_scan.scan import regen_playlists
 
     _whole_list()
-    store.Store.from_songs("full", [_song("Tagged", "T1")]).save(store.path("full"))
+    store.save(store.Store.from_songs("full", [_song("Tagged", "T1")]))
     metrics = ScanMetrics()
     regen_playlists(metrics)
     # pl: W1 (a words-only match) and N1 are empty.
     assert metrics.slots_empty == {"full": 0, "pl": 2}
-    spotdl_dir, _, _ = env
-    report = json.loads((spotdl_dir / ".empty-slots.json").read_text())
+    from music_fetch import state
+
+    with state.session() as conn:
+        report = state.get(conn, state.EMPTY_SLOTS)
     assert report["playlists"]["full"] == {"total": 0, "entries": []}
     assert report["playlists"]["pl"]["total"] == 2 and len(report["playlists"]["pl"]["entries"]) == 2
 
@@ -267,11 +264,11 @@ def test_regen_records_the_empty_slots(env) -> None:
 def test_store_listings_by_recording(env) -> None:
     from music_scan.scan import store_listings
 
-    store.Store("pl", [{"song": _song("Tagged", "T1")}, {"song": {**_song("Isrc", "I1"), "isrc": "GB1"}},
+    store.save(store.Store("pl", [{"song": _song("Tagged", "T1")}, {"song": {**_song("Isrc", "I1"), "isrc": "GB1"}},
                        {"song": {"name": "Url only", "artists": ["Artist"],
                                  "url": "https://open.spotify.com/track/U1"}},
-                       _local(9, "Local")]).save(store.path("pl"))
-    store.Store.from_songs("album", [_song("Tagged", "T1")]).save(store.path("album"))
+                       _local(9, "Local")]))
+    store.save(store.Store.from_songs("album", [_song("Tagged", "T1")]))
     listed = store_listings()
     # A loose copy of T1 is listed by both stores, whichever item the index holds for T1.
     assert listed(_item("Copy", "/c.m4a", spotify_ids="T1")) == {"pl", "album"}

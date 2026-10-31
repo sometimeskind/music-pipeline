@@ -61,7 +61,7 @@ def _regen(tmp_path: Path, lib, songs_by_playlist: dict[str, list[dict]], album:
          mock.patch("music_scan.scan.PLAYLISTS", playlists_dir), \
          mock.patch("music_scan.scan.MusicLibrary", return_value=wrapper):
         for name, songs in songs_by_playlist.items():
-            store.Store.from_songs(name, songs).save(store.path(name))
+            store.save(store.Store.from_songs(name, songs))
             if name in album:
                 (spotdl_dir / f"{name}.album").touch()
         regen_playlists()
@@ -74,8 +74,8 @@ def test_an_album_playlist_lists_the_whole_release_in_disc_track_order(tmp_path:
     """One entry on Spotify lists the album's every local track, including an
     extra with no Spotify ID; a normal playlist stays track level."""
     _release(real_lib)
-    lines = _regen(tmp_path, real_lib, {"later": [_song("Three", "S3")], "mix": [_song("Three", "S3")]}, {"later"})
-    assert lines["later"] == ["01.m4a", "03.m4a", "04.m4a"]
+    lines = _regen(tmp_path, real_lib, {"albums": [_song("Three", "S3")], "mix": [_song("Three", "S3")]}, {"albums"})
+    assert lines["albums"] == ["01.m4a", "03.m4a", "04.m4a"]
     assert lines["mix"] == ["03.m4a"]
 
 
@@ -84,20 +84,20 @@ def test_albums_follow_playlist_order_and_each_file_is_listed_once(tmp_path: Pat
     _add(real_lib, "Other", "/lib/Other/01.m4a", album="Other", disc=1, track=1, spotify_ids="O1",
          spotify_album_id="OTH")
     songs = [_song("Other", "O1", "OTH", "Other"), _song("One", "S1"), _song("Three", "S3")]
-    assert _regen(tmp_path, real_lib, {"later": songs}, {"later"})["later"] == ["01.m4a", "01.m4a", "03.m4a", "04.m4a"]
+    assert _regen(tmp_path, real_lib, {"albums": songs}, {"albums"})["albums"] == ["01.m4a", "01.m4a", "03.m4a", "04.m4a"]
 
 
 def test_a_twin_lists_the_representatives_album(tmp_path: Path, real_lib) -> None:
     """#214: the entry is on twin TWIN, canon filed the items on ALB under the same name."""
     _release(real_lib)
-    assert _regen(tmp_path, real_lib, {"later": [_song("One", "S1", "TWIN")]}, {"later"})["later"] == \
+    assert _regen(tmp_path, real_lib, {"albums": [_song("One", "S1", "TWIN")]}, {"albums"})["albums"] == \
         ["01.m4a", "03.m4a", "04.m4a"]
 
 
 def test_a_track_canon_moved_to_another_album_is_listed_alone(tmp_path: Path, real_lib) -> None:
     """A single's track filed on its standard album doesn't bring that album in."""
     _release(real_lib)
-    assert _regen(tmp_path, real_lib, {"later": [_song("One", "S1", "SINGLE", "One - Single")]}, {"later"})["later"] == \
+    assert _regen(tmp_path, real_lib, {"albums": [_song("One", "S1", "SINGLE", "One - Single")]}, {"albums"})["albums"] == \
         ["01.m4a"]
 
 
@@ -106,7 +106,7 @@ def test_an_album_whose_tracks_all_left_is_not_listed(tmp_path: Path, real_lib) 
     store entry is on their album any more: the listing drops them at once."""
     _release(real_lib)
     _add(real_lib, "Other", "/lib/Other/01.m4a", album="Other", spotify_ids="O1", spotify_album_id="OTH")
-    assert _regen(tmp_path, real_lib, {"later": [_song("Other", "O1", "OTH", "Other")]}, {"later"})["later"] == \
+    assert _regen(tmp_path, real_lib, {"albums": [_song("Other", "O1", "OTH", "Other")]}, {"albums"})["albums"] == \
         ["01.m4a"]
 
 
@@ -275,8 +275,8 @@ def test_the_cutovers_queue_writes_what_the_later_store_did(tmp_path: Path, real
          spotify_album_id="OTH")
     songs = [_song("Other", "O1", "OTH", "Other"), _song("One", "S1"), _song("Three", "S3")]
     with mock.patch("music_scan.scan._album_records", return_value={}):
-        _regen(tmp_path, real_lib, {"later": songs}, {"later"})
-    written = (tmp_path / "playlists" / "later.m3u").read_text().splitlines()
+        _regen(tmp_path, real_lib, {"albums": songs}, {"albums"})
+    written = (tmp_path / "playlists" / "albums.m3u").read_text().splitlines()
     queue = [("7", {"name": "Other", "spotify_album_ids": ["OTH"],
                     "playlists": {"later": [["Other", "Artist", "O1", None, 1, 1]]}}),
              ("8", {"name": "Album", "spotify_album_ids": ["ALB"],

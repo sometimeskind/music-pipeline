@@ -573,7 +573,7 @@ def test_the_tick_queues_a_request_and_the_listing_follows_its_album(switched, t
     prowlarr.search.return_value = []
     with patch.object(albums, "_push"):
         tick([], MagicMock(), prowlarr, MagicMock(), lambda k, r: False, Settings(mode="dry-run"),
-             tmp_path / ".albums.json", library=None, wants=None)
+             library=None, wants=None)
     loaded = State.load()
     [record] = loaded.albums.values()
     assert record["origin"] == albums.REQUEST and record["tracks_count"] == 14

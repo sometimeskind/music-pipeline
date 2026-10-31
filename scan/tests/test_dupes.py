@@ -235,10 +235,10 @@ def test_spotify_durations_read_every_store_first_listing_wins(tmp_path, monkeyp
     from music_fetch import store
 
     monkeypatch.setattr(store, "STORE_DIR", tmp_path / "store")
-    store.Store.from_songs("a", [{"song_id": "S1", "duration": 200}, {"song_id": "S2"},
-                                 {"url": "https://open.spotify.com/track/S3", "duration": 180.5}]).save(store.path("a"))
-    store.Store.from_songs("b", [{"song_id": "S1", "duration": 999}, {"song_id": "S4", "duration": 90}]
-                           ).save(store.path("b"))
+    store.save(store.Store.from_songs("a", [{"song_id": "S1", "duration": 200}, {"song_id": "S2"},
+                                 {"url": "https://open.spotify.com/track/S3", "duration": 180.5}]))
+    store.save(store.Store.from_songs("b", [{"song_id": "S1", "duration": 999}, {"song_id": "S4", "duration": 90}]
+                           ))
     (tmp_path / "c.spotdl").write_text('{"songs": [{"song_id": "OLD", "duration": 1}]}')
     assert dupes.spotify_durations() == {"S1": 200.0, "S3": 180.5, "S4": 90.0}
 
@@ -649,7 +649,7 @@ def test_an_extra_merges_into_its_own_records_release_item(monkeypatch, tmp_path
     _patch_run(monkeypatch, items, tmp_path)
     from music_fetch import store
 
-    store.Store.from_songs("pl", [{"song_id": "S", "duration": 200}]).save(store.path("pl"))
+    store.save(store.Store.from_songs("pl", [{"song_id": "S", "duration": 200}]))
     certain, listed = dupes.run(apply=True)
     assert [sorted(i.id for i in g.items) for g in certain] == [[1, 2]] and listed == []
     assert extra.removed and not track.removed

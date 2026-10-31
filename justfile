@@ -1,8 +1,19 @@
-# Run the test suite in a dev container (never pushed to registry)
+# Run the test suite in a dev container (never pushed to registry), against a throwaway
+# Postgres: the state is the music database's, so the tests need one (homelab#2502).
 # --network=host: build container shares host network stack so systemd-resolved DNS works
+# The Postgres image is CI's (.github/workflows/service.yml): move both with the CNPG major.
 test:
+    #!/usr/bin/env sh
+    set -eu
     docker build --network=host --target dev -f service/Dockerfile -t music-pipeline-service:dev .
-    docker run --rm music-pipeline-service:dev
+    net="music-test-$$"
+    docker network create "$net" >/dev/null
+    trap 'docker rm -f "$net-pg" >/dev/null 2>&1; docker network rm "$net" >/dev/null 2>&1' EXIT
+    docker run -d --rm --name "$net-pg" --network "$net" -e POSTGRES_PASSWORD=test \
+        postgres:17.11@sha256:31ba9c94a03ada9988f2bb493a22a75eef3a185884533e5cdbcd498ea835b08f >/dev/null
+    until docker exec "$net-pg" pg_isready -q -h 127.0.0.1 -U postgres; do sleep 1; done
+    docker run --rm --network "$net" -e MUSIC_TEST_DATABASE_URL="postgresql://postgres:test@$net-pg:5432/postgres" \
+        music-pipeline-service:dev
 
 # Run the MCP adapter's tests, including its contract test against the real pipeline API
 test-mcp:
