@@ -212,6 +212,33 @@ def same_base_title(name: str, title: str) -> bool:
     return bool(base) and base == release_words(clean_album(title))
 
 
+LENGTH_SLACK = 2.0
+"""Seconds: two copies of one recording are at most this far apart in length.
+An AcoustID match (:func:`music_scan.dupes.audio_match`) and a shared
+MusicBrainz recording ID (:func:`same_mb_recording`) count only within it."""
+
+
+def lengths_agree(a, b) -> bool:
+    """True when lengths *a* and *b* (seconds) are within :data:`LENGTH_SLACK`,
+    or either is unknown (nothing to veto with)."""
+    try:
+        a, b = float(a or 0), float(b or 0)
+    except (TypeError, ValueError):
+        return True
+    return not (a and b) or abs(a - b) <= LENGTH_SLACK
+
+
+def same_mb_recording(a_mbid: str | None, a_length, b_mbid: str | None, b_length) -> bool:
+    """True when two items' ``mb_trackid`` agree and so do their lengths (homelab#2540).
+
+    beets imports every file as a singleton and names its recording from title,
+    artist and length, so an ``mb_trackid`` is a best guess: a sibling recording
+    (the 5.1 mix of a stereo track, a live take of a studio one) passes the
+    threshold.  The sibling's length gives it away; a recording's copies agree
+    within :data:`LENGTH_SLACK`."""
+    return bool(a_mbid) and a_mbid == b_mbid and lengths_agree(a_length, b_length)
+
+
 def recording_ids(spotify_ids=(), isrcs=(), mb_trackid: str | None = None) -> frozenset[str]:
     """The identity keys of one recording (#287): ``spotify:<track ID>``,
     ``isrc:<code>`` and ``mb:<MusicBrainz recording ID>``.  Two recordings are

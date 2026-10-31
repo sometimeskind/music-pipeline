@@ -7,12 +7,16 @@ ISRC, MusicBrainz recording ID and AcoustID fingerprints are supporting evidence
 
 Two tiers, grouped transitively:
 
-* **Certain:** a shared Spotify ID, ISRC or MusicBrainz recording ID, or an
-  AcoustID match (a shared ``acoustid_id``, or fingerprints within
-  :data:`MATCH_BER`) with lengths within :data:`LENGTH_SLACK` seconds and the
-  same title once edition suffixes are dropped.
+* **Certain:** a shared Spotify ID or ISRC; a shared MusicBrainz recording ID
+  with lengths within :data:`LENGTH_SLACK` seconds (beets names each file's
+  recording by a best guess, and a sibling such as a 5.1 mix or a live take
+  shares it at another length, homelab#2540); or an AcoustID match (a shared
+  ``acoustid_id``, or fingerprints within :data:`MATCH_BER`) with lengths
+  within :data:`LENGTH_SLACK` seconds and the same title once edition suffixes
+  are dropped.
 * **Uncertain:** the same title and artist after the album matcher's
-  normalisation (#197), or an AcoustID match with lengths further apart.  An
+  normalisation (#197), or an AcoustID match or shared MusicBrainz recording
+  ID with lengths further apart.  An
   AcoustID match between different titles is uncertain too: one file is
   likely the other's audio under the wrong tags (a wrong download, #221), which
   ``music-audit-lengths --replace`` fixes and a merge would make worse.
@@ -90,8 +94,8 @@ from music_fetch import events
 from music_fetch.usenet import clean_album, normalise, words
 from music_scan.audit import LIBRARY, REPLACED, item_path, pipeline_lock
 from music_scan.identity import (
-    MERGED_FILES, add_isrcs, add_merged_file, add_to_list, fingerprint, item_isrcs, item_spotify_ids,
-    merged_files, spotify_id, split_list,
+    LENGTH_SLACK, MERGED_FILES, add_isrcs, add_merged_file, add_to_list, fingerprint, item_isrcs,
+    item_spotify_ids, lengths_agree, merged_files, spotify_id, split_list,
 )
 from music_scan.metrics import _gauge, _push
 from music_scan.supersede import MANAGED_VIA
@@ -99,8 +103,8 @@ from music_scan.supersede import MANAGED_VIA
 logger = logging.getLogger(__name__)
 
 CERTAIN, UNCERTAIN, ALBUM = "certain", "uncertain", "album"
-# An AcoustID match is certain only with lengths this close (seconds).
-LENGTH_SLACK = 2.0
+# An AcoustID match or a shared MusicBrainz recording ID is certain only with
+# lengths within LENGTH_SLACK seconds (music_scan.identity).
 # Fingerprint comparison: a window of WINDOW sub-fingerprints (about 8 a second)
 # slid up to MAX_SHIFT either way; a bit error rate at or under MATCH_BER is a
 # match.  Different recordings sit near 0.5, but repetitive tracks by one artist
@@ -239,16 +243,26 @@ def find_dupes(items: list, decoder: Callable[[str], list[int]] = decode) -> tup
 
     # Shared IDs.
     seen: dict[tuple[str, str], object] = {}
+    by_mbid: dict[str, list] = defaultdict(list)
     for item in items:
         keys = [("spotify", s) for s in sorted(item_spotify_ids(item))]
         keys += [("isrc", c) for c in sorted(item_isrcs(item))]
-        if mbid := item.get("mb_trackid"):
-            keys.append(("mbid", mbid))
         for key in keys:
             if key in seen:
                 join(seen[key], item, f"{key[0]} {key[1]}")
             else:
                 seen[key] = item
+        if mbid := item.get("mb_trackid"):
+            by_mbid[mbid].append(item)
+    # A MusicBrainz recording ID is beets' guess per file (homelab#2540): certain
+    # only with lengths that agree, else a sibling recording (uncertain).
+    for mbid, holders in by_mbid.items():
+        for a, b in combinations(holders, 2):
+            if lengths_agree(a.length, b.length):
+                join(a, b, f"mbid {mbid}")
+            else:
+                gap = abs(float(a.length or 0) - float(b.length or 0))
+                uncertain_edges.append((a.id, b.id, f"mbid {mbid} but {gap:.0f}s apart"))
 
     # AcoustID, between items sharing an artist word.
     by_word: dict[str, list] = defaultdict(list)

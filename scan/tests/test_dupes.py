@@ -89,13 +89,26 @@ def test_bit_error_rate_needs_enough_overlap() -> None:
 @pytest.mark.parametrize("field,a,b", [
     ("spotify_ids", "S1,S2", "S2"),
     ("isrc", "GB1;US9", "US9"),
-    ("mb_trackid", "rec-1", "rec-1"),
 ])
 def test_a_shared_id_is_certain_whatever_the_lengths(field, a, b) -> None:
     one = FakeItem(1, "Song", length=200.0, **{field: a})
     clip = FakeItem(2, "Song (clip)", length=30.0, **{field: b})
     certain, uncertain, *_ = _tiers([one, clip])
     assert certain == [[1, 2]] and uncertain == []
+
+
+def test_a_shared_recording_id_is_certain_only_with_lengths_that_agree() -> None:
+    """homelab#2540: beets guessed the 5.1 mix's recording for the stereo 6930, which
+    6994 (the real 5.1 mix, 11 s longer) holds.  A recording ID is a best guess per
+    file, so a shared one is certain only within LENGTH_SLACK."""
+    stereo = FakeItem(6930, "Oh! Sweet Nuthin' (5.1 mix)", length=445.2, mb_trackid="d0063aee")
+    surround = FakeItem(6994, "Oh! Sweet Nuthin' (5.1 mix)", length=456.0, mb_trackid="d0063aee")
+    reencode = FakeItem(7000, "Oh! Sweet Nuthin'", length=446.5, mb_trackid="d0063aee")
+    certain, uncertain, _, groups, loose = _tiers([stereo, surround, reencode])
+    assert certain == [[6930, 7000]]
+    assert groups[0].evidence == [(6930, 7000, "mbid d0063aee")]
+    assert uncertain == [[6930, 6994, 7000]]
+    assert {"mbid d0063aee but 11s apart", "mbid d0063aee but 10s apart"} <= {why for *_, why in loose[0].evidence}
 
 
 def test_spotify_url_counts_as_a_spotify_id() -> None:

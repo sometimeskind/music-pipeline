@@ -14,7 +14,9 @@ Only identity decides which album item replaces a loose one (#255), first hit wi
 1. a shared Spotify track ID, except one ``tag_album_ids`` gave the album
    item by title words (``words_ids``);
 2. a shared ISRC;
-3. the same MusicBrainz recording ID;
+3. the same MusicBrainz recording ID, with lengths within ``LENGTH_SLACK``
+   (homelab#2540: beets' recording is a best guess per file, and a sibling
+   recording, a 5.1 mix or a live take, shares it at another length);
 4. disc and track: the loose item sits on the album's Spotify album (its
    ``spotify_album_id``, set by canon from Spotify's numbering) at the slot an
    album item with no Spotify ID holds, and the release has Spotify's track
@@ -72,7 +74,9 @@ import time
 from collections import Counter
 from pathlib import Path
 
-from music_scan.identity import PlaylistTrack, item_isrcs, item_spotify_ids, same_base_title, split_list
+from music_scan.identity import (
+    PlaylistTrack, item_isrcs, item_spotify_ids, same_base_title, same_mb_recording, split_list,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -119,7 +123,7 @@ def _id_rung(loose, album) -> str | None:
         return "spotify id"
     if item_isrcs(album) & item_isrcs(loose):
         return "isrc"
-    if album.get("mb_trackid") and album.get("mb_trackid") == loose.get("mb_trackid"):
+    if same_mb_recording(album.get("mb_trackid"), album.length, loose.get("mb_trackid"), loose.length):
         return "recording id"
     return None
 
