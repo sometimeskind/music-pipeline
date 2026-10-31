@@ -294,6 +294,21 @@ def test_retire_keeps_the_recordings_a_smaller_edition_lacks_as_extras(quarantin
                                  [*cd, *extras], listed) == []
 
 
+def test_retire_keeps_a_copy_whose_recording_id_matches_only_at_another_length(quarantined) -> None:
+    """homelab#2540: a legacy copy sharing only beets' guessed recording ID with a
+    release item 20 s away is another recording (a live take, a 5.1 mix): an extra."""
+    cd = [_cd("cd@2", n) for n in range(1, 3)]
+    cd[0]["mb_trackid"], cd[0]["length"] = "rec-1", 300.0
+    legacy = FakeItem(50, title="Track 1", mb_trackid="rec-1", length=320.0, via="usenet",
+                      album="Boys and Girls in America", albumartist="The Hold Steady")
+    lib = FakeLib([*cd, legacy])
+    assert release.retire(lib, "BOYS", BOYS, "cd@2", None, _listed({})) == 0
+    assert quarantined == [] and legacy[release.EXTRA] == "1"
+    legacy["length"] = 301.0
+    assert release.retire(lib, "BOYS", BOYS, "cd@2", None, _listed({})) == 1
+    assert quarantined == [legacy]
+
+
 def test_retire_takes_every_copy_a_same_edition_reimport_holds(quarantined) -> None:
     old = [_cd("deluxe@1", n) for n in range(1, 12)]
     new = [_cd("cd@2", n) for n in range(1, 12)]
@@ -332,6 +347,18 @@ def test_split_replaced_deletes_only_what_the_library_holds(tmp_path, ffmpeg) ->
     held, only = release.split_replaced([by_isrc, by_mbid, bonus, bare, tmp_path / "gone.m4a"], library)
     assert held == [by_isrc, by_mbid]
     assert only == [bonus, bare, tmp_path / "gone.m4a"]
+
+
+def test_split_replaced_holds_a_mb_recording_only_at_the_files_length(tmp_path, ffmpeg) -> None:
+    """homelab#2540: a replaced file whose only identity is a recording ID another item
+    holds at another length (a sibling beets guessed) is an only copy, never purged."""
+    from music_scan.identity import Recordings
+
+    stereo = _m4a(tmp_path / "633-10 - Oh! Sweet Nuthin'.m4a", mb_trackid="d0063aee")  # 1 s of audio
+    sibling = Recordings([FakeItem(6994, mb_trackid="d0063aee", length=11.0)])
+    assert release.split_replaced([stereo], sibling) == ([], [stereo])
+    copy = Recordings([FakeItem(6930, mb_trackid="d0063aee", length=1.5)])
+    assert release.split_replaced([stereo], copy) == ([stereo], [])
 
 
 def test_purge_replaced_deletes_superseded_files_after_the_retention_only(tmp_path, ffmpeg) -> None:
