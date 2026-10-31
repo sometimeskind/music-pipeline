@@ -18,11 +18,13 @@ AcoustID links to its fingerprint at :data:`MIN_SCORE` or more.
 - No recording at :data:`MIN_SCORE`: ``[NOMATCH]``, left alone (some releases
   are unknown to AcoustID, homelab#2546).
 
-Items whose ``mb_trackid`` the pipeline wrote itself are not guesses: a request
-fallback's (``fallback_recording``, which AcoustID already named) is skipped,
-and a merge or supersede keeper's (``merged_files``: the merge decided it holds
-its losers' recordings, and kept the ID Navidrome's plays and stars are on) is
-checked but replaced only with ``--keepers``.
+A request fallback's ``mb_trackid`` (``fallback_recording``) is not a guess:
+AcoustID named it at its import, so the item is skipped.  A merge or supersede
+keeper (``merged_files``) is checked like any item and marked as one: a merge
+joins only copies with the same audio or a shared ID, so the keeper's audio is
+the merged recording's, and the ID it carries from a loser is that loser's beets
+guess (supersede kept it for Navidrome's plays and stars, a loss the operator
+accepted on 2026-10-31).  Its losers' files stay superseded by ``merged_files``.
 
 It is a dry run without ``--apply``.  The lookups run first, without a lock
 (pyacoustid keeps to AcoustID's 3 requests a second, so the whole library takes
@@ -147,7 +149,7 @@ class Flagged:
     item_id: int
     guess: str
     found: Recordings  # the recordings at MIN_SCORE or more, best first
-    keeper: bool  # a merge or supersede keeper: replaced only with --keepers
+    keeper: bool  # a merge or supersede keeper (merged_files), marked in the report and event
 
     @property
     def replacement(self) -> str | None:
@@ -172,8 +174,7 @@ def _lookup(lookup: Callable[[str], Recordings], path: str) -> Recordings:
         return lookup(path)
 
 
-def recheck(items: Iterable, lookup: Callable[[str], Recordings],
-            keepers: bool = False) -> tuple[Counter, list[Flagged]]:
+def recheck(items: Iterable, lookup: Callable[[str], Recordings]) -> tuple[Counter, list[Flagged]]:
     """Check each of *items* that has an ``mb_trackid`` against *lookup* (the
     recordings for a file's audio, best first).  Logs one line per finding and
     returns the counts and the flagged items."""
@@ -222,8 +223,6 @@ def recheck(items: Iterable, lookup: Callable[[str], Recordings],
             counts["ambiguous"] += 1
             outcome = (f"{len(confident)} recordings ("
                        + ", ".join(f"{r} {s:.2f}" for s, r in confident) + "), none chosen; left alone")
-        elif f.keeper and not keepers:
-            outcome = f"a merge keeper, left alone without --keepers (→ {f.replacement})"
         else:
             counts["replaceable"] += 1
             outcome = f"→ {f.replacement}" + (" (a merge keeper)" if f.keeper else "")
@@ -232,7 +231,7 @@ def recheck(items: Iterable, lookup: Callable[[str], Recordings],
     return counts, flagged
 
 
-def replace(lib, flagged: list[Flagged], keepers: bool = False) -> int:
+def replace(lib, flagged: list[Flagged]) -> int:
     """Replace each flagged item's guess with its one confident recording, under
     the pipeline lock, each with its ``recording_replaced`` event in the same
     transaction.  An item whose ``mb_trackid`` changed since its lookup (or that
@@ -240,7 +239,7 @@ def replace(lib, flagged: list[Flagged], keepers: bool = False) -> int:
     from music_fetch import db, events  # noqa: PLC0415
     from music_scan.audit import pipeline_lock  # noqa: PLC0415
 
-    todo = [f for f in flagged if f.replacement and (keepers or not f.keeper)]
+    todo = [f for f in flagged if f.replacement]
     if not todo:
         return 0
     replaced = 0
@@ -269,7 +268,7 @@ def replace(lib, flagged: list[Flagged], keepers: bool = False) -> int:
     return replaced
 
 
-def run_recheck(apply: bool = False, keepers: bool = False, ids: list[int] | None = None,
+def run_recheck(apply: bool = False, ids: list[int] | None = None,
                 library_db: str = LIBRARY_DB, library_dir: str = LIBRARY_DIR,
                 lookup: Callable[[str], Recordings] | None = None) -> Counter:
     """``--recheck``: check every item with an ``mb_trackid`` (or the items *ids*),
@@ -297,8 +296,8 @@ def run_recheck(apply: bool = False, keepers: bool = False, ids: list[int] | Non
             items = list(lib.items())
         logger.info("Rechecking %d item(s) with an mb_trackid against AcoustID",
                     sum(1 for i in items if i.get("mb_trackid")))
-        counts, flagged = recheck(items, lookup, keepers)
-        counts["replaced"] = replace(lib, flagged, keepers) if apply else 0
+        counts, flagged = recheck(items, lookup)
+        counts["replaced"] = replace(lib, flagged) if apply else 0
     finally:
         lib._close()
 
@@ -319,13 +318,11 @@ def main() -> None:
     parser.add_argument("--recheck", action="store_true",
                         help="check items that have an mb_trackid against their AcoustID recordings (homelab#2543)")
     parser.add_argument("--apply", action="store_true", help="with --recheck: replace the flagged guesses")
-    parser.add_argument("--keepers", action="store_true",
-                        help="with --recheck: replace merge and supersede keepers' guesses too")
     parser.add_argument("ids", nargs="*", type=int, help="with --recheck: only these item IDs")
     args = parser.parse_args()
     if not args.recheck:
-        if args.apply or args.keepers or args.ids:
-            parser.error("--apply, --keepers and item IDs go with --recheck")
+        if args.apply or args.ids:
+            parser.error("--apply and item IDs go with --recheck")
         run()
         return
-    run_recheck(apply=args.apply, keepers=args.keepers, ids=args.ids)
+    run_recheck(apply=args.apply, ids=args.ids)

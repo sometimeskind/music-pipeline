@@ -1,7 +1,7 @@
 """music-mb-fingerprint --recheck (homelab#2543): a guessed mb_trackid checked against AcoustID.
 
 The cases are the library's: a stereo track beets matched to the 5.1 mix (6994,
-and 6930, a merge keeper), a live album's track matched to the studio alternate
+and 6930, a merge keeper, replaced like any item), a live album's track matched to the studio alternate
 version (5672), and a studio track matched to a live recording (5970).  The
 replacement tests run against Postgres when ``MUSIC_TEST_DATABASE_URL`` is set
 (fetch/tests/pg_fixture.py).
@@ -100,21 +100,16 @@ def test_flags_each_guess_not_among_its_recordings(caplog):
     counts, flagged = mbf.recheck(_library(), _lookup())
     assert {f.item_id: f.replacement for f in flagged} == {6994: STEREO, 6930: STEREO, 5672: LIVE, 5970: None}
     assert counts["checked"] == 4 and counts["flagged"] == 4 and counts["agree"] == 0
-    # 6930 is a keeper and 5970 has two recordings: only 6994 and 5672 are replaced without --keepers.
-    assert counts["replaceable"] == 2 and counts["keepers"] == 1 and counts["ambiguous"] == 1
+    # 5970 has two recordings; 6930, a merge keeper, is replaced like the others (homelab#2543, 2026-10-31).
+    assert counts["replaceable"] == 3 and counts["keepers"] == 1 and counts["ambiguous"] == 1
     assert ("[RECHECK] 6994 — Oh! Sweet Nuthin’ (5.1 mix): mb_trackid surround-rec is not among its "
             "AcoustID recordings (stereo-rec 0.97): → stereo-rec") in caplog.text
     assert "6930 — Oh! Sweet Nuthin’ (5.1 mix): mb_trackid surround-rec is not among" in caplog.text
-    assert "a merge keeper, left alone without --keepers (→ stereo-rec)" in caplog.text
+    assert "(stereo-rec 0.96): → stereo-rec (a merge keeper)" in caplog.text
     assert "[RECHECK] 5672 — The Big Country (alternate version): mb_trackid alternate-rec" in caplog.text
     assert ("[RECHECK] 5970 — Purple Rain: mb_trackid live-1992-rec is not among its AcoustID recordings "
             "(studio-rec 0.98): 2 recordings (studio-rec 0.98, remaster-rec 0.91), none chosen; left alone"
             ) in caplog.text
-
-
-def test_keepers_makes_a_keeper_replaceable():
-    counts, _ = mbf.recheck(_library(), _lookup(), keepers=True)
-    assert counts["replaceable"] == 3 and counts["keepers"] == 1
 
 
 def test_a_guess_among_its_recordings_is_not_reported(caplog):
@@ -209,29 +204,20 @@ def test_replace_stores_each_replaceable_guess_with_its_event(pg_url, monkeypatc
     monkeypatch.delenv("PREFECT_API_URL", raising=False)
     items = _library()
     _, flagged = mbf.recheck(items, _lookup())
-    assert mbf.replace(FakeLib(items), flagged) == 2
+    assert mbf.replace(FakeLib(items), flagged) == 3
     by_id = {i.id: i for i in items}
     assert by_id[6994]["mb_trackid"] == STEREO and by_id[6994].stored and by_id[6994].written
     assert by_id[6994]["mb_releasetrackid"] == SURROUND  # kept as it was
     assert by_id[5672]["mb_trackid"] == LIVE
-    assert by_id[6930]["mb_trackid"] == SURROUND and not by_id[6930].stored  # a keeper
+    assert by_id[6930]["mb_trackid"] == STEREO and by_id[6930].stored  # a merge keeper too
     assert by_id[5970]["mb_trackid"] == LIVE_1992 and not by_id[5970].stored  # two recordings
     rows = _events(pg_url)
-    assert [(k, s, i) for k, s, i, _, _ in rows] == [("recording_replaced", "mb-fingerprint", 6994),
-                                                     ("recording_replaced", "mb-fingerprint", 5672)]
+    assert [(k, s, i) for k, s, i, _, _ in rows] == [("recording_replaced", "mb-fingerprint", n)
+                                                     for n in (6994, 6930, 5672)]
     assert rows[0][3] == ("[RECHECK] 6994 — Oh! Sweet Nuthin’ (5.1 mix): mb_trackid surround-rec → stereo-rec "
                           "(AcoustID 0.97)")
-    assert rows[0][4]["old"] == SURROUND and rows[0][4]["new"] == STEREO and rows[0][4]["keeper"] is False
-
-
-@needs_pg
-def test_replace_with_keepers_replaces_a_keeper(pg_url, monkeypatch):
-    monkeypatch.delenv("PREFECT_API_URL", raising=False)
-    items = _library()
-    _, flagged = mbf.recheck(items, _lookup(), keepers=True)
-    assert mbf.replace(FakeLib(items), flagged, keepers=True) == 3
-    assert items[1]["mb_trackid"] == STEREO
-    assert [r[4]["keeper"] for r in _events(pg_url)] == [False, True, False]
+    assert rows[0][4]["old"] == SURROUND and rows[0][4]["new"] == STEREO
+    assert [r[4]["keeper"] for r in rows] == [False, True, False]
 
 
 @needs_pg
@@ -242,8 +228,8 @@ def test_replace_skips_an_item_changed_since_its_lookup(pg_url, monkeypatch, cap
     items[0]["mb_trackid"] = "set-by-hand"
     lib = FakeLib(items)
     del lib.by_id[5672]  # it left the library meanwhile
-    assert mbf.replace(lib, flagged) == 0
-    assert items[0]["mb_trackid"] == "set-by-hand" and _events(pg_url) == []
+    assert mbf.replace(lib, flagged) == 1  # 6930 only
+    assert items[0]["mb_trackid"] == "set-by-hand" and [r[2] for r in _events(pg_url)] == [6930]
     assert "[SKIP] 6994: mb_trackid is set-by-hand now, not surround-rec" in caplog.text
     assert "[SKIP] 5672: mb_trackid is (gone from the library) now" in caplog.text
 
