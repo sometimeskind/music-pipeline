@@ -483,17 +483,19 @@ def test_album_completion_wires_the_release_hooks():
 
 
 def test_album_completion_supersedes_loose_copies_after_canon():
-    """The album copy supersedes loose items after the IDs and canon (#266); the .m3u files follow."""
+    """The album copy supersedes loose items after the IDs and canon (#266); the .m3u files follow.
+    The release is this record's claimed items: another album's import in the same window is not
+    (homelab#2531)."""
     import music_fetch.albums as albums
     from music_scan import canon, release, supersede
     from music_service import flows
 
     events = []
     lib = MagicMock()
-    fresh, old = MagicMock(added=200.0), MagicMock(added=50.0)
-    for item, via in ((fresh, "usenet"), (old, "usenet")):
-        item.get.side_effect = lambda k, d=None, via=via: via if k == "via" else d
-    lib.items_by_source.return_value = [fresh, old]
+    fresh, old, other = MagicMock(added=200.0), MagicMock(added=50.0), MagicMock(added=150.0)
+    for item, record in ((fresh, "K"), (old, "K"), (other, "OTHER")):
+        item.get.side_effect = lambda k, d=None, record=record: {"via": "usenet", "album_record": record}.get(k, d)
+    lib.items_by_source.return_value = [fresh, old, other]
     with patch.object(flows.scan, "tag_album_ids", side_effect=lambda *a: events.append("ids")), \
          patch.object(release, "retire_held", side_effect=lambda lib: events.append("held") or 1), \
          patch.object(canon, "canonicalize_items", side_effect=lambda items: events.append("canon")), \
@@ -505,7 +507,7 @@ def test_album_completion_supersedes_loose_copies_after_canon():
          patch.object(flows, "concurrency"):
         hooks = flows._album_library_hooks(lib)
         with patch.object(albums, "complete",
-                          side_effect=lambda state, c, imp, claim, add, tag, retire, **kw: tag("keep", [], 100.0, 10)):
+                          side_effect=lambda state, c, imp, claim, add, tag, retire, **kw: tag("keep", [], 100.0, 10, "K")):
             hooks[2](albums.State(), albums.Completion(nzo_id="n", ok=True, path="x"))
 
     # The extras the new IDs show the release holds go before canon moves files (#294).

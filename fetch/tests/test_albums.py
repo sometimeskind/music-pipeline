@@ -516,7 +516,7 @@ def run_complete(state, completion, roots, have_result=True, imported=None, tagg
     status = albums.complete(
         state, completion, import_inbox, claim,
         add_source=lambda have_src, new_src, tracks: added.append((have_src, new_src)),
-        tag_ids=lambda pl, tracks, since, count: tagged.append((pl, count)),
+        tag_ids=lambda pl, tracks, since, count, key: tagged.append((pl, count)),
         retire=lambda key, record, keep, drop: retired.append((keep, drop)) or 0,
         identify=(lambda folder: identity),
         import_rest=(lambda pl, job: (rest if rest is not None else []).append((pl, job)) or 0),
@@ -616,7 +616,7 @@ def test_complete_import_crash_keeps_the_release_for_a_retry(roots) -> None:
     status = albums.complete(
         state, albums.Completion("nzo1", True, "album/Artist-Album-FLAC"), lambda: None,
         claim=_claim_all, add_source=lambda *a: None, retire=_no_retire,
-        tag_ids=lambda pl, tracks, start, count: since.append(start),
+        tag_ids=lambda pl, tracks, start, count, key: since.append(start),
         complete_root=complete_root, inbox_root=inbox, quarantine_root=quarantine,
     )
     assert status == albums.IMPORTED
@@ -694,7 +694,7 @@ def test_restart_mid_import_resumes_it_instead_of_a_loose_scan(roots) -> None:
     status = albums.complete(
         state, albums.Completion("nzo1", True, "album/Artist-Album-FLAC"), lambda: None,
         claim=_claim_all, add_source=lambda *a: None, retire=_no_retire,
-        tag_ids=lambda pl, tracks, start, count: since.append(start),
+        tag_ids=lambda pl, tracks, start, count, key: since.append(start),
         identify=lambda folder: identified.append(folder) or {"missing": 1, "album": "Album", "mb_albumid": "mb1"},
         complete_root=complete_root, inbox_root=inbox, quarantine_root=quarantine,
     )

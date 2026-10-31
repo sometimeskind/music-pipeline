@@ -329,7 +329,7 @@ def complete(state, completion, roots, titles):
     tagged = []
     status = albums.complete(
         state, completion, lambda: None, lambda pl, since, key, guid, job: titles,
-        add_source=lambda *a: None, tag_ids=lambda pl, tracks, since, count: tagged.append((pl, tracks)),
+        add_source=lambda *a: None, tag_ids=lambda pl, tracks, since, count, key: tagged.append((pl, tracks)),
         retire=lambda *a: 0, identify=lambda folder: None, import_rest=lambda pl, job: 0,
         complete_root=complete_root, inbox_root=inbox, quarantine_root=quarantine,
     )

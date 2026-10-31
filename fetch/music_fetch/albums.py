@@ -1543,7 +1543,7 @@ def complete(
     import_inbox: Callable[[], None],
     claim: Claim,
     add_source: Callable[[str, str, list[list[str]]], None],
-    tag_ids: Callable[[str, list[list], float, int], None],
+    tag_ids: Callable[[str, list[list], float, int, str], None],
     retire: Retire,
     identify: Identify | None = None,
     import_rest: Callable[[str, str], int] | None = None,
@@ -1578,7 +1578,8 @@ def complete(
     Whichever copy is kept, *retire* sends the record's other copies (earlier
     releases, legacy items) whose recording it holds to
     ``quarantine/replaced/``; a copy of a recording it lacks stays on the album
-    as a local-only extra (#287).  Then *tag_ids* gives
+    as a local-only extra (#287).  Then *tag_ids* (playlist, tracks, start,
+    track count, record key) gives
     the kept copy Spotify track IDs as a best effort, retires the extras
     whose recording those IDs show the kept copy holds (#294), and
     canonicalises the album, onto paths the retired copies no longer hold
@@ -1701,7 +1702,7 @@ def complete(
                 # After retire (#283): the copies it quarantined no longer hold the
                 # canonical paths, so canon can move every new item onto them.
                 for playlist in playlists:
-                    tag_ids(playlist, record["playlists"][playlist], started, record.get("tracks_count") or 0)
+                    tag_ids(playlist, record["playlists"][playlist], started, record.get("tracks_count") or 0, key)
 
             if not missing:
                 n = retire(key, record, this, None)

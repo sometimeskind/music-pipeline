@@ -14,7 +14,7 @@ def _complete_with_tag_ids(embed_covers):
     lib.items_by_source.return_value = [fresh, old]
 
     def fake_complete(state, completion, import_inbox, claim, add_source, tag_ids, retire, **kw):
-        tag_ids("later", [], 100.0, 2)
+        tag_ids("later", [], 100.0, 2, "1")
         return "imported"
 
     with patch("music_fetch.albums.complete", side_effect=fake_complete), \
