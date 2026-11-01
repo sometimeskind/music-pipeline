@@ -21,6 +21,8 @@ class FakeItem:
         self.stored = self.written = self.removed = False
 
     def get(self, key, default=None):
+        if key in ("title", "artist", "albumartist") and key not in self.data:
+            return getattr(self, key)  # beets' get reads fixed fields too (Recordings does)
         return self.data.get(key, default)
 
     def __getitem__(self, key):
@@ -290,11 +292,15 @@ def test_merge_never_overwrites_a_replaced_file(tmp_path) -> None:
     assert moved[0].read_bytes() == b"audio" and moved[0].name != f"2-{name}"
 
 
-def test_merge_records_the_losers_files_on_the_keeper_and_passes_them_on(tmp_path) -> None:
-    """#303: the keeper names the files it superseded, and a later keeper inherits them."""
+def test_merge_records_the_losers_files_on_the_keeper_and_passes_them_on(tmp_path, monkeypatch) -> None:
+    """#303: the keeper names the files it superseded, and a later keeper inherits them.
+    The files' tags name the keeper's title (homelab#2539 trusts the name only then)."""
+    from music_scan import playlists
     from music_scan.identity import Recordings
     from music_scan.release import split_replaced
 
+    monkeypatch.setattr(playlists, "_file_tags",
+                        lambda path: playlists.ReplacedFile(path, "Song", "", frozenset(), frozenset(), None))
     keeper = _on_disk(tmp_path, FakeItem(1, "Song", isrc="GB1"))
     bare = _on_disk(tmp_path, FakeItem(2, "Song"))  # no identity at all, as #302's legacy extras
     moved = merge(keeper, [bare], tmp_path / "replaced")

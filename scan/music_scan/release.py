@@ -88,7 +88,10 @@ scan's ``music_scan_replaced_files``.
 there ``REPLACED_RETENTION_DAYS`` (default 14; ``0`` turns it off), counted
 from the move (the file's ctime: a rename keeps the mtime).  A merge's loser
 counts as held while its keeper is in the library, by the file name the keeper
-records (#303).  It never deletes an only copy.  The scan pushes what is left there by kind.
+records (#303), but only while the file's title and artist tags agree with the
+keeper's: a wrong merge's loser is judged by its identity tags, and kept as an
+only copy when none is held (homelab#2539).  ``--replaced`` logs each such file
+``[MISMERGED]``.  It never deletes an only copy.  The scan pushes what is left there by kind.
 """
 
 from __future__ import annotations
@@ -751,20 +754,46 @@ def split_replaced(files: list[Path], library) -> tuple[list[Path], list[Path]]:
     *library* (a :class:`music_scan.identity.Recordings` of the library's
     items) holds by their identity tags (Spotify ID, ISRC, or ``mb_trackid``
     from an item whose length agrees with the file's, homelab#2540), and which
-    hold one it doesn't (#287).  A merge's loser is superseded while
-    its keeper is in the library, whatever its tags
-    (:meth:`~music_scan.identity.Recordings.holds_merged`, #303).  Any other unreadable file, or one with no
-    identity tags, is an only copy: nothing says the library has it."""
+    hold one it doesn't (#287).  A merge's loser is superseded while its
+    keeper is in the library, whatever its identity tags, as long as its title
+    and artist tags agree with the keeper's
+    (:meth:`~music_scan.identity.Recordings.holds_merged`, #303): a file name
+    is not an ID, and a wrong merge leaves one behind (homelab#2539).  A
+    merged file that disagrees is judged by its identity tags like any other.
+    An unreadable file, or one with no identity tags the library holds, is an
+    only copy: nothing says the library has it."""
     from music_scan.playlists import _file_tags  # noqa: PLC0415
 
     held, only = [], []
     for f in files:
-        if library.holds_merged(f.name):
-            held.append(f)
+        rf = _file_tags(f)
+        superseded = rf is not None and (library.holds_merged(f.name, rf.title, rf.artist)
+                                         or library.holds(rf.recording_ids, rf.length))
+        (held if superseded else only).append(f)
+    return held, only
+
+
+def log_mismerged(files: list[Path], library, held: list[Path]) -> int:
+    """Log each of *files* a merge recorded on a keeper (``merged_files``)
+    whose title or artist its tags don't share (homelab#2539, ``[MISMERGED]``):
+    likely a wrong merge, so :func:`split_replaced` judged it by its identity
+    tags alone, superseded when it is in *held*.  Returns the count."""
+    from music_scan.playlists import _file_tags  # noqa: PLC0415
+
+    n = 0
+    for f in files:
+        keepers = library.merge_keepers(f.name)
+        if not keepers:
             continue
         rf = _file_tags(f)
-        (held if rf is not None and library.holds(rf.recording_ids, rf.length) else only).append(f)
-    return held, only
+        title, artist = (rf.title, rf.artist) if rf is not None else ("", "")
+        if library.holds_merged(f.name, title, artist):
+            continue
+        n += 1
+        logger.info("  [MISMERGED] %s: %s — %s, but merged onto %s; %s", f, artist or "?", title or "?",
+                    ", ".join(f"{k.id} ({k.artist or '?'} — {k.title or '?'})" for k in keepers),
+                    "superseded by its identity tags" if f in held else "an only copy by its identity tags")
+    return n
 
 
 def _moved_at(f: Path) -> float:
@@ -813,7 +842,11 @@ def list_replaced(records: dict[str, dict], replaced_dir: Path, library) -> dict
     its ``--replaced`` command, then the unclaimed ones by file (#298).
     Deletes nothing.  Returns the counts by kind, as :func:`purge_replaced`
     leaves them with nothing due."""
-    held, only = split_replaced(audio_files(replaced_dir) if replaced_dir.is_dir() else [], library)
+    files = audio_files(replaced_dir) if replaced_dir.is_dir() else []
+    held, only = split_replaced(files, library)
+    if log_mismerged(files, library, held):
+        logger.info("[MISMERGED] files above: a keeper's merged_files names them, but their title or artist isn't "
+                    "the keeper's, so only their identity tags count (homelab#2539)")
     claimed, unclaimed = group_replaced(records, only)
     names = {k: f"{records[k].get('artist')} — {records[k].get('name')}" for k in claimed}
     claims = Counter(f for files in claimed.values() for f in files)
@@ -882,7 +915,9 @@ def audit_main() -> None:
             raise SystemExit(1)
         with MusicLibrary(LIBRARY_DB) as lib:
             library = Recordings(lib.all_items())
-        held, only = split_replaced(replaced_copies(hits[0][1], REPLACED), library)
+        copies = replaced_copies(hits[0][1], REPLACED)
+        held, only = split_replaced(copies, library)
+        log_mismerged(copies, library, held)
         for f in held:
             logger.info("  [REPLACED] %s", f)
         for f in only:

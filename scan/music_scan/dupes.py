@@ -44,7 +44,9 @@ then the older item.  The keeper takes the others' ``spotify_ids``, ``isrc``, ``
 a missing ``mb_trackid``; their files move to ``quarantine/replaced/`` (never
 deleted) and their rows leave the database.  The keeper records the moved files'
 names in :data:`MERGED_FILES` (with any its losers had recorded), so the purge
-counts them superseded while it is in the library, whatever their tags say (#303).  The ``.m3u`` files are then
+counts them superseded while it is in the library, whatever their identity tags
+say (#303), as long as their title and artist tags are the keeper's: a wrong
+merge's loser is judged by its identity tags alone (homelab#2539).  The ``.m3u`` files are then
 regenerated, so every entry resolves to the keeper.  The keeper is not moved:
 ``music-canon-albums --apply`` files it under its canonical album afterwards.
 
@@ -469,7 +471,9 @@ def merge(keeper, losers: list, replaced_dir: Path = REPLACED, why: str = "dupli
 
     The keeper records their names in :data:`MERGED_FILES`: the merge is the
     decision that it holds their recording, which their own tags may not say
-    (no IDs, or an ``mb_trackid`` the keeper lacks, #303)."""
+    (no IDs, or an ``mb_trackid`` the keeper lacks, #303).  The purge trusts a
+    name only while the file's title and artist agree with the keeper's
+    (:func:`music_scan.identity.merge_agrees`, homelab#2539)."""
     write = False
     for loser in losers:
         for name in merged_files(loser):

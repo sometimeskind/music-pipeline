@@ -388,7 +388,7 @@ def test_a_merge_loser_is_superseded_while_its_keeper_is_in_the_library(tmp_path
     from music_scan.identity import Recordings
 
     bare = _m4a(tmp_path / "1870-04 - Love Cry (Joy Orbison remix).m4a", title="Love Cry")
-    by_mbid = _m4a(tmp_path / "3377-12 - Ava Adore.m4a", mb_trackid="rec-loser")
+    by_mbid = _m4a(tmp_path / "3377-12 - Ava Adore.m4a", title="Ava Adore", mb_trackid="rec-loser")
     lookalike = _m4a(tmp_path / "99-12 - Ava Adore.m4a", title="Ava Adore")  # no record, same title
     files = [bare, by_mbid, lookalike]
     keepers = [FakeItem(3724, title="Love Cry", merged_files=bare.name),
@@ -401,6 +401,47 @@ def test_a_merge_loser_is_superseded_while_its_keeper_is_in_the_library(tmp_path
 
     gone = _m4a(tmp_path / "329-10 - Killer Parties.m4a")
     assert release.split_replaced([gone], Recordings(keepers)) == ([], [gone])  # its keeper left the library
+
+
+def test_a_wrong_merges_loser_is_judged_by_its_identity_tags(tmp_path, ffmpeg, caplog) -> None:
+    """homelab#2539: a keeper's merged_files names a file whose title and artist are not
+    its own (a wrong merge: 451's file on 9674, carried on to 9673).  The name alone
+    supersedes nothing: an only copy is kept, and a file whose recording another item
+    holds by ID is still superseded.  ``--replaced`` lists both [MISMERGED]."""
+    import logging
+    import time
+
+    from music_scan.identity import Recordings
+
+    wrong = _m4a(tmp_path / "451-02 - Pictures Of You - Remastered.m4a", title="Pictures Of You - Remastered",
+                 artist="The Cure", isrc="GBAAA8900001")
+    right = _m4a(tmp_path / "9674-02 - Easy on Your Own_.2.m4a", title="Easy on Your Own?", artist="Alvvays")
+    keeper = FakeItem(9673, title="Easy on Your Own?", artist="Alvvays", isrc="US3R42246502",
+                      merged_files=f"{wrong.name}/{right.name}")
+    library = Recordings([keeper])
+    assert release.split_replaced([wrong, right], library) == ([right], [wrong])
+    later = time.time() + 15 * 86400
+    assert release.purge_replaced(tmp_path, library, 14, now=later) == {"superseded": 0, "only_copy": 1, "purged": 1}
+    assert wrong.exists() and not right.exists()
+
+    holder = FakeItem(9778, title="Pictures of You (Remastered)", artist="The Cure", isrc="GBAAA8900001")
+    assert release.split_replaced([wrong], Recordings([keeper, holder])) == ([wrong], [])
+
+    caplog.set_level(logging.INFO, logger=release.logger.name)
+    assert release.list_replaced({}, tmp_path, library) == {"superseded": 0, "only_copy": 1}
+    assert "[MISMERGED]" in caplog.text and "merged onto 9673 (Alvvays — Easy on Your Own?)" in caplog.text
+    assert "an only copy by its identity tags" in caplog.text
+
+
+def test_an_untitled_or_unreadable_merged_file_is_not_superseded_by_its_name(tmp_path, ffmpeg) -> None:
+    """homelab#2539: nothing corroborates the merge, so the name doesn't count."""
+    from music_scan.identity import Recordings
+
+    untitled = _m4a(tmp_path / "12-01 - Song.m4a")
+    broken = tmp_path / "13-01 - Song.m4a"
+    broken.write_bytes(b"not audio")
+    keeper = FakeItem(14, title="Song", merged_files=f"{untitled.name}/{broken.name}")
+    assert release.split_replaced([untitled, broken], Recordings([keeper])) == ([], [untitled, broken])
 
 
 def test_retention_days_setting(monkeypatch) -> None:

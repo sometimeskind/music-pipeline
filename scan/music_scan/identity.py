@@ -13,7 +13,9 @@ track, so a same-title entry with another ID is another recording.
 
 Whether the library holds a recording (:class:`Recordings`, #287) takes the
 ID rungs only: a copy leaves the library, or is deleted from
-``quarantine/replaced/``, only when one of them agrees.
+``quarantine/replaced/``, only when one of them agrees, or when a merge
+recorded the file on a keeper whose title and artist its tags share (#303,
+homelab#2539).
 """
 
 from __future__ import annotations
@@ -255,6 +257,27 @@ def item_recording_ids(item) -> frozenset[str]:
     return recording_ids(item_spotify_ids(item), item_isrcs(item), item.get("mb_trackid"))
 
 
+class MergeKeeper(NamedTuple):
+    """An item whose :data:`MERGED_FILES` name a replaced file, as
+    :class:`Recordings` weighs the name (homelab#2539)."""
+
+    id: int
+    title: str
+    artist: str
+
+
+def merge_agrees(file_title: str, file_artist: str, keeper_title: str, keeper_artist: str) -> bool:
+    """True when a merged file's tags plausibly name its keeper's recording
+    (homelab#2539): the same title once edition notes are dropped
+    (:func:`same_base_title`), and artists that share a word when both are
+    known.  An untitled file never agrees: nothing says the merge was right.
+    Only a check on the merge's decision, never identity by itself."""
+    if not same_base_title(file_title or "", keeper_title or ""):
+        return False
+    a, b = set(release_words(file_artist or "")), set(release_words(keeper_artist or ""))
+    return not (a and b) or not a.isdisjoint(b)
+
+
 class Recordings:
     """The recordings some items hold, by :func:`recording_ids` (#287).
 
@@ -265,7 +288,10 @@ class Recordings:
 
     It also knows the files merges moved to ``quarantine/replaced/`` onto these
     items (:data:`MERGED_FILES`): the merge decided the keeper holds their
-    recording, whatever their own tags say (#303).
+    recording, whatever their own identity tags say (#303).  A name is not an
+    ID, though, and a wrong merge leaves its loser's name behind
+    (homelab#2539), so a merged file counts only while its title and artist
+    agree with a keeper's (:func:`merge_agrees`).
 
     A Spotify ID or ISRC holds a recording outright.  A MusicBrainz recording ID
     (``mb:``) holds it only from an item whose length agrees
@@ -275,14 +301,19 @@ class Recordings:
     def __init__(self, items=()) -> None:
         self.ids: set[str] = set()
         self.mb_lengths: dict[str, list] = {}
-        self.merged: set[str] = set()
+        self.merged: dict[str, list[MergeKeeper]] = {}
         for item in items:
             for key in item_recording_ids(item):
                 if key.startswith("mb:"):
                     self.mb_lengths.setdefault(key, []).append(item.get("length"))
                 else:
                     self.ids.add(key)
-            self.merged.update(merged_files(item))
+            names = merged_files(item)
+            if names:
+                keeper = MergeKeeper(item.id, item.get("title") or "",
+                                     item.get("artist") or item.get("albumartist") or "")
+                for name in names:
+                    self.merged.setdefault(name, []).append(keeper)
 
     def holds(self, ids: frozenset[str], length=None) -> bool:
         """True when a key of *ids* (one recording's :func:`recording_ids`) is
@@ -293,9 +324,15 @@ class Recordings:
         return any(lengths_agree(length, held) for key in ids if key.startswith("mb:")
                    for held in self.mb_lengths.get(key, ()))
 
-    def holds_merged(self, name: str) -> bool:
-        """True when a merge moved the replaced file *name* onto one of these items."""
-        return name in self.merged
+    def holds_merged(self, name: str, title: str, artist: str) -> bool:
+        """True when a merge moved the replaced file *name* onto one of these
+        items and the file's *title* and *artist* (its tags) agree with that
+        keeper's (:func:`merge_agrees`, homelab#2539)."""
+        return any(merge_agrees(title, artist, k.title, k.artist) for k in self.merged.get(name, ()))
+
+    def merge_keepers(self, name: str) -> list[MergeKeeper]:
+        """The items whose :data:`MERGED_FILES` name the replaced file *name*."""
+        return self.merged.get(name, [])
 
     def holds_item(self, item) -> bool:
         return self.holds(item_recording_ids(item), item.get("length"))
