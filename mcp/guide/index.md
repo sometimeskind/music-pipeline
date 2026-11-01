@@ -8,7 +8,7 @@ ts-egress, Prowlarr, cookies) stays in homelab's `docs/media/` runbooks.
 
 | Topic | Read it for |
 |-------|-------------|
-| `classify` | A symptom ("two copies", "mixed album", "wrong take", "no cover", "playlist missing tracks", "never downloads") → what to look at and which tool fixes it |
+| `classify` | A symptom ("two copies", "mixed album", "wrong take", "titled as the wrong version", "no cover", "playlist missing tracks", "never downloads") → what to look at and which tool fixes it |
 | `album-mode` | How an album moves from `wanted` to `imported`, what each log tag means, and what to do when a stage fails |
 | `workflow` | Dry run → apply, jobs and paging, the read and write tiers, and the operations that stay on the operator's workstation |
 | `verify` | When a fix shows: tick and scan timing, and the line or metric that should change |

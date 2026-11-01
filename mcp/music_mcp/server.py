@@ -301,6 +301,14 @@ def build_server(
         return await run("audit_want_albums", {})
 
     @mcp.tool(annotations={"readOnlyHint": True})
+    async def audit_titles() -> dict:
+        """music-audit-titles: items whose title or trackdisambig names a version (5.1, live, demo,
+        alternate, mono, take, outtake) that Spotify's entry at their slot doesn't, by album, with the
+        album's reset command. Items with no Spotify ID or store entry are counted, not compared.
+        The fix is the album's: reset_album with reimport=true."""
+        return await run("audit_titles", {})
+
+    @mcp.tool(annotations={"readOnlyHint": True})
     async def recheck_recordings(
         ids: Annotated[list[ItemId] | None, Field(description="only these item IDs (default: every item with "
                                                               "an mb_trackid)")] = None,
