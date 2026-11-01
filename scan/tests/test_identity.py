@@ -177,3 +177,18 @@ def test_recordings_holds_a_merged_name_only_with_an_agreeing_keeper() -> None:
     assert not lib.holds_merged("451-02 - x.m4a", "Pictures Of You - Remastered", "The Cure")
     assert not lib.holds_merged("unknown.m4a", "Easy on Your Own?", "Alvvays")
     assert [k.id for k in lib.merge_keepers("451-02 - x.m4a")] == [9673]
+
+
+def test_different_song_reads_titles_without_their_version_notes() -> None:
+    """homelab#2544: a sibling recording is the same song; a venue suffix doesn't hide another song."""
+    from music_scan.identity import different_song
+
+    assert not different_song("Oh! Sweet Nuthin'", "Oh! Sweet Nuthin' (5.1 mix)")
+    assert not different_song("Song (Live at X, 1975)", "Song")
+    assert not different_song("Song - 2015 Remaster", "Song [mono]")
+    assert not different_song("Its Alright", "It's Alright")  # apostrophes are folded
+    assert different_song("Romance in Durango (Live at Harvard Square Theatre, Cambridge, MA - November 1975)",
+                          "It Ain't Me, Babe (Live at Harvard Square Theatre, Cambridge, MA - November 1975)")
+    # Nothing to compare by: never two songs.
+    assert not different_song("恋人", "Koibito")
+    assert not different_song("", "Song")
