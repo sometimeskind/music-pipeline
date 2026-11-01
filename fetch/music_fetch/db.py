@@ -32,7 +32,8 @@ ENV = "MUSIC_DATABASE_URL"
 # Seconds a connection attempt may take.  Event writes are best-effort, and an
 # import must not stall long on a database that is down.
 CONNECT_TIMEOUT = 3
-# pg_advisory_xact_lock key that serialises migrations; nothing else takes advisory locks here.
+# pg_advisory_xact_lock key that serialises migrations.  The only other advisory lock is a
+# recorded recheck run's (music_scan.recheck_runs), in the two-key space, so they never meet.
 _MIGRATION_LOCK = 2413
 
 # The kinds of event (homelab#2413).  The events table's CHECK lists the same
@@ -322,6 +323,43 @@ MIGRATIONS: list[str] = [
         'album_requested', 'later_added', 'later_removed', 'spotify_id_resolved',
         'filled', 'wrong_version', 'moved', 'override_set', 'override_cleared',
         'state_edited', 'recording_replaced'));
+    """,
+    # 12: long maintenance runs (homelab#2553).  A run's checkpoint (how far it
+    # has got, its counts) and a recheck run's findings, so a run resumes after
+    # a restart and its apply works from the findings by run ID.  Only
+    # music_scan.recheck_runs reads or writes them; an older image ignores both.
+    """
+    CREATE TABLE long_runs (
+        run_id      text PRIMARY KEY,
+        tool        text NOT NULL,
+        args        jsonb NOT NULL DEFAULT '{}',
+        status      text NOT NULL CHECK (status IN ('running', 'done', 'failed')),
+        position    integer NOT NULL DEFAULT 0,
+        cursor      bigint,
+        total       integer,
+        counts      jsonb NOT NULL DEFAULT '{}',
+        caller      text,
+        job_id      text,
+        created_at  timestamptz NOT NULL DEFAULT now(),
+        updated_at  timestamptz NOT NULL DEFAULT now(),
+        finished_at timestamptz
+    );
+    CREATE TABLE recheck_findings (
+        run_id         text NOT NULL REFERENCES long_runs (run_id) ON DELETE CASCADE,
+        item_id        integer NOT NULL,
+        guess          text NOT NULL,
+        replacement    text,
+        found          jsonb NOT NULL,
+        keeper         boolean NOT NULL DEFAULT false,
+        file_path      text,
+        file_size      bigint,
+        file_mtime_ns  bigint,
+        outcome        text CHECK (outcome IN ('replaced', 'skipped')),
+        outcome_reason text,
+        outcome_at     timestamptz,
+        outcome_job    text,
+        PRIMARY KEY (run_id, item_id)
+    );
     """,
 ]
 

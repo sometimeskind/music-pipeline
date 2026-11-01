@@ -148,6 +148,25 @@ def test_migrate_is_idempotent(pg_url):
 
 
 @needs_pg
+def test_an_image_before_migration_12_runs_on_schema_12(pg_url, monkeypatch, caplog):
+    """The rollback path for homelab#2553: an image that knows 11 migrations
+    connects to a database at 12, migrates nothing, and records and prunes
+    events as before, ignoring long_runs and recheck_findings."""
+    with psycopg.connect(pg_url, autocommit=True) as conn:
+        assert db.migrate(conn) == 12
+    monkeypatch.setattr(db, "MIGRATIONS", db.MIGRATIONS[:11])
+    with db.connect(pg_url) as conn:
+        assert db.migrate(conn) == 12
+        events.insert(conn, "recording_replaced", "[RECHECK] 1 — T: mb_trackid a → b", source="mb-fingerprint",
+                      item_id=1)
+        assert events.prune(conn) == 0
+    assert "music database is at schema 12, this image knows 11" in caplog.text
+    with psycopg.connect(pg_url) as conn:
+        assert conn.execute("SELECT count(*) FROM events").fetchone() == (1,)
+        assert conn.execute("SELECT max(version) FROM schema_migrations").fetchone() == (12,)
+
+
+@needs_pg
 def test_a_newer_schema_is_left_alone(pg_url):
     with psycopg.connect(pg_url, autocommit=True) as conn:
         db.migrate(conn)

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import logging
 import time
 
@@ -269,6 +270,16 @@ def prune_events_task() -> None:
         return
     logger.info("Event store: pruned %d event(s) past %d days (each album keeps its latest %d)", n,
                 events.KEEP_DAYS, events.KEEP_PER_ALBUM)
+    # Recorded recheck runs and their findings (homelab#2553), on the same terms.
+    from music_scan import recheck_runs  # noqa: PLC0415
+    try:
+        with contextlib.closing(db.connect()) as conn:
+            runs = recheck_runs.prune(conn)
+    except Exception:
+        logger.exception("[EVENT] pruning the recorded runs failed; the next nightly retries it")
+        return
+    if runs:
+        logger.info("Recorded runs: pruned %d run(s) past %d days", runs, recheck_runs.KEEP_DAYS)
 
 
 @task(name="beet-update", log_prints=True)
