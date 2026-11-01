@@ -7,7 +7,10 @@ big playlists switch to Usenet first, this audit shows how far whole-album
 grabs would get them: for each spotdl playlist (every store without an
 ``.album`` or ``.nosync`` sentinel; ``--playlist`` for one, ``--all`` for
 every store), the want list grouped by album, with the albums that hold at
-least ``--min`` wanted tracks (default 2) listed most wanted first.
+least ``--min`` wanted tracks (default 2) listed most wanted first.  The
+total across playlists counts as the album tick's wants feed does
+(homelab#2406): albums merged by album key (a record's editions as one), a
+track two playlists list counted once, ``--min`` applied to the merged albums.
 
 ``--library`` (homelab#2403) is the baseline for a library-wide rule: every
 library item by its ``spotify_album_id`` (one per recording) plus every
@@ -30,6 +33,7 @@ import os
 from pathlib import Path
 from typing import Callable
 
+from music_fetch import state as statedb
 from music_fetch import store
 from music_fetch.albums import State, _spotify_album, _track_id, _wants, album_key
 from music_scan.held import album_held, held_urls
@@ -123,15 +127,21 @@ def _summary(label: str, entries: int, albums: list[AlbumWants], minimum: int) -
             f"{sum(1 for a in albums if len(a.wanted) == 1)} singleton(s)")
 
 
-def merged(reports: list[Report]) -> list[AlbumWants]:
-    """The albums of *reports* merged by key, each wanted track once, as the
-    album tick counts them across playlists (``feed_wants``, homelab#2406)."""
+def merged(reports: list[Report], refs: dict[str, str] | None = None) -> list[AlbumWants]:
+    """The albums of *reports* merged by key, each wanted track once
+    (``_track_id``), as the album tick counts them across playlists
+    (``feed_wants``, homelab#2406).  With *refs* (``State.refs``: every
+    Spotify album ID of a record → its key) an album the store has a record
+    for is merged under the record's key, as the tick does, so two editions
+    of one release group are one album (homelab#2410, #2478)."""
+    refs = refs or {}
     albums: dict[str, AlbumWants] = {}
     seen: dict[str, set[str]] = {}
     for report in reports:
         for album in report.albums:
-            into = albums.setdefault(album.key, dataclasses.replace(album, wanted=[]))
-            ids = seen.setdefault(album.key, set())
+            key = refs.get(album.key, album.key)
+            into = albums.setdefault(key, dataclasses.replace(album, key=key, wanted=[]))
+            ids = seen.setdefault(key, set())
             for song in album.wanted:
                 if _track_id(song) not in ids:
                     ids.add(_track_id(song))
@@ -139,11 +149,13 @@ def merged(reports: list[Report]) -> list[AlbumWants]:
     return list(albums.values())
 
 
-def log_reports(reports: list[Report], minimum: int = DEFAULT_MIN) -> None:
+def log_reports(reports: list[Report], minimum: int = DEFAULT_MIN, refs: dict[str, str] | None = None) -> None:
     """One ``[WANT]`` summary per playlist, its albums at or over *minimum*
     (``[ALBUM]``, most wanted first), then the total across playlists: the
-    albums merged, each wanted track counted once (:func:`merged`), and the
-    entries summed."""
+    albums merged by album key (under their record's key, given *refs*), each
+    wanted track counted once and *minimum* applied to the merged albums
+    (:func:`merged`), which is the album tick's rule (``feed_wants``); the
+    entries are summed, since they are playlist slots."""
     for report in reports:
         logger.info(_summary(report.playlist, report.entries, report.albums, minimum))
         for album in report.over(minimum):
@@ -151,7 +163,7 @@ def log_reports(reports: list[Report], minimum: int = DEFAULT_MIN) -> None:
             logger.info("  [ALBUM] %s: %d%s track(s) wanted, first at #%d: %s — %s (%s)",
                         report.playlist, len(album.wanted), tracks, album.first + 1, album.artist, album.name, album.key)
     if len(reports) > 1:
-        logger.info(_summary("total", sum(r.entries for r in reports), merged(reports), minimum))
+        logger.info(_summary("total", sum(r.entries for r in reports), merged(reports, refs), minimum))
 
 
 @dataclasses.dataclass
@@ -352,8 +364,19 @@ def run(playlist: str | None = None, all_stores: bool = False, minimum: int = DE
             logger.error("[WANT] %s: no readable store", name)
             continue
         reports.append(group(name, playlist_store.songs, lambda s: index.match_song(s, words=False)[0] is not None, held))
-    log_reports(reports, minimum)
+    log_reports(reports, minimum, _album_refs() if len(reports) > 1 else None)
     return reports
+
+
+def _album_refs() -> dict[str, str]:
+    """The album store's Spotify album IDs → record key (``State.refs``),
+    for the total's merge; none when the music database is down, so the
+    total then merges by Spotify album ID only."""
+    try:
+        return State.load().refs()
+    except (statedb.Unavailable, OSError, ValueError) as exc:
+        logger.warning("[WANT] album store unreadable, the total merges by Spotify album ID only: %s", exc)
+        return {}
 
 
 def main() -> None:
