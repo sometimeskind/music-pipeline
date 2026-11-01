@@ -124,6 +124,7 @@ from beets.plugins import BeetsPlugin
 from music_fetch import events
 from music_fetch.album_requests import SOURCE as REQUEST_SOURCE
 from music_fetch.album_requests import url_recording
+from music_fetch.usenet import words
 
 from music_scan.identity import (
     add_isrcs, add_to_list, different_song, fingerprint, item_isrcs, item_spotify_ids, same_mb_recording, split_list,
@@ -433,6 +434,12 @@ class MusicPipelinePlugin(BeetsPlugin):
                 continue
             disambig = item.get("trackdisambig") or ""
             dropped = different_song(title, matched)
+            if title != matched and words(title) == words(matched):
+                # Only case or punctuation differs (In My Time of Need, In My Time Of
+                # Need): no sibling, and MusicBrainz's spelling is the better one.  It
+                # becomes a pending key too, so tag_source_on_stored finds the tags.
+                self._alias_pending((entry.title.lower(), title.lower()), matched.lower())
+                title = matched
             item["title"] = title
             item["trackdisambig"] = ""
             if dropped:
@@ -443,6 +450,14 @@ class MusicPipelinePlugin(BeetsPlugin):
                     "[TITLE] {} → {}{}", matched, title, " (recording dropped)" if dropped else "")
             elif disambig:
                 self._log.warning("[TITLE] {}: trackdisambig {!r} cleared", title, disambig)
+
+    def _alias_pending(self, keys: tuple[str, ...], alias: str) -> None:
+        """Make *alias* find what any of *keys* holds in the pending tags."""
+        for pending in (self._pending_sources, self._pending_via, self._pending_job, self._pending_spotdl):
+            for key in keys:
+                if key in pending:
+                    pending.setdefault(alias, pending[key])
+                    break
 
     def _different_song(self, item, matched: str | None) -> bool:
         """True when a Usenet item's own title and its match's are two songs,
