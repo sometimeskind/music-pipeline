@@ -1147,6 +1147,39 @@ def test_a_generic_file_title_keeps_beets_title() -> None:
     assert _warnings(plugin) == ["[TITLE] Cool It Down: the file's title 'Track 07' names nothing; beets' title kept"]
 
 
+def test_a_case_only_difference_keeps_musicbrainz_spelling() -> None:
+    """Heartbreaker's files spell In My Time Of Need, MusicBrainz In My Time of Need:
+    no sibling, so beets' title stays and nothing is logged but the cleared disambig."""
+    plugin = _make_plugin()
+    item = _file(f"{LOADED}/12 - In My Time Of Need.flac", "In My Time Of Need", track=12)
+    task = _created(plugin, item)
+    _match(item, title="In My Time of Need", trackdisambig="", mb_trackid="need-rec")
+
+    plugin.restore_file_title(session=MagicMock(), task=task)
+
+    assert (item.title, item.mb_trackid) == ("In My Time of Need", "need-rec")
+    plugin._log.warning.assert_not_called()
+
+
+def test_a_punctuation_difference_keeps_musicbrainz_spelling_and_finds_the_tags() -> None:
+    """Don't against Don’t: beets' title stays, and the pending tags are found by it after the rename."""
+    plugin = _make_plugin()
+    item = _file(f"{LOADED}/03 - Don't Ask For The Water.flac", "Don't Ask For The Water", track=3)
+    task = _created(plugin, item)
+    _match(item, title="Don’t Ask for the Water", trackdisambig="live")
+    plugin.restore_file_title(session=MagicMock(), task=task)
+    item.path = "/root/Music/library/Artist/Album/03 - Don’t Ask for the Water.flac".encode()
+    for field in ("sources", "via", "usenet_job"):
+        del item[field]
+
+    with patch.object(type(item), "store"):
+        plugin.tag_source_on_stored(lib=MagicMock(), item=item)
+
+    assert (item.title, item.trackdisambig) == ("Don’t Ask for the Water", "")
+    assert (item.get("sources"), item.get("via")) == ("keep", "usenet")
+    assert _warnings(plugin) == ["[TITLE] Don’t Ask for the Water: trackdisambig 'live' cleared"]
+
+
 def test_own_title() -> None:
     from music_scan.music_pipeline import own_title
 
