@@ -144,6 +144,15 @@ def clean_album(name: str) -> str:
     return name.strip() or name
 
 
+def search_title(name: str) -> str:
+    """An album name as album mode searches and matches it: :func:`clean_album`,
+    and Spotify's bonus-track count dropped too ("Saint Cloud +3" would search
+    as "saint cloud and 3", homelab#2568).  Not in clean_album, whose scan-side
+    callers compare track titles, where a dropped word loosens a veto."""
+    name = clean_album(name)
+    return re.sub(r"\s+\+\s?\d+$", "", name).strip() or name
+
+
 def tier(release: Release) -> int:
     tokens = set(words(release.title))
     if LOSSLESS_CATEGORY in release.categories or tokens & {"flac", "alac", "lossless"}:
@@ -205,7 +214,22 @@ def _occurrences(seq: list[str], within: list[str]) -> int:
     return sum(1 for i in range(len(within) - n + 1) if within[i:i + n] == seq)
 
 
-def matches(
+@dataclasses.dataclass(frozen=True)
+class Rejection:
+    """Why a release is not the album (homelab#2568).  *stage* counts the rules
+    it passed, so a higher one came closer; *distance* orders within a stage
+    (album words lacking, leftover words).  *rule* is the short name a [MISS]
+    tallies; *detail* says what failed."""
+    stage: int
+    rule: str
+    detail: str = ""
+    distance: int = 0
+
+    def __str__(self) -> str:
+        return f"{self.rule}: {self.detail}" if self.detail else self.rule
+
+
+def rejection(
     release: Release,
     artist: str,
     album: str,
@@ -214,43 +238,90 @@ def matches(
     album_type: str | None = None,
     seconds: int = 0,
     any_album: bool = False,
-) -> bool:
-    """True when the release title names this album, carries little else, and
-    its size fits the album's duration (or, unknown, its track count).
+) -> Rejection | None:
+    """None when the release title names this album, carries little else, and
+    its size fits the album's duration (or, unknown, its track count); else the
+    first rule it fails.
 
     *any_album* is for a title with no readable words (#197): any release by
     the artist matches on size and type alone, and the pick is logged as such.
     """
     title_words = words(release.title)
     title = set(title_words)
-    album_words = [w for w in words(clean_album(album)) if w not in _ARTICLES]
-    if not any_album and (not album_words or not set(album_words) <= title):
-        return False
+    album_words = [w for w in words(search_title(album)) if w not in _ARTICLES]
+    if not any_album:
+        if not album_words:
+            return Rejection(0, "album words", "the album has none")
+        lacking = [w for w in dict.fromkeys(album_words) if w not in title]
+        if lacking:
+            return Rejection(0, "album words", "lacks " + " ".join(lacking), distance=len(lacking))
     artist_words = [w for w in words(artist) if w not in _ARTICLES]
     if not _leads_with_artist(title_words, artist, album):
-        return False
+        return Rejection(1, "artist", "doesn't start with " + (artist or "an album word"))
     if title & _REJECT_WORDS and not set(words(album)) & _REJECT_WORDS:
-        return False
+        return Rejection(2, "reject word", " ".join(sorted(title & _REJECT_WORDS)))
     extra = [] if any_album else leftover(release, artist, album)
     if len(extra) > MAX_LEFTOVER_WORDS:
-        return False
+        return Rejection(3, "leftover words", " ".join(extra), distance=len(extra))
     # Self-titled: the artist words already satisfy the album check, so the
     # title must name the album a second time, say so, or carry nothing else.
     if not any_album and set(album_words) <= set(artist_words) and not (
-        _occurrences(words(clean_album(album)), title_words) >= 2
+        _occurrences(words(search_title(album)), title_words) >= 2
         or {"self", "titled"} <= title
         or not extra
     ):
-        return False
+        return Rejection(4, "self-titled", "names the album once, beside " + " ".join(extra))
     is_single = album_type == "single" if album_type else 0 < tracks <= 3
-    if title & _SINGLE_WORDS - set(words(album)) and not is_single:
-        return False
+    shorter = sorted(title & _SINGLE_WORDS - set(words(album)))
+    if shorter and not is_single:
+        return Rejection(5, "single", f"tagged {' '.join(shorter)}, the album isn't one")
     if seconds > 0:
-        if not seconds * MIN_BYTES_PER_SECOND <= release.size <= seconds * MAX_BYTES_PER_SECOND:
-            return False
-    elif tracks > 0 and not (tracks * MIN_BYTES_PER_TRACK <= release.size <= tracks * MAX_BYTES_PER_TRACK):
-        return False
-    return True
+        low, high = seconds * MIN_BYTES_PER_SECOND, seconds * MAX_BYTES_PER_SECOND
+    elif tracks > 0:
+        low, high = tracks * MIN_BYTES_PER_TRACK, tracks * MAX_BYTES_PER_TRACK
+    else:
+        low = high = 0
+    if high and not low <= release.size <= high:
+        return Rejection(6, "size", f"{release.size / 1e6:.0f} MB, not {low / 1e6:.0f}-{high / 1e6:.0f} MB")
+    return None
+
+
+def matches(release: Release, artist: str, album: str, tracks: int, **kwargs) -> bool:
+    """True when :func:`rejection` finds no rule the release fails."""
+    return rejection(release, artist, album, tracks, **kwargs) is None
+
+
+def why_none(
+    releases: list[Release],
+    artist: str,
+    album: str,
+    tracks: int,
+    blocklist: set[str],
+    *,
+    album_type: str | None = None,
+    seconds: int = 0,
+    any_album: bool = False,
+    shown: int = 3,
+) -> str:
+    """Why no release matched, for a [MISS] (homelab#2568): how many failed each
+    rule, then the *shown* closest titles and the rule each failed, so a miss
+    can be judged from the log.  A release that fails no rule but is
+    blocklisted (or has no download link) counts as the closest."""
+    found: list[tuple[Release, Rejection]] = []
+    for r in releases:
+        why = rejection(r, artist, album, tracks, album_type=album_type, seconds=seconds, any_album=any_album)
+        if why is None:
+            why = Rejection(7, "blocklisted") if r.guid in blocklist else Rejection(7, "no download link")
+        found.append((r, why))
+    if not found:
+        return ""
+    tally: dict[str, int] = {}
+    for _, why in found:
+        tally[why.rule] = tally.get(why.rule, 0) + 1
+    counts = ", ".join(f"{n} {rule}" for rule, n in sorted(tally.items(), key=lambda kv: -kv[1]))
+    found.sort(key=lambda rw: (-rw[1].stage, rw[1].distance, -rw[0].grabs))
+    closest = "; ".join(f'"{r.title}" ({why})' for r, why in found[:shown])
+    return f"rejected: {counts}; closest: {closest}"
 
 
 def rank(

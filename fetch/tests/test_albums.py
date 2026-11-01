@@ -791,6 +791,39 @@ def one_album(artist: str, name: str, key: str = "a0", **extra) -> State:
     return state
 
 
+def test_plus_n_suffix_is_not_searched() -> None:
+    """homelab#2568: "Saint Cloud +3" searched as "waxahatchee saint cloud and 3"."""
+    state = one_album("Waxahatchee", "Saint Cloud +3")
+    prowlarr, sab = fakes([release(title="Waxahatchee-Saint_Cloud-WEB-FLAC-2020-GRP")])
+    top_up(state, Settings(mode="dry-run"), prowlarr, sab, never_have, albums.TickResult(), now=lambda: NOW)
+    prowlarr.search.assert_called_once_with("waxahatchee saint cloud")
+    assert state.albums["a0"]["status"] == albums.DRY_RUN
+
+
+def test_miss_says_why_the_results_were_rejected(caplog) -> None:
+    """homelab#2568: a [MISS] tallies the rules the results failed and shows the closest."""
+    caplog.set_level("INFO", logger="music_fetch.albums")
+    state = wanted_state()
+    prowlarr, sab = fakes([release("r1", "Artist-Other-WEB-FLAC-2020"), release("r2", "Band-Album-WEB-FLAC-2020")])
+    top_up(state, Settings(mode="on"), prowlarr, sab, never_have, albums.TickResult(), now=lambda: NOW)
+    assert state.albums["a0"]["status"] == albums.MISSING
+    line = next(r.getMessage() for r in caplog.records if "[MISS]" in r.getMessage())
+    assert '2 result(s), none match; queries: "artist album"; rejected: 1 album words, 1 artist; closest: ' \
+        '"Band-Album-WEB-FLAC-2020" (artist: doesn\'t start with Artist); ' \
+        '"Artist-Other-WEB-FLAC-2020" (album words: lacks album)' in line
+
+
+def test_miss_of_another_edition_says_so(caplog) -> None:
+    """A copy in the library is replaced only by its own edition (#279): the [MISS] says matches were another."""
+    caplog.set_level("INFO", logger="music_fetch.albums")
+    state = wanted_state()
+    state.albums["a0"]["edition"] = ["deluxe"]
+    prowlarr, sab = fakes([release("r1", "Artist-Album-WEB-FLAC-2020-GRP")])
+    top_up(state, Settings(mode="on"), prowlarr, sab, never_have, albums.TickResult(), now=lambda: NOW)
+    line = next(r.getMessage() for r in caplog.records if "[MISS]" in r.getMessage())
+    assert "none match" in line and "1 match but not the edition of the copy kept (deluxe)" in line
+
+
 def test_query_is_normalised() -> None:
     state = one_album("Slayyyter", "WOR$T GIRL IN AMERICA (Deluxe)")
     prowlarr, sab = fakes([release(title="Slayyyter-WORsT GIRL IN AMERICA-24BIT-48KHZ-WEB-FLAC-2026-OBZEN")])

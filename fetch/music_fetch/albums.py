@@ -95,7 +95,9 @@ from music_fetch import album_requests, events, later_requests, overrides, resol
 from music_fetch import state as statedb
 from music_fetch.ids import spotify_key
 from music_fetch.metrics import _gauge, _push
-from music_fetch.usenet import Release, clean_album, edition, normalise, rank, readable, words
+from music_fetch.usenet import (
+    Release, clean_album, edition, normalise, rank, readable, search_title, why_none, words,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -320,7 +322,7 @@ def plan(key: str, record: dict, overrides: dict[str, str]) -> Plan:
     if words:
         return Plan([words], album=words, note=" (override)")
     artist = record["artist"] if readable(record["artist"]) else ""
-    name = clean_album(record["name"])
+    name = search_title(record["name"])
     if readable(name):
         first = normalise(f"{artist} {name}")
         # Retrying a compilation as "various artists" would only list compilations.
@@ -983,9 +985,10 @@ def top_up(
         tracks = record.get("tracks_count") or max(len(t) for t in record["playlists"].values())
         in_flight, imported = _taken(state, key)
         blocklist = set(record["blocklist"]) | imported
-        ranked = rank(releases, search.artist, search.album, tracks, blocklist, record.get("year"),
-                      album_type=record.get("album_type"), seconds=record.get("duration") or 0,
-                      any_album=search.any_album)
+        match_args = dict(album_type=record.get("album_type"), seconds=record.get("duration") or 0,
+                          any_album=search.any_album)
+        ranked = rank(releases, search.artist, search.album, tracks, blocklist, record.get("year"), **match_args)
+        other_edition = 0
         record["searched_at"] = _iso(now())
         record["query"] = search.queries[0]
         record.pop("lost", None)
@@ -993,6 +996,7 @@ def top_up(
             record["dry_run"] = True
         if record.get("edition") is not None:
             # An incomplete copy is in the library: only the same edition replaces it (#279).
+            other_edition = len(ranked)
             ranked = [r for r in ranked if sorted(edition(r.title)) == record["edition"]]
             if not ranked and record.get("best_copy"):
                 best_copy = record["best_copy"]
@@ -1010,8 +1014,15 @@ def top_up(
             # A request's fallback goes on: its gaps stay with spotdl until the next retry.
             if record.get("status") != FALLBACK:
                 record["status"] = MISSING
-            logger.info("[MISS] %s%s: %d result(s), none match; queries: %s%s",
+            # Why, so a miss can be judged from the log (homelab#2568).
+            if other_edition:
+                why = (f"{other_edition} match but not the edition of the copy kept "
+                       f"({' '.join(record['edition']) or 'plain'})")
+            else:
+                why = why_none(releases, search.artist, search.album, tracks, blocklist, **match_args)
+            logger.info("[MISS] %s%s: %d result(s), none match; queries: %s%s%s",
                         label, search.note, len(releases), ", ".join(f'"{q}"' for q in sent),
+                        f"; {why}" if why else "",
                         "; its gaps stay with spotdl" if record["status"] == FALLBACK else _back(record))
             continue
 

@@ -5,7 +5,8 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from music_fetch.usenet import (
-    Prowlarr, Release, Sabnzbd, clean_album, leftover, matches, normalise, rank, readable, tier,
+    Prowlarr, Release, Sabnzbd, clean_album, leftover, matches, normalise, rank, readable, rejection, search_title,
+    tier, why_none,
 )
 
 MB = 1_000_000
@@ -30,10 +31,77 @@ def rel(title: str, size: int = 400 * MB, guid: str | None = None, cats=(3000,),
         ("Rumours - Super Deluxe", "Rumours"),
         ("OK Computer OKNOTOK 1997 2017", "OK Computer OKNOTOK 1997 2017"),
         ("(What's the Story) Morning Glory?", "Morning Glory?"),
+        # Kept here: the scan side compares track titles with it (homelab#2568).
+        ("Saint Cloud +3", "Saint Cloud +3"),
     ],
 )
 def test_clean_album(name: str, expected: str) -> None:
     assert clean_album(name) == expected
+
+
+@pytest.mark.parametrize(
+    "name, expected",
+    [
+        ("Saint Cloud +3", "Saint Cloud"),
+        ("Saint Cloud + 3", "Saint Cloud"),
+        ("Abbey Road (Remastered 2009) +2", "Abbey Road"),
+        ("1+1", "1+1"),
+        ("Rock + Roll", "Rock + Roll"),
+        ("+3", "+3"),
+    ],
+)
+def test_search_title_drops_bonus_track_count(name: str, expected: str) -> None:
+    """homelab#2568: Spotify's "+3" (three bonus tracks) searched as "and 3"."""
+    assert search_title(name) == expected
+
+
+def test_matches_the_release_of_a_plus_n_album() -> None:
+    """What it can now grab: the release without the bonus tracks, which is the album;
+    the three it lacks stay with spotdl."""
+    assert matches(rel("Waxahatchee-Saint_Cloud-WEB-FLAC-2020-GRP"), "Waxahatchee", "Saint Cloud +3", 14)
+
+
+@pytest.mark.parametrize(
+    "title, size, album, tracks, rule",
+    [
+        ("Artist-Other_Album-WEB-FLAC-2020", 400 * MB, "Great Album", 10, "album words"),
+        ("Other_Band-Great_Album-WEB-FLAC-2020", 400 * MB, "Great Album", 10, "artist"),
+        ("Artist-Great_Album-Discography-FLAC", 400 * MB, "Great Album", 10, "reject word"),
+        ("Artist-Great_Album_Live_At_Wembley_Stadium-FLAC-2020-GRP", 400 * MB, "Great Album", 10, "leftover words"),
+        ("Artist-Great_Album-EP-WEB-FLAC-2020-GRP", 400 * MB, "Great Album", 10, "single"),
+        ("Artist-Great_Album-WEB-FLAC-2020-GRP", 5 * MB, "Great Album", 10, "size"),
+        ("Artist-Live_Somewhere-FLAC-2020-GRP", 400 * MB, "Artist", 10, "self-titled"),
+    ],
+)
+def test_rejection_names_the_rule(title: str, size: int, album: str, tracks: int, rule: str) -> None:
+    """homelab#2568: each rule matches() applies names itself, so a [MISS] can say why."""
+    why = rejection(rel(title, size=size), "Artist", album, tracks)
+    assert why is not None and why.rule == rule
+    assert not matches(rel(title, size=size), "Artist", album, tracks)
+
+
+def test_rejection_details_say_what_failed() -> None:
+    assert str(rejection(rel("Artist-Great-FLAC"), "Artist", "Great Album", 10)) == "album words: lacks album"
+    assert str(rejection(rel("Artist-Great_Album-FLAC", size=5 * MB), "Artist", "Great Album", 10)) == \
+        "size: 5 MB, not 10-1500 MB"
+    assert rejection(rel("Artist-Great_Album-WEB-FLAC-2020-GRP"), "Artist", "Great Album", 10) is None
+
+
+def test_why_none_tallies_rules_and_shows_the_closest() -> None:
+    releases = [
+        rel("Other_Band-Great_Album-FLAC", guid="artist"),
+        rel("Artist-Something_Else-FLAC", guid="far", grabs=99),
+        rel("Artist-Great-FLAC", guid="near"),
+        rel("Artist-Great_Album-FLAC", guid="small", size=5 * MB),
+        rel("Artist-Great_Album-WEB-FLAC-2020-GRP", guid="blocked"),
+    ]
+    why = why_none(releases, "Artist", "Great Album", 10, {"blocked"})
+    assert why.startswith("rejected: 2 album words, 1 artist, 1 size, 1 blocklisted; closest: ")
+    closest = why.split("closest: ")[1]
+    assert closest.startswith('"Artist-Great_Album-WEB-FLAC-2020-GRP" (blocklisted); "Artist-Great_Album-FLAC" (size')
+    assert '"Other_Band-Great_Album-FLAC" (artist' in closest  # the third closest
+    assert "Something_Else" not in closest
+    assert why_none([], "Artist", "Great Album", 10, set()) == ""
 
 
 @pytest.mark.parametrize(
