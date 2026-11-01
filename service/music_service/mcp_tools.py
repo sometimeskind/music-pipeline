@@ -407,27 +407,35 @@ def _search_releases(body: dict, _: Albums) -> dict:
     return {"query": query, "limit": limit}
 
 
-def _remove_from_later(body: dict, _: Albums) -> dict:
+def _remove_from_later(body: dict, albums: Albums) -> dict:
     from music_fetch.album_requests import MAX_PER_CALL  # noqa: PLC0415
 
-    _only(body, "release_groups", "through")
+    _only(body, "release_groups", "albums", "through")
     groups = body.get("release_groups") or []
     if not isinstance(groups, list):
         raise BadRequest("release_groups must be a list of MusicBrainz release group IDs or URLs")
     out = list(dict.fromkeys(mbid(g, "release-group", "release_groups") for g in groups))
     if len(out) > MAX_PER_CALL:
         raise BadRequest(f"{len(out)} release groups: at most {MAX_PER_CALL} a call")
+    # homelab#2534: an album query, as find_albums takes it, reaches an entry held by ref too.
+    queries = body.get("albums") or []
+    if not isinstance(queries, list):
+        raise BadRequest("albums must be a list of album queries")
+    if len(queries) > MAX_PER_CALL:
+        raise BadRequest(f"{len(queries)} albums: at most {MAX_PER_CALL} a call")
+    keys = list(dict.fromkeys(resolve_album(q, albums) for q in queries))
     through = body.get("through")
     if through is not None and (isinstance(through, bool) or not isinstance(through, int) or through < 1):
         raise BadRequest("through must be a positive integer: Later's first N albums")
-    if not out and through is None:
-        raise BadRequest("name release_groups, or through")
-    return {"release_groups": out, "through": through}
+    if not out and not keys and through is None:
+        raise BadRequest("name release_groups, albums, or through")
+    return {"release_groups": out, "albums": keys, "through": through}
 
 
 def _remove_later_argv(args: dict, apply: bool) -> list[list[str]]:
     through = [f"--through={args['through']}"] if args["through"] is not None else []
-    return [_apply(["music-later", "remove", *through], apply, *args["release_groups"])]
+    albums = [f"--album={key}" for key in args["albums"]]
+    return [_apply(["music-later", "remove", *through, *albums], apply, *args["release_groups"])]
 
 
 def _canon_albums(body: dict, _: Albums) -> dict:

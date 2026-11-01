@@ -33,12 +33,13 @@ IDs. An album key is the album's row in the album store, an integer such as 1734
 operator's one-time rekey, homelab#2478, it was the Spotify album ID); find_albums and get_album
 show it, requeue_albums takes it or any of the album's Spotify album IDs, and it is never a
 Spotify ID itself. An album query (find_albums, get_album,
-reset_album, the override and hold tools) is the key, any of the album's Spotify IDs, its
+reset_album, the override and hold tools, remove_from_later's albums) is the key, any of the album's Spotify IDs, its
 release group, the exact "artist — album", or a part matching one album; a query matching
 several returns "ambiguous" with the candidates and does nothing. A track (pin_track,
-unpin_track, unlink_spotify_id) is a Spotify track ID or URL. An album is requested (request_album) and taken
-off Later (remove_from_later) by its MusicBrainz release group, an MBID or musicbrainz.org
-URL; search_releases finds one from what the user typed (never search MusicBrainz with a
+unpin_track, unlink_spotify_id) is a Spotify track ID or URL. An album is requested (request_album) by its
+MusicBrainz release group, an MBID or musicbrainz.org URL, and taken off Later
+(remove_from_later) by release group or by album query; search_releases finds a release group
+from what the user typed (never search MusicBrainz with a
 title read from the library). An item ID is a
 beets item (an integer: get_item, merge_items pairs, replace_item, unlink_spotify_id,
 audit_dupes fingerprint_ids);
@@ -483,15 +484,22 @@ def build_server(
             list[str] | None,
             Field(description="albums to take off Later: MusicBrainz release group MBIDs or URLs", max_length=25),
         ] = None,
+        albums: Annotated[
+            list[str] | None,
+            Field(description="albums to take off Later by album query, as find_albums takes one (key, Spotify "
+                              "album ID or URL, 'artist — album', or a part matching one album): this also reaches "
+                              "an entry held by ref, which has no release group yet", max_length=25),
+        ] = None,
         through: Annotated[
             int | None, Field(description="also take off Later's first N albums (get_later's positions 1 to N)",
                               ge=1)
         ] = None,
         apply: Apply = False,
     ) -> dict:
-        """Take albums off Later, by release group or every album up to a position. Their files stay in
-        the library; Later's .m3u drops them at the next scan."""
-        body: dict[str, Any] = {"release_groups": release_groups or [], "apply": apply}
+        """Take albums off Later, by release group, by album (an album query; an ambiguous one returns
+        "ambiguous" with the candidates and does nothing), or every album up to a position. Their files
+        stay in the library; Later's .m3u drops them at the next scan."""
+        body: dict[str, Any] = {"release_groups": release_groups or [], "albums": albums or [], "apply": apply}
         if through is not None:
             body["through"] = through
         return await run("remove_from_later", body, write=True)

@@ -4,7 +4,8 @@ A ``later_queue`` row (migration 8 in :mod:`music_fetch.db`) names an album by
 MusicBrainz release group.  Albums are appended by a request with ``later``
 (``music-requests add --later``, the Music MCP's ``request_album``), and leave
 only by explicit removal (:func:`remove`, ``music-later remove``): by release
-group, or every album up to a position (``--through``).  Leaving touches no
+group, by album (``--album``, homelab#2534), or every album up to a position
+(``--through``).  Leaving touches no
 files, and there is no removal from play counts.
 
 An album the stage 3 cutover (``music-cutover``) queued from the later
@@ -12,7 +13,7 @@ playlist before its row had a release group names it by ``ref`` instead
 (migration 9): one of its album refs, its primary Spotify album ID, which
 follows the album through a merge.  The regen gives such an entry its row's
 release group once the row has one (:func:`resolve_refs`); until then it is
-removed by ``--through`` only.
+removed by album or by ``--through``, not by release group.
 
 ``available_at`` is when the library first held the album whole: set when it
 is added if it is held already, else by the first ``.m3u`` regen that finds it

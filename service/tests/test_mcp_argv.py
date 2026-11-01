@@ -60,9 +60,11 @@ CASES = {
                                    "preferred_release": "11111111-1111-4111-8111-111111111111"},
                                   {"release_group": "6e0a6c2a-2d38-3d3c-9d38-4f0c2b5b7a11", "preferred_release": None}],
                        "later": True}],
-    "remove_from_later": [{"release_groups": ["6e0a6c2a-2d38-3d3c-9d38-4f0c2b5b7a11"], "through": None},
-                          {"release_groups": [], "through": 2},
-                          {"release_groups": ["0b4ed3a1-7d3c-4d9e-9b8e-0c5c6a8d2f10"], "through": 1}],
+    "remove_from_later": [{"release_groups": ["6e0a6c2a-2d38-3d3c-9d38-4f0c2b5b7a11"], "albums": [], "through": None},
+                          {"release_groups": [], "albums": [], "through": 2},
+                          {"release_groups": [], "albums": ["1734", "--apply"], "through": None},
+                          {"release_groups": ["0b4ed3a1-7d3c-4d9e-9b8e-0c5c6a8d2f10"], "albums": ["1734"],
+                           "through": 1}],
 }
 
 

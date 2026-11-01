@@ -274,3 +274,25 @@ def test_a_ref_entry_is_removed_by_through(music_db, caplog):
         with conn.transaction():
             assert later_queue.remove(conn, out, rows, {}) == 1
     assert _queue() == [(RG_A, True)]
+
+
+@needs_pg
+def test_a_ref_entry_is_removed_by_its_album(music_db, caplog):
+    """homelab#2534: an album selector reaches the entry its row is held by, ref or release group."""
+    from music_fetch import later_cli
+
+    _setup([_song("N"), _song("A")], [], _record("N", None), _record("A", RG_A))
+    _run(caplog)
+    with state.connect() as conn:
+        rows = state.load_albums(conn)
+        for query in ("band — album n", "N", "Album N"):
+            out, lines = later_cli.remove_dry_run(conn, rows, [], None, [query])
+            assert [e.ref for e in out] == ["N"], query
+            assert lines[0] == "Remove 1 of 1: Band — Album N [album ref N, no release group yet]: position 1 of 2"
+        out, lines = later_cli.remove_dry_run(conn, rows, [], None, ["Album A", "N", "band — album n"])
+        assert [(e.release_group, e.ref) for e in out] == [(RG_A, None), (None, "N")]
+        with pytest.raises(later_cli.req.Refused, match="2 album"):
+            later_cli.remove_dry_run(conn, rows, [], None, ["Album"])
+        with conn.transaction():
+            assert later_queue.remove(conn, later_cli.remove_dry_run(conn, rows, [], None, ["N"])[0], rows, {}) == 1
+    assert _queue() == [(RG_A, True)]

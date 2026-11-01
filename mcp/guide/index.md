@@ -41,7 +41,7 @@ musicbrainz.org URL the user gives, or one `search_releases` found from what the
 dry run first; `list_requests` shows each request and its
 album's status. A request that misses stays missing: it has no spotdl fallback yet. With
 `later` the albums also go on Later, whose `.m3u` is in arrival order; `get_later` shows it and
-`remove_from_later` takes albums off. See `requests`.
+`remove_from_later` takes albums off, by release group or album. See `requests`.
 
 ## The two invariants
 

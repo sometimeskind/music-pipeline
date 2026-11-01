@@ -89,7 +89,9 @@ behind where the user is listening. A reset or reimport doesn't move it.
 
 `get_later` shows the queue: positions 1, 2, … are the `.m3u`'s albums, oldest arrival first,
 then the pending ones with their album's status. `remove_from_later` takes albums off it, by
-release group, or `through=N` for the first N (the ones listened to). Removing touches no files:
+release group, by album (`albums`: an album query as `find_albums` takes one, its key, a
+Spotify album ID or URL, "artist — album" or a part matching one album; an ambiguous one returns
+the candidates and does nothing), or `through=N` for the first N (the ones listened to). Removing touches no files:
 the album stays in the library. Both writes are a dry run first; the `.m3u` changes at the next
 scan (`trigger_scan` to have it now).
 
@@ -98,7 +100,8 @@ playlist's albums on the queue ahead of the others, in the playlist's order, so 
 the queue alone. An album whose record had no release group yet is queued by its album ref
 instead: `get_later` shows it with no release group and a ref (its Spotify album ID). It gets
 its release group at a later scan, once an import or a MusicBrainz lookup gives its record one.
-Until then `remove_from_later` reaches it only with `through=N`, never by release group.
+Until then `remove_from_later` reaches it by album (`albums`, e.g. the album key `get_later`
+shows) or with `through=N`, never by release group.
 
 **Incomplete Later albums are requested automatically** (homelab#2535). Each album tick
 requests every album on Later that the library doesn't hold whole, that has a release group and
