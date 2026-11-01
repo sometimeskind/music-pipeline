@@ -209,9 +209,15 @@ def _leads_with_artist(title_words: list[str], artist: str, album: str) -> bool:
     return set(lead[:len(names)]) == set(names)
 
 
-def _occurrences(seq: list[str], within: list[str]) -> int:
-    n = len(seq)
-    return sum(1 for i in range(len(within) - n + 1) if within[i:i + n] == seq)
+def _album_follows_artist(title_words: list[str], artist: str, album: str) -> bool:
+    """True when a self-titled album's name comes right after the artist, as a
+    release names it (``The Meters-The Meters-…``).  Anywhere else in the title
+    it is part of another album's name: ``The Meters-The Essentials The
+    Meters-…`` is a compilation (homelab#2568).  Articles don't count."""
+    lead = [w for w in title_words if w not in _ARTICLES]
+    names = [w for w in words(artist) if w not in _ARTICLES]
+    name = [w for w in words(search_title(album)) if w not in _ARTICLES]
+    return bool(names) and lead[:len(names)] == names and lead[len(names):len(names) + len(name)] == name
 
 
 @dataclasses.dataclass(frozen=True)
@@ -264,9 +270,10 @@ def rejection(
     if len(extra) > MAX_LEFTOVER_WORDS:
         return Rejection(3, "leftover words", " ".join(extra), distance=len(extra))
     # Self-titled: the artist words already satisfy the album check, so the
-    # title must name the album a second time, say so, or carry nothing else.
+    # title must name the album again right after the artist, say so, or
+    # carry nothing else.
     if not any_album and set(album_words) <= set(artist_words) and not (
-        _occurrences(words(search_title(album)), title_words) >= 2
+        _album_follows_artist(title_words, artist, album)
         or {"self", "titled"} <= title
         or not extra
     ):

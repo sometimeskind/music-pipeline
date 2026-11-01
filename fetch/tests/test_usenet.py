@@ -242,10 +242,27 @@ def test_sabnzbd_finished_empty_makes_no_call() -> None:
 
 
 @pytest.mark.parametrize(
+    "artist, album, title",
+    [
+        ("The Meters", "The Meters", "The_Meters-The_Meters-REMASTERED-CD-FLAC-2001-GRP"),
+        ("The Meters", "The Meters", "The Meters - The Meters (1969) [FLAC]"),
+        ("Sylvie", "Sylvie", "Sylvie-Sylvie-WEB-2023-GRP"),
+        ("Weezer", "Weezer (Blue Album)", "Weezer-Weezer-CD-FLAC-1994-GRP"),
+        ("Sylvie", "Sylvie", "Sylvie-Self Titled-WEB-2023-GRP"),
+    ],
+)
+def test_matches_a_self_titled_release(artist: str, album: str, title: str) -> None:
+    """The album named right after the artist, or "self titled" (homelab#2568)."""
+    assert matches(rel(title), artist, album, 12, album_type="album")
+
+
+@pytest.mark.parametrize(
     "artist, album, title, size_mb",
     [
         # Self-titled: the album words are the artist words.
         ("Wendy Eisenberg", "Wendy Eisenberg", "Wendy Eisenberg-Viewfinder-16BIT-WEB-FLAC-2024-ENRiCH", 541),
+        # Self-titled, and a compilation that names the artist twice (homelab#2568, album 275).
+        ("The Meters", "The Meters", "The Meters-The Essentials The Meters-WEB-2002-KNOWN", 108),
         # clean_album makes it self-titled; also a CD single.
         ("Electronic", "Electronic (Special Edition)", "Electronic-Vivid-CDRS6514-CDM-FLAC-1999-HOUND", 210),
         # The album name inside a box set's title.
