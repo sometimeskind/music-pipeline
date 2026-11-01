@@ -172,10 +172,22 @@ def test_feed_updates_a_waiting_record_but_not_a_grabbed_one() -> None:
 
 
 @pytest.mark.parametrize("status", [albums.WANTED, albums.DRY_RUN, albums.MISSING, albums.HAVE])
-def test_feed_deletes_a_waiting_record_whose_album_dropped_under_the_threshold(status) -> None:
+def test_feed_deletes_a_waiting_record_whose_album_dropped_under_the_threshold(status, caplog) -> None:
+    caplog.set_level("INFO", logger="music_fetch.albums")
     state = State(albums={"A": wants_record(status)})
     feed_wants(state, ["disc"], hook({"disc": [("A", [song(1)])]}), Settings())
     assert state.albums == {}
+    assert "[UNWANTED] A Artist — Album A" in caplog.text  # logged, so a vanished record can be traced
+
+
+def test_feed_keeps_a_record_reset_to_import_again() -> None:
+    """homelab#2544: album 611, reset with reimport, held every wanted track already, so no
+    want list named it; the feed deleted the record and its reimport with it, unlogged."""
+    record = {**wants_record(), "reimport": True}
+    state = State(albums={"A": record})
+    feed_wants(state, ["disc"], hook({}), Settings())
+    assert state.albums["A"]["reimport"] is True
+    assert state.albums["A"]["playlists"] == wants_record()["playlists"]
 
 
 @pytest.mark.parametrize("status", [albums.GRABBED, albums.IMPORTED, albums.FAILED])
