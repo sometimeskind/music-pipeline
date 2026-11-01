@@ -20,6 +20,7 @@ homelab#2539).
 
 from __future__ import annotations
 
+import difflib
 import re
 from collections import Counter
 from typing import NamedTuple
@@ -220,9 +221,23 @@ def different_song(a: str, b: str) -> bool:
     Durango (Live at …)`` is not ``It Ain't Me, Babe (Live at …)``, while
     ``Oh! Sweet Nuthin'`` and ``Oh! Sweet Nuthin' (5.1 mix)`` are one song.
     A title with no words left (another script, glyphs only) never differs:
-    there is nothing to tell the songs apart by."""
+    there is nothing to tell the songs apart by.
+
+    Release tags misspell: dropped spaces (``Saved theEarth``) and a changed
+    word in a long title (``Rockford River`` for ``Rock River``) are still one
+    song, so two titles differ only when their letters are less than
+    :data:`SAME_SONG_RATIO` alike, as Durango and Babe are."""
     x, y = release_words(clean_album(a or "")), release_words(clean_album(b or ""))
-    return bool(x and y) and x != y
+    if not (x and y):
+        return False
+    jx, jy = "".join(x), "".join(y)
+    return jx != jy and difflib.SequenceMatcher(None, jx, jy).ratio() < SAME_SONG_RATIO
+
+
+SAME_SONG_RATIO = 0.8
+"""How alike two titles' letters must be (difflib's ratio) to name one song.
+``Intro``/``Outro`` (0.6) and ``Amy``/``Ama`` (0.67) are two songs; a dropped
+space or a changed word in a long title stays well above it (homelab#2544)."""
 
 
 LENGTH_SLACK = 2.0

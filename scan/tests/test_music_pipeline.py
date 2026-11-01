@@ -1180,6 +1180,37 @@ def test_a_punctuation_difference_keeps_musicbrainz_spelling_and_finds_the_tags(
     assert _warnings(plugin) == ["[TITLE] Don’t Ask for the Water: trackdisambig 'live' cleared"]
 
 
+def test_a_spacing_difference_keeps_musicbrainz_spelling_and_the_recording() -> None:
+    """Illinois' tags drop spaces (Saved theEarth): one song, so the recording stays and
+    MusicBrainz's spelling is kept."""
+    plugin = _make_plugin()
+    item = _file(f"{LOADED}/16 - Temple.flac", "In This Temple as in the Hearts of Man for Whom He Saved theEarth",
+                 track=16)
+    task = _created(plugin, item)
+    _match(item, title="In This Temple as in the Hearts of Man for Whom He Saved the Earth", trackdisambig="",
+           mb_trackid="temple-rec", isrc="USA2P0500016")
+
+    plugin.restore_file_title(session=MagicMock(), task=task)
+
+    assert item.title == "In This Temple as in the Hearts of Man for Whom He Saved the Earth"
+    assert (item.mb_trackid, item.isrc) == ("temple-rec", "USA2P0500016")
+    plugin._log.warning.assert_not_called()
+
+
+def test_a_changed_word_keeps_the_files_title_and_the_recording() -> None:
+    """Rock River against MusicBrainz's Rockford River: one song, the file's words win."""
+    plugin = _make_plugin()
+    file_title = "To the Workers of the Rock River Valley Region, I Have an Idea Concerning Your Predicament"
+    item = _file(f"{LOADED}/12 - Workers.flac", file_title, track=12)
+    task = _created(plugin, item)
+    _match(item, title=file_title.replace("Rock River", "Rockford River"), mb_trackid="workers-rec")
+
+    plugin.restore_file_title(session=MagicMock(), task=task)
+
+    assert (item.title, item.mb_trackid) == (file_title, "workers-rec")
+    assert "(recording dropped)" not in _warnings(plugin)[0]
+
+
 def test_own_title() -> None:
     from music_scan.music_pipeline import own_title
 
