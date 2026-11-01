@@ -8,7 +8,8 @@ from unittest import mock
 
 import pytest
 
-from music_fetch import store
+from music_fetch import albums, store
+from music_fetch import state as statedb
 from music_scan import want_albums
 
 URL = "https://open.spotify.com/track/"
@@ -85,6 +86,54 @@ def test_total_merges_albums_and_counts_a_shared_track_once(caplog) -> None:
     by_key = {a.key: a for a in want_albums.merged([soft, fancy, single])}
     assert [s["song_id"] for s in by_key["S"].wanted] == ["s1", "s2", "s3"]
     assert [s["song_id"] for s in soft.albums[0].wanted] == ["s1", "s2"]  # the playlist's own report is untouched
+
+
+def _queued(reports: list[want_albums.Report], state: albums.State | None = None) -> set[str]:
+    """The album keys ``feed_wants`` queues from *reports*, fed as the album tick's wants hook feeds it."""
+    state = state or albums.State()
+    by_name = {r.playlist: [(a.key, a.first, a.wanted) for a in r.albums] for r in reports}
+    albums.feed_wants(state, list(by_name), lambda name: by_name[name], albums.Settings(mode="dry-run"))
+    return {k for k, r in state.albums.items() if albums._wants(r)}
+
+
+def test_total_counts_one_wanted_track_per_playlist_as_one_album_of_two_like_feed_wants(caplog) -> None:
+    # One wanted track of album S on each playlist: two singletons per playlist,
+    # one album holding 2 in the total, which album mode queues (homelab#2406).
+    soft = want_albums.group("soft", [_song("s1", "S"), _song("q1", "Q")], lambda s: False, frozenset())
+    fancy = want_albums.group("fancy", [_song("s2", "S"), _song("q1", "Q")], lambda s: False, frozenset())
+
+    with caplog.at_level(logging.INFO, logger="music_scan.want_albums"):
+        want_albums.log_reports([soft, fancy], minimum=2)
+
+    assert [r.getMessage() for r in caplog.records] == [
+        "[WANT] soft: 2 wanted of 2 entries on 2 album(s); 0 album(s) hold 2+ (0 wanted (0%)), 2 singleton(s)",
+        "[WANT] fancy: 2 wanted of 2 entries on 2 album(s); 0 album(s) hold 2+ (0 wanted (0%)), 2 singleton(s)",
+        # q1 is on both playlists: one wanted track, a singleton; the entries are both playlists' slots.
+        "[WANT] total: 3 wanted of 4 entries on 2 album(s); 1 album(s) hold 2+ (2 wanted (66%)), 1 singleton(s)",
+    ]
+    over = {a.key for a in want_albums.merged([soft, fancy]) if len(a.wanted) >= 2}
+    assert over == _queued([soft, fancy]) == {"S"}
+
+
+def test_total_merges_two_editions_under_their_record_like_feed_wants(caplog) -> None:
+    # E1 and E2 are two Spotify editions of the album store's record 1734
+    # (homelab#2410, keyed by row since homelab#2478): one album of two.
+    soft = want_albums.group("soft", [_song("e1", "E1")], lambda s: False, frozenset())
+    fancy = want_albums.group("fancy", [_song("e2", "E2")], lambda s: False, frozenset())
+    record = {**statedb.new_record("1734"), "spotify_album_ids": ["E1", "E2"], "origin": albums.WANTS,
+              "status": albums.WANTED, "blocklist": [], "playlists": {}}
+    state = albums.State(albums={"1734": record})
+
+    with caplog.at_level(logging.INFO, logger="music_scan.want_albums"):
+        want_albums.log_reports([soft, fancy], minimum=2, refs=state.refs())
+        want_albums.log_reports([soft, fancy], minimum=2)
+
+    totals = [r.getMessage() for r in caplog.records if "total" in r.getMessage()]
+    assert totals == [
+        "[WANT] total: 2 wanted of 2 entries on 1 album(s); 1 album(s) hold 2+ (2 wanted (100%)), 0 singleton(s)",
+        "[WANT] total: 2 wanted of 2 entries on 2 album(s); 0 album(s) hold 2+ (0 wanted (0%)), 2 singleton(s)",
+    ]
+    assert _queued([soft, fancy], state) == {"1734"}
 
 
 def test_summary_of_an_album_with_unknown_track_count_omits_it(caplog) -> None:
