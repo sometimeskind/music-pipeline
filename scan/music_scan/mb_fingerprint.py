@@ -432,9 +432,32 @@ def refreshed(item, recording: dict) -> Changes:
             if (before := item.get(field) or "") != new}
 
 
+class Suspect(dict):
+    """No changes, because the new recording names another song than the item
+    (:func:`suspect`).  Empty, so it refreshes nothing wherever a Changes does."""
+
+
+def suspect(item, recording: dict) -> bool:
+    """True when *recording*'s title names another song than *item*'s title
+    (:func:`~music_scan.identity.different_song`, version notes dropped), so the
+    refresh would retitle the item as that song (homelab#2544).  Either the
+    recheck matched the audio to the wrong recording (9127, *The Skin of My Yellow
+    Country Teeth* against "Tu Is Tarah Se Mere Zindagi Main", an AcoustID
+    collision) or the file is a wrong download (8276, *Out in the Street* against
+    *Dancing in the Dark* from the same show).  Both want a person
+    (``replace_item``, a reimport, the recording set back), not a new title that
+    hides the mismatch."""
+    from music_scan.identity import different_song  # noqa: PLC0415
+
+    title = recording.get("title") or ""
+    return bool(title) and different_song(item.get("title") or "", title)
+
+
 def _refresh(item, recording_id: str, lookup: RecordingLookup) -> Changes | None:
     """:func:`refreshed` for *item* against *recording_id*, or None when the
-    lookup fails or MusicBrainz has no such recording (logged ``[NOREFRESH]``)."""
+    lookup fails or MusicBrainz has no such recording (logged ``[NOREFRESH]``),
+    or an empty :class:`Suspect` when the recording names another song
+    (logged ``[SUSPECT]``)."""
     try:
         recording = lookup(recording_id)
     except (OSError, ValueError, http.client.HTTPException) as exc:  # urllib's errors, a cut or non-JSON body
@@ -445,6 +468,11 @@ def _refresh(item, recording_id: str, lookup: RecordingLookup) -> Changes | None
         logger.warning("[NOREFRESH] %s: MusicBrainz has no recording %s; title and trackdisambig left as they were",
                        _label(item), recording_id)
         return None
+    if suspect(item, recording):
+        logger.warning("[SUSPECT] %s: its recording %s is titled %r, another song: the recheck matched the "
+                       "wrong recording or the file is a wrong download; title and trackdisambig left as they were",
+                       _label(item), recording_id, recording.get("title"))
+        return Suspect()
     return refreshed(item, recording)
 
 
@@ -541,7 +569,7 @@ def replace_run(run_id: str, apply: bool = False, library_db: str = LIBRARY_DB,
         raise SystemExit(f"--replace-run: {db.ENV} is unset; the run's findings are in the database")
     job_id = os.environ.get("MUSIC_EVENT_JOB") or None
     counts: Counter = Counter({k: 0 for k in ("replaceable", "replaced", "already", "skipped", "ambiguous",
-                                              "refreshed", "norefresh")})
+                                              "refreshed", "norefresh", "suspect")})
     recordings = musicbrainz_recordings() if apply else None
 
     def refresh(item, f: Flagged) -> Changes | None:
@@ -549,6 +577,7 @@ def replace_run(run_id: str, apply: bool = False, library_db: str = LIBRARY_DB,
         changes = _refresh(item, f.replacement, recordings)
         counts["refreshed"] += bool(changes)
         counts["norefresh"] += changes is None
+        counts["suspect"] += isinstance(changes, Suspect)
         return changes
 
     lib = beets.library.Library(library_db, directory=library_dir)
@@ -604,8 +633,9 @@ def replace_run(run_id: str, apply: bool = False, library_db: str = LIBRARY_DB,
                 counts["already"], counts["skipped"], counts["ambiguous"])
     if apply:
         logger.info("[SUMMARY] run %s: title or trackdisambig refreshed on %d; %d not refreshed (their "
-                    "MusicBrainz lookup failed: catch them up with --refresh-replaced)",
-                    run_id, counts["refreshed"], counts["norefresh"])
+                    "MusicBrainz lookup failed: catch them up with --refresh-replaced); %d [SUSPECT] (the new "
+                    "recording names another song: check each by hand)",
+                    run_id, counts["refreshed"], counts["norefresh"], counts["suspect"])
     return counts
 
 
@@ -647,8 +677,10 @@ def refresh_replaced(since: datetime | None = None, apply: bool = False, library
 
     if not db.configured():
         raise SystemExit(f"--refresh-replaced: {db.ENV} is unset; the replaced items are its recording_replaced events")
-    counts: Counter = Counter({k: 0 for k in ("replaced", "refresh", "current", "skipped", "norefresh", "refreshed")})
+    counts: Counter = Counter({k: 0 for k in ("replaced", "refresh", "current", "skipped", "norefresh", "refreshed",
+                                              "suspect")})
     failed: list[int] = []
+    suspects: list[int] = []
     todo: list[tuple[int, str, Changes]] = []
     recordings = musicbrainz_recordings()
     lib = beets.library.Library(library_db, directory=library_dir)
@@ -673,6 +705,9 @@ def refresh_replaced(since: datetime | None = None, apply: bool = False, library
             if changes is None:
                 counts["norefresh"] += 1
                 failed.append(item_id)
+            elif isinstance(changes, Suspect):
+                counts["suspect"] += 1
+                suspects.append(item_id)
             elif not changes:
                 counts["current"] += 1
             else:
@@ -697,12 +732,16 @@ def refresh_replaced(since: datetime | None = None, apply: bool = False, library
                     logger.info("[REFRESH] %s: %s", _label(item), _describe(changes))
     finally:
         lib._close()
-    logger.info("[SUMMARY] %d replaced item(s): %s, %d current already, %d skipped, %d not looked up%s",
+    logger.info("[SUMMARY] %d replaced item(s): %s, %d current already, %d skipped, %d not looked up%s, "
+                "%d suspect%s",
                 counts["replaced"],
                 f"{counts['refreshed']} refreshed" if apply else
                 f"{counts['refresh']} to refresh (re-run with --apply)",
                 counts["current"], counts["skipped"], counts["norefresh"],
-                f" (MusicBrainz lookup failed: {', '.join(map(str, failed))}; run it again)" if failed else "")
+                f" (MusicBrainz lookup failed: {', '.join(map(str, failed))}; run it again)" if failed else "",
+                counts["suspect"],
+                f" (the new recording names another song, left alone: {', '.join(map(str, suspects))}; "
+                "check each by hand)" if suspects else "")
     return counts
 
 

@@ -665,6 +665,53 @@ def test_a_failed_or_empty_lookup_refreshes_nothing(caplog):
     assert item.data == {"title": "Oh! Sweet Nuthin’ (5.1 mix)", "trackdisambig": "5.1 mix"}
 
 
+@pytest.mark.parametrize(("item", "recording"), [
+    # An AcoustID collision: a Bollywood recording for a Clap Your Hands Say Yeah track.
+    (FakeItem(9127, "The Skin of My Yellow Country Teeth", via="spotdl"),
+     {"id": "bolly", "title": "Tu Is Tarah Se Mere Zindagi Main", "disambiguation": ""}),
+    # A wrong download, or a wrong match, from the same show.
+    (FakeItem(8276, "Out in the Street (live at Brendan Byrne Arena, E. Rutherford, NJ - 8/6/1984)", via="spotdl"),
+     {"id": "dark", "title": "Dancing in the Dark", "disambiguation": "live, 1984-08-06: Brendan Byrne Arena"}),
+    # A Usenet title from before #398 naming the guess's song wants a person too (a reimport).
+    (FakeItem(11982, "It Ain't Me, Babe (Live At Harvard Square Theatre)", via="usenet"),
+     {"id": "durango", "title": "Romance in Durango", "disambiguation": "live, 1975-11-20"}),
+])
+def test_a_recording_naming_another_song_is_suspect_and_refreshes_nothing(item, recording, caplog):
+    """homelab#2544: the 2026-10-31 dry run would have retitled these as other songs."""
+    before = dict(item.data)
+    changes = mbf._refresh(item, recording["id"], _recordings({recording["id"]: recording}))
+    assert isinstance(changes, mbf.Suspect) and not changes
+    assert item.data == before
+    assert f"[SUSPECT] {item.id} — " in caplog.text and repr(recording["title"]) in caplog.text
+
+
+def test_a_long_title_for_the_same_song_is_no_suspect():
+    """6389: MusicBrainz's longer title for the same song refreshes as usual."""
+    item = FakeItem(6389, "Midnight Moon Pool", via="spotdl")
+    recording = {"id": "moon", "title": "I. Midnight Moon Pool (Womb of the Soul)", "disambiguation": ""}
+    assert mbf._refresh(item, "moon", _recordings({"moon": recording})) == {
+        "title": ("Midnight Moon Pool", "I. Midnight Moon Pool (Womb of the Soul)")}
+
+
+@needs_pg
+def test_refresh_replaced_lists_suspects_and_leaves_them(pg_url, monkeypatch, caplog):
+    caplog.set_level("INFO")
+    bolly = {"id": "bolly", "title": "Tu Is Tarah Se Mere Zindagi Main", "disambiguation": ""}
+    monkeypatch.setattr(mbf, "musicbrainz_recordings",
+                        lambda: _recordings({**RECORDINGS, CONSTRUCTIVE["id"]: CONSTRUCTIVE, "bolly": bolly}))
+    items = [FakeItem(9127, "The Skin of My Yellow Country Teeth", via="spotdl", mb_trackid="bolly"),
+             FakeItem(3778, "Constructive Summer", via="spotdl", mb_trackid=CONSTRUCTIVE["id"],
+                      trackdisambig="live, 2024-03-10: Omeara, London, England")]
+    _open(monkeypatch, RunLib(items))
+    _replaced(pg_url, (9127, "bolly"), (3778, CONSTRUCTIVE["id"]))
+
+    counts = mbf.refresh_replaced(apply=True)
+    assert (counts["refreshed"], counts["suspect"]) == (1, 1)
+    assert items[0]["title"] == "The Skin of My Yellow Country Teeth" and not items[0].stored
+    assert ("1 suspect (the new recording names another song, left alone: 9127; check each by hand)"
+            in caplog.text)
+
+
 @needs_pg
 def test_the_apply_refreshes_each_replaced_items_fields_with_its_event(pg_url, monkeypatch, caplog, musicbrainz):
     caplog.set_level("INFO")
@@ -755,7 +802,7 @@ def test_refresh_replaced_lists_before_and_after_and_changes_nothing(pg_url, mon
     assert "[SKIP] 4242: gone from the library" in caplog.text
     assert "[NOREFRESH] 6930" in caplog.text
     assert ("[SUMMARY] 6 replaced item(s): 2 to refresh (re-run with --apply), 1 current already, 2 skipped, "
-            "1 not looked up (MusicBrainz lookup failed: 6930; run it again)") in caplog.text
+            "1 not looked up (MusicBrainz lookup failed: 6930; run it again), 0 suspect") in caplog.text
     assert _events(pg_url)[-1][2] == 4242  # no event of its own
 
 
