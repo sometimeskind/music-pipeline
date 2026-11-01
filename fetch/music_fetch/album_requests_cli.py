@@ -180,6 +180,11 @@ def _listed(entry: dict) -> str:
     where = (f"album {album['key']}, {album['status']} ({album['origin']})" if album
              else "pending: the next album tick queues it")
     preferred = f"; preferred release {entry['preferred_release']}" if entry["preferred_release"] else ""
+    if album and "fallback_left" in album:
+        rejected = album.get("fallback_rejected") or {}
+        where += f", {album['fallback_left']} track(s) left" + (
+            f" ({', '.join(f'{r} {n}' for r, n in rejected.items())} rejected"
+            f"{': all unknown to AcoustID' if album.get('acoustid_unknown_only') else ''})" if rejected else "")
     return (f"{entry['artist']} — {entry['name']} [release group {entry['release_group']}{preferred}]: {where}; "
             f"requested by {entry['requested_by']} at {entry['requested_at']}")
 
@@ -232,7 +237,9 @@ def run(args: argparse.Namespace, get: req.Get | None = None) -> None:
     with _connect() as conn:
         rows = statedb.load_albums(conn)
         if args.command == "list":
-            found = req.listing(conn, rows, args.status)
+            from music_scan.guard import request_rejects  # noqa: PLC0415 — the image holds both packages
+
+            found = req.listing(conn, rows, args.status, request_rejects())
             for entry in found:
                 logger.info("%s", _listed(entry))
             logger.info("%d request(s)", len(found))

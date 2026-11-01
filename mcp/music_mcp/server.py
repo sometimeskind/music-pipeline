@@ -204,7 +204,8 @@ def build_server(
         """What happened since `since` (event counts by kind, each kind's latest events) and
         the library issues standing now for the operator to decide on: mixed albums, stuck
         albums (failed, missing, stale grabs and fallbacks), only copies in quarantine/replaced,
-        path clashes, empty playlist slots and length-guard rejects."""
+        path clashes, empty playlist slots and length-guard rejects; and the album requests
+        missing, failed or in fallback, each as list_requests shows it."""
         return await call("digest_summary", lambda c: pipeline.get(c, "/digest_summary", since=since))
 
     @mcp.tool(annotations={"readOnlyHint": True})
@@ -241,7 +242,10 @@ def build_server(
         """The album requests, oldest first: the release group, who asked when, and the album's status.
         One Usenet misses falls back to spotdl from its MusicBrainz tracklist: fallback, with
         album.fallback_left the tracks still missing (only audio AcoustID confirms is imported),
-        then filled."""
+        then filled. album.fallback_rejected counts the missing tracks whose download was rejected,
+        by reason: fingerprint (AcoustID named another recording), acoustid-unknown (AcoustID knows
+        no recording for the audio, so it may be right), duration, silence.
+        album.acoustid_unknown_only: every reject is acoustid-unknown, for the operator to decide."""
         return await call("list_requests", lambda c: pipeline.get(c, "/requests", status=status, offset=offset))
 
     @mcp.tool(annotations={"readOnlyHint": True})

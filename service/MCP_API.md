@@ -149,13 +149,13 @@ What happened since `since` (default: 24 hours ago), and the library issues stan
             "path_clashes": {"total": 1, "listed": [{"id": 10001, "path": "…", "album": "…"}]},
             "empty_slots": {"at": "2026-10-29T03:40:00+00:00", "playlists": {"chill": {"total": 1, "entries": ["Someone — Absent"]}}},
             "rejects": {"total": 1, "listed": ["rejected/chill/two.m4a"]}},
- "requests": {"missing": {"total": 0, "listed": []}, "failed": {"total": 0, "listed": []}}}
+ "requests": {"missing": {"total": 0, "listed": []}, "failed": {"total": 0, "listed": []}, "fallback": {"total": 0, "listed": []}}}
 ```
 
 - `history.events` holds each kind's latest 25 in the window, oldest first; `counts` every kind's total. A `merge`, `moved`, `local` or `recording_replaced` event also carries its `item_id` and `data`, which the digest judges: a merge or a move between unrelated recordings or albums, an extra left to `music-audit-dupes`, a guessed recording ID `music-mb-fingerprint --recheck` replaced (`data.old`, `data.new`, `data.score`, homelab#2543). With the event store unavailable, `history` is `{"error": "…"}` and the rest still answers.
 - `issues.stuck`: `failed` and `missing` albums (a feed's, which never fall back), grabs SABnzbd hasn't finished in 12 hours, and fallbacks spotdl hasn't filled in 14.
 - `issues.mixed` is the last album tick's; `only_copies` are the files in `quarantine/replaced/` holding a recording the library doesn't; `path_clashes` the items canon tagged in place (`canon_clash`); `empty_slots` the last scan's (the `empty-slots` document), playlists with none left out; `rejects` the length guard's files still in `quarantine/rejected/`.
-- `requests` (homelab#2478) are the album requests whose album ended `missing` or `failed`, each as `list_requests` shows it. A request that misses stays `missing` until the MusicBrainz-built fallback: it never goes to spotdl. With the database down both are empty and an `error` says so.
+- `requests` (homelab#2478) are the album requests whose album ended `missing` or `failed`, or is in `fallback` with tracks left, each as `list_requests` shows it (`fallback_rejected` and `acoustid_unknown_only` included). With the database down all three are empty and an `error` says so.
 
 ## Overrides (any tier, homelab#2484)
 
@@ -179,14 +179,17 @@ Before `music-overrides import` has run, or with the database down: `503 {"statu
 
 ### `GET /mcp-api/requests[?status=S][&offset=N]` (`list_requests`)
 
-The album requests in the `music` database (`music_fetch.album_requests`), oldest first. A request names a MusicBrainz release group; `album` is the album row that has it (its key, status and origin), or `null` while the next album tick hasn't queued it, when `status` is `pending`. Otherwise `status` is the album's (`wanted`, `dry-run`, `grabbed`, `missing`, `have`, `imported`, `failed`, `fallback`, `filled`); `?status=` keeps only those. `tracklist_release` is the release the tracklist was read from: the `preferred_release`, else one with the release group's most common track count.
+The album requests in the `music` database (`music_fetch.album_requests`), oldest first. A request names a MusicBrainz release group; `album` is the album row that has it (its key, status and origin), or `null` while the next album tick hasn't queued it, when `status` is `pending`. Otherwise `status` is the album's (`wanted`, `dry-run`, `grabbed`, `missing`, `have`, `imported`, `failed`, `fallback`, `filled`); `?status=` keeps only those. `tracklist_release` is the release the tracklist was read from: the `preferred_release`, else one with the release group's most common track count. A `fallback` album also has `fallback_left`, the tracks spotdl still has to get, and (homelab#2546) `fallback_rejected`, those of them whose download is held in `quarantine/rejected/request/`, by reason: `fingerprint` (AcoustID named other recordings, or ours below 0.85, or the file couldn't be fingerprinted), `acoustid-unknown` (AcoustID has no MusicBrainz recording for the audio: no result, or only results with no recording), `duration`, `silence`. `acoustid_unknown_only` is true when there is at least one and every one is `acoustid-unknown`. Rejects from before homelab#2546 all read `fingerprint`.
 
 ```json
 {"status": "ok", "filter": null, "total": 1, "offset": 0, "next_offset": null,
  "requests": [{"release_group": "6e0a…", "artist": "…", "name": "…", "preferred_release": null,
                "tracklist_release": "b84e…", "tracks": 10, "requested_by": "sub-…", "requested_at": "2026-10-30T09:00:00Z",
                "status": "missing",
-               "album": {"key": "2120", "status": "missing", "origin": "request", "searched_at": "…", "query": "…"}}]}
+               "album": {"key": "2120", "status": "missing", "origin": "request", "searched_at": "…", "query": "…"}},
+              {"release_group": "…", "…": "…", "status": "fallback",
+               "album": {"key": "2131", "status": "fallback", "origin": "request", "searched_at": "…", "query": "…",
+                         "fallback_left": 22, "fallback_rejected": {"acoustid-unknown": 18}, "acoustid_unknown_only": true}}]}
 ```
 
 With the database down: `503 {"status": "unavailable", "error": "…"}`.

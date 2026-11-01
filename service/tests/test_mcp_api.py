@@ -585,6 +585,48 @@ def test_event_history_returns_no_credential(env, client, event_store):
         assert resp.status_code == 200 and mcp_harness.SECRET not in resp.get_data(as_text=True), path
 
 
+@needs_pg
+def test_list_requests_and_the_digest_show_why_a_fallbacks_downloads_were_rejected(env, client, tmp_path,
+                                                                                    monkeypatch):
+    """homelab#2546: a fallback whose every reject is AcoustID knowing no recording says so."""
+    from music_fetch import album_requests as req
+    from music_fetch import albums
+    from music_fetch import state as statedb
+    from music_scan import guard
+
+    recs = [f"0000000{i}-0000-4000-8000-00000000000{i}" for i in (1, 2, 3)]
+    with statedb.session() as conn:
+        assert req.add(conn, req.Tracklist(RG, "b84e6c2a-2d38-3d3c-9d38-4f0c2b5b7a11", "Band", "Transa",
+                                           [["T", "Band", None, None, 1, n] for n in (1, 2, 3)]), "sub-1")
+    state = albums.State.load()
+    state.albums["REQ1"] = {**statedb.new_record("REQ1"), "artist": "Band", "name": "Transa",
+                            "status": albums.FALLBACK, "origin": albums.REQUEST, "release_group": RG,
+                            "fallback_at": "2026-10-31T00:00:00+00:00", "fallback_tracks": {req.SOURCE: recs}}
+    state.save()
+    held = tmp_path / "quarantine" / "rejected" / req.SOURCE
+    held.mkdir(parents=True)
+    urls = {}
+    for n, rec in enumerate(recs[:2]):  # the third: spotdl found nothing
+        (held / f"{n}.m4a").write_bytes(b"x")
+        (held / f"{n}.m4a.reason").write_text(f"acoustid-unknown: not recording {rec}: …\n")
+        urls[f"{n}.m4a"] = req.recording_url(rec)
+    monkeypatch.setattr(guard, "song_url", lambda path: urls.get(Path(path).name))
+
+    [listed] = client.get("/mcp-api/requests", headers=READ).get_json()["requests"]
+    assert listed["status"] == "fallback"
+    assert listed["album"]["fallback_left"] == 3
+    assert listed["album"]["fallback_rejected"] == {"acoustid-unknown": 2}
+    assert listed["album"]["acoustid_unknown_only"] is True
+    [digested] = client.get("/mcp-api/digest_summary", headers=READ).get_json()["requests"]["fallback"]["listed"]
+    assert digested["album"] == listed["album"]
+
+    # One download AcoustID named as another recording: no longer unknown only.
+    (held / "1.m4a.reason").write_text(f"fingerprint: not recording {recs[1]}: …\n")
+    album = client.get("/mcp-api/requests", headers=READ).get_json()["requests"][0]["album"]
+    assert album["fallback_rejected"] == {"acoustid-unknown": 1, "fingerprint": 1}
+    assert album["acoustid_unknown_only"] is False
+
+
 def test_stuck_names_stale_grabs_and_fallbacks_only():
     from datetime import datetime, timezone
 

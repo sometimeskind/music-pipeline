@@ -260,7 +260,7 @@ def make_blueprint(jobs: mcp_jobs.JobQueue) -> Blueprint:
                 "empty_slots": mcp_history.empty_slots(),
                 "rejects": mcp_history.rejects(quarantine),
             }
-        requests = mcp_history.requests(state)
+        requests = mcp_history.requests(state, quarantine / "rejected")
         return jsonify({"status": "ok", "since": _z(since), "until": _z(now.isoformat(timespec="seconds")),
                         "history": history, "issues": issues, "requests": requests})
 
@@ -297,6 +297,7 @@ def make_blueprint(jobs: mcp_jobs.JobQueue) -> Blueprint:
         from music_fetch import album_requests  # noqa: PLC0415
         from music_fetch import state as statedb  # noqa: PLC0415
         from music_fetch.album_requests_cli import STATUSES  # noqa: PLC0415
+        from music_scan.guard import request_rejects  # noqa: PLC0415
         from music_service.mcp_tools import BadRequest  # noqa: PLC0415
 
         status = request.args.get("status") or None
@@ -306,7 +307,8 @@ def make_blueprint(jobs: mcp_jobs.JobQueue) -> Blueprint:
         read("list_requests", status=status)
         try:
             with statedb.session() as conn:
-                found = album_requests.listing(conn, statedb.load_albums(conn), status)
+                found = album_requests.listing(conn, statedb.load_albums(conn), status,
+                                               request_rejects(quarantine / "rejected"))
         except (statedb.Unavailable, psycopg.Error) as exc:
             logger.warning("[MCP] reading the requests failed: %s", exc)
             return jsonify({"status": "unavailable", "error": f"the music database: {type(exc).__name__}"}), 503

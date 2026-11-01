@@ -39,8 +39,9 @@ class ScanMetrics:
     tracks_imported: int = 0
     failure_reason: str = ""
     lossless_items: int | None = None
-    # Downloads the length guard rejected, per reason (#165).
-    rejected: dict[str, int] = field(default_factory=lambda: {"duration": 0, "silence": 0, "fingerprint": 0})
+    # Downloads the length guard rejected, per reason (#165; guard.REASONS, homelab#2546's acoustid-unknown).
+    rejected: dict[str, int] = field(default_factory=lambda: {"duration": 0, "silence": 0, "fingerprint": 0,
+                                                              "acoustid-unknown": 0})
     # Playlist entries with no library item, per playlist (#228).
     slots_empty: dict[str, int] = field(default_factory=dict)
     # Files left in quarantine/replaced/ by kind (superseded, only_copy) and

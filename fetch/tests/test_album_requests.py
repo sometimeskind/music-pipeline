@@ -574,6 +574,50 @@ def test_the_tick_queues_a_request_and_the_listing_follows_its_album(pg_url, tmp
         assert origin == ("request",)
 
 
+# --- a fallback's rejects (homelab#2546) ---
+
+REC_A, REC_B, REC_C = (f"0000000{i}-0000-4000-8000-00000000000{i}" for i in (1, 2, 3))
+
+
+def _fallback_entry(left: list[str], rejects: dict[str, str] | None) -> dict:
+    record = {"artist": "Band", "name": "The Album", "status": albums.FALLBACK, "origin": albums.REQUEST,
+              "release_group": RG, "fallback_tracks": {req.SOURCE: left}}
+    request = req.Request(RG, R12, "Band", "The Album", [["T", "Band", None, None, 1, 1]] * 3)
+    return req.entry(request, state.AlbumRows(albums={"7": record}), rejects)
+
+
+def test_a_fallback_whose_every_reject_is_unknown_to_acoustid_says_so():
+    # REC_C was never downloaded (spotdl found nothing): it is left, but no reject.
+    album = _fallback_entry([REC_A, REC_B, REC_C], {REC_A: "acoustid-unknown", REC_B: "acoustid-unknown"})["album"]
+    assert album["fallback_left"] == 3
+    assert album["fallback_rejected"] == {"acoustid-unknown": 2}
+    assert album["acoustid_unknown_only"] is True
+
+
+def test_a_fallback_with_another_reason_among_its_rejects_is_not_unknown_only():
+    album = _fallback_entry([REC_A, REC_B], {REC_A: "acoustid-unknown", REC_B: "fingerprint"})["album"]
+    assert album["fallback_rejected"] == {"acoustid-unknown": 1, "fingerprint": 1}
+    assert album["acoustid_unknown_only"] is False
+
+
+def test_only_the_tracks_left_count_and_no_rejects_is_not_unknown_only():
+    # REC_B's reject is moot: the library holds the track now (a Usenet release, or a later download).
+    album = _fallback_entry([REC_A], {REC_B: "fingerprint"})["album"]
+    assert album["fallback_rejected"] == {} and album["acoustid_unknown_only"] is False
+    # Without the rejects read, the entry is as before.
+    assert set(_fallback_entry([REC_A], None)["album"]) >= {"fallback_left"}
+    assert "fallback_rejected" not in _fallback_entry([REC_A], None)["album"]
+
+
+def test_music_requests_list_names_the_rejects():
+    line = cli._listed(_fallback_entry([REC_A, REC_B], {REC_A: "acoustid-unknown", REC_B: "acoustid-unknown"}))
+    assert ": album 7, fallback (request), 2 track(s) left (acoustid-unknown 2 rejected: all unknown to AcoustID); " \
+        in line
+    mixed = cli._listed(_fallback_entry([REC_A, REC_B], {REC_A: "acoustid-unknown", REC_B: "silence"}))
+    assert "2 track(s) left (acoustid-unknown 1, silence 1 rejected); " in mixed
+    assert "2 track(s) left; " in cli._listed(_fallback_entry([REC_A, REC_B], {}))
+
+
 # --- search (2c) ---
 
 

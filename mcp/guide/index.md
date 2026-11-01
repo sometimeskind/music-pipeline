@@ -39,7 +39,9 @@ purpose → `hold_album`; a `[MISS]` that never resolves → `pin_track` (see `c
 `request_album` asks for whole albums by MusicBrainz release group (an MBID or
 musicbrainz.org URL the user gives, or one `search_releases` found from what the user typed),
 dry run first; `list_requests` shows each request and its
-album's status. A request that misses stays missing: it has no spotdl fallback yet. With
+album's status. A request Usenet misses falls back to spotdl from MusicBrainz (`fallback`); a
+download is imported only when AcoustID confirms it, and acoustid_unknown_only marks an album
+whose rejects AcoustID simply doesn't know, for the operator to decide. With
 `later` the albums also go on Later, whose `.m3u` is in arrival order; `get_later` shows it and
 `remove_from_later` takes albums off, by release group or album. See `requests`.
 
