@@ -434,9 +434,10 @@ class MusicPipelinePlugin(BeetsPlugin):
                 continue
             disambig = item.get("trackdisambig") or ""
             dropped = different_song(title, matched)
-            if title != matched and words(title) == words(matched):
-                # Only case or punctuation differs (In My Time of Need, In My Time Of
-                # Need): no sibling, and MusicBrainz's spelling is the better one.  It
+            if title != matched and "".join(words(title)) == "".join(words(matched)):
+                # Only case, punctuation or spacing differs (In My Time of Need, In My
+                # Time Of Need; Saved theEarth): no sibling, and MusicBrainz's spelling
+                # is the better one.  It
                 # becomes a pending key too, so tag_source_on_stored finds the tags.
                 self._alias_pending((entry.title.lower(), title.lower()), matched.lower())
                 title = matched

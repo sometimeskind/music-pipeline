@@ -189,6 +189,16 @@ def test_different_song_reads_titles_without_their_version_notes() -> None:
     assert not different_song("Its Alright", "It's Alright")  # apostrophes are folded
     assert different_song("Romance in Durango (Live at Harvard Square Theatre, Cambridge, MA - November 1975)",
                           "It Ain't Me, Babe (Live at Harvard Square Theatre, Cambridge, MA - November 1975)")
+    # Release tags misspell: one song still (Illinois, homelab#2544).
+    assert not different_song("In This Temple as in the Hearts of Man for Whom He Saved theEarth",
+                              "In This Temple as in the Hearts of Man for Whom He Saved the Earth")
+    assert not different_song("They Are Night Zombies!! They Are Neighbors!! They Have ComeBack fromthe Dead!! Ahhhh!",
+                              "They Are Night Zombies!! They Are Neighbors!! They Have Come Back From the Dead!! Ahhhh!")
+    assert not different_song("To the Workers of the Rock River Valley Region, I Have an Idea Concerning Your Predicament",
+                              "To the Workers of the Rockford River Valley Region, I Have an Idea Concerning Your Predicament")
+    # Short titles a letter or two apart are two songs.
+    assert different_song("Intro", "Outro")
+    assert different_song("Amy", "Ama")
     # Nothing to compare by: never two songs.
     assert not different_song("恋人", "Koibito")
     assert not different_song("", "Song")
