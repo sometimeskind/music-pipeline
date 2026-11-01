@@ -291,8 +291,16 @@ async def test_the_request_tools(pipeline_url):
         assert later["argv"] == [["music-requests", "add", "--later", "--", rg]], later
         removed = await finish(c, (await c.call_tool("remove_from_later", {
             "release_groups": [f"https://musicbrainz.org/release-group/{rg2}"], "through": 2})).data)
-        assert removed["status"] == "done" and removed["args"] == {"release_groups": [rg2], "through": 2}
+        assert removed["status"] == "done" and removed["args"] == {"release_groups": [rg2], "albums": [],
+                                                                   "through": 2}
         assert removed["argv"] == [["music-later", "remove", "--through=2", "--", rg2]], removed
+        # homelab#2534: by album query, resolved to the key as find_albums resolves it.
+        by_album = await finish(c, (await c.call_tool("remove_from_later", {"albums": ["pastel", "ALB3"]})).data)
+        assert by_album["status"] == "done" and by_album["args"] == {"release_groups": [], "albums": ["ALB3"],
+                                                                     "through": None}, by_album
+        assert by_album["argv"] == [["music-later", "remove", "--album=ALB3"]], by_album
+        ambiguous = (await c.call_tool("remove_from_later", {"albums": ["abbey"]})).data
+        assert ambiguous["status"] == "ambiguous" and {a["key"] for a in ambiguous["candidates"]} == {"ALB1", "ALB2"}
         with pytest.raises(ToolError):
             await c.call_tool("remove_from_later", {})
         for albums in ([{"release_group": "not an mbid"}],

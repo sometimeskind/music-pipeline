@@ -198,6 +198,27 @@ def test_music_later_removes_by_release_group_and_through(music_db, caplog):
 
 
 @needs_pg
+def test_music_later_removes_by_album(music_db, caplog):
+    """homelab#2534: --album names an album as find_albums does; an ambiguous one refuses."""
+    _rows(_album(RG, albums.HAVE, "First"), _album(RG2, albums.HAVE, "Second"), _album(RG3, albums.WANTED, "Third"))
+    with state.connect() as conn, conn.transaction():
+        later_queue.add(conn, [RG, RG2], state.load_albums(conn), {})
+    dry = _run(later_cli, ["remove", "--album=band — second", "--album=Third", "--album", RG2, "--", RG2], caplog)
+    assert dry == [
+        f"Band — Third [release group {RG3}]: not on Later; nothing changes",
+        f"Remove 1 of 1: Band — Second [release group {RG2}]: position 2 of 2",
+        "1 album(s) leave Later at the next scan's regen; their files stay in the library",
+        "Dry run; --apply to write"]
+    with pytest.raises(later_cli.req.Refused, match="--album: 3 album\\(s\\) match 'Band'"):
+        _run(later_cli, ["remove", "--album=Band"], caplog)
+    with pytest.raises(later_cli.req.Refused, match="--album: 0 album"):
+        _run(later_cli, ["remove", "--album=nothing like it"], caplog)
+    applied = _run(later_cli, ["remove", "--apply", "--album=Second"], caplog)
+    assert applied[-1] == "Applied: 1 album(s) removed from Later"
+    assert [e.release_group for e in _queue()] == [RG]
+
+
+@needs_pg
 def test_music_later_refuses_a_through_past_the_end_and_an_empty_call(music_db, caplog):
     _rows(_album(RG, albums.HAVE))
     with state.connect() as conn, conn.transaction():

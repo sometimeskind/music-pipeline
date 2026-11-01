@@ -4,8 +4,10 @@
 ``remove_from_later`` shows the dry run before an apply and compares it again
 before applying, so it prints nothing that changes between two runs.  The
 albums to remove are named by release group after ``--`` (an MBID or a
-musicbrainz.org URL), or ``--through N`` takes Later's first N albums in
-``.m3u`` order: the ones listened to.  Albums are appended by
+musicbrainz.org URL), by album with ``--album`` (as ``find_albums`` names one:
+its key, a Spotify album ID or URL, ``artist — album`` or a part matching one
+album; homelab#2534), which reaches an entry held by ref too, or ``--through N``
+takes Later's first N albums in ``.m3u`` order: the ones listened to.  Albums are appended by
 ``music-requests add --later``.  ``auto-requests`` lists the albums the next
 album tick requests automatically (homelab#2535, :mod:`music_fetch.later_requests`):
 read-only, and it reads nothing but the music database.
@@ -16,14 +18,17 @@ from __future__ import annotations
 import argparse
 import logging
 import sys
+from collections.abc import Sequence
 
 import psycopg
 
 from music_fetch import album_requests as req
 from music_fetch import later_queue as later
 from music_fetch import later_requests
+from music_fetch import overrides as ov
 from music_fetch import state as statedb
 from music_fetch.album_requests_cli import _connect
+from music_fetch.overrides_cli import select_album
 
 logger = logging.getLogger(__name__)
 
@@ -39,15 +44,30 @@ def parse(specs: list[str]) -> list[str]:
     return list(out)
 
 
+def select(rows: statedb.AlbumRows, queries: list[str]) -> list[tuple[str, dict]]:
+    """The album rows *queries* name, in order, each once: each query must name
+    exactly one row (:func:`overrides_cli.select_album`), else nothing is done."""
+    out: dict[str, dict] = {}
+    for query in queries:
+        try:
+            key, record = select_album(rows, query)
+        except ov.Refused as exc:
+            raise req.Refused(f"--album: {exc}") from exc
+        out.setdefault(key, record)
+    return list(out.items())
+
+
 def remove_dry_run(conn: psycopg.Connection, rows: statedb.AlbumRows, groups: list[str],
-                   through: int | None) -> tuple[list[later.Entry], list[str]]:
+                   through: int | None, albums: Sequence[str] = ()) -> tuple[list[later.Entry], list[str]]:
     """The entries ``--apply`` would remove, and the dry run's lines: the
-    first *through* available albums, then *groups* in order.  A release
-    group not on Later is listed and left as it is.  An entry named by ref
-    alone (queued by the cutover before its row had a release group) is
-    removed by *through* only."""
-    if not groups and not through:
-        raise req.Refused("name at least one release group, or --through")
+    first *through* available albums, then *groups*, then *albums* in order.
+    A release group or album not on Later is listed and left as it is.  An
+    entry named by ref alone (queued by the cutover before its row had a
+    release group) is reached by its album (homelab#2534) or by *through*,
+    never by release group."""
+    if not groups and not albums and not through:
+        raise req.Refused("name at least one release group or --album, or --through")
+    selected = select(rows, list(albums))
     entries = later.load(conn)
     available = [e for e in entries if e.available_at is not None]
     position = {e.id: n for n, e in enumerate(available, 1)}
@@ -63,6 +83,19 @@ def remove_dry_run(conn: psycopg.Connection, rows: statedb.AlbumRows, groups: li
             chosen.setdefault(on[group].id, on[group])
         else:
             lines.append(f"{_named(group, index.groups.get(group), requests)}: not on Later; nothing changes")
+    # An album's row is on Later by release group or by ref: the entries whose row it is.
+    # Two entries are one row only between a release group arriving and the regen merging them.
+    held: dict[str, list[later.Entry]] = {}
+    for entry in entries:
+        if (found := index.find(entry)) is not None:
+            held.setdefault(found[0], []).append(entry)
+    for key, record in selected:
+        if key in held:
+            for entry in held[key]:
+                chosen.setdefault(entry.id, entry)
+        else:
+            lines.append(f"{_named(record.get('release_group'), (key, record), requests, later.ref(record))}"
+                         f": not on Later; nothing changes")
     for n, entry in enumerate(chosen.values(), 1):
         where = (f"position {position[entry.id]} of {len(available)}" if entry.id in position
                  else "pending: not in the .m3u yet")
@@ -103,6 +136,9 @@ def _parser() -> argparse.ArgumentParser:
     p = sub.add_parser("remove", help="take albums off Later (their files stay)")
     p.add_argument("--apply", action="store_true", help="write it (a dry run without)")
     p.add_argument("--through", type=int, metavar="N", help="Later's first N albums, in .m3u order")
+    p.add_argument("--album", action="append", default=[], metavar="QUERY",
+                   help="an album, held on Later by release group or by ref: its key, a Spotify album ID or URL, "
+                        "'artist — album', or a part matching one album (repeatable)")
     p.add_argument("groups", nargs="*", metavar="RELEASE_GROUP", help="a release group MBID or URL")
     return parser
 
@@ -124,7 +160,7 @@ def run(args: argparse.Namespace) -> None:
             for line in later_requests.lines(later_requests.plan(conn, rows)):
                 logger.info("%s", line)
             return
-        out, lines = remove_dry_run(conn, rows, groups, args.through)
+        out, lines = remove_dry_run(conn, rows, groups, args.through, args.album)
         for line in lines:
             logger.info("%s", line)
         if not args.apply:

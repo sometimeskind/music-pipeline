@@ -148,9 +148,11 @@ async def test_reads_route_to_the_contract(pipeline, fake, tool, args, method, p
     ("request_album", {"albums": [{"release_group": "rg-1"}], "later": True}, "/mcp-api/run/request_album",
      {"albums": [{"release_group": "rg-1", "preferred_release": None}], "later": True, "apply": False}),
     ("remove_from_later", {"release_groups": ["rg-1"], "through": 2}, "/mcp-api/run/remove_from_later",
-     {"release_groups": ["rg-1"], "through": 2, "apply": False}),
+     {"release_groups": ["rg-1"], "albums": [], "through": 2, "apply": False}),
     ("remove_from_later", {"through": 1, "apply": True}, "/mcp-api/run/remove_from_later",
-     {"release_groups": [], "through": 1, "apply": True}),
+     {"release_groups": [], "albums": [], "through": 1, "apply": True}),
+    ("remove_from_later", {"albums": ["band — album"]}, "/mcp-api/run/remove_from_later",
+     {"release_groups": [], "albums": ["band — album"], "apply": False}),
 ])
 async def test_runs_post_the_contract_body(pipeline, fake, tool, args, path, body):
     async with Client(build_server(pipeline, lambda: TOM)) as client:

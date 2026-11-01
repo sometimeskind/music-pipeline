@@ -273,14 +273,30 @@ def test_remove_from_later_normalises_its_release_groups(client, env):
     resp = client.post("/mcp-api/run/remove_from_later", headers=WRITE, json={
         "release_groups": [RG2, f"https://musicbrainz.org/release-group/{RG}", RG], "through": 3})
     assert resp.status_code == 200, resp.json
-    assert resp.json["args"] == {"release_groups": [RG2, RG], "through": 3}
+    assert resp.json["args"] == {"release_groups": [RG2, RG], "albums": [], "through": 3}
     assert env["commands"].ran[-1] == ["music-later", "remove", "--through=3", "--", RG2, RG]
     resp = client.post("/mcp-api/run/remove_from_later", headers=WRITE, json={"through": 1})
     assert env["commands"].ran[-1] == ["music-later", "remove", "--through=1"]
     for body in ({}, {"release_groups": []}, {"through": 0}, {"through": True}, {"release_groups": "x"},
-                 {"release_groups": ["abc"]}, {"release_groups": [RG], "surprise": 1}):
+                 {"release_groups": ["abc"]}, {"release_groups": [RG], "surprise": 1}, {"albums": "pastel"},
+                 {"albums": [""]}, {"albums": [3]}, {"albums": ["pastel"] * 26}):
         assert client.post("/mcp-api/run/remove_from_later", json=body, headers=WRITE).status_code == 400, body
     assert client.post("/mcp-api/run/remove_from_later", json={"through": 1}, headers=READ).status_code == 403
+
+
+def test_remove_from_later_resolves_its_albums(client, env):
+    """homelab#2534: an album query, resolved to its key as find_albums resolves it."""
+    resp = client.post("/mcp-api/run/remove_from_later", headers=WRITE, json={
+        "albums": ["pastel", "Nina Simone — Pastel Blues", "ALB3"]})
+    assert resp.status_code == 200, resp.json
+    assert resp.json["args"] == {"release_groups": [], "albums": ["ALB3"], "through": None}
+    assert env["commands"].ran[-1] == ["music-later", "remove", "--album=ALB3"]
+    before = len(env["commands"].ran)
+    amb = client.post("/mcp-api/run/remove_from_later", headers=WRITE, json={"albums": ["pastel", "abbey"]})
+    assert amb.status_code == 200 and amb.json["status"] == "ambiguous" and len(amb.json["candidates"]) == 2
+    missing = client.post("/mcp-api/run/remove_from_later", headers=WRITE, json={"albums": ["zzz nothing"]})
+    assert missing.json["status"] == "not_found"
+    assert len(env["commands"].ran) == before
 
 
 @pytest.fixture
