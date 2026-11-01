@@ -44,12 +44,14 @@ beets item (an integer: get_item, merge_items pairs, replace_item, unlink_spotif
 audit_dupes fingerprint_ids);
 get_album also shows beets album IDs, which no tool takes. A playlist entry resolves to an item
 by Spotify track ID (song_id) or ISRC. replace_item takes a YouTube video ID or URL. A tool run
-that outlasts the inline wait returns a job_id: poll get_job.
+that outlasts the inline wait returns a job_id: poll get_job. recheck_recordings is a long job
+(about an hour for the whole library) in a lane of its own: it survives a restart, its job_id is
+the run ID, and apply_recheck applies the finished run.
 
 Tiers. Read tools anyone signed in may use. Write tools (reset_album, requeue_albums,
-merge_items, replace_item, unlink_spotify_id, embed_covers, canon_albums, set_search_override,
-clear_search_override, hold_album, release_album, pin_track, unpin_track, request_album,
-remove_from_later) are a dry run unless
+merge_items, replace_item, unlink_spotify_id, embed_covers, canon_albums, apply_recheck,
+set_search_override, clear_search_override, hold_album, release_album, pin_track, unpin_track,
+request_album, remove_from_later) are a dry run unless
 apply=true, and
 apply is accepted only after a dry run with the same arguments in the last 15 minutes whose
 output still matches: show the user the dry run and apply only once they agree. If an apply
@@ -297,6 +299,25 @@ def build_server(
         """music-audit-want-albums: the tracks still wanted, grouped by album."""
         return await run("audit_want_albums", {})
 
+    @mcp.tool(annotations={"readOnlyHint": True})
+    async def recheck_recordings(
+        ids: Annotated[list[ItemId] | None, Field(description="only these item IDs (default: every item with "
+                                                              "an mb_trackid)")] = None,
+        resume: Annotated[str | None, Field(description="continue this run (its job_id) after it failed or was "
+                                                        "interrupted, with the items it was started with")] = None,
+    ) -> dict:
+        """music-mb-fingerprint --recheck as a recorded run: each item's guessed MusicBrainz recording
+        checked against what AcoustID names for its audio. A whole-library run takes about an hour, in
+        a lane of its own (one at a time; other tools keep working), and resumes after a restart from
+        its checkpoint. Changes nothing: its job_id is the run ID apply_recheck takes once it is done.
+        Poll get_job; its progress field says how far it has got."""
+        body: dict[str, Any] = {}
+        if ids:
+            body["ids"] = ids
+        if resume:
+            body["resume"] = resume
+        return await run("recheck_recordings", body)
+
     # ---- writes: dry run, then apply ----
 
     @mcp.tool(annotations={"destructiveHint": True})
@@ -373,6 +394,17 @@ def build_server(
         canonical album identity."""
         body = {"refresh": refresh, "search_budget": search_budget, "mb_budget": mb_budget, "apply": apply}
         return await run("canon_albums", body, write=True)
+
+    @mcp.tool(annotations={"destructiveHint": True})
+    async def apply_recheck(
+        run_id: Annotated[str, Field(description="the job_id of a finished recheck_recordings run")],
+        apply: Apply = False,
+    ) -> dict:
+        """music-mb-fingerprint --replace-run: a finished recheck run's replacements. The dry run
+        reads the run's findings (no AcoustID) and says, item by item, what the apply does as the
+        library stands now; an item whose mb_trackid or file changed since its check is skipped.
+        Refused for a run not finished or finished over 7 days ago."""
+        return await run("apply_recheck", {"run_id": run_id, "apply": apply}, write=True)
 
     # ---- search overrides, holds and pins: dry run, then apply ----
 

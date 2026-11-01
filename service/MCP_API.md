@@ -47,7 +47,8 @@ One that matches none: `404 {"status": "not_found", "query": "..."}`.
  "album_mode": "on",
  "quarantine": {"unmatched": 14, "rejected": 3, "replaced": 120},
  "playlists": ["chill", "running"],
- "jobs": {"running": {"job_id": "…", "tool": "canon_albums", "status": "running"}, "queued": 1, "depth": 5}}
+ "jobs": {"running": {"job_id": "…", "tool": "canon_albums", "status": "running"}, "queued": 1, "depth": 5,
+          "long": {"job_id": "…", "tool": "recheck_recordings", "status": "running", "lane": "long"}}}
 ```
 
 ### `GET /mcp-api/albums?query=Q` (`find_albums`)
@@ -210,7 +211,9 @@ With the database down: `503 {"status": "unavailable", "error": "…"}`.
 
 ## Jobs
 
-The CLI tools run as jobs in a **single-slot queue** of depth 5: at most 5 jobs are queued or running at once. A 6th call returns `503 {"status": "busy", "queue": [<job summary>…]}`. Jobs run one at a time, in order, each one a subprocess of the CLI (`argv` below).
+The CLI tools run as jobs in a **single-slot queue** of depth 5 (the short lane): at most 5 jobs are queued or running at once. A 6th call returns `503 {"status": "busy", "queue": [<job summary>…]}`. Jobs run one at a time, in order, each one a subprocess of the CLI (`argv` below).
+
+**The long lane** (homelab#2553) runs at most one long job (`recheck_recordings`) beside the short lane, so the short tools keep working while it runs. A second long job while one is queued or running returns `503 {"status": "busy", "queue": [<the long job>]}`. A long job holds no lock of its own: a CLI that writes in a long job takes its locks itself, for that phase only.
 
 ### Running a tool
 
@@ -224,9 +227,9 @@ The CLI tools run as jobs in a **single-slot queue** of depth 5: at most 5 jobs 
 ```json
 {"job_id": "3f2a…", "tool": "reset_album", "args": {"album": "0ETF…", "reimport": false}, "mode": "dry_run",
  "status": "done", "caller": "a1b2…", "tier": "write",
- "argv": [["music-album-reset", "--", "0ETF…"]],
+ "argv": [["music-album-reset", "--", "0ETF…"]], "lane": "short", "resumable": false, "resumes": 0,
  "created_at": "…", "started_at": "…", "finished_at": "…", "exit_code": 0,
- "dry_run_hash": "sha256:…", "error": null,
+ "dry_run_hash": "sha256:…", "error": null, "progress": null,
  "output": "…one page…", "offset": 0, "next_offset": null, "total_lines": 12}
 ```
 
@@ -238,11 +241,13 @@ The CLI tools run as jobs in a **single-slot queue** of depth 5: at most 5 jobs 
 | `done` | every command exited 0 |
 | `failed` | a command exited non-zero (`exit_code`), or the job could not run (`error`) |
 | `refused` | an apply whose fresh dry run no longer matches: `output` is the new dry run, which now counts as the dry run to apply |
-| `interrupted` | it was queued or running when the service restarted; never retried |
+| `interrupted` | it was queued or running when the service restarted and is not resumable, or was resumed 5 times already; never retried |
 
 `args` are the **normalised** arguments: album queries resolved to their key, ID lists deduplicated and sorted, `since` in UTC. `argv` lists each command the job runs (`merge_items` runs one per pair). `dry_run_hash` is set on a successful dry run and on a refused apply.
 
-Records live on pipeline-state (`inbox/spotdl/.mcp-jobs.json`, output in `.mcp-jobs/<job_id>.log`). The last 50 jobs and every job of the last 7 days are kept, whichever is more. On boot, `queued`, `waiting_for_lock` and `running` jobs become `interrupted`.
+`lane` is `short` or `long`. `progress` is the output's latest `[PROGRESS] <done>/<total>…` line as `{"done": n, "total": n, "line": "…", "at": "<its log timestamp>"}`, or `null`: a long job's progress without paging through its output.
+
+Records live on pipeline-state (`inbox/spotdl/.mcp-jobs.json`, output in `.mcp-jobs/<job_id>.log`). The last 50 jobs and every job of the last 7 days are kept, whichever is more. On boot, `queued`, `waiting_for_lock` and `running` jobs become `interrupted`, except a **resumable** one (`resumable: true`: a long job, and an apply of `apply_recheck` once its dry-run comparison has passed, `applying: true`; one cut short before that ends `interrupted` with nothing applied). That job is queued again with the same `job_id`, `resumes` one higher and `resumed_at` set, and its output goes on after what it printed before (`[MCP] resumed after a restart (n of 5)`). A long job's CLI continues from its own checkpoint. A resumed apply takes its locks again and runs only its `--apply` commands, since the dry-run comparison passed before the restart. The CLI checks each item again, and an item applied before the restart is counted as done. After 5 resumes a job is `interrupted` (`error` says so), so a job that kills the pod is not run forever.
 
 Every job logs `[MCP]` lines to the pod log: one at the start with its argv, caller, tier and mode, every output line, and one at the end with its status and exit code.
 
@@ -264,9 +269,12 @@ A write tool's **apply** takes Prefect's `pipeline` lock (and first `albums`, fo
 | `audit_lengths` | `{"silence": false}` | `music-audit-lengths [--silence]` |
 | `audit_releases` | `{"replaced_query": "…"}` (optional; `""` lists every only copy) | `music-album-audit-releases` / `… --replaced` / `… --replaced=QUERY` |
 | `audit_want_albums` | `{}` | `music-audit-want-albums` |
+| `recheck_recordings` | `{"ids": [6994, 5672]}` (optional; none = every item with an `mb_trackid`) or `{"resume": "<run ID>"}` | `music-mb-fingerprint --recheck --run-id=<job_id> [-- ID…]` / `… --run-id=<run ID>` (long lane) |
 | `search_releases` | `{"query": "…", "limit": 5}` | `music-requests search --limit=N -- QUERY` |
 
 `audit_releases --replaced` takes the CLI's query as given, ambiguity included: the CLI itself refuses more than one match.
+
+`recheck_recordings` (homelab#2553) is a recorded `music-mb-fingerprint --recheck` in the long lane: each item's guessed MusicBrainz recording (`mb_trackid`) checked against the recordings AcoustID links to its audio, at 3 lookups a second (about an hour for the whole library). Its run ID is its `job_id`. The run stores a checkpoint every 25 items and its findings in the `music` database, so a restart resumes it (above) and `apply_recheck` applies it. It changes nothing in the library. `ids` (positive integers, deduplicated and sorted) limits it to those items. `resume` (a run ID: 1 to 64 letters, digits, `-` or `_`, starting with a letter or digit) continues a run that ended `failed` or `interrupted`, with the items it was started with, so it can't be combined with `ids`. A finished run, an unknown one, or one another process holds fails the call (exit 1).
 
 `search_releases` (homelab#2478) reads only MusicBrainz, never the library: it sends `query` (1 to 200 characters, whitespace collapsed) as given, in MusicBrainz's release-group search syntax, so it must be what the user typed, never a title read from the library. It lists the best `limit` matches (1 to 10, default 5), each release group with its primary and secondary types, first year and its releases, earliest first (at most 15 listed, the rest counted): date, country, media, disambiguation and track count. A release group whose secondary types include Live, Remix, Compilation, Demo, DJ-mix or Mixtape/Street is `Flagged: …: not a studio album`; a release not official, or whose disambiguation says live, demo, remix or compilation, is `[flagged: …]`. Each match costs a release browse at one MusicBrainz read a second, so a long list outlasts the inline wait. A query MusicBrainz rejects, or MusicBrainz down, fails the call (exit 1).
 
@@ -283,6 +291,7 @@ Every write tool's body takes `"apply": false` (the default) or `true`.
 | `unlink_spotify_id` | `{"id": 9674, "track": "…"}` | `music-audit-dupes --unlink <id> <track id>` | pipeline |
 | `embed_covers` | `{}` | `music-embed-covers` | pipeline |
 | `canon_albums` | `{"refresh": false, "search_budget": null, "mb_budget": null}` | `music-canon-albums [--refresh] [--search-budget N] [--mb-budget N]` | pipeline |
+| `apply_recheck` | `{"run_id": "…"}` | `music-mb-fingerprint --replace-run=<run ID>` | pipeline |
 | `set_search_override` | `{"album": "…", "words": "…", "reason": ""}` | `music-overrides search [--reason=R] -- <key> <words>` | none |
 | `clear_search_override` | `{"album": "…"}` | `music-overrides clear-search -- <key>` | none |
 | `hold_album` | `{"album": "…", "reason": "…"}` | `music-overrides hold --reason=R -- <key>` | none |
@@ -305,6 +314,8 @@ The override tools (homelab#2484) write rows of their own tables, which the tick
 `remove_from_later` (homelab#2478) takes `release_groups` (up to 25, MBIDs or URLs, deduplicated in order) and `through`, a positive integer: Later's first N albums, `get_later`'s positions 1 to N. At least one is needed. A release group not on Later is listed and left as it is; a `through` past the end of Later fails the call (exit 1). The apply deletes the queue rows, each with a `later_removed` event and the caller, in one transaction; `later.m3u` drops the albums at the next scan, and their files stay in the library. The scan's regen reads the queue, so it takes no lock.
 
 `unlink_spotify_id` (homelab#2530) takes one Spotify track ID (`track`: an ID or `open.spotify.com/track` URL, reduced to the ID) off one item's `spotify_ids`. A playlist entry resolves by Spotify ID before ISRC, so an item that wrongly holds an entry's ID takes its slot even when the right item holds the entry's ISRC. An ID the item doesn't hold, or its `spotify_url` ID (its file was downloaded for that entry: `replace_item` it instead), fails the call (exit 1). The dry run prints the field before and after, and each playlist entry listing the ID with the item it resolves to afterwards (`resolver`'s rule), or that its slot goes empty. The apply stores the item, records a `wrong_version` event, regenerates the `.m3u` files and triggers a Navidrome scan. It is undone by hand: `beet modify id:<id> spotify_ids=<the dry run's before value>`.
+
+`apply_recheck` (homelab#2553) takes the `job_id` of a finished `recheck_recordings` run. Its dry run reads the run's findings, not AcoustID. For each replaceable item it says what the apply does as the library stands: `[WOULD-REPLACE] <id> — <title>: mb_trackid <old> → <new>`, `[SKIP] <id>: <why>` (gone from the library, its `mb_trackid` changed, or its file's path, size or mtime changed since the check: `replace_item` swaps the audio and keeps `mb_trackid`), or `[DONE]` (it holds the replacement already). The apply stores each replacement with its `recording_replaced` event (`data.run`) and the finding's outcome in one transaction, then writes the file's tags. It is guarded like any write (the dry run's hash, 15 minutes). Items with several recordings are left alone. A run that isn't finished, or that finished more than 7 days ago, fails the call (exit 1); runs are pruned 30 days after they finish. The apply is resumable (above): resumed or run again, it re-checks every item, so a partly applied run finishes without a second event for an item it already replaced.
 
 `merge_items` runs its pairs in order and stops at the first that fails; each pair is its own CLI run, so the pairs before it stay merged. Within a pair, beets commits each store and removal on its own (no transaction spans the merge), so a crash mid-pair can leave the keeper with the loser's IDs and the loser still in the library: rerun the pair.
 

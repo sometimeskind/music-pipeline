@@ -41,7 +41,8 @@ class Locks:
 
     @contextlib.contextmanager
     def __call__(self, names):
-        jobs = self.queue_ref[0].jobs
+        # A job resumed by the constructor can get here before the queue is in queue_ref.
+        jobs = self.queue_ref[0].jobs if self.queue_ref else {}
         self.status_on_enter.extend(j["status"] for j in jobs.values() if j["status"] == mcp_jobs.WAITING)
         self.held.append(names)
         yield
@@ -261,3 +262,149 @@ def test_the_image_does_not_set_music_locks_held():
     # The process's environment as it started (an image ENV included), before
     # any test's monkeypatch.
     assert "MUSIC_LOCKS_HELD" not in _START_ENV
+
+
+# --- the long lane and resumes (homelab#2553) ---
+
+
+def test_a_long_job_runs_beside_the_short_lane(make):
+    """An hour-long recheck doesn't hold up the short tools, and a second long job is busy."""
+    release = threading.Event()
+    started = threading.Event()
+
+    def commands(argv, env, on_line):
+        if argv[0] == "music-mb-fingerprint":
+            started.set()
+            release.wait(5)
+        on_line(f"ran {' '.join(argv)}")
+        return 0
+
+    q, _, _ = make()
+    q._run_command = commands
+    long_job = q.submit("recheck_recordings", {}, "dry_run", "pilot", "read",
+                        [["music-mb-fingerprint", "--recheck", f"--run-id={mcp_jobs.JOB_ID}"]],
+                        lane=mcp_jobs.LONG, resumable=True)
+    assert long_job["argv"] == [["music-mb-fingerprint", "--recheck", f"--run-id={long_job['job_id']}"]]
+    assert started.wait(5)
+    short = run(q)  # finishes while the long job runs
+    assert short["status"] == "done" and short["lane"] == mcp_jobs.SHORT
+    with pytest.raises(mcp_jobs.Busy) as exc:
+        q.submit("recheck_recordings", {}, "dry_run", "pilot", "read", [["music-mb-fingerprint"]],
+                 lane=mcp_jobs.LONG)
+    assert [j["job_id"] for j in exc.value.queue] == [long_job["job_id"]]
+    assert [j["job_id"] for j in q.active(mcp_jobs.LONG)] == [long_job["job_id"]]
+    assert q.active(mcp_jobs.SHORT) == []
+    release.set()
+    assert q.wait(long_job["job_id"], 5)["status"] == "done"
+
+
+def _left_running(path, **job):
+    """A records file as a restart leaves it: *job* still running, with a log."""
+    stamp = mcp_jobs.now()
+    record = {"job_id": "j1", "tool": "recheck_recordings", "args": {}, "mode": "dry_run", "status": "running",
+              "caller": "sub-1", "tier": "read", "argv": [["music-mb-fingerprint", "--recheck", "--run-id=j1"]],
+              "locks": [], "lane": mcp_jobs.LONG, "resumable": True, "resumes": 0, "created_at": stamp,
+              "started_at": stamp, "finished_at": None, "exit_code": None, "dry_run_hash": None, "error": None,
+              **job}
+    path.write_text(json.dumps({"jobs": {record["job_id"]: record}}))
+    (path.parent / ".mcp-jobs").mkdir(exist_ok=True)
+    (path.parent / ".mcp-jobs" / f"{record['job_id']}.log").write_text(
+        "[2026-11-01T10:00:00+0000] Rechecking 9210 item(s)\n"
+        "[2026-11-01T10:03:00+0000] [PROGRESS] 500/9210, 9 flagged so far\n")
+    return record
+
+
+def _restart(path, commands=None):
+    ref: list = []
+    commands = commands or Commands()
+    locks = Locks(ref)
+    q = JobQueue(path, run_command=commands, locks=locks)
+    ref.append(q)
+    return q, commands, locks
+
+
+def test_a_restart_resumes_a_long_job_with_its_log(tmp_path):
+    path = tmp_path / ".mcp-jobs.json"
+    _left_running(path)
+    q, commands, _ = _restart(path)
+    job = q.wait("j1", 5)
+    assert job["status"] == "done" and job["resumes"] == 1 and job["resumed_at"]
+    assert commands.ran == [["music-mb-fingerprint", "--recheck", "--run-id=j1"]]  # its CLI resumes the run
+    out = q.output("j1")
+    assert out[:2] == ["[2026-11-01T10:00:00+0000] Rechecking 9210 item(s)",
+                       "[2026-11-01T10:03:00+0000] [PROGRESS] 500/9210, 9 flagged so far"]
+    assert out[2] == "[MCP] resumed after a restart (1 of 5)"
+    assert out[3] == "ran music-mb-fingerprint --recheck --run-id=j1"
+
+
+def test_a_restart_resumes_an_apply_under_its_locks_without_the_comparison(tmp_path):
+    """A resumed apply takes its locks again and runs only its --apply commands: the CLI
+    re-checks each item (music-mb-fingerprint --replace-run), and the dry run it matched
+    before the restart is not re-run, so a partly applied run is never refused."""
+    path = tmp_path / ".mcp-jobs.json"
+    _left_running(path, tool="apply_recheck", mode="apply", tier="write", lane=mcp_jobs.SHORT, applying=True,
+                  argv=[["music-mb-fingerprint", "--replace-run=r1", "--apply"]],
+                  dry_run_argv=[["music-mb-fingerprint", "--replace-run=r1"]], locks=["pipeline"])
+    q, commands, locks = _restart(path)
+    job = q.wait("j1", 5)
+    assert job["status"] == "done" and job["resumes"] == 1
+    assert locks.held == [("pipeline",)]
+    assert commands.ran == [["music-mb-fingerprint", "--replace-run=r1", "--apply"]]
+    assert commands.envs[0]["MUSIC_LOCKS_HELD"] == "pipeline"
+    assert job["dry_run_hash"] is None  # not a dry run anyone may apply
+    assert q.output("j1")[2].startswith("[MCP] resumed after a restart (1 of 5); the dry run matched before it")
+
+
+@pytest.mark.parametrize("job", [
+    {},
+    {"tool": "apply_recheck", "mode": "apply", "tier": "write", "lane": mcp_jobs.SHORT, "locks": ["pipeline"],
+     "applying": True, "argv": [["music-mb-fingerprint", "--replace-run=r1", "--apply"]]},
+], ids=["long job", "apply"])
+def test_the_resume_cap_interrupts_a_job_restarted_too_often(tmp_path, job):
+    path = tmp_path / ".mcp-jobs.json"
+    _left_running(path, resumes=mcp_jobs.MAX_RESUMES, **job)
+    q, commands, locks = _restart(path)
+    record = q.get("j1")
+    assert record["status"] == "interrupted" and record["resumes"] == mcp_jobs.MAX_RESUMES
+    assert record["error"] == "the service restarted; resumed 5 times already, not again"
+    assert commands.ran == [] and locks.held == []
+
+
+def test_a_job_that_is_not_resumable_is_still_interrupted(tmp_path):
+    path = tmp_path / ".mcp-jobs.json"
+    _left_running(path, tool="embed_covers", resumable=False, lane=mcp_jobs.SHORT)
+    q, commands, _ = _restart(path)
+    assert q.get("j1")["status"] == "interrupted" and commands.ran == []
+
+
+def test_progress_is_the_latest_progress_line():
+    lines = ["[2026-11-01T10:03:00+0000] [PROGRESS] 500/9210, 9 flagged so far",
+             "[2026-11-01T10:03:01+0000] [RECHECK] 812 — …",
+             "[2026-11-01T10:06:00+0000] [PROGRESS] 1000/9210, 20 flagged so far",
+             "[2026-11-01T10:06:01+0000] [NOMATCH] 990 — …"]
+    assert mcp_jobs.progress(lines) == {"done": 1000, "total": 9210, "at": "2026-11-01T10:06:00+0000",
+                                        "line": "[PROGRESS] 1000/9210, 20 flagged so far"}
+    assert mcp_jobs.progress(["[PROGRESS] 3/4, 1 flagged so far"])["at"] is None
+    assert mcp_jobs.progress(["ran x"]) is None
+
+
+@pytest.mark.parametrize("status", ["queued", "waiting_for_lock", "running"])
+def test_an_apply_cut_short_before_its_comparison_is_not_resumed(tmp_path, status):
+    """Its dry run was never compared, so resuming it would apply unguarded: interrupted, nothing applied."""
+    path = tmp_path / ".mcp-jobs.json"
+    _left_running(path, tool="apply_recheck", mode="apply", tier="write", lane=mcp_jobs.SHORT, status=status,
+                  argv=[["music-mb-fingerprint", "--replace-run=r1", "--apply"]], locks=["pipeline"])
+    q, commands, locks = _restart(path)
+    record = q.get("j1")
+    assert record["status"] == "interrupted" and commands.ran == [] and locks.held == []
+    assert record["error"] == "the service restarted before the apply began; nothing was applied"
+
+
+def test_an_apply_marks_itself_applying_once_its_comparison_passes(make):
+    q, _, _ = make({"music-mb-fingerprint --replace-run=r1": (["[WOULD-REPLACE] 1"], 0)})
+    dry = run(q, tool="apply_recheck", commands=[["music-mb-fingerprint", "--replace-run=r1"]])
+    assert not dry.get("applying")
+    job = run(q, tool="apply_recheck", mode="apply", commands=[["music-mb-fingerprint", "--replace-run=r1"]],
+              apply_commands=[["music-mb-fingerprint", "--replace-run=r1", "--apply"]],
+              expected_hash=dry["dry_run_hash"], locks=("pipeline",), resumable=True)
+    assert job["status"] == "done" and job["applying"] is True and job["resumable"] is True

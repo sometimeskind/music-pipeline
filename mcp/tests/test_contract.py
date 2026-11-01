@@ -159,6 +159,22 @@ async def test_a_read_caller_runs_the_audits(pipeline_url):
             assert job["output"].startswith("ran "), job
 
 
+async def test_a_read_caller_starts_a_recheck_in_the_long_lane(pipeline_url):
+    """homelab#2553: the long job's run ID is its job ID, and apply_recheck takes it."""
+    async with Client(server(pipeline_url, PILOT)) as c:
+        job = await finish(c, (await c.call_tool("recheck_recordings", {"ids": [2, 1, 2]})).data)
+        assert job["status"] == "done" and job["lane"] == "long" and job["resumable"] is True, job
+        assert job["args"] == {"ids": [1, 2], "resume": None}
+        assert job["argv"] == [["music-mb-fingerprint", "--recheck", f"--run-id={job['job_id']}", "--", "1", "2"]]
+        assert "progress" in job
+    async with Client(server(pipeline_url, TOM)) as c:
+        dry = await finish(c, (await c.call_tool("apply_recheck", {"run_id": job["job_id"]})).data)
+        assert dry["status"] == "done" and dry["lane"] == "short", dry
+        assert dry["argv"] == [["music-mb-fingerprint", f"--replace-run={job['job_id']}"]]
+        with pytest.raises(ToolError):
+            await c.call_tool("apply_recheck", {"run_id": "--apply"})
+
+
 async def test_the_pipeline_refuses_a_read_tier_write_too(pipeline_url):
     # The adapter refuses first; this is the pipeline's own guard behind it.
     p = Pipeline(pipeline_url, TOKEN)

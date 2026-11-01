@@ -126,8 +126,9 @@ def make_blueprint(jobs: mcp_jobs.JobQueue) -> Blueprint:
         by_status: dict[str, int] = {}
         for record in albums.values():
             by_status[record.get("status", "?")] = by_status.get(record.get("status", "?"), 0) + 1
-        active = jobs.active()
+        active = jobs.active(mcp_jobs.SHORT)
         running = next((j for j in active if j["status"] != mcp_jobs.QUEUED), None)
+        long_job = next(iter(jobs.active(mcp_jobs.LONG)), None)
         return jsonify({"status": "ok", "items": items,
                         "albums": {"total": len(albums), "by_status": by_status},
                         "album_mode": os.environ.get("ALBUM_MODE", "off") or "off",
@@ -135,7 +136,7 @@ def make_blueprint(jobs: mcp_jobs.JobQueue) -> Blueprint:
                         "playlists": store.names(),
                         "jobs": {"running": running,
                                  "queued": sum(j["status"] == mcp_jobs.QUEUED for j in active),
-                                 "depth": jobs.depth}})
+                                 "depth": jobs.depth, "long": long_job}})
 
     @bp.get("/albums")
     def find_albums():
@@ -341,7 +342,8 @@ def make_blueprint(jobs: mcp_jobs.JobQueue) -> Blueprint:
         finished = job["status"] not in mcp_jobs.ACTIVE
         lines = jobs.output(job["job_id"])
         output, next_offset = mcp_jobs.page(lines, min(offset, len(lines)), finished)
-        return {**job, "output": output, "offset": offset, "next_offset": next_offset, "total_lines": len(lines)}
+        return {**job, "progress": mcp_jobs.progress(lines), "output": output, "offset": offset,
+                "next_offset": next_offset, "total_lines": len(lines)}
 
     @bp.get("/jobs/<job_id>")
     def get_job(job_id: str):
@@ -377,9 +379,11 @@ def make_blueprint(jobs: mcp_jobs.JobQueue) -> Blueprint:
                                     "error": f"run {tool.name} with apply=false first (same args, within 15 min)"}), 409
                 job = jobs.submit(tool.name, args, "apply", g.caller, g.tier, tool.commands(args, False),
                                   apply_commands=tool.commands(args, True), expected_hash=dry["dry_run_hash"],
-                                  locks=tool.locks)
+                                  locks=tool.locks, resumable=tool.resumable)
             else:
-                job = jobs.submit(tool.name, args, "dry_run", g.caller, g.tier, tool.commands(args, False))
+                # A write tool's dry run is short and never resumed; a long job is (homelab#2553).
+                job = jobs.submit(tool.name, args, "dry_run", g.caller, g.tier, tool.commands(args, False),
+                                  lane=tool.lane, resumable=tool.resumable and tool.tier != WRITE)
         except mcp_jobs.Busy as exc:
             return jsonify({"status": "busy", "queue": exc.queue}), 503
 

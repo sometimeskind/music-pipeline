@@ -1,5 +1,10 @@
 """The MCP job queue (homelab#2412): one CLI job at a time, records on pipeline-state.
 
+Two lanes (homelab#2553): the short lane runs the tools one at a time from a
+queue of :data:`DEPTH`; the long lane runs at most one long job (an hour-long
+recheck) beside it, so the short tools keep working.  A long job takes no lock
+of its own: one whose CLI writes takes its locks inside, for that phase only.
+
 Each job runs one or more CLI commands as subprocesses, one after another.
 A write tool's apply holds Prefect's locks for its whole run: it runs the dry
 run again, compares that output's hash with the dry run the caller saw, and
@@ -9,7 +14,13 @@ runs the ``--apply`` commands only when they match.  The subprocess gets
 Records live in one JSON index, each job's output in its own log file next to
 it; the last :data:`KEEP_JOBS` jobs and every job of the last
 :data:`KEEP_DAYS` days are kept.  Jobs left queued or running by a restart are
-marked ``interrupted`` when the queue loads, never retried.
+marked ``interrupted`` when the queue loads, never retried, except a
+*resumable* one (a long job, or a resumable tool's apply once its dry-run
+comparison has passed): it is queued again
+with the same job ID and its log appended, up to :data:`MAX_RESUMES` times.  Its
+CLI continues from its own checkpoint (``--run-id``) or, for an apply, checks
+each item again; a resumed apply runs its ``--apply`` commands under its locks
+without the dry-run comparison, which passed before the restart.
 """
 
 from __future__ import annotations
@@ -41,6 +52,11 @@ DEPTH = 5
 KEEP_JOBS = 50
 KEEP_DAYS = 7
 DRY_RUN_WINDOW_SECONDS = 15 * 60
+SHORT, LONG = "short", "long"
+# A resumable job is resumed after this many restarts at most, then interrupted (a job that kills the pod).
+MAX_RESUMES = 5
+# In a command, replaced by the job's ID when it is submitted: a long job's run ID is its job ID.
+JOB_ID = "{job_id}"
 
 QUEUED = "queued"
 WAITING = "waiting_for_lock"
@@ -57,6 +73,8 @@ PAGE_BYTES = 32 * 1024
 # "[2026-10-27T14:03:11+0000] ": the CLIs' logging prefix.
 _LOG_PREFIX = re.compile(r"^\[\d{4}-\d{2}-\d{2}T[^\]]*\]\s?")
 _ONLY_TIMESTAMP = re.compile(r"^\s*\[?\d{4}-\d{2}-\d{2}[T ][\d:.]+(Z|[+-]\d{2}:?\d{2})?\]?\s*$")
+# "[2026-11-01T10:00:00+0000] [PROGRESS] 500/9210, 9 flagged so far"
+_PROGRESS = re.compile(r"^(?:\[(?P<at>\d{4}-\d{2}-\d{2}T[^\]]*)\]\s?)?(?P<line>\[PROGRESS\] (?P<done>\d+)/(?P<total>\d+).*)$")
 
 
 class Busy(Exception):
@@ -81,6 +99,14 @@ def output_hash(lines: list[str]) -> str:
     kept = [_LOG_PREFIX.sub("", line) for line in lines]
     kept = [line for line in kept if not _ONLY_TIMESTAMP.match(line)]
     return "sha256:" + hashlib.sha256("\n".join(kept).encode()).hexdigest()
+
+
+def progress(lines: list[str]) -> dict | None:
+    """The job's latest ``[PROGRESS]`` line: how far it has got, and when."""
+    for line in reversed(lines):
+        if m := _PROGRESS.match(line):
+            return {"done": int(m["done"]), "total": int(m["total"]), "line": m["line"], "at": m["at"]}
+    return None
 
 
 def same_args(a: dict, b: dict) -> bool:
@@ -146,18 +172,22 @@ class JobQueue:
         self._run_command = run_command
         self._locks = locks
         self._mu = threading.RLock()
-        self._pending: queue.Queue[str] = queue.Queue()
+        self._pending: dict[str, queue.Queue[str]] = {SHORT: queue.Queue(), LONG: queue.Queue()}
         self._done: dict[str, threading.Event] = {}
-        self._live: dict[str, list[str]] = {}  # output of the job running now
+        self._live: dict[str, list[str]] = {}  # output of the jobs running now
         self._specs: dict[str, dict] = {}  # what a queued job runs; not persisted
-        self._worker: threading.Thread | None = None
-        self.jobs: dict[str, dict] = self._load()
+        self._workers: dict[str, threading.Thread] = {}
+        resumed: list[dict] = []
+        self.jobs: dict[str, dict] = self._load(resumed)
+        for job in sorted(resumed, key=lambda j: j["created_at"]):
+            self._enqueue(job, self._resume_spec(job))
 
     # ------------------------------------------------------------------
     # Records
     # ------------------------------------------------------------------
 
-    def _load(self) -> dict[str, dict]:
+    def _load(self, resumed: list[dict]) -> dict[str, dict]:
+        """The records; a resumable job left active by a restart is queued again (appended to *resumed*)."""
         try:
             jobs = json.loads(self.path.read_text(encoding="utf-8")).get("jobs", {})
         except FileNotFoundError:
@@ -167,13 +197,37 @@ class JobQueue:
             return {}
         lost = [j for j in jobs.values() if j.get("status") in ACTIVE]
         for job in lost:
-            job.update(status=INTERRUPTED, finished_at=now(), error="the service restarted")
+            resumes = job.get("resumes", 0)
+            if job.get("resumable") and job.get("mode") == "apply" and not job.get("applying"):
+                # Cut short before its dry-run comparison passed: nothing applied, and no guard to resume past.
+                job.update(status=INTERRUPTED, finished_at=now(),
+                           error="the service restarted before the apply began; nothing was applied")
+                logger.info("[MCP] job=%s interrupted by a restart before its apply (tool=%s caller=%s)",
+                            job["job_id"], job.get("tool"), job.get("caller"))
+                _record_end(job)
+                continue
+            if job.get("resumable") and resumes < MAX_RESUMES:
+                job.update(status=QUEUED, resumes=resumes + 1, resumed_at=now())
+                logger.info("[MCP] job=%s resumed after a restart (%d of %d; tool=%s caller=%s)",
+                            job["job_id"], resumes + 1, MAX_RESUMES, job.get("tool"), job.get("caller"))
+                resumed.append(job)
+                continue
+            error = (f"the service restarted; resumed {resumes} times already, not again" if job.get("resumable")
+                     else "the service restarted")
+            job.update(status=INTERRUPTED, finished_at=now(), error=error)
             logger.info("[MCP] job=%s interrupted by a restart (tool=%s caller=%s)",
                         job["job_id"], job.get("tool"), job.get("caller"))
             _record_end(job)
         if lost:
             self._save(jobs)
         return jobs
+
+    @staticmethod
+    def _resume_spec(job: dict) -> dict:
+        """What a resumed job runs: its commands again, an apply's ``--apply`` commands only."""
+        if job.get("mode") == "apply":
+            return {"commands": job["argv"], "apply_commands": None, "expected_hash": None, "resumed_apply": True}
+        return {"commands": job["argv"], "apply_commands": None, "expected_hash": None}
 
     def _save(self, jobs: dict[str, dict] | None = None) -> None:
         jobs = self.jobs if jobs is None else jobs
@@ -212,9 +266,10 @@ class JobQueue:
         except FileNotFoundError:
             return []
 
-    def active(self) -> list[dict]:
+    def active(self, lane: str | None = None) -> list[dict]:
         with self._mu:
-            jobs = [j for j in self.jobs.values() if j.get("status") in ACTIVE]
+            jobs = [j for j in self.jobs.values()
+                    if j.get("status") in ACTIVE and lane in (None, j.get("lane", SHORT))]
         return [summary(j) for j in sorted(jobs, key=lambda j: j["created_at"])]
 
     def find_dry_run(self, tool: str, args: dict, window: float = DRY_RUN_WINDOW_SECONDS) -> dict | None:
@@ -234,29 +289,43 @@ class JobQueue:
 
     def submit(self, tool: str, args: dict, mode: str, caller: str, tier: str, commands: list[list[str]],
                apply_commands: list[list[str]] | None = None, expected_hash: str | None = None,
-               locks: tuple[str, ...] = ()) -> dict:
-        """Queue a job and return its record; raises :class:`Busy` when the queue is full."""
+               locks: tuple[str, ...] = (), lane: str = SHORT, resumable: bool = False) -> dict:
+        """Queue a job and return its record; raises :class:`Busy` when its lane is full
+        (the short lane holds :attr:`depth` jobs, the long lane one)."""
         with self._mu:
-            active = self.active()
-            if len(active) >= self.depth:
+            active = self.active(lane)
+            if len(active) >= (self.depth if lane == SHORT else 1):
                 raise Busy(active)
             job_id = uuid.uuid4().hex[:16]
+
+            def fill(argvs: list[list[str]] | None) -> list[list[str]] | None:
+                return None if argvs is None else [[a.replace(JOB_ID, job_id) for a in argv] for argv in argvs]
+
+            commands, apply_commands = fill(commands), fill(apply_commands)  # type: ignore[assignment]
             job = {"job_id": job_id, "tool": tool, "args": args, "mode": mode, "status": QUEUED,
                    "caller": caller, "tier": tier, "argv": apply_commands if apply_commands else commands,
-                   "locks": list(locks), "created_at": now(), "started_at": None, "finished_at": None,
+                   "locks": list(locks), "lane": lane, "resumable": resumable, "resumes": 0,
+                   "created_at": now(), "started_at": None, "finished_at": None,
                    "exit_code": None, "dry_run_hash": None, "error": None}
             if apply_commands:
                 job["dry_run_argv"] = commands
             self.jobs[job_id] = job
-            self._specs[job_id] = {"commands": commands, "apply_commands": apply_commands,
-                                   "expected_hash": expected_hash}
-            self._done[job_id] = threading.Event()
             self._save()
-            self._pending.put(job_id)
-            if self._worker is None or not self._worker.is_alive():
-                self._worker = threading.Thread(target=self._work, name="mcp-jobs", daemon=True)
-                self._worker.start()
+            self._enqueue(job, {"commands": commands, "apply_commands": apply_commands,
+                                "expected_hash": expected_hash})
             return dict(job)
+
+    def _enqueue(self, job: dict, spec: dict) -> None:
+        lane = job.get("lane", SHORT)
+        with self._mu:
+            self._specs[job["job_id"]] = spec
+            self._done[job["job_id"]] = threading.Event()
+            self._pending[lane].put(job["job_id"])
+            worker = self._workers.get(lane)
+            if worker is None or not worker.is_alive():
+                worker = threading.Thread(target=self._work, args=(lane,), name=f"mcp-jobs-{lane}", daemon=True)
+                self._workers[lane] = worker
+                worker.start()
 
     def wait(self, job_id: str, timeout: float) -> dict | None:
         """The job's record once it finishes, or as it stands after *timeout* seconds."""
@@ -269,9 +338,9 @@ class JobQueue:
     # Running
     # ------------------------------------------------------------------
 
-    def _work(self) -> None:
+    def _work(self, lane: str) -> None:
         while True:
-            job_id = self._pending.get()
+            job_id = self._pending[lane].get()
             try:
                 self._run(job_id)
             except Exception as exc:  # noqa: BLE001 — record it and go on to the next job
@@ -296,12 +365,14 @@ class JobQueue:
                     job["mode"], job["caller"], job["tier"], json.dumps(job["argv"]))
         self.logs.mkdir(parents=True, exist_ok=True)
         log_path = self.logs / f"{job_id}.log"
+        resumed = job.get("resumes", 0) > 0
         with self._mu:
-            self._live[job_id] = []
+            # A resumed job's output goes on after what it printed before the restart.
+            self._live[job_id] = self.output(job_id) if resumed else []
         if locks:
             self._update(job, status=WAITING)
             logger.info("[MCP] job=%s waiting for lock(s) %s", job_id, ", ".join(locks))
-        with self._locks(locks), log_path.open("w", encoding="utf-8") as log:
+        with self._locks(locks), log_path.open("a" if resumed else "w", encoding="utf-8") as log:
             self._update(job, status=RUNNING, started_at=now())
             # MUSIC_LOCKS_HELD is only ever set here, for the locks this job holds.
             env = {k: v for k, v in os.environ.items() if k != "MUSIC_LOCKS_HELD"}
@@ -326,7 +397,14 @@ class JobQueue:
                         return code
                 return 0
 
+            if resumed:
+                emit(f"[MCP] resumed after a restart ({job['resumes']} of {MAX_RESUMES})"
+                     + ("; the dry run matched before it, so the apply goes on, checking each item again"
+                        if spec.get("resumed_apply") else ""))
             code = run_all(spec["commands"])
+            if spec.get("resumed_apply"):
+                self._finish(job, DONE if code == 0 else FAILED, code)
+                return
             if spec["apply_commands"] is None or code != 0:
                 fields = {"dry_run_hash": output_hash(self._live[job_id])} if code == 0 else {}
                 self._finish(job, DONE if code == 0 else FAILED, code, **fields)
@@ -343,6 +421,7 @@ class JobQueue:
             log.seek(0)
             log.truncate()
             emit(f"[MCP] dry run re-run matches ({fresh}); applying")
+            self._update(job, applying=True)  # from here a restart resumes the apply (homelab#2553)
             code = run_all(spec["apply_commands"])
             self._finish(job, DONE if code == 0 else FAILED, code)
 
@@ -366,4 +445,4 @@ def _record_end(job: dict) -> None:
 
 
 def summary(job: dict) -> dict:
-    return {k: job.get(k) for k in ("job_id", "tool", "mode", "status", "caller", "created_at")}
+    return {k: job.get(k) for k in ("job_id", "tool", "mode", "status", "caller", "created_at", "lane")}

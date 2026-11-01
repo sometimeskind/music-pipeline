@@ -94,7 +94,7 @@ def test_library_status(client):
     assert body["albums"] == {"total": 3, "by_status": {"imported": 1, "wanted": 1, "failed": 1}}
     assert body["quarantine"] == {"unmatched": 1, "rejected": 1, "replaced": 2}
     assert body["playlists"] == ["chill"]
-    assert body["jobs"] == {"running": None, "queued": 0, "depth": 5}
+    assert body["jobs"] == {"running": None, "queued": 0, "depth": 5, "long": None}
 
 
 def test_find_albums_lists_every_match_with_item_counts(client):
