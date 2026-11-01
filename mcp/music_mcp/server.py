@@ -244,7 +244,8 @@ def build_server(
         album.fallback_left the tracks still missing (only audio AcoustID confirms is imported),
         then filled. album.fallback_rejected counts the missing tracks whose download was rejected,
         by reason: fingerprint (AcoustID named another recording), acoustid-unknown (AcoustID knows
-        no recording for the audio, so it may be right), duration, silence.
+        no recording for the audio, so it may be right; the scan asks again daily for 30 days), duration,
+        silence.
         album.acoustid_unknown_only: every reject is acoustid-unknown, for the operator to decide."""
         return await call("list_requests", lambda c: pipeline.get(c, "/requests", status=status, offset=offset))
 

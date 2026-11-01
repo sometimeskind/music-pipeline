@@ -41,7 +41,8 @@ musicbrainz.org URL the user gives, or one `search_releases` found from what the
 dry run first; `list_requests` shows each request and its
 album's status. A request Usenet misses falls back to spotdl from MusicBrainz (`fallback`); a
 download is imported only when AcoustID confirms it, and acoustid_unknown_only marks an album
-whose rejects AcoustID simply doesn't know, for the operator to decide. With
+whose rejects AcoustID simply doesn't know (the scan asks again daily, for 30 days), for the
+operator to decide. With
 `later` the albums also go on Later, whose `.m3u` is in arrival order; `get_later` shows it and
 `remove_from_later` takes albums off, by release group or album. See `requests`.
 

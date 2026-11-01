@@ -67,16 +67,25 @@ for one of these reasons:
 | Reason | Meaning |
 |--------|---------|
 | `fingerprint` | AcoustID named other recordings (or this one too weakly), or the file couldn't be fingerprinted: the wrong audio |
-| `acoustid-unknown` | AcoustID has no MusicBrainz recording for the audio at all. The file may well be right (a new or obscure release AcoustID hasn't linked yet), but nothing confirms it, so it isn't imported |
+| `acoustid-unknown` | AcoustID has no MusicBrainz recording for the audio at all. The file may well be right (a new or obscure release AcoustID hasn't linked yet), but nothing confirms it, so it isn't imported yet: the scan asks AcoustID again once a day, for 30 days |
 | `duration`, `silence` | The length guard's: the wrong length, or silence padding |
 
-So a track AcoustID doesn't know stays a gap: `list_requests` shows how many the album still
-lacks (its fallback_left), and the album is not `filled` (nor on Later's `.m3u`) until it has none.
-Its fallback_rejected counts those tracks whose download was rejected, by reason, and
-acoustid_unknown_only is true when every one is `acoustid-unknown`: the album isn't unfetchable,
-AcoustID just doesn't know it. That is the operator's call (Usenet only, a manual source, or a
-later retry once AcoustID catches up); say which album it is and leave it. Rejects from before
-homelab#2546 all read `fingerprint`. A failed AcoustID lookup is no reject: the file waits for the next scan.
+A held `acoustid-unknown` file is re-checked rather than downloaded again: once a day the scan
+looks it up on AcoustID under the same rule. When AcoustID now names the track's own recording,
+the file is imported as a verified download (`[VERIFIED] … on re-check`); when it names other
+recordings, the reason becomes `fingerprint` (`[REJECT] … on re-check`) and it is never asked
+about again; otherwise it stays held. After 30 days it is no longer re-checked (logged once,
+`[UNKNOWN] … no longer re-checked`) and stays held for the operator. Nothing deletes it.
+
+So a track AcoustID doesn't know stays a gap until a re-check confirms it: `list_requests` shows
+how many the album still lacks (its fallback_left), and the album is not `filled` (nor on Later's
+`.m3u`) until it has none. Its fallback_rejected counts those tracks whose download is held, by
+reason, and acoustid_unknown_only is true when every one is `acoustid-unknown`: the album isn't
+unfetchable, AcoustID just doesn't know it yet. Both follow the re-checks: a confirmed file
+leaves the count, a mismatch moves to `fingerprint`. An album still unknown after the re-checks is
+the operator's call (Usenet only, a manual source); say which album it is and leave it. Rejects
+from before homelab#2546 all read `fingerprint`. A failed AcoustID lookup is no reject: the file
+waits for the next scan.
 The tracks it has are one album, named from MusicBrainz (album, artist, release IDs).
 
 While it has gaps, the album is searched on Usenet again every 7 days; a release found then is

@@ -39,6 +39,12 @@ it names other recordings, or ours only below the score (``fingerprint``).  A
 file that can't be fingerprinted is ``fingerprint`` too.  A lookup that fails
 leaves it for the next scan.  :func:`request_rejects` reads the reasons back
 for ``list_requests``.
+
+An ``acoustid-unknown`` reject is re-checked rather than downloaded again
+(:func:`recheck_unknown`, the operator's call on homelab#2546): AcoustID links
+new releases over time, and a lookup costs a second.  Each scan asks AcoustID
+again about the held files last checked a day or more ago, under the same
+rule, and stops after :data:`RECHECK_DAYS`, leaving the file to the operator.
 """
 
 from __future__ import annotations
@@ -51,6 +57,7 @@ import subprocess
 import time
 from collections import Counter
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable, Mapping
 
@@ -73,6 +80,14 @@ FINGERPRINT_MIN_SCORE = 0.85
 ACOUSTID_DELAY = 0.35
 # Seconds an AcoustID lookup may take before it counts as failed (music-mb-fingerprint's).
 LOOKUP_TIMEOUT = 30
+# An acoustid-unknown reject is asked about again at most this often (homelab#2546) ...
+RECHECK_SECONDS = 24 * 3600
+# ... for this many days after it was held (ACOUSTID_RECHECK_DAYS); then the operator decides.
+# Nothing purges quarantine/rejected/, so the file stays.
+RECHECK_DAYS = 30
+# recheck_unknown's outcomes: confirmed and moved to the inbox, now a real mismatch,
+# still unknown, a failed lookup (the pass stops), and past RECHECK_DAYS this scan.
+RECHECKS = ("verified", "fingerprint", UNKNOWN, "failed", "stopped")
 
 _SILENCE_START = re.compile(r"silence_start:\s*(-?[\d.]+)")
 _SILENCE_END = re.compile(r"silence_end:\s*(-?[\d.]+)")
@@ -335,6 +350,138 @@ def verify_requests(unverified: Path, inbox: Path, rejected_dir: Path, audio_ext
         shutil.move(str(f), dest)
         logger.info("  [VERIFIED] %s: %s — AcoustID names recording %s", source, f.name, recording)
     return rejected
+
+
+def recheck_days() -> int:
+    try:
+        return int(os.environ.get("ACOUSTID_RECHECK_DAYS", "") or RECHECK_DAYS)
+    except ValueError:
+        logger.error("ACOUSTID_RECHECK_DAYS must be an integer — using %d", RECHECK_DAYS)
+        return RECHECK_DAYS
+
+
+def _utc(ts: float) -> str:
+    return datetime.fromtimestamp(ts, timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def read_sidecar(sidecar: Path) -> tuple[str, dict[str, float]]:
+    """A ``.reason`` sidecar's first line (``<reason>: <detail>``) and the
+    re-check's ``<key>: <UTC time>`` lines after it (homelab#2546): ``held``
+    (since when), ``checked`` (the last lookup) and ``stopped`` (past
+    :data:`RECHECK_DAYS`).  Readers of the reason read the first line only."""
+    lines = sidecar.read_text(encoding="utf-8").splitlines()
+    stamps: dict[str, float] = {}
+    for line in lines[1:]:
+        key, _, value = line.partition(": ")
+        try:
+            stamps[key.strip()] = datetime.fromisoformat(value.strip()).timestamp()
+        except ValueError:
+            continue
+    return (lines[0] if lines else ""), stamps
+
+
+def write_sidecar(sidecar: Path, first: str, stamps: Mapping[str, float]) -> None:
+    sidecar.write_text(first + "\n" + "".join(f"{k}: {_utc(v)}\n" for k, v in stamps.items()), encoding="utf-8")
+
+
+def recheck_unknown(rejected_dir: Path, inbox: Path, songs: dict[str, dict] | None = None,
+                    recordings: Callable[[Path], Mapping[str, float]] = acoustid_recordings,
+                    now: float | None = None, days: int | None = None) -> Counter:
+    """Ask AcoustID again about the album request fallback downloads held in
+    *rejected_dir*/``request/`` as :data:`UNKNOWN` (homelab#2546), each at most
+    once every :data:`RECHECK_SECONDS`, under :func:`fingerprint_rejection`'s
+    rule.  AcoustID now names the track's own recording at
+    :data:`FINGERPRINT_MIN_SCORE` or more: the file moves to *inbox*/``request/``
+    as a verified download does, and imports this scan (its URL is held by the
+    inbox until then, and by the library after).  It names other recordings: the
+    reason becomes ``fingerprint``, never asked again.  Still nothing: the
+    sidecar records the check.  A failed lookup changes nothing and ends the
+    pass, so a down AcoustID costs one timeout a scan, not one per file.
+
+    A file held *days* (:func:`recheck_days`) or more is no longer asked about:
+    it stays held, logged once (``stopped``), for the operator.  A file whose
+    request was reset or answered is skipped, as is every file while the album
+    state can't be read.  The fingerprint is computed again each time (about a
+    second); the length and silence checks it already passed aren't repeated.
+    Returns the outcomes (:data:`RECHECKS`)."""
+    from music_fetch.album_requests import SOURCE, url_recording  # noqa: PLC0415
+
+    now = time.time() if now is None else now
+    days = recheck_days() if days is None else days
+    outcomes: Counter = Counter({o: 0 for o in RECHECKS})
+    try:
+        sidecars = sorted((rejected_dir / SOURCE).rglob("*.reason"))
+    except OSError:
+        return outcomes
+    for sidecar in sidecars:
+        audio = sidecar.with_name(sidecar.name.removesuffix(".reason"))
+        try:
+            first, stamps = read_sidecar(sidecar)
+            written = sidecar.stat().st_mtime
+        except OSError:
+            continue
+        if first.split(":", 1)[0].strip() != UNKNOWN or "stopped" in stamps or not audio.is_file():
+            continue
+        # A reject from before the re-check has no stamps: held since its sidecar was written.
+        stamps.setdefault("held", written)
+        if now - stamps["held"] >= days * 86400:
+            write_sidecar(sidecar, first, {**stamps, "stopped": now})
+            outcomes["stopped"] += 1
+            logger.warning("  [UNKNOWN] %s: %s — held %d+ days as unknown to AcoustID; no longer re-checked, "
+                           "the operator decides", SOURCE, audio.name, days)
+            continue
+        if now - stamps.get("checked", stamps["held"]) < RECHECK_SECONDS:
+            continue
+        url = song_url(audio)
+        recording = url_recording(url)
+        if songs is None:
+            songs = request_songs()
+            if songs is None:
+                break
+        if recording is None or (url or "") not in songs:
+            continue  # its request was reset or answered: nothing wants it imported
+        try:
+            found = recordings(audio)
+        except LookupFailed as exc:
+            outcomes["failed"] += 1
+            logger.warning("  [GUARD] %s: %s: AcoustID re-check failed (%s); the held files are re-checked at "
+                           "the next scan", SOURCE, audio.name, exc)
+            break
+        except ValueError as exc:
+            rejection: Rejection | None = Rejection("fingerprint", f"not recording {recording}: {exc}")
+        else:
+            rejection = fingerprint_rejection(recording, found)
+        finally:
+            time.sleep(ACOUSTID_DELAY)
+        if rejection is None:
+            dest = inbox / audio.relative_to(rejected_dir)
+            if dest.exists():
+                logger.warning("  [GUARD] %s: %s — AcoustID names recording %s on re-check, but %s exists; "
+                               "left held", SOURCE, audio.name, recording, dest)
+                continue
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            shutil.move(str(audio), dest)
+            sidecar.unlink(missing_ok=True)
+            outcomes["verified"] += 1
+            logger.info("  [VERIFIED] %s: %s — AcoustID names recording %s on re-check", SOURCE, audio.name,
+                        recording)
+            continue
+        stamps["checked"] = now
+        if rejection.reason == UNKNOWN:
+            write_sidecar(sidecar, first, stamps)
+            outcomes[UNKNOWN] += 1
+            logger.info("  [UNKNOWN] %s: %s — still unknown to AcoustID on re-check", SOURCE, audio.name)
+            continue
+        write_sidecar(sidecar, f"{rejection.reason}: {rejection.detail}", stamps)
+        outcomes[rejection.reason] += 1
+        logger.warning("  [REJECT] %s: %s — %s: %s, on re-check (was %s)", SOURCE, audio.name, rejection.reason,
+                       rejection.detail, UNKNOWN)
+        _reject_event(SOURCE, audio, rejection, audio)
+    if any(outcomes.values()):
+        logger.info("AcoustID re-check of held unknown downloads: %d verified, %d now fingerprint, %d still "
+                    "unknown, %d failed lookup(s), %d no longer re-checked (%d+ days)", outcomes["verified"],
+                    outcomes["fingerprint"], outcomes[UNKNOWN], outcomes["failed"], outcomes["stopped"], days)
+    return outcomes
 
 
 def guard_inbox(inbox: Path, rejected_dir: Path, audio_exts: set[str], mode: str | None = None) -> Counter:
