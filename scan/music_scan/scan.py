@@ -672,6 +672,18 @@ def tag_album_ids(lib: MusicLibrary, source: str, tracks: list[list], since: flo
 
 
 
+def check_request_downloads() -> Counter:
+    """Check album requests' fallback downloads (homelab#2478) before the
+    import, so what AcoustID confirms imports in this scan.  Both the Prefect
+    scan and :func:`run` call it.  Returns the rejections per reason; a
+    failure leaves the downloads for the next scan."""
+    try:
+        return verify_requests(UNVERIFIED, SPOTDL_DIR, REJECTED, AUDIO_EXTS)
+    except Exception:
+        logger.error("Request fallback check failed — its downloads wait for the next scan", exc_info=True)
+        return Counter()
+
+
 def run() -> None:
     """Execute the full scan pipeline, push metrics on completion."""
     metrics = ScanMetrics()
@@ -684,10 +696,7 @@ def run() -> None:
 
         rejected: Counter = Counter()
         logger.info("==> Checking album requests' fallback downloads...")
-        try:
-            rejected.update(verify_requests(UNVERIFIED, SPOTDL_DIR, REJECTED, AUDIO_EXTS))
-        except Exception:
-            logger.error("Request fallback check failed — its downloads wait for the next scan", exc_info=True)
+        rejected.update(check_request_downloads())
 
         logger.info("==> Checking download lengths...")
         try:

@@ -153,6 +153,18 @@ def spotdl_sync_task(metrics) -> None:
 # ---------------------------------------------------------------------------
 
 
+@task(name="verify-request-downloads", log_prints=True)
+def verify_requests_task(metrics: ScanMetrics) -> None:
+    """Check album requests' fallback downloads against AcoustID (homelab#2478)
+    before the import: spotdl leaves them in ``unverified/request/``, outside
+    the inbox, and only this step moves the confirmed ones in.  Until
+    homelab#2546 only ``music-scan``'s in-process path ran it, so under Prefect
+    they waited there, held, and never imported."""
+    from music_scan.guard import REASONS  # noqa: PLC0415
+
+    metrics.rejected = {**dict.fromkeys(REASONS, 0), **scan.check_request_downloads()}
+
+
 @task(name="beet-import", log_prints=True)
 def beet_import_task() -> list:
     """Import inbox audio files into the beets library."""
@@ -348,6 +360,7 @@ def _run_scan_tasks() -> None:
     try:
         since = time.time()
         outage: MusicBrainzUnavailable | None = None
+        verify_requests_task(metrics)
         try:
             imported = beet_import_task()
         except MusicBrainzUnavailable as exc:

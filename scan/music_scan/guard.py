@@ -267,16 +267,17 @@ def request_rejects(rejected_dir: Path = QUARANTINE_DIR / "rejected") -> dict[st
     return out
 
 
-def request_songs() -> dict[str, dict]:
+def request_songs() -> dict[str, dict] | None:
     """``{recording URL: song}`` of every album request's fallback songs, from
-    the album state; empty when it can't be read."""
+    the album state; None when it can't be read, so no download is judged
+    against an empty state (every one would read as unwanted)."""
     from music_fetch import albums  # noqa: PLC0415
 
     try:
         records = albums.State.load().albums
     except Exception as exc:
         logger.warning("  [GUARD] could not read the album state (%s); request fallbacks wait", exc)
-        return {}
+        return None
     return {s["url"]: s for r in records.values() for s in r.get("album_songs") or () if s.get("url")}
 
 
@@ -297,6 +298,8 @@ def verify_requests(unverified: Path, inbox: Path, rejected_dir: Path, audio_ext
     if not files:
         return rejected
     songs = request_songs() if songs is None else songs
+    if songs is None:
+        return rejected
     for f in files:
         source = f.relative_to(unverified).parts[0]
         url = song_url(f)

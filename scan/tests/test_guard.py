@@ -278,6 +278,19 @@ def test_a_download_no_request_wants_is_rejected(requests_dirs, clip) -> None:
     assert "no album request's track is" in (rejected / "request" / "Band - Song.m4a.reason").read_text()
 
 
+def _never(path):
+    raise AssertionError(f"{path.name} looked up")
+
+
+def test_downloads_wait_when_the_album_state_cant_be_read(requests_dirs, clip, monkeypatch) -> None:
+    """An unreadable state is not an empty one: every download would read as unwanted and be rejected."""
+    unverified, inbox, rejected = requests_dirs
+    path = clip(unverified / "request" / "Band - Song.m4a", ("tone", 30), url=REC_URL)
+    monkeypatch.setattr(guard, "request_songs", lambda: None)
+    counts = guard.verify_requests(unverified, inbox, rejected, AUDIO_EXTS, None, _never)
+    assert sum(counts.values()) == 0 and path.exists() and not rejected.exists()
+
+
 # AcoustID's lookup responses (homelab#2546), through pyacoustid's own parsing: only the
 # web service and the fingerprinting are faked.
 def _response(*results):
@@ -385,3 +398,4 @@ def test_the_length_guard_leaves_verified_request_files_alone(dirs, clip, monkey
     path = clip(inbox / "request" / "Band - Song.m4a", ("tone", 15), ("silence", 10), ("tone", 15), url=REC_URL)
     assert sum(guard_inbox(inbox, rejected, AUDIO_EXTS, mode="on").values()) == 0
     assert path.exists()
+
