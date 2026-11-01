@@ -210,12 +210,13 @@ def test_fetch_flow_runs_fetch_then_scan():
         mock_ingest.reconcile_playlists.side_effect = lambda: (call_order.append("reconcile-playlists"), [])[1]
         mock_ingest.sync_playlists.side_effect = lambda *_, **__: call_order.append("spotdl-sync")
         mock_scan.sync_hooks.return_value = nullcontext({})
+        mock_scan.check_request_downloads.side_effect = lambda: (call_order.append("verify-requests"), {})[1]
         mock_scan.run_inbox_import.side_effect = lambda: (call_order.append("beet-import"), [])[1]
 
         fetch_and_scan_flow()
 
     assert call_order[:3] == ["preflight", "reconcile-playlists", "spotdl-sync"]
-    assert "beet-import" in call_order
+    assert call_order.index("verify-requests") < call_order.index("beet-import")
     mock_scan.run_inbox_import.assert_called_once()
 
 
@@ -280,6 +281,7 @@ def test_scan_flow_runs_all_scan_steps_in_order():
          patch("music_service.flows.concurrency") as mock_concurrency:
         mock_concurrency.return_value.__enter__.return_value = None
         mock_concurrency.return_value.__exit__.return_value = False
+        mock_scan.check_request_downloads.side_effect = lambda: (call_order.append("verify-requests"), {})[1]
         mock_scan.run_inbox_import.side_effect = lambda: (call_order.append("beet-import"), [])[1]
         mock_scan.quarantine_inbox_leftovers.side_effect = lambda: (call_order.append("quarantine"), 0)[1]
         mock_scan.import_asis_from_quarantine.side_effect = lambda: (call_order.append("asis-import"), 0)[1]
@@ -299,6 +301,7 @@ def test_scan_flow_runs_all_scan_steps_in_order():
             scan_flow()
 
     assert call_order == [
+        "verify-requests",  # homelab#2546: the request fallback's confirmed downloads import in this scan
         "beet-import",
         "quarantine",
         "asis-import",
@@ -330,6 +333,7 @@ def test_scan_flow_skips_when_pipeline_busy():
 
 
 def _scan_mocks(mock_scan, mock_ingest):
+    mock_scan.check_request_downloads.return_value = {}
     mock_scan.run_inbox_import.return_value = [("A", "B"), ("C", "D")]
     mock_scan.quarantine_inbox_leftovers.return_value = 1
     mock_scan.import_asis_from_quarantine.return_value = 3
@@ -355,6 +359,26 @@ def test_scan_pushes_metrics_on_success():
     assert m.tracks_imported == 5
     assert m.quarantined_tracks == 1
     assert m.lossless_items == 0
+
+
+def test_scan_verifies_request_downloads_and_pushes_their_rejects():
+    """homelab#2546: the Prefect scan checks the request fallback's downloads, as music-scan's run() does."""
+    from music_service.flows import _run_scan_tasks
+    pushed: list = []
+
+    with patch("music_service.flows.ingest") as mock_ingest, \
+         patch("music_service.flows.scan") as mock_scan, \
+         patch("music_service.flows.concurrency"), \
+         patch("music_scan.process.run_beet_update"), \
+         patch("music_scan.navidrome.trigger_scan"), \
+         patch("music_scan.metrics.ScanMetrics.push", autospec=True, side_effect=pushed.append):
+        _scan_mocks(mock_scan, mock_ingest)
+        mock_scan.check_request_downloads.return_value = {"acoustid-unknown": 2, "fingerprint": 1}
+        _run_scan_tasks()
+
+    mock_scan.check_request_downloads.assert_called_once_with()
+    (m,) = pushed
+    assert m.rejected == {"duration": 0, "silence": 0, "fingerprint": 1, "acoustid-unknown": 2}
 
 
 def test_scan_pushes_metrics_on_failure():

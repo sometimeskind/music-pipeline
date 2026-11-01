@@ -1188,3 +1188,24 @@ def test_tag_album_ids_isrc_prefers_this_release_over_another_albums_copy() -> N
                 tracks_count=28) == 1
     assert mine.data["spotify_ids"] == "sid-mc" and other.data["spotify_ids"] == "sid-best-of"
 
+
+
+def test_check_request_downloads_verifies_then_rechecks_and_survives_a_failure(monkeypatch, caplog) -> None:
+    """homelab#2546: the new downloads, then the held unknown ones; one failing doesn't skip the other."""
+    from collections import Counter
+
+    import music_scan.scan as scan
+
+    calls: list[str] = []
+
+    def verify(*args):
+        calls.append("verify")
+        raise RuntimeError("state down")
+
+    monkeypatch.setattr(scan, "verify_requests", verify)
+    monkeypatch.setattr(scan, "recheck_unknown", lambda *a: calls.append("recheck") or Counter(verified=1))
+    assert scan.check_request_downloads() == Counter()
+    assert calls == ["verify", "recheck"]
+    assert "Request fallback check failed" in caplog.text
+    monkeypatch.setattr(scan, "verify_requests", lambda *a: Counter({"acoustid-unknown": 2}))
+    assert scan.check_request_downloads() == Counter({"acoustid-unknown": 2})

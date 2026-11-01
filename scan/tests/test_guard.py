@@ -278,6 +278,19 @@ def test_a_download_no_request_wants_is_rejected(requests_dirs, clip) -> None:
     assert "no album request's track is" in (rejected / "request" / "Band - Song.m4a.reason").read_text()
 
 
+def _never(path):
+    raise AssertionError(f"{path.name} looked up")
+
+
+def test_downloads_wait_when_the_album_state_cant_be_read(requests_dirs, clip, monkeypatch) -> None:
+    """An unreadable state is not an empty one: every download would read as unwanted and be rejected."""
+    unverified, inbox, rejected = requests_dirs
+    path = clip(unverified / "request" / "Band - Song.m4a", ("tone", 30), url=REC_URL)
+    monkeypatch.setattr(guard, "request_songs", lambda: None)
+    counts = guard.verify_requests(unverified, inbox, rejected, AUDIO_EXTS, None, _never)
+    assert sum(counts.values()) == 0 and path.exists() and not rejected.exists()
+
+
 # AcoustID's lookup responses (homelab#2546), through pyacoustid's own parsing: only the
 # web service and the fingerprinting are faked.
 def _response(*results):
@@ -385,3 +398,167 @@ def test_the_length_guard_leaves_verified_request_files_alone(dirs, clip, monkey
     path = clip(inbox / "request" / "Band - Song.m4a", ("tone", 15), ("silence", 10), ("tone", 15), url=REC_URL)
     assert sum(guard_inbox(inbox, rejected, AUDIO_EXTS, mode="on").values()) == 0
     assert path.exists()
+
+
+# ---------------------------------------------------------------------------
+# recheck_unknown: a held acoustid-unknown download asked about again (homelab#2546)
+# ---------------------------------------------------------------------------
+
+NOW = 1_800_000_000.0
+DAY = 86400
+UNKNOWN_LINE = f"acoustid-unknown: not recording {REC}: AcoustID knows no MusicBrainz recording for it"
+
+
+def _held_unknown(rejected: Path, clip, name: str = "Band - Song.m4a", url: str = REC_URL,
+                  held: float | None = NOW - 3 * DAY, checked: float | None = None,
+                  first: str = UNKNOWN_LINE) -> Path:
+    (rejected / "request").mkdir(parents=True, exist_ok=True)
+    path = clip(rejected / "request" / name, ("tone", 1), url=url)
+    stamps = {k: v for k, v in (("held", held), ("checked", checked)) if v is not None}
+    guard.write_sidecar(path.with_name(name + ".reason"), first, stamps)
+    return path
+
+
+def _recheck(dirs, found, songs=None, now=NOW, days=None):
+    """Run the re-check with AcoustID answering *found*; returns the outcomes and the files looked up."""
+    _, inbox, rejected = dirs
+    songs = {REC_URL: {"url": REC_URL, "song_id": REC, "duration": 30}} if songs is None else songs
+    asked: list[str] = []
+
+    def recordings(path):
+        asked.append(path.name)
+        if isinstance(found, Exception):
+            raise found
+        return found
+
+    return guard.recheck_unknown(rejected, inbox, songs, recordings, now=now, days=days), asked
+
+
+def _outcomes(**counts) -> dict[str, int]:
+    return {**dict.fromkeys(guard.RECHECKS, 0), **counts}
+
+
+def test_a_held_unknown_file_acoustid_now_confirms_moves_to_the_inbox(requests_dirs, clip, caplog) -> None:
+    import logging
+
+    caplog.set_level(logging.INFO)
+    _, inbox, rejected = requests_dirs
+    path = _held_unknown(rejected, clip, checked=NOW - DAY)
+    outcomes, asked = _recheck(requests_dirs, {REC: 0.9})
+    assert outcomes == _outcomes(verified=1) and asked == [path.name]
+    # Where a verified download goes, for this scan's import; the reject is gone.
+    assert (inbox / "request" / "Band - Song.m4a").exists()
+    assert not path.exists() and not path.with_name(path.name + ".reason").exists()
+    assert guard.request_rejects(rejected) == {}
+    assert f"[VERIFIED] request: Band - Song.m4a — AcoustID names recording {REC} on re-check" in caplog.text
+    assert "1 verified, 0 now fingerprint, 0 still unknown, 0 failed lookup(s)" in caplog.text
+
+
+@pytest.mark.parametrize("found,why", [
+    ({OTHER: 0.99}, f"AcoustID names 1 other recording(s) (best {OTHER} at 0.99)"),
+    ({REC: 0.6, OTHER: 0.4}, f"AcoustID names 1 other recording(s) (best {OTHER} at 0.40)"),
+    ({REC: 0.84}, "AcoustID names it only at score 0.84"),
+    (ValueError("no fingerprint: bad file"), "no fingerprint: bad file"),
+])
+def test_a_recheck_accepts_only_the_tracks_own_recording_at_the_score(requests_dirs, clip, found, why) -> None:
+    """The strict rule holds on a re-check: another recording, or ours below 0.85, is a real mismatch."""
+    _, inbox, rejected = requests_dirs
+    path = _held_unknown(rejected, clip)
+    outcomes, _ = _recheck(requests_dirs, found)
+    assert outcomes == _outcomes(fingerprint=1)
+    assert path.exists() and not (inbox / "request").exists()
+    first, stamps = guard.read_sidecar(path.with_name(path.name + ".reason"))
+    assert first == f"fingerprint: not recording {REC}: {why}"
+    assert stamps == {"held": NOW - 3 * DAY, "checked": NOW}
+    assert guard.request_rejects(rejected) == {REC: "fingerprint"}
+    # Never asked again.
+    assert _recheck(requests_dirs, AssertionError("not looked up"), now=NOW + 5 * DAY)[0] == _outcomes()
+
+
+def test_a_held_file_acoustid_still_doesnt_know_stays_and_is_asked_again_a_day_later(requests_dirs, clip) -> None:
+    _, _, rejected = requests_dirs
+    path = _held_unknown(rejected, clip)
+    sidecar = path.with_name(path.name + ".reason")
+    assert _recheck(requests_dirs, {})[0] == _outcomes(**{"acoustid-unknown": 1})
+    assert path.exists()
+    assert guard.read_sidecar(sidecar) == (UNKNOWN_LINE, {"held": NOW - 3 * DAY, "checked": NOW})
+    assert guard.request_rejects(rejected) == {REC: "acoustid-unknown"}
+    # Once a day at most.
+    assert _recheck(requests_dirs, AssertionError("not looked up"), now=NOW + DAY - 60)[0] == _outcomes()
+    outcomes, asked = _recheck(requests_dirs, {}, now=NOW + DAY)
+    assert outcomes == _outcomes(**{"acoustid-unknown": 1}) and asked == [path.name]
+
+
+def test_a_fresh_reject_waits_a_day_for_its_first_recheck(requests_dirs, clip) -> None:
+    _, _, rejected = requests_dirs
+    _held_unknown(rejected, clip, held=NOW - 2 * 3600)
+    assert _recheck(requests_dirs, AssertionError("not looked up"))[0] == _outcomes()
+
+
+def test_a_reject_from_before_the_recheck_is_held_since_its_sidecar_was_written(requests_dirs, clip) -> None:
+    import os
+
+    _, _, rejected = requests_dirs
+    path = _held_unknown(rejected, clip, held=None)
+    sidecar = path.with_name(path.name + ".reason")
+    sidecar.write_text(UNKNOWN_LINE + "\n", encoding="utf-8")  # what reject() writes
+    os.utime(sidecar, (NOW - 2 * DAY, NOW - 2 * DAY))
+    assert _recheck(requests_dirs, {})[0] == _outcomes(**{"acoustid-unknown": 1})
+    assert guard.read_sidecar(sidecar)[1] == {"held": NOW - 2 * DAY, "checked": NOW}
+
+
+def test_a_failed_lookup_changes_nothing_and_ends_the_pass(requests_dirs, clip, caplog) -> None:
+    _, _, rejected = requests_dirs
+    a = _held_unknown(rejected, clip, "a.m4a")
+    b = _held_unknown(rejected, clip, "b.m4a")
+    before = {p: p.with_name(p.name + ".reason").read_text() for p in (a, b)}
+    outcomes, asked = _recheck(requests_dirs, guard.LookupFailed("HTTP request timed out (30s)"))
+    assert outcomes == _outcomes(failed=1) and asked == ["a.m4a"]  # AcoustID is down: b isn't tried
+    assert {p: p.with_name(p.name + ".reason").read_text() for p in (a, b)} == before
+    assert "AcoustID re-check failed (HTTP request timed out (30s))" in caplog.text
+    # Tried again at the next scan, not a day later.
+    assert _recheck(requests_dirs, {}, now=NOW + 300)[0] == _outcomes(**{"acoustid-unknown": 2})
+
+
+def test_after_the_recheck_days_the_file_stays_held_for_the_operator(requests_dirs, clip, caplog) -> None:
+    _, _, rejected = requests_dirs
+    path = _held_unknown(rejected, clip, held=NOW - 30 * DAY, checked=NOW - DAY)
+    outcomes, asked = _recheck(requests_dirs, {REC: 0.99})
+    assert outcomes == _outcomes(stopped=1) and asked == []
+    assert path.exists()
+    assert guard.read_sidecar(path.with_name(path.name + ".reason"))[1]["stopped"] == NOW
+    assert guard.request_rejects(rejected) == {REC: "acoustid-unknown"}
+    assert caplog.text.count("held 30+ days as unknown to AcoustID; no longer re-checked") == 1
+    # Logged once: later scans leave it alone.
+    caplog.clear()
+    assert _recheck(requests_dirs, AssertionError("not looked up"), now=NOW + 2 * DAY)[0] == _outcomes()
+    assert "[UNKNOWN]" not in caplog.text
+
+
+def test_the_recheck_days_come_from_the_environment(monkeypatch, requests_dirs, clip) -> None:
+    monkeypatch.setenv("ACOUSTID_RECHECK_DAYS", "7")
+    assert guard.recheck_days() == 7
+    _, _, rejected = requests_dirs
+    _held_unknown(rejected, clip, held=NOW - 8 * DAY)
+    assert _recheck(requests_dirs, AssertionError("not looked up"))[0] == _outcomes(stopped=1)
+    monkeypatch.setenv("ACOUSTID_RECHECK_DAYS", "soon")
+    assert guard.recheck_days() == guard.RECHECK_DAYS
+
+
+def test_only_unknown_files_a_request_still_wants_are_rechecked(requests_dirs, clip) -> None:
+    _, _, rejected = requests_dirs
+    _held_unknown(rejected, clip, "real.m4a", first=f"fingerprint: not recording {REC}: detail")
+    _held_unknown(rejected, clip, "short.m4a", first="duration: expected 30s, got 20s (-33%)")
+    _held_unknown(rejected, clip, "dropped.m4a", url=f"https://musicbrainz.org/recording/{OTHER}")
+    gone = _held_unknown(rejected, clip, "gone.m4a")
+    gone.unlink()  # the operator took it away
+    assert _recheck(requests_dirs, AssertionError("not looked up"))[0] == _outcomes()
+
+
+def test_no_file_is_rechecked_while_the_album_state_cant_be_read(requests_dirs, clip, monkeypatch) -> None:
+    _, _, rejected = requests_dirs
+    path = _held_unknown(rejected, clip)
+    monkeypatch.setattr(guard, "request_songs", lambda: None)
+    _, inbox, _ = requests_dirs
+    assert guard.recheck_unknown(rejected, inbox, None, _never, now=NOW) == _outcomes()
+    assert guard.read_sidecar(path.with_name(path.name + ".reason"))[1] == {"held": NOW - 3 * DAY}
