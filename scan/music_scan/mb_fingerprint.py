@@ -38,9 +38,18 @@ and, item by item, re-reads the item, skips it when its ``mb_trackid`` changed
 meanwhile, and stores the new ID with a ``recording_replaced`` event in the same
 Postgres transaction (it refuses to run without ``MUSIC_DATABASE_URL``), then
 writes the file's tags.
-``mb_releasetrackid`` and the title stay as they were (titles are homelab#2544).
 An item whose file changed since its lookup (path, size or mtime: replace_item
 swaps the audio and keeps ``mb_trackid``) is skipped too.
+
+The fields beets copied from the guessed recording go with it (homelab#2544):
+each replaced item's ``trackdisambig`` and ``title`` are refreshed from the new
+recording on MusicBrainz (:func:`refreshed`), in the same store, and logged
+``[REFRESH]``.  A lookup that fails leaves them as they were (``[NOREFRESH]``)
+and the replacement goes ahead: ``--refresh-replaced`` catches such items up,
+and the items replaced before this existed (``recording_replaced`` events,
+``--since`` to narrow them), as a dry run unless ``--apply``.
+``mb_releasetrackid``, ISRCs and the work stay as they were (see
+:func:`refreshed`).
 
 A recorded run (homelab#2553): ``--recheck --run-id ID`` stores its checkpoint
 every :data:`CHECKPOINT_EVERY` items and its findings in the database
@@ -61,11 +70,13 @@ import argparse
 import contextlib
 import dataclasses
 import functools
+import http.client
 import logging
 import os
 import time
 from collections import Counter
 from collections.abc import Callable, Iterable
+from datetime import datetime, timezone
 
 logger = logging.getLogger(__name__)
 
@@ -342,10 +353,111 @@ def verdict(item, f: Flagged) -> tuple[str, str]:
     return REPLACE, ""
 
 
+# ---------------------------------------------------------------------------
+# The guessed recording's fields, after a replacement (homelab#2544)
+# ---------------------------------------------------------------------------
+
+# A MusicBrainz recording by ID (``recording/<id>``: its title and disambiguation), None when there is none.
+RecordingLookup = Callable[[str], "dict | None"]
+Changes = dict[str, tuple[str, str]]  # field: (before, after)
+
+
+def musicbrainz_recordings() -> RecordingLookup:
+    """``recording/<id>`` through the pipeline's MusicBrainz client
+    (:class:`music_scan.mb_release.MusicBrainz`: one request a second, a 503
+    retried once, a 404 None)."""
+    from music_scan.mb_release import MusicBrainz  # noqa: PLC0415
+
+    mb = MusicBrainz()
+    return lambda recording_id: mb.get(f"recording/{recording_id}")
+
+
+def other_version(title: str, recording_title: str, disambiguation: str) -> bool:
+    """True when *title* names a version (:data:`music_scan.titles.VERSIONS`:
+    5.1, live, demo, alternate, mono, take, outtake) more often than the
+    recording's title and disambiguation together do: ``Oh! Sweet Nuthin' (5.1
+    mix)`` against the stereo recording, never ``Song (Live)`` against a
+    recording whose disambiguation reads "live, 1975-…"."""
+    from music_scan.titles import counts  # noqa: PLC0415
+
+    ours, theirs, notes = counts(title), counts(recording_title), counts(disambiguation)
+    return any(n > theirs[word] + notes[word] for word, n in ours.items())
+
+
+def refreshed_title(item, recording_title: str, disambiguation: str) -> str:
+    """*item*'s title once its recording is the one titled *recording_title*.
+
+    beets wrote the guessed recording's title, so the new recording's replaces
+    it (a spotdl item's, a manual import's).  A Usenet album track
+    (``via=usenet``) is the exception: since music-pipeline#398 its title is its
+    release file's own, on purpose, so it stays while it is the same song as the
+    recording's (:func:`~music_scan.identity.different_song`, version notes
+    dropped) and names no version the recording doesn't (:func:`other_version`).
+    A track imported before #398 still carries the guess's title, and the
+    guess's song name or its "(5.1 mix)" gives that away."""
+    from music_scan.identity import different_song  # noqa: PLC0415
+
+    title = item.get("title") or ""
+    if not recording_title or item.get("via") != "usenet":
+        return recording_title or title
+    if different_song(title, recording_title) or other_version(title, recording_title, disambiguation):
+        return recording_title
+    return title
+
+
+def refreshed(item, recording: dict) -> Changes:
+    """The fields of *item* beets copied from its guessed recording that change
+    now that its recording is *recording* (MusicBrainz's ``recording/<id>``),
+    as (before, after):
+
+    - ``trackdisambig``: the recording's disambiguation, often empty (3778,
+      *Constructive Summer*, kept the guess's "live, 2024-03-10: Omeara…").
+    - ``title``: :func:`refreshed_title`.
+
+    The rest stay.  ``mb_trackid`` is the recheck's.  ISRCs are an identity key
+    too, of mixed provenance (spotdl's from Spotify, the match's, a merge's
+    union), and playlist entries resolve to items by them, so dropping the
+    guess's could unlink an entry; nothing here tells which they are.  The work
+    and its composer and lyricist credits are the file's own: beets' singleton
+    lookup asks MusicBrainz for no work relations.  ``mb_releasetrackid``
+    likewise (a singleton match has no release track).  The artist stays, as in
+    the plugin's ``RECORDING_FIELDS``: a wrong song by the right artist is the
+    case seen.  Arranger and remixer credits come
+    from the recording, but only when the guess had any; otherwise they are the
+    file's, and nothing tells the two apart."""
+    disambiguation = recording.get("disambiguation") or ""
+    after = {"title": refreshed_title(item, recording.get("title") or "", disambiguation),
+             "trackdisambig": disambiguation}
+    return {field: (before, new) for field, new in after.items()
+            if (before := item.get(field) or "") != new}
+
+
+def _refresh(item, recording_id: str, lookup: RecordingLookup) -> Changes | None:
+    """:func:`refreshed` for *item* against *recording_id*, or None when the
+    lookup fails or MusicBrainz has no such recording (logged ``[NOREFRESH]``)."""
+    try:
+        recording = lookup(recording_id)
+    except (OSError, ValueError, http.client.HTTPException) as exc:  # urllib's errors, a cut or non-JSON body
+        logger.warning("[NOREFRESH] %s: the MusicBrainz lookup of %s failed (%s); title and trackdisambig "
+                       "left as they were", _label(item), recording_id, exc)
+        return None
+    if not recording:
+        logger.warning("[NOREFRESH] %s: MusicBrainz has no recording %s; title and trackdisambig left as they were",
+                       _label(item), recording_id)
+        return None
+    return refreshed(item, recording)
+
+
+def _describe(changes: Changes) -> str:
+    return "; ".join(f"{field} {before!r} → {after!r}" for field, (before, after) in changes.items())
+
+
 def _store(conn, item, f: Flagged, job_id: str | None = None, run_id: str | None = None,
-           event: bool = True) -> str:
-    """Store *f*'s replacement on *item* with its ``recording_replaced`` event (and,
-    for a recorded run, the finding's outcome) in one transaction; returns the message."""
+           event: bool = True, refresh: Changes | None = None) -> str:
+    """Store *f*'s replacement on *item*, and the fields *refresh* changes, with
+    its ``recording_replaced`` event (its ``data.refreshed`` the changes) and,
+    for a recorded run, the finding's outcome, in one transaction; returns the
+    message."""
     from music_fetch import events  # noqa: PLC0415
 
     from music_scan import recheck_runs  # noqa: PLC0415
@@ -358,20 +470,29 @@ def _store(conn, item, f: Flagged, job_id: str | None = None, run_id: str | None
                           spotify_album_id=events.spotify_album(item.get("spotify_album_id")),
                           release_group=item.get("mb_releasegroupid"), item_id=item.id,
                           data={**events.item_fields(item), "old": f.guess, "new": f.replacement,
-                                "score": score, "keeper": f.keeper, **({"run": run_id} if run_id else {})})
+                                "score": score, "keeper": f.keeper, **({"run": run_id} if run_id else {}),
+                                **({"refreshed": {k: list(v) for k, v in refresh.items()}} if refresh else {})})
         if run_id:
             recheck_runs.record_outcome(conn, run_id, item.id, "replaced", None, job_id)
-        if item.get("mb_trackid") != f.replacement:
+        if item.get("mb_trackid") != f.replacement or refresh:
             item["mb_trackid"] = f.replacement
+            for field, (_, after) in (refresh or {}).items():
+                item[field] = after
             item.store()
     return message
+
+
+def _log_refresh(item_id: int, refresh: Changes | None) -> None:
+    if refresh:
+        logger.info("[REFRESH] %s: %s", item_id, _describe(refresh))
 
 
 def replace(lib, flagged: list[Flagged]) -> int:
     """Replace each flagged item's guess with its one confident recording, under
     the pipeline lock, each with its ``recording_replaced`` event in the same
-    transaction.  An item whose ``mb_trackid`` or file changed since its lookup
-    (or that left the library) is skipped.  Returns the count replaced."""
+    transaction, and refresh the fields beets copied from the guess
+    (:func:`refreshed`).  An item whose ``mb_trackid`` or file changed since its
+    lookup (or that left the library) is skipped.  Returns the count replaced."""
     from music_fetch import db  # noqa: PLC0415
     from music_scan.audit import pipeline_lock  # noqa: PLC0415
 
@@ -379,6 +500,7 @@ def replace(lib, flagged: list[Flagged]) -> int:
     if not todo:
         return 0
     replaced = 0
+    recordings = musicbrainz_recordings()
     with pipeline_lock(), contextlib.closing(db.connect()) as conn:
         for f in todo:
             item = lib.get_item(f.item_id)
@@ -386,9 +508,11 @@ def replace(lib, flagged: list[Flagged]) -> int:
             if what != REPLACE:
                 logger.warning("[SKIP] %s: %s; left alone", f.item_id, why)
                 continue
-            message = _store(conn, item, f)
+            refresh = _refresh(item, f.replacement, recordings)
+            message = _store(conn, item, f, refresh=refresh)
             item.try_write()
             logger.info("%s", message)
+            _log_refresh(item.id, refresh)
             replaced += 1
     return replaced
 
@@ -404,7 +528,9 @@ def replace_run(run_id: str, apply: bool = False, library_db: str = LIBRARY_DB,
     library holds each now.  Without *apply* it says what an apply would do;
     with it, under the pipeline lock, it stores each.  Re-running it after an
     interrupted apply finishes the job: an item that holds its replacement
-    already is written again (its tags) and counted as done."""
+    already is written again (its tags) and counted as done.  The apply also
+    refreshes the fields beets copied from the guess (:func:`refreshed`, one
+    MusicBrainz lookup per item); the dry run reads only the findings."""
     import beets.library  # noqa: PLC0415
 
     from music_fetch import db  # noqa: PLC0415
@@ -414,7 +540,17 @@ def replace_run(run_id: str, apply: bool = False, library_db: str = LIBRARY_DB,
     if not db.configured():
         raise SystemExit(f"--replace-run: {db.ENV} is unset; the run's findings are in the database")
     job_id = os.environ.get("MUSIC_EVENT_JOB") or None
-    counts: Counter = Counter({k: 0 for k in ("replaceable", "replaced", "already", "skipped", "ambiguous")})
+    counts: Counter = Counter({k: 0 for k in ("replaceable", "replaced", "already", "skipped", "ambiguous",
+                                              "refreshed", "norefresh")})
+    recordings = musicbrainz_recordings() if apply else None
+
+    def refresh(item, f: Flagged) -> Changes | None:
+        assert recordings is not None
+        changes = _refresh(item, f.replacement, recordings)
+        counts["refreshed"] += bool(changes)
+        counts["norefresh"] += changes is None
+        return changes
+
     lib = beets.library.Library(library_db, directory=library_dir)
     try:
         with contextlib.closing(db.connect()) as conn, (pipeline_lock() if apply else contextlib.nullcontext()):
@@ -442,16 +578,21 @@ def replace_run(run_id: str, apply: bool = False, library_db: str = LIBRARY_DB,
                     counts["already"] += 1
                     logger.info("[DONE] %s: holds %s already", _label(item), f.replacement)
                     if apply:
-                        # Stored before a restart: its event and outcome may not be, nor its tags.
-                        _store(conn, item, f, job_id, run_id, event=row["outcome"] != "replaced")
+                        # Stored before a restart: its event and outcome may not be, nor its tags,
+                        # nor its refresh (which finds nothing to change when it was).
+                        changes = refresh(item, f)
+                        _store(conn, item, f, job_id, run_id, event=row["outcome"] != "replaced", refresh=changes)
                         item.try_write()
+                        _log_refresh(item.id, changes)
                     continue
                 if not apply:
                     logger.info("[WOULD-REPLACE] %s: mb_trackid %s → %s (AcoustID %.2f)%s", _label(item), f.guess,
                                 f.replacement, f.found[0][0], " (a merge keeper)" if f.keeper else "")
                     continue
-                logger.info("%s", _store(conn, item, f, job_id, run_id))
+                changes = refresh(item, f)
+                logger.info("%s", _store(conn, item, f, job_id, run_id, refresh=changes))
                 item.try_write()
+                _log_refresh(item.id, changes)
                 counts["replaced"] += 1
     finally:
         lib._close()
@@ -461,7 +602,114 @@ def replace_run(run_id: str, apply: bool = False, library_db: str = LIBRARY_DB,
                 f"{counts['replaced']} replaced" if apply else
                 f"{counts['replaceable'] - counts['already'] - counts['skipped']} to replace (re-run with --apply)",
                 counts["already"], counts["skipped"], counts["ambiguous"])
+    if apply:
+        logger.info("[SUMMARY] run %s: title or trackdisambig refreshed on %d; %d not refreshed (their "
+                    "MusicBrainz lookup failed: catch them up with --refresh-replaced)",
+                    run_id, counts["refreshed"], counts["norefresh"])
     return counts
+
+
+# The latest recording_replaced event of each item, since a time (or ever): the item and the recording it got.
+_REPLACED = """
+SELECT DISTINCT ON (item_id) item_id, data->>'new'
+  FROM events
+ WHERE kind = %(kind)s AND item_id IS NOT NULL
+   AND (%(since)s::timestamptz IS NULL OR at >= %(since)s::timestamptz)
+ ORDER BY item_id, at DESC, id DESC
+"""
+
+
+def replaced_items(conn, since: datetime | None = None) -> list[tuple[int, str | None]]:
+    """(item ID, the recording it got) from each item's latest ``recording_replaced`` event since *since*."""
+    return [(r[0], r[1]) for r in conn.execute(_REPLACED, {"kind": EVENT_KIND, "since": since}).fetchall()]
+
+
+def refresh_replaced(since: datetime | None = None, apply: bool = False, library_db: str = LIBRARY_DB,
+                     library_dir: str = LIBRARY_DIR) -> Counter:
+    """``--refresh-replaced`` (homelab#2544): :func:`refreshed` for the items the
+    recheck replaced (their ``recording_replaced`` events, since *since*), for
+    those replaced before the apply refreshed anything (the 168 of 2026-10-31)
+    and any whose lookup failed then.  Without *apply* it lists each change,
+    before → after (``[WOULD-REFRESH]``).
+
+    It never changes ``mb_trackid``, the recheck's: an item whose ``mb_trackid``
+    is no longer its event's recording (reimported, rechecked again, set by
+    hand) is skipped, and so is one whose lookup fails (``[NOREFRESH]``, listed
+    in the summary).  The lookups run first, without a lock, at MusicBrainz's
+    one a second.  Then *apply* takes the pipeline lock, reads each item again,
+    changes it only while its recording and the fields are as they were looked
+    up, and writes its tags (``[REFRESH]``).  Running it again changes nothing
+    new: a refreshed item's fields are its recording's already."""
+    import beets.library  # noqa: PLC0415
+
+    from music_fetch import db  # noqa: PLC0415
+    from music_scan.audit import pipeline_lock  # noqa: PLC0415
+
+    if not db.configured():
+        raise SystemExit(f"--refresh-replaced: {db.ENV} is unset; the replaced items are its recording_replaced events")
+    counts: Counter = Counter({k: 0 for k in ("replaced", "refresh", "current", "skipped", "norefresh", "refreshed")})
+    failed: list[int] = []
+    todo: list[tuple[int, str, Changes]] = []
+    recordings = musicbrainz_recordings()
+    lib = beets.library.Library(library_db, directory=library_dir)
+    try:
+        with contextlib.closing(db.connect()) as conn:
+            rows = replaced_items(conn, since)
+        logger.info("%d item(s) replaced by the recheck%s", len(rows),
+                    f" since {since.isoformat()}" if since else "")
+        for item_id, recording in rows:
+            counts["replaced"] += 1
+            item = lib.get_item(item_id)
+            if item is None:
+                counts["skipped"] += 1
+                logger.info("[SKIP] %s: gone from the library", item_id)
+                continue
+            if not recording or item.get("mb_trackid") != recording:
+                counts["skipped"] += 1
+                logger.info("[SKIP] %s: mb_trackid is %s now, not its replacement %s; left alone", _label(item),
+                            item.get("mb_trackid") or "unset", recording)
+                continue
+            changes = _refresh(item, recording, recordings)
+            if changes is None:
+                counts["norefresh"] += 1
+                failed.append(item_id)
+            elif not changes:
+                counts["current"] += 1
+            else:
+                counts["refresh"] += 1
+                todo.append((item_id, recording, changes))
+                if not apply:
+                    logger.info("[WOULD-REFRESH] %s: %s", _label(item), _describe(changes))
+        if apply and todo:
+            with pipeline_lock():
+                for item_id, recording, changes in todo:
+                    item = lib.get_item(item_id)
+                    if (item is None or item.get("mb_trackid") != recording
+                            or any((item.get(field) or "") != before for field, (before, _) in changes.items())):
+                        counts["skipped"] += 1
+                        logger.warning("[SKIP] %s: changed since its lookup; left alone (run it again)", item_id)
+                        continue
+                    for field, (_, after) in changes.items():
+                        item[field] = after
+                    item.store()
+                    item.try_write()
+                    counts["refreshed"] += 1
+                    logger.info("[REFRESH] %s: %s", _label(item), _describe(changes))
+    finally:
+        lib._close()
+    logger.info("[SUMMARY] %d replaced item(s): %s, %d current already, %d skipped, %d not looked up%s",
+                counts["replaced"],
+                f"{counts['refreshed']} refreshed" if apply else
+                f"{counts['refresh']} to refresh (re-run with --apply)",
+                counts["current"], counts["skipped"], counts["norefresh"],
+                f" (MusicBrainz lookup failed: {', '.join(map(str, failed))}; run it again)" if failed else "")
+    return counts
+
+
+def utc_time(value: str) -> datetime:
+    """An ISO 8601 date or time; one without an offset is UTC."""
+    at = datetime.fromisoformat(value)
+    return at if at.tzinfo else at.replace(tzinfo=timezone.utc)
 
 
 def run_recheck(apply: bool = False, ids: list[int] | None = None,
@@ -573,9 +821,24 @@ def main() -> None:
     parser.add_argument("--replace-run", metavar="ID",
                         help="a recorded run's replacements: what an apply would do, or with --apply do it")
     parser.add_argument("--apply", action="store_true",
-                        help="with --recheck: replace the flagged guesses; with --replace-run: apply the run")
+                        help="with --recheck: replace the flagged guesses; with --replace-run: apply the run; "
+                             "with --refresh-replaced: refresh the items")
+    parser.add_argument("--refresh-replaced", action="store_true",
+                        help="refresh title and trackdisambig from the new recording on the items the recheck "
+                             "replaced (their recording_replaced events): a dry run, or with --apply do it "
+                             "(homelab#2544)")
+    parser.add_argument("--since", type=utc_time, metavar="TIME",
+                        help="with --refresh-replaced: only items replaced at or after TIME (ISO 8601, UTC "
+                             "unless it says otherwise; default: every one)")
     parser.add_argument("ids", nargs="*", type=int, help="with --recheck: only these item IDs")
     args = parser.parse_args()
+    if args.refresh_replaced:
+        if args.recheck or args.run_id or args.replace_run or args.ids:
+            parser.error("--refresh-replaced takes only --since and --apply")
+        refresh_replaced(since=args.since, apply=args.apply)
+        return
+    if args.since:
+        parser.error("--since goes with --refresh-replaced")
     if args.replace_run:
         if args.recheck or args.run_id or args.ids:
             parser.error("--replace-run takes only --apply")
