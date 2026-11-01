@@ -98,6 +98,9 @@ Search the album's name in the log. The import logs `[RELEASE]`/`[NOMB]`, then o
 few per run, and `audit_want_albums` shows what is still wanted, grouped by album. A
 `fallback` album went to spotdl after its releases failed. A name of glyphs only
 (`[NOWORDS]`), or one whose `[MISS]` queries the indexer can't match, needs
-`set_search_override`: words a release title holds, which also steer the edition picked. Its
-dry run shows the query before and after, and when the album is searched again (a `missing`
-album at the next tick).
+`set_search_override`. A `[MISS]` with results says which rule rejected them (`rejected: …;
+closest: "<title>" (<rule>: <detail>)`): `album words` on the closest means the release
+spells the title differently, which an override fixes; `size`, `single` or `leftover words`
+are about the release itself, which an override doesn't change. An override is words a
+release title holds, which also steer the edition picked. Its dry run shows the query before
+and after, and when the album is searched again (a `missing` album at the next tick).
