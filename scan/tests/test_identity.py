@@ -153,3 +153,27 @@ def test_recordings_hold_a_recording_by_spotify_id_isrc_or_mb_recording_id_never
     assert not library.holds_item(_item(title="Song"))  # the same title is not the same recording
     assert not library.holds(recording_ids(["SP2"], ["USX9"], "other-rec"))
     assert not Recordings().holds(recording_ids(["SP1"]))
+
+
+def test_merge_agrees_needs_the_title_and_a_shared_artist_word() -> None:
+    """homelab#2539: a merged file counts as its keeper's recording only when its tags agree."""
+    from music_scan.identity import merge_agrees
+
+    assert merge_agrees("Love Cry (Joy Orbison remix)", "Four Tet", "Love Cry", "Four Tet")
+    assert merge_agrees("Ava Adore", "", "Ava Adore", "The Smashing Pumpkins")  # unknown artist doesn't veto
+    assert merge_agrees("Heaven", "Talking Heads", "Heaven - 2005 Remaster", "Talking Heads feat. David Byrne")
+    assert not merge_agrees("Pictures Of You - Remastered", "The Cure", "Easy on Your Own?", "Alvvays")
+    assert not merge_agrees("Heaven", "Talking Heads", "Heaven", "Bryan Adams")
+    assert not merge_agrees("", "Alvvays", "Easy on Your Own?", "Alvvays")
+
+
+def test_recordings_holds_a_merged_name_only_with_an_agreeing_keeper() -> None:
+    class Item(dict):
+        id = property(lambda self: self["id"])
+
+    lib = Recordings([Item(id=9673, title="Easy on Your Own?", artist="Alvvays",
+                           merged_files="451-02 - x.m4a/9674-02 - y.m4a")])
+    assert lib.holds_merged("9674-02 - y.m4a", "Easy on Your Own?", "Alvvays")
+    assert not lib.holds_merged("451-02 - x.m4a", "Pictures Of You - Remastered", "The Cure")
+    assert not lib.holds_merged("unknown.m4a", "Easy on Your Own?", "Alvvays")
+    assert [k.id for k in lib.merge_keepers("451-02 - x.m4a")] == [9673]

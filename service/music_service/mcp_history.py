@@ -192,7 +192,8 @@ def only_copies(lib: mcp_reads.Library, replaced: Path) -> dict:
 
     if not replaced.is_dir():
         return listed([])
-    library = Recordings(lib.identities(("spotify_ids", "spotify_url", "isrc", "mb_trackid", MERGED_FILES, "length")))
+    library = Recordings(lib.identities(("spotify_ids", "spotify_url", "isrc", "mb_trackid", MERGED_FILES, "length",
+                                         "title", "artist", "albumartist")))
     _, only = release.split_replaced(release.audio_files(replaced), library)
     return listed([str(f.relative_to(replaced.parent)) for f in only])
 

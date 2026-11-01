@@ -24,7 +24,8 @@ keeper (``merged_files``) is checked like any item and marked as one: a merge
 joins only copies with the same audio or a shared ID, so the keeper's audio is
 the merged recording's, and the ID it carries from a loser is that loser's beets
 guess (supersede kept it for Navidrome's plays and stars, a loss the operator
-accepted on 2026-10-31).  Its losers' files stay superseded by ``merged_files``.
+accepted on 2026-10-31).  Its losers' files stay superseded by ``merged_files``
+(while their title and artist agree with the keeper's, homelab#2539).
 
 It is a dry run without ``--apply``.  The lookups run first, without a lock
 (pyacoustid keeps to AcoustID's 3 requests a second, so the whole library takes
