@@ -9,6 +9,7 @@ replacement tests run against Postgres when ``MUSIC_TEST_DATABASE_URL`` is set
 
 from __future__ import annotations
 
+import contextlib
 import os
 import sys
 from pathlib import Path
@@ -293,7 +294,7 @@ def test_replace_skips_an_item_changed_since_its_lookup(pg_url, monkeypatch, cap
     assert mbf.replace(lib, flagged) == 1  # 6930 only
     assert items[0]["mb_trackid"] == "set-by-hand" and [r[2] for r in _events(pg_url)] == [6930]
     assert "[SKIP] 6994: mb_trackid is set-by-hand now, not surround-rec" in caplog.text
-    assert "[SKIP] 5672: mb_trackid is (gone from the library) now" in caplog.text
+    assert "[SKIP] 5672: gone from the library; left alone" in caplog.text
 
 
 @needs_pg
@@ -309,3 +310,268 @@ def test_a_store_that_fails_leaves_no_event(pg_url, monkeypatch):
     with pytest.raises(RuntimeError, match="database is locked"):
         mbf.replace(FakeLib(items), flagged)
     assert _events(pg_url) == []
+
+
+# --- a recorded run (homelab#2553): checkpoints, resume, the apply by run ID ---
+
+
+class Killed(BaseException):
+    """The process dying mid-run (a rollout): no handler runs."""
+
+
+class RunLib(FakeLib):
+    """A FakeLib run_recheck and replace_run can open."""
+
+    def items(self):
+        return list(self.by_id.values())
+
+    def _close(self):
+        pass
+
+
+def test_a_checkpoint_every_so_many_items_and_after_the_last(monkeypatch):
+    monkeypatch.setattr(mbf, "CHECKPOINT_EVERY", 3)
+    items = sorted(_library(), key=lambda i: i.id)
+    calls = []
+    mbf.recheck(FakeLib(items), [i.id for i in items], _lookup(),
+                checkpoint=lambda n, last, counts, new: calls.append((n, last, counts["checked"],
+                                                                      [f.item_id for f in new])))
+    assert calls == [(3, 6930, 3, [5672, 5970, 6930]), (4, 6994, 4, [6994])]
+
+
+def test_a_continued_run_counts_on_from_its_checkpoint(monkeypatch, caplog):
+    caplog.set_level("INFO")
+    monkeypatch.setattr(mbf, "PROGRESS_EVERY", 3)
+    items = _library()[:2]
+    counts, flagged = mbf.recheck(FakeLib(items), [i.id for i in items], _lookup(), start=2, total=4,
+                                  counts={"checked": 2, "flagged": 1, "nomatch": 1})
+    assert counts["checked"] == 4 and counts["flagged"] == 3 and counts["nomatch"] == 1 and len(flagged) == 2
+    assert "[PROGRESS] 3/4, 2 flagged so far" in caplog.text
+
+
+def test_an_item_whose_file_changed_since_its_check_is_skipped(tmp_path):
+    """replace_item swaps the audio and keeps mb_trackid (homelab#2553): the ID alone can't tell."""
+    item = FakeItem(6994, "T", mb_trackid=SURROUND)
+    item.path = bytes(tmp_path / "T-6994.m4a")
+    (tmp_path / "T-6994.m4a").write_bytes(b"old audio")
+    _, (f,) = mbf.recheck(FakeLib([item]), [6994], _lookup())
+    assert f.file[1] == 9 and mbf.verdict(item, f) == (mbf.REPLACE, "")
+    (tmp_path / "T-6994.m4a").write_bytes(b"the new, longer audio")
+    assert mbf.verdict(item, f) == (mbf.SKIP, "its file changed since its check; recheck it by ID")
+    item["mb_trackid"] = STEREO
+    assert mbf.verdict(item, f)[0] == mbf.ALREADY
+    assert mbf.verdict(None, f) == (mbf.SKIP, "gone from the library")
+
+
+def test_main_keeps_a_recorded_run_a_dry_run(monkeypatch):
+    for argv in (["--recheck", "--run-id", "r1", "--apply"], ["--replace-run", "r1", "--recheck"],
+                 ["--run-id", "r1"]):
+        monkeypatch.setattr(sys, "argv", ["music-mb-fingerprint", *argv])
+        monkeypatch.setattr(mbf, "run", lambda: pytest.fail("not the fill mode"))
+        monkeypatch.setattr(mbf, "run_recheck", lambda **_: pytest.fail("refused by argparse"))
+        with pytest.raises(SystemExit):
+            mbf.main()
+
+
+def _open(monkeypatch, lib):
+    import beets.library
+
+    monkeypatch.setattr(beets.library, "Library", lambda *a, **k: lib)
+    monkeypatch.delenv("PREFECT_API_URL", raising=False)
+
+
+def _rows(url, sql, *params):
+    with psycopg.connect(url) as conn:
+        return conn.execute(sql, params).fetchall()
+
+
+@needs_pg
+def test_a_recorded_run_resumes_after_its_checkpoint(pg_url, monkeypatch, caplog):
+    caplog.set_level("INFO")
+    monkeypatch.setattr(mbf, "CHECKPOINT_EVERY", 2)
+    lib = RunLib(_library())
+    _open(monkeypatch, lib)
+    calls = []
+
+    def dies_at_6930(path):
+        item_id = int(path.rsplit("-", 1)[1].split(".")[0])
+        if item_id == 6930:
+            raise Killed
+        calls.append(item_id)
+        return ACOUSTID[item_id]
+
+    with pytest.raises(Killed):
+        mbf.run_recheck(run_id="r1", lookup=dies_at_6930)
+    assert calls == [5672, 5970]  # in ID order
+    assert _rows(pg_url, "SELECT status, position, cursor, total FROM long_runs") == [("running", 2, 5970, 4)]
+    assert [r[0] for r in _rows(pg_url, "SELECT item_id FROM recheck_findings ORDER BY item_id")] == [5672, 5970]
+
+    resumed = _lookup()
+    counts = mbf.run_recheck(run_id="r1", lookup=resumed)
+    assert resumed.calls == [6930, 6994]  # only the items after the checkpoint
+    assert counts["checked"] == 4 and counts["flagged"] == 4 and counts["replaceable"] == 3
+    assert "[RESUME] run r1: continuing after item 5970 (2 of 4 walked, 2 flagged so far)" in caplog.text
+    (status, finished), = _rows(pg_url, "SELECT status, finished_at FROM long_runs")
+    assert status == "done" and finished is not None
+    findings = _rows(pg_url, "SELECT item_id, replacement FROM recheck_findings ORDER BY item_id")
+    assert findings == [(5672, LIVE), (5970, None), (6930, STEREO), (6994, STEREO)]
+    assert _events(pg_url) == []  # a recorded run is a dry run
+
+
+@needs_pg
+def test_a_recorded_run_refuses_a_finished_run_other_args_and_a_second_process(pg_url, monkeypatch):
+    from music_fetch import db
+    from music_scan import recheck_runs
+
+    lib = RunLib(_library())
+    _open(monkeypatch, lib)
+    with psycopg.connect(pg_url, autocommit=True) as other:
+        db.migrate(other)
+        recheck_runs.hold(other, "r1")
+        with pytest.raises(SystemExit, match="run r1 is running in another process"):
+            mbf.run_recheck(run_id="r1", lookup=_lookup())
+    mbf.run_recheck(run_id="r1", ids=[6994], lookup=_lookup())
+    with pytest.raises(SystemExit, match="run r1 finished at"):
+        mbf.run_recheck(run_id="r1", ids=[6994], lookup=_lookup())
+    with psycopg.connect(pg_url, autocommit=True) as conn:
+        conn.execute("UPDATE long_runs SET status = 'failed', finished_at = NULL, position = 0, cursor = NULL")
+    with pytest.raises(SystemExit, match=r"run r1 was started with \{'ids': \[6994\]\}, not \{'ids': \[5672\]\}"):
+        mbf.run_recheck(run_id="r1", ids=[5672], lookup=_lookup())
+    resumed = _lookup()
+    mbf.run_recheck(run_id="r1", lookup=resumed)  # no IDs: the ones it was started with
+    assert resumed.calls == [6994]
+    with pytest.raises(SystemExit, match="1 to 64 letters"):
+        mbf.run_recheck(run_id="-apply", lookup=_lookup())
+
+
+@needs_pg
+def test_lookups_failing_in_a_row_leave_a_failed_run_to_continue(pg_url, monkeypatch):
+    monkeypatch.setattr(mbf, "RETRY_SECONDS", 0)
+    monkeypatch.setattr(mbf, "MAX_FAILURES_IN_A_ROW", 2)
+    _open(monkeypatch, RunLib(_library()))
+
+    def down(path):
+        raise mbf.LookupFailed("503")
+
+    with pytest.raises(SystemExit, match="2 AcoustID lookups failed in a row"):
+        mbf.run_recheck(run_id="r1", lookup=down)
+    assert _rows(pg_url, "SELECT status FROM long_runs") == [("failed",)]
+    assert mbf.run_recheck(run_id="r1", lookup=_lookup())["checked"] == 4
+
+
+def _recorded_run(pg_url, monkeypatch, lib, ids=None):
+    _open(monkeypatch, lib)
+    mbf.run_recheck(run_id="r1", ids=ids, lookup=_lookup())
+
+
+@needs_pg
+def test_replace_run_previews_then_applies_a_recorded_run(pg_url, monkeypatch, caplog):
+    caplog.set_level("INFO")
+    items = _library()
+    lib = RunLib(items)
+    _recorded_run(pg_url, monkeypatch, lib)
+    locks = []
+    from music_scan import audit
+
+    @contextlib.contextmanager
+    def lock():
+        locks.append("pipeline")
+        yield
+
+    monkeypatch.setattr(audit, "pipeline_lock", lock)
+    preview = mbf.replace_run("r1")
+    assert preview["replaceable"] == 3 and preview["replaced"] == 0 and locks == [] and _events(pg_url) == []
+    assert "[WOULD-REPLACE] 6994 — Oh! Sweet Nuthin’ (5.1 mix): mb_trackid surround-rec → stereo-rec" in caplog.text
+    assert "3 replaceable: 3 to replace (re-run with --apply), 0 already replaced, 0 skipped; 1 with several" \
+        in caplog.text
+
+    monkeypatch.setenv("MUSIC_EVENT_JOB", "job-1")
+    counts = mbf.replace_run("r1", apply=True)
+    assert counts["replaced"] == 3 and locks == ["pipeline"]
+    by_id = {i.id: i for i in items}
+    assert by_id[6994]["mb_trackid"] == STEREO and by_id[6994].written and by_id[5672]["mb_trackid"] == LIVE
+    assert by_id[5970]["mb_trackid"] == LIVE_1992 and not by_id[5970].stored
+    rows = _events(pg_url)
+    assert [r[2] for r in rows] == [5672, 6930, 6994] and {r[4]["run"] for r in rows} == {"r1"}
+    assert _rows(pg_url, "SELECT item_id, outcome, outcome_job FROM recheck_findings "
+                         "WHERE replacement IS NOT NULL ORDER BY item_id") == [
+        (5672, "replaced", "job-1"), (6930, "replaced", "job-1"), (6994, "replaced", "job-1")]
+
+
+@needs_pg
+def test_an_interrupted_apply_is_finished_by_running_it_again(pg_url, monkeypatch, caplog):
+    """A restart mid-apply (homelab#2553): the second apply takes the pipeline lock
+    again and re-checks every item, so an item changed in between is skipped, an
+    item stored before the kill is written again without a second event, and an
+    item whose store died before its transaction committed gets its event."""
+    caplog.set_level("INFO")
+    items = _library()
+    lib = RunLib(items)
+    _recorded_run(pg_url, monkeypatch, lib)
+    by_id = {i.id: i for i in items}
+    from music_scan import audit
+
+    locks = []
+
+    @contextlib.contextmanager
+    def lock():
+        locks.append("pipeline")
+        yield
+
+    monkeypatch.setattr(audit, "pipeline_lock", lock)
+
+    def dies():  # 6930's store: the beets row is written, then the process dies before the commit
+        by_id[6930].stored = True
+        raise Killed
+
+    by_id[6930].store = dies
+    with pytest.raises(Killed):
+        mbf.replace_run("r1", apply=True)
+    assert [r[2] for r in _events(pg_url)] == [5672]  # 6930's event rolled back with its transaction
+    assert by_id[6930]["mb_trackid"] == STEREO  # but beets holds the replacement
+
+    del by_id[6930].store
+    by_id[5672].written = False
+    by_id[6994]["mb_trackid"] = "set-by-hand"  # changed between the two applies
+    counts = mbf.replace_run("r1", apply=True)
+    assert locks == ["pipeline", "pipeline"]
+    assert counts["already"] == 2 and counts["skipped"] == 1 and counts["replaced"] == 0
+    assert by_id[5672].written  # its tags written again
+    assert by_id[6994]["mb_trackid"] == "set-by-hand"
+    assert "[SKIP] 6994: mb_trackid is set-by-hand now, not surround-rec; left alone" in caplog.text
+    assert sorted(r[2] for r in _events(pg_url)) == [5672, 6930]  # one event each, 6930's recorded now
+    assert _rows(pg_url, "SELECT item_id, outcome, outcome_reason FROM recheck_findings "
+                         "WHERE replacement IS NOT NULL ORDER BY item_id") == [
+        (5672, "replaced", None), (6930, "replaced", None),
+        (6994, "skipped", "mb_trackid is set-by-hand now, not surround-rec")]
+
+
+@needs_pg
+def test_replace_run_refuses_an_unknown_an_unfinished_and_a_stale_run(pg_url, monkeypatch):
+    lib = RunLib(_library())
+    _open(monkeypatch, lib)
+    with pytest.raises(SystemExit, match="no run r1"):
+        mbf.replace_run("r1")
+    mbf.run_recheck(run_id="r1", lookup=_lookup())
+    with psycopg.connect(pg_url, autocommit=True) as conn:
+        conn.execute("UPDATE long_runs SET status = 'running'")
+    with pytest.raises(SystemExit, match="run r1 is running, not finished"):
+        mbf.replace_run("r1", apply=True)
+    with psycopg.connect(pg_url, autocommit=True) as conn:
+        conn.execute("UPDATE long_runs SET status = 'done', finished_at = now() - interval '8 days'")
+    with pytest.raises(SystemExit, match="more than 7 days ago; start a new run"):
+        mbf.replace_run("r1", apply=True)
+    assert _events(pg_url) == []
+
+
+@needs_pg
+def test_runs_are_pruned_with_their_findings(pg_url, monkeypatch):
+    from music_fetch import db
+    from music_scan import recheck_runs
+
+    _recorded_run(pg_url, monkeypatch, RunLib(_library()))
+    with contextlib.closing(db.connect()) as conn:
+        assert recheck_runs.prune(conn) == 0
+        conn.execute("UPDATE long_runs SET finished_at = now() - interval '31 days'")
+        assert recheck_runs.prune(conn) == 1
+    assert _rows(pg_url, "SELECT count(*) FROM recheck_findings") == [(0,)]
