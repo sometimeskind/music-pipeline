@@ -417,7 +417,8 @@ def build_server(
         """music-mb-fingerprint --replace-run: a finished recheck run's replacements. The dry run
         reads the run's findings (no AcoustID) and says, item by item, what the apply does as the
         library stands now; an item whose mb_trackid or file changed since its check is skipped.
-        Refused for a run not finished or finished over 7 days ago."""
+        The apply also refreshes each replaced item's trackdisambig and title from its new
+        MusicBrainz recording. Refused for a run not finished or finished over 7 days ago."""
         return await run("apply_recheck", {"run_id": run_id, "apply": apply}, write=True)
 
     # ---- search overrides, holds and pins: dry run, then apply ----

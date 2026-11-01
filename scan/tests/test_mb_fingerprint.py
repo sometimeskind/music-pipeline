@@ -66,6 +66,36 @@ class FakeLib:
         return self.by_id.get(item_id)
 
 
+# MusicBrainz's recordings (homelab#2544): what the apply refreshes title and trackdisambig from.
+RECORDINGS = {
+    STEREO: {"id": STEREO, "title": "Oh! Sweet Nuthin’", "disambiguation": ""},
+    LIVE: {"id": LIVE, "title": "The Big Country", "disambiguation": "live, 1979-08-27: Central Park, New York"},
+}
+
+
+def _recordings(table=None, fails=()):
+    """A MusicBrainz lookup over *table* (None for a recording it lacks), raising for the IDs in *fails*."""
+    table = RECORDINGS if table is None else table
+    calls = []
+
+    def lookup(recording_id):
+        calls.append(recording_id)
+        if recording_id in fails:
+            raise OSError("HTTP Error 502: Bad Gateway")
+        return table.get(recording_id)
+
+    lookup.calls = calls
+    return lookup
+
+
+@pytest.fixture(autouse=True)
+def musicbrainz(monkeypatch):
+    """No test reaches MusicBrainz: the refresh's lookups read :data:`RECORDINGS`."""
+    lookup = _recordings()
+    monkeypatch.setattr(mbf, "musicbrainz_recordings", lambda: lookup)
+    return lookup
+
+
 def _recheck(items, lookup, lib=None):
     """recheck over *items*, each re-read from *lib* (by default a library of *items*)."""
     return mbf.recheck(lib or FakeLib(items), [i.id for i in items], lookup)
@@ -575,3 +605,219 @@ def test_runs_are_pruned_with_their_findings(pg_url, monkeypatch):
         conn.execute("UPDATE long_runs SET finished_at = now() - interval '31 days'")
         assert recheck_runs.prune(conn) == 1
     assert _rows(pg_url, "SELECT count(*) FROM recheck_findings") == [(0,)]
+
+
+# --- the guessed recording's fields, refreshed after a replacement (homelab#2544) ---
+
+
+CONSTRUCTIVE = {"id": "9691e78a", "title": "Constructive Summer", "disambiguation": ""}
+
+
+def test_a_replaced_items_trackdisambig_is_the_new_recordings():
+    """3778 kept the guessed live recording's trackdisambig after #2543's apply."""
+    item = FakeItem(3778, "Constructive Summer", via="spotdl",
+                    trackdisambig="live, 2024-03-10: Omeara, London, England")
+    assert mbf.refreshed(item, CONSTRUCTIVE) == {
+        "trackdisambig": ("live, 2024-03-10: Omeara, London, England", "")}
+    assert mbf.refreshed(FakeItem(3778, "Constructive Summer", via="spotdl"), CONSTRUCTIVE) == {}
+
+
+def test_a_spotdl_items_title_is_the_new_recordings():
+    """spotdl items' titles came from the guess: 5672's alternate version is the live take."""
+    item = FakeItem(5672, "The Big Country (alternate version)", via="spotdl")
+    assert mbf.refreshed(item, RECORDINGS[LIVE]) == {
+        "title": ("The Big Country (alternate version)", "The Big Country"),
+        "trackdisambig": ("", "live, 1979-08-27: Central Park, New York")}
+
+
+@pytest.mark.parametrize(("title", "recording"), [
+    ("In My Time Of Need", {"title": "In My Time of Need", "disambiguation": ""}),  # its spelling, music-pipeline#402
+    ("Purple Rain (2015 Paisley Park Remaster)", {"title": "Purple Rain", "disambiguation": ""}),  # no version word
+    ("Tangled Up in Blue (Live)", {"title": "Tangled Up in Blue", "disambiguation": "live, 1975-11-21: Boston"}),
+    ("Song (5.1 Mix)", {"title": "Song (5.1 mix)", "disambiguation": ""}),  # the new recording's title says it
+    ("ロマンス", {"title": "Romance", "disambiguation": ""}),  # nothing to tell two songs apart by
+])
+def test_a_usenet_items_same_song_title_is_kept(title, recording):
+    """Since music-pipeline#398 a Usenet album track's title is its release file's own, on purpose."""
+    assert "title" not in mbf.refreshed(FakeItem(1, title, via="usenet"), recording)
+
+
+@pytest.mark.parametrize(("title", "recording", "after"), [
+    # Imported before #398: the guess's version note, which the new recording doesn't have.
+    ("Oh! Sweet Nuthin’ (5.1 mix)", RECORDINGS[STEREO], "Oh! Sweet Nuthin’"),
+    ("Purple Rain (live)", {"title": "Purple Rain", "disambiguation": ""}, "Purple Rain"),
+    # Another song (the Dylan Live 1975 case): the recording's title.
+    ("It Ain't Me, Babe (Live At Harvard Square Theatre, Cambridge, MA-November 1975)",
+     {"title": "Romance in Durango", "disambiguation": "live, 1975-11-20: Harvard Square Theatre"},
+     "Romance in Durango"),
+])
+def test_a_usenet_items_title_naming_another_version_or_song_is_replaced(title, recording, after):
+    assert mbf.refreshed(FakeItem(1, title, via="usenet"), recording)["title"] == (title, after)
+
+
+def test_a_failed_or_empty_lookup_refreshes_nothing(caplog):
+    item = FakeItem(6994, "Oh! Sweet Nuthin’ (5.1 mix)", trackdisambig="5.1 mix")
+    assert mbf._refresh(item, STEREO, _recordings(fails={STEREO})) is None
+    assert mbf._refresh(item, "merged-away", _recordings()) is None
+    assert ("[NOREFRESH] 6994 — Oh! Sweet Nuthin’ (5.1 mix): the MusicBrainz lookup of stereo-rec failed "
+            "(HTTP Error 502: Bad Gateway); title and trackdisambig left as they were") in caplog.text
+    assert "[NOREFRESH] 6994 — Oh! Sweet Nuthin’ (5.1 mix): MusicBrainz has no recording merged-away" in caplog.text
+    assert item.data == {"title": "Oh! Sweet Nuthin’ (5.1 mix)", "trackdisambig": "5.1 mix"}
+
+
+@needs_pg
+def test_the_apply_refreshes_each_replaced_items_fields_with_its_event(pg_url, monkeypatch, caplog, musicbrainz):
+    caplog.set_level("INFO")
+    items = _library()
+    items[2]["trackdisambig"] = "alternate version"
+    lib = RunLib(items)
+    _recorded_run(pg_url, monkeypatch, lib)
+    mbf.replace_run("r1")
+    assert musicbrainz.calls == []  # the dry run reads only the findings
+
+    counts = mbf.replace_run("r1", apply=True)
+    assert counts["replaced"] == 3 and counts["refreshed"] == 3 and counts["norefresh"] == 0
+    by_id = {i.id: i for i in items}
+    assert (by_id[5672]["title"], by_id[5672]["trackdisambig"], by_id[5672]["mb_trackid"]) == (
+        "The Big Country", "live, 1979-08-27: Central Park, New York", LIVE)
+    assert by_id[6994]["title"] == "Oh! Sweet Nuthin’" and by_id[6994].written
+    assert by_id[5970]["title"] == "Purple Rain"  # not replaced, not refreshed
+    data = {r[2]: r[4] for r in _events(pg_url)}
+    assert data[5672]["refreshed"] == {"title": ["The Big Country (alternate version)", "The Big Country"],
+                                       "trackdisambig": ["alternate version",
+                                                         "live, 1979-08-27: Central Park, New York"]}
+    assert data[5672]["title"] == "The Big Country (alternate version)"  # the event names the item as it was
+    assert ("[REFRESH] 5672: title 'The Big Country (alternate version)' → 'The Big Country'; "
+            "trackdisambig 'alternate version' → 'live, 1979-08-27: Central Park, New York'") in caplog.text
+
+
+@needs_pg
+def test_a_failed_lookup_still_replaces_and_leaves_the_fields(pg_url, monkeypatch, caplog):
+    caplog.set_level("INFO")
+    monkeypatch.setattr(mbf, "musicbrainz_recordings", lambda: _recordings(fails={STEREO}))
+    items = _library()
+    _, flagged = _recheck(items, _lookup())
+    assert mbf.replace(FakeLib(items), flagged) == 3
+    by_id = {i.id: i for i in items}
+    assert by_id[6994]["mb_trackid"] == STEREO and by_id[6994]["title"] == "Oh! Sweet Nuthin’ (5.1 mix)"
+    assert by_id[5672]["title"] == "The Big Country"
+    assert "refreshed" not in {r[2]: r[4] for r in _events(pg_url)}[6994]
+    assert "[NOREFRESH] 6994" in caplog.text
+
+
+# --- --refresh-replaced: the items replaced before the refresh existed ---
+
+
+def _replaced(url, *pairs, at="2026-10-31T20:50:00Z"):
+    """A recording_replaced event for each (item ID, new recording), as #2543's apply stored them."""
+    from music_fetch import db, events
+
+    with contextlib.closing(db.connect(url)) as conn:
+        for item_id, new in pairs:
+            events.insert(conn, mbf.EVENT_KIND, f"[RECHECK] {item_id}", source=mbf.SOURCE, item_id=item_id,
+                          data={"old": "guess", "new": new})
+        conn.execute("UPDATE events SET at = %s WHERE at > now() - interval '1 minute'", (at,))
+
+
+def _past():
+    """The library after #2543's apply: the IDs replaced, the guesses' fields left."""
+    return [
+        FakeItem(3778, "Constructive Summer", via="spotdl", mb_trackid=CONSTRUCTIVE["id"],
+                 trackdisambig="live, 2024-03-10: Omeara, London, England"),
+        FakeItem(6994, "Oh! Sweet Nuthin’ (5.1 mix)", via="usenet", mb_trackid=STEREO),
+        FakeItem(5672, "The Big Country", via="usenet", mb_trackid=LIVE,
+                 trackdisambig="live, 1979-08-27: Central Park, New York"),  # current already
+        FakeItem(5970, "Purple Rain", mb_trackid="set-by-hand"),  # changed since its event
+        FakeItem(6930, "Oh! Sweet Nuthin’ (5.1 mix)", mb_trackid="lookup-fails"),
+    ]
+
+
+@needs_pg
+def test_refresh_replaced_lists_before_and_after_and_changes_nothing(pg_url, monkeypatch, caplog):
+    caplog.set_level("INFO")
+    monkeypatch.setattr(mbf, "musicbrainz_recordings",
+                        lambda: _recordings({**RECORDINGS, CONSTRUCTIVE["id"]: CONSTRUCTIVE}, fails={"lookup-fails"}))
+    items = _past()
+    _open(monkeypatch, RunLib(items))
+    _replaced(pg_url, (3778, CONSTRUCTIVE["id"]), (6994, STEREO), (5672, LIVE), (5970, STUDIO),
+              (6930, "lookup-fails"), (4242, "gone"))
+    before = {i.id: dict(i.data) for i in items}
+
+    counts = mbf.refresh_replaced()
+    assert {i.id: i.data for i in items} == before and not any(i.stored or i.written for i in items)
+    assert (counts["replaced"], counts["refresh"], counts["current"], counts["skipped"], counts["norefresh"]) == (
+        6, 2, 1, 2, 1)
+    assert ("[WOULD-REFRESH] 3778 — Constructive Summer: trackdisambig 'live, 2024-03-10: Omeara, London, "
+            "England' → ''") in caplog.text
+    assert "[WOULD-REFRESH] 6994 — Oh! Sweet Nuthin’ (5.1 mix): title 'Oh! Sweet Nuthin’ (5.1 mix)' → " \
+           "'Oh! Sweet Nuthin’'" in caplog.text
+    assert "[SKIP] 5970 — Purple Rain: mb_trackid is set-by-hand now, not its replacement studio-rec" in caplog.text
+    assert "[SKIP] 4242: gone from the library" in caplog.text
+    assert "[NOREFRESH] 6930" in caplog.text
+    assert ("[SUMMARY] 6 replaced item(s): 2 to refresh (re-run with --apply), 1 current already, 2 skipped, "
+            "1 not looked up (MusicBrainz lookup failed: 6930; run it again)") in caplog.text
+    assert _events(pg_url)[-1][2] == 4242  # no event of its own
+
+
+@needs_pg
+def test_refresh_replaced_applies_under_the_lock_and_never_touches_mb_trackid(pg_url, monkeypatch, caplog):
+    caplog.set_level("INFO")
+    monkeypatch.setattr(mbf, "musicbrainz_recordings",
+                        lambda: _recordings({**RECORDINGS, CONSTRUCTIVE["id"]: CONSTRUCTIVE}, fails={"lookup-fails"}))
+    items = _past()
+    _open(monkeypatch, RunLib(items))
+    _replaced(pg_url, (3778, CONSTRUCTIVE["id"]), (6994, STEREO), (5970, STUDIO), (6930, "lookup-fails"))
+    from music_scan import audit
+
+    locks = []
+
+    @contextlib.contextmanager
+    def lock():
+        locks.append("pipeline")
+        yield
+
+    monkeypatch.setattr(audit, "pipeline_lock", lock)
+    counts = mbf.refresh_replaced(apply=True)
+    assert counts["refreshed"] == 2 and locks == ["pipeline"]
+    by_id = {i.id: i for i in items}
+    assert by_id[3778]["trackdisambig"] == "" and by_id[3778].stored and by_id[3778].written
+    assert by_id[6994]["title"] == "Oh! Sweet Nuthin’" and by_id[6994]["mb_trackid"] == STEREO
+    assert by_id[5970]["mb_trackid"] == "set-by-hand" and not by_id[5970].stored
+    assert by_id[6930]["title"] == "Oh! Sweet Nuthin’ (5.1 mix)" and not by_id[6930].stored
+    assert "[REFRESH] 3778 — Constructive Summer: trackdisambig" in caplog.text
+
+    caplog.clear()
+    again = mbf.refresh_replaced(apply=True)  # nothing new to change
+    assert again["refreshed"] == 0 and again["current"] == 2
+
+
+@needs_pg
+def test_refresh_replaced_since_takes_only_later_replacements(pg_url, monkeypatch, musicbrainz):
+    items = _past()
+    _open(monkeypatch, RunLib(items))
+    _replaced(pg_url, (6994, STEREO), at="2026-10-01T00:00:00Z")
+    _replaced(pg_url, (5672, LIVE), at="2026-10-31T20:00:00Z")
+    counts = mbf.refresh_replaced(since=mbf.utc_time("2026-10-31"))
+    assert counts["replaced"] == 1 and musicbrainz.calls == [LIVE]
+
+
+def test_refresh_replaced_refuses_without_the_database(monkeypatch):
+    monkeypatch.delenv("MUSIC_DATABASE_URL", raising=False)
+    with pytest.raises(SystemExit, match="MUSIC_DATABASE_URL is unset"):
+        mbf.refresh_replaced()
+
+
+def test_main_runs_refresh_replaced_with_its_own_flags_only(monkeypatch):
+    calls = []
+    monkeypatch.setattr(mbf, "refresh_replaced", lambda **kw: calls.append(kw))
+    monkeypatch.setattr(mbf, "run", lambda: pytest.fail("not the fill mode"))
+    monkeypatch.setattr(sys, "argv", ["music-mb-fingerprint", "--refresh-replaced", "--since", "2026-10-31T20:00",
+                                      "--apply"])
+    mbf.main()
+    assert calls == [{"since": mbf.utc_time("2026-10-31T20:00:00+00:00"), "apply": True}]
+    for argv in (["--refresh-replaced", "--recheck"], ["--refresh-replaced", "6994"], ["--since", "2026-10-31"],
+                 ["--refresh-replaced", "--since", "yesterday"]):
+        monkeypatch.setattr(sys, "argv", ["music-mb-fingerprint", *argv])
+        with pytest.raises(SystemExit):
+            mbf.main()
+    assert len(calls) == 1

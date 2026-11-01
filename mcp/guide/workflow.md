@@ -46,6 +46,11 @@ output. A run that ends `failed` (AcoustID down) or `interrupted` continues with
 write like the others, dry run first. Its dry run reads the run's findings, not AcoustID, so it
 takes seconds and lists each replacement (`[WOULD-REPLACE]`) or why an item is skipped (it left
 the library, its `mb_trackid` changed, or its file changed since the check: recheck those by ID).
+The apply also refreshes each replaced item's `trackdisambig` and `title` from its new recording
+on MusicBrainz (`[REFRESH]`, about a second an item); a Usenet album track keeps its file's own
+title unless it names another song or a version (5.1, live, demo…) the recording doesn't. A
+`[NOREFRESH]` item (its MusicBrainz lookup failed) is replaced anyway; its fields are caught up
+by the operator's `music-mb-fingerprint --refresh-replaced` on the workstation.
 The apply is refused for a run not finished or finished more than 7 days ago: run a new one. An
 apply cut short by a restart is resumed and checks each item again. Run again by hand, one that
 already holds its replacement shows `[DONE]`.
@@ -69,6 +74,7 @@ and let the operator run it. In the CLAUDE.md admin form, it is:
 | `music-audit-dupes --merge … --allow-manual --apply` | Drops a manually imported item too |
 | `music-audit-lengths --replace <id> --youtube <url> --force --apply` | Swaps the file in even though the length guard rejects it |
 | `music-audit-lengths --quarantine` | Also runs the length guard over quarantine's files |
+| `music-mb-fingerprint --refresh-replaced [--since <time>] --apply` | Refreshes `title` and `trackdisambig` from the new recording on items the recheck replaced before its apply did that, or whose lookup failed then (homelab#2544). A dry run without `--apply`; never changes `mb_trackid` |
 | `music-rollback-releases --apply` | The legacy cleanup: moves pre-#279 Usenet items that match no playlist entry to `quarantine/replaced/` |
 
 Groups that would take a track off an album are listed `[ALBUM]` and left alone by
