@@ -216,7 +216,7 @@ def test_fetch_flow_runs_fetch_then_scan():
         fetch_and_scan_flow()
 
     assert call_order[:3] == ["preflight", "reconcile-playlists", "spotdl-sync"]
-    assert "beet-import" in call_order
+    assert call_order.index("verify-requests") < call_order.index("beet-import")
     mock_scan.run_inbox_import.assert_called_once()
 
 
@@ -281,6 +281,7 @@ def test_scan_flow_runs_all_scan_steps_in_order():
          patch("music_service.flows.concurrency") as mock_concurrency:
         mock_concurrency.return_value.__enter__.return_value = None
         mock_concurrency.return_value.__exit__.return_value = False
+        mock_scan.check_request_downloads.side_effect = lambda: (call_order.append("verify-requests"), {})[1]
         mock_scan.run_inbox_import.side_effect = lambda: (call_order.append("beet-import"), [])[1]
         mock_scan.quarantine_inbox_leftovers.side_effect = lambda: (call_order.append("quarantine"), 0)[1]
         mock_scan.import_asis_from_quarantine.side_effect = lambda: (call_order.append("asis-import"), 0)[1]
