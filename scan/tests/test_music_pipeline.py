@@ -31,6 +31,7 @@ def _make_plugin() -> MusicPipelinePlugin:
     plugin._pending_spotdl = {}
     plugin._pending_via = {}
     plugin._pending_job = {}
+    plugin._file_tags = {}
     return plugin
 
 
@@ -1047,3 +1048,188 @@ def test_a_second_fallback_copy_of_a_recording_is_a_duplicate() -> None:
     with patch("music_scan.music_pipeline._read_spotdl_tags", return_value=SpotdlTags(REC_URL)):
         _handle_same(plugin, MagicMock(), task)
     task.set_choice.assert_called_once_with(beets_importer.Action.SKIP)
+
+
+# ---------------------------------------------------------------------------
+# restore_file_title — a Usenet album track keeps its file's title (homelab#2544)
+# ---------------------------------------------------------------------------
+
+LOADED = "/root/Music/inbox/usenet/keep/The Velvet Underground-Loaded-Re-Loaded 45th Anniversary Edition-WEB-FLAC"
+DYLAN = "/root/Music/inbox/usenet/keep/Bob Dylan-The Bootleg Series Vol 5 Live 1975-WEB-FLAC"
+DURANGO = "Romance in Durango (Live at Harvard Square Theatre, Cambridge, MA - November 1975)"
+BABE = "It Ain't Me, Babe (Live at Harvard Square Theatre, Cambridge, MA - November 1975)"
+
+
+def _file(path: str, title: str, track: int = 1, **tags):
+    """A beets Item as read from a release file, before any match."""
+    from beets.library import Item
+
+    return Item(path=path, title=title, track=track, artist=tags.pop("artist", "Artist"), **tags)
+
+
+def _match(item, **info) -> None:
+    """What beets' apply_metadata writes from the chosen recording."""
+    for field, value in info.items():
+        item[field] = value
+
+
+def _created(plugin, item):
+    task = _task(item=item)
+    plugin.tag_source_on_created(session=MagicMock(), task=task)
+    return task
+
+
+def _warnings(plugin) -> list[str]:
+    return [c.args[0].replace("{}", "%s").replace("{!r}", "%r") % c.args[1:]
+            for c in plugin._log.warning.call_args_list]
+
+
+def test_a_same_song_sibling_gets_the_files_title_and_keeps_its_recording() -> None:
+    """Loaded's stereo Oh! Sweet Nuthin', matched to the 5.1 mix's recording."""
+    plugin = _make_plugin()
+    item = _file(f"{LOADED}/10 - Oh! Sweet Nuthin'.flac", "Oh! Sweet Nuthin'", track=10)
+    task = _created(plugin, item)
+    _match(item, title="Oh! Sweet Nuthin' (5.1 mix)", trackdisambig="5.1 mix",
+           mb_trackid="d0063aee", mb_releasetrackid="d0063aee", isrc="USWB10005", work="Oh! Sweet Nuthin'")
+
+    plugin.restore_file_title(session=MagicMock(), task=task)
+
+    assert item.title == "Oh! Sweet Nuthin'"
+    assert item.trackdisambig == ""
+    # The fingerprint recheck owns a same-song sibling's identity (homelab#2540).
+    assert (item.mb_trackid, item.mb_releasetrackid, item.isrc) == ("d0063aee", "d0063aee", "USWB10005")
+    assert _warnings(plugin) == ["[TITLE] Oh! Sweet Nuthin' (5.1 mix) → Oh! Sweet Nuthin'"]
+    assert plugin._file_tags == {}
+
+
+def test_another_song_gets_the_files_title_and_loses_the_recording() -> None:
+    """Dylan's Romance in Durango, matched to It Ain't Me, Babe from the same show."""
+    plugin = _make_plugin()
+    item = _file(f"{DYLAN}/1-05 - Romance in Durango.flac", DURANGO, track=5, isrc="USSM10500005")
+    task = _created(plugin, item)
+    _match(item, title=BABE, trackdisambig="live, 1975-11-20", mb_trackid="babe-rec", mb_releasetrackid="babe-rec",
+           isrc="USSM17500123", mb_workid="babe-work", work="It Ain't Me, Babe", composers=["Bob Dylan"])
+
+    plugin.restore_file_title(session=MagicMock(), task=task)
+
+    assert item.title == DURANGO
+    assert item.trackdisambig == ""
+    assert (item.mb_trackid, item.mb_releasetrackid, item.mb_workid, item.work) == ("", "", "", "")
+    assert item.composers == []
+    assert item.isrc == "USSM10500005"  # the file's own ISRC comes back
+    assert _warnings(plugin) == [f"[TITLE] {BABE} → {DURANGO} (recording dropped)"]
+
+
+def test_another_song_is_no_duplicate_by_the_wrong_recording() -> None:
+    """The duplicate check runs before the restore: the other song's recording and ISRCs
+    must not merge the file into, or let a manual import shadow it."""
+    plugin = _make_plugin()
+    item = _file(f"{DYLAN}/1-05 - Romance in Durango.flac", DURANGO, track=5)
+    task = _created(plugin, item)
+    task.chosen_info.return_value = {"title": BABE, "track_id": "babe-rec", "isrc": "USSM17500123"}
+    manual = _lib_dup(42, via="", mb_trackid="babe-rec", isrc="USSM17500123")
+    session = _session({"mb_trackid:babe-rec": [manual], "isrc:USSM17500123": [manual]})
+
+    plugin.handle_duplicates(session=session, task=task)
+
+    task.set_choice.assert_not_called()
+
+
+def test_a_generic_file_title_keeps_beets_title() -> None:
+    plugin = _make_plugin()
+    item = _file(f"{LOADED}/07.flac", "Track 07", track=7)
+    task = _created(plugin, item)
+    _match(item, title="Cool It Down", trackdisambig="", mb_trackid="cool-rec")
+
+    plugin.restore_file_title(session=MagicMock(), task=task)
+
+    assert (item.title, item.mb_trackid) == ("Cool It Down", "cool-rec")
+    assert _warnings(plugin) == ["[TITLE] Cool It Down: the file's title 'Track 07' names nothing; beets' title kept"]
+
+
+def test_own_title() -> None:
+    from music_scan.music_pipeline import own_title
+
+    assert own_title("Song", 1) == "Song"
+    assert own_title("05 - Romance in Durango", 5) == "Romance in Durango"
+    assert own_title("5. Song", 5) == "Song"
+    assert own_title("7 Seconds", 7) == "7 Seconds"  # no separator: part of the title
+    assert own_title("99 Luftballons", 3) == "99 Luftballons"
+    for generic in ("", "  ", "05", "Track 5", "track05", "TRACK"):
+        assert own_title(generic, 5) is None
+
+
+def test_a_spotdl_import_keeps_beets_match() -> None:
+    plugin = _make_plugin()
+    item = _file("/root/Music/inbox/spotdl/chill/The Velvet Underground - Oh! Sweet Nuthin'.m4a", "Oh! Sweet Nuthin'")
+    task = _created(plugin, item)
+    _match(item, title="Oh! Sweet Nuthin' (2015 remaster)", trackdisambig="2015 remaster", mb_trackid="rem-rec")
+
+    plugin.restore_file_title(session=MagicMock(), task=task)
+
+    assert (item.title, item.trackdisambig, item.mb_trackid) == (
+        "Oh! Sweet Nuthin' (2015 remaster)", "2015 remaster", "rem-rec")
+    plugin._log.warning.assert_not_called()
+
+
+def test_a_restored_title_finds_the_pending_tags_again() -> None:
+    """tag_source_on_stored falls back to the pre-import title once beets renamed the file."""
+    plugin = _make_plugin()
+    item = _file(f"{LOADED}/10 - 10 - Oh! Sweet Nuthin'.flac", "10 - Oh! Sweet Nuthin'", track=10)
+    task = _created(plugin, item)
+    _match(item, title="Oh! Sweet Nuthin' (5.1 mix)")
+    plugin.restore_file_title(session=MagicMock(), task=task)
+    # Renamed by the move, and the flex attrs lost on the way (see tag_source_on_stored).
+    item.path = b"/root/Music/library/The Velvet Underground/Loaded/10 - Oh! Sweet Nuthin'.flac"
+    for field in ("sources", "via", "usenet_job"):
+        del item[field]
+
+    with patch.object(type(item), "store"):
+        plugin.tag_source_on_stored(lib=MagicMock(), item=item)
+
+    assert (item.title, item.get("sources"), item.get("via")) == ("Oh! Sweet Nuthin'", "keep", "usenet")
+    assert item.get("usenet_job") == "The Velvet Underground-Loaded-Re-Loaded 45th Anniversary Edition-WEB-FLAC"
+
+
+def test_beets_keeps_the_item_object_from_created_to_apply(monkeypatch, tmp_path) -> None:
+    """The restore is keyed by the item object (homelab#2544).  Drive beets' own
+    singleton task, candidate lookup and _apply_choice: if an upgrade copies the item
+    between import_task_created and import_task_apply, or moves the event after the
+    store or before apply_metadata, the library gets beets' title and this fails."""
+    from beets import metadata_plugins
+    from beets import plugins as beets_plugins
+    from beets.autotag.hooks import TrackInfo
+    from beets.importer import stages
+    from beets.importer.tasks import SingletonImportTask
+    from beets.library import Library
+
+    plugin = _make_plugin()
+    seen = []
+
+    def on_apply(session, task):
+        seen.append((task.item.title, task.item.id))  # beets' title, not stored yet
+        plugin.restore_file_title(session=session, task=task)
+
+    listeners = {"import_task_created": [plugin.tag_source_on_created], "import_task_apply": [on_apply]}
+
+    def send(event, **kwargs):
+        return [r for f in listeners.get(event, []) if (r := f(**kwargs)) is not None]
+
+    monkeypatch.setattr(beets_plugins, "send", send)
+    sibling = TrackInfo(title="Oh! Sweet Nuthin' (5.1 mix)", track_id="d0063aee", trackdisambig="5.1 mix",
+                        artist="The Velvet Underground", length=445.0, data_source="MusicBrainz")
+    monkeypatch.setattr(metadata_plugins, "item_candidates", lambda *a, **k: iter([sibling]))
+    monkeypatch.setattr(metadata_plugins, "tracks_for_ids", lambda *a, **k: iter([]))
+
+    lib = Library(str(tmp_path / "library.db"), str(tmp_path / "library"))
+    session = MagicMock(lib=lib)
+    item = _file(f"{LOADED}/10 - Oh! Sweet Nuthin'.flac", "Oh! Sweet Nuthin'", track=10,
+                 artist="The Velvet Underground", length=445.0)
+    task, = SingletonImportTask(None, item).handle_created(session)
+    task.lookup_candidates([])
+    task.set_choice(task.candidates[0])
+    stages._apply_choice(session, task)
+
+    assert seen == [("Oh! Sweet Nuthin' (5.1 mix)", None)]
+    stored, = lib.items()
+    assert (stored.title, stored.trackdisambig, stored.mb_trackid) == ("Oh! Sweet Nuthin'", "", "d0063aee")

@@ -214,6 +214,17 @@ def same_base_title(name: str, title: str) -> bool:
     return bool(base) and base == release_words(clean_album(title))
 
 
+def different_song(a: str, b: str) -> bool:
+    """True when titles *a* and *b* name two songs once version notes are
+    dropped as :func:`same_base_title` drops them (homelab#2544): ``Romance in
+    Durango (Live at …)`` is not ``It Ain't Me, Babe (Live at …)``, while
+    ``Oh! Sweet Nuthin'`` and ``Oh! Sweet Nuthin' (5.1 mix)`` are one song.
+    A title with no words left (another script, glyphs only) never differs:
+    there is nothing to tell the songs apart by."""
+    x, y = release_words(clean_album(a or "")), release_words(clean_album(b or ""))
+    return bool(x and y) and x != y
+
+
 LENGTH_SLACK = 2.0
 """Seconds: two copies of one recording are at most this far apart in length.
 An AcoustID match (:func:`music_scan.dupes.audio_match`) and a shared

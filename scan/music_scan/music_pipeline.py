@@ -74,6 +74,21 @@ Responsibilities
    to ``skip``, since the main config's ``remove`` would delete the existing
    item and its file (#202).
 
+1b. **restore_file_title** (``import_task_apply``, homelab#2544): a Usenet
+    album track keeps its file's own title.  beets matches each file to the
+    closest MusicBrainz recording by title, artist and length, and that can be
+    a sibling (the 5.1 mix of a stereo track, an outtake, a live take) or,
+    with a venue suffix and a similar length, another song.  The release's
+    files name their tracks right, so the title captured at
+    ``import_task_created`` goes back on and ``trackdisambig`` goes.  When the
+    titles are two songs (:func:`~music_scan.identity.different_song`), the
+    recording is wrong too: its IDs, ISRCs and work credits go back to the
+    file's own (usually none), ``[TITLE] … (recording dropped)``.  A same-song
+    sibling keeps its recording ID: the fingerprint recheck owns identity
+    (homelab#2540).  A generic file title (empty, digits, ``Track NN``) keeps
+    beets' title.  spotdl imports keep beets' match: their titles are
+    YouTube's, and a request fallback's recording AcoustID verified.
+
 3. **fingerprint_if_missing** (``item_imported``): ``chroma`` fingerprints at
    ``import_task_start``, which ASIS mode never sends (see the note), so asis
    imports would carry no ``acoustid_fingerprint`` for the duplicate audit
@@ -98,6 +113,7 @@ duplicate check fires. After the rebuild completes all tracks will carry
 """
 
 import os
+import re
 from pathlib import Path
 from typing import NamedTuple
 
@@ -110,7 +126,8 @@ from music_fetch.album_requests import SOURCE as REQUEST_SOURCE
 from music_fetch.album_requests import url_recording
 
 from music_scan.identity import (
-    add_isrcs, add_to_list, fingerprint, item_isrcs, item_spotify_ids, same_mb_recording, split_list, spotify_id,
+    add_isrcs, add_to_list, different_song, fingerprint, item_isrcs, item_spotify_ids, same_mb_recording, split_list,
+    spotify_id,
 )
 
 # The two locations where spotdl downloads land at beet-import time.
@@ -131,6 +148,39 @@ ASIS_STAGING_ROOT = Path("/tmp")
 
 # The MusicBrainz recording an album request's fallback download was verified as (homelab#2478).
 FALLBACK_RECORDING = "fallback_recording"
+
+
+# What a MusicBrainz match for another song wrongly says about a file: the recording's IDs
+# and ISRCs, and its work and the credits beets reads from it (homelab#2544).  The artist
+# stays: beets weighs it in the match, and a wrong song by the right artist is the case seen.
+RECORDING_FIELDS = (
+    "mb_trackid", "mb_releasetrackid", "isrc", "mb_workid", "work", "work_disambig",
+    "composers", "composers_ids", "composer_sort", "lyricists", "lyricists_ids",
+    "arrangers", "arrangers_ids", "remixers", "remixers_ids",
+)
+# A file title that names nothing: beets' is better (homelab#2544).
+_GENERIC_TITLE = re.compile(r"(?:track\s*)?\d*", re.IGNORECASE)
+
+
+class FileTags(NamedTuple):
+    """A Usenet item's own tags, captured before beets' match overwrites them
+    (homelab#2544).  Holds the item itself, so its ``id()`` can't be reused
+    while the entry waits for ``import_task_apply``."""
+
+    item: object
+    title: str          # as the file has it
+    own: str | None     # what goes back on: :func:`own_title`
+    fields: dict        # RECORDING_FIELDS as the file has them
+
+
+def own_title(title: str | None, track) -> str | None:
+    """The title a release file gives its track, or None when it names nothing
+    (empty, digits only, ``Track NN``).  A leading track number that is the
+    file's own (``05 - Song``, ``5. Song``) is dropped (homelab#2544)."""
+    title = (title or "").strip()
+    if isinstance(track, int) and track > 0:
+        title = re.sub(rf"^0*{track}\s*[-._)]\s*(?=\S)", "", title)
+    return None if _GENERIC_TITLE.fullmatch(title) else title
 
 
 class SpotdlTags(NamedTuple):
@@ -301,7 +351,10 @@ class MusicPipelinePlugin(BeetsPlugin):
         self._pending_via: dict[str, str] = {}
         # Same keys → usenet job folder (#284).
         self._pending_job: dict[str, str] = {}
+        # id(item) → a Usenet item's own tags, from import_task_created to import_task_apply.
+        self._file_tags: dict[int, FileTags] = {}
         self.register_listener("import_task_created", self.tag_source_on_created)
+        self.register_listener("import_task_apply", self.restore_file_title)
         self.register_listener("item_imported", self.tag_source_on_stored)
         self.register_listener("import_task_choice", self.handle_duplicates)
         self.register_listener("item_imported", self.fingerprint_if_missing)
@@ -334,11 +387,18 @@ class MusicPipelinePlugin(BeetsPlugin):
                 item["usenet_job"] = job
                 self._pending_job[filename] = job
             title = (item.title or "").lower()
-            if title:
-                self._pending_sources[title] = playlist
-                self._pending_via[title] = via
+            keys = {title}
+            if via == "usenet":
+                # Its own title goes back on at import_task_apply (homelab#2544).
+                own = own_title(item.title, getattr(item, "track", None))
+                self._file_tags[id(item)] = FileTags(
+                    item, item.title or "", own, {f: item.get(f) for f in RECORDING_FIELDS})
+                keys.add((own or "").lower())
+            for key in keys - {""}:
+                self._pending_sources[key] = playlist
+                self._pending_via[key] = via
                 if job:
-                    self._pending_job[title] = job
+                    self._pending_job[key] = job
             tags = _read_spotdl_tags(item.path)
             if tags.url or tags.isrc:
                 self._apply_spotdl_tags(item, tags)
@@ -348,6 +408,49 @@ class MusicPipelinePlugin(BeetsPlugin):
             self._log.debug(
                 "tagged incoming track source={} via={}: {}", playlist, via, item.path
             )
+
+    def restore_file_title(self, session, task):
+        """Put a Usenet album track's own title back over beets' match (homelab#2544).
+
+        Fires from ``import_task_apply``: after ``apply_metadata`` wrote the
+        matched recording's fields, before ``task.add`` stores the item and
+        before its file is written and moved, so the title reaches the tags
+        and the library path.  Keyed by the item object, which beets keeps from
+        ``import_task_created`` to here (a test holds beets to it).
+        """
+        for item in _items_from_task(task):
+            entry = self._file_tags.pop(id(item), None)
+            if entry is None or entry.item is not item:
+                if _via_from_path(item.path) == "usenet":
+                    self._log.warning(
+                        "[TITLE] {}: no file title captured at import; beets' title kept", item.title)
+                continue
+            matched = item.title or ""
+            title = entry.own
+            if title is None:
+                self._log.warning(
+                    "[TITLE] {}: the file's title {!r} names nothing; beets' title kept", matched, entry.title)
+                continue
+            disambig = item.get("trackdisambig") or ""
+            dropped = different_song(title, matched)
+            item["title"] = title
+            item["trackdisambig"] = ""
+            if dropped:
+                for field, value in entry.fields.items():
+                    item[field] = value
+            if title != matched or dropped:
+                self._log.warning(
+                    "[TITLE] {} → {}{}", matched, title, " (recording dropped)" if dropped else "")
+            elif disambig:
+                self._log.warning("[TITLE] {}: trackdisambig {!r} cleared", title, disambig)
+
+    def _different_song(self, item, matched: str | None) -> bool:
+        """True when a Usenet item's own title and its match's are two songs,
+        so the match's recording isn't the file's (homelab#2544)."""
+        entry = self._file_tags.get(id(item))
+        if entry is None or entry.item is not item:
+            return False
+        return entry.own is not None and different_song(entry.own, matched or "")
 
     def tag_source_on_stored(self, lib, item):
         """Re-apply source= and via= after the item is persisted to the library.
@@ -359,6 +462,8 @@ class MusicPipelinePlugin(BeetsPlugin):
         first (handles no-rename edge cases), then fall back to the normalised
         title (the common case after a move-import).
         """
+        # An as-is import never reaches import_task_apply (homelab#2544).
+        self._file_tags.pop(id(item), None)
         path = item.path.decode() if isinstance(item.path, bytes) else item.path
         title = (item.title or "").lower()
         playlist = self._pending_sources.pop(Path(path).name, None)
@@ -432,6 +537,10 @@ class MusicPipelinePlugin(BeetsPlugin):
         try:
             info = task.chosen_info()
         except Exception:
+            info = {}
+        if self._different_song(item, info.get("title")):
+            # The match is another song (homelab#2544): its recording and ISRCs
+            # aren't the file's, and import_task_apply drops them.
             info = {}
         isrcs = {*split_list(tags.isrc, ";"), *split_list(info.get("isrc"), ";"), *item_isrcs(item)}
         mb_trackid = (info.get("track_id") or info.get("mb_trackid") or item.get("mb_trackid")
