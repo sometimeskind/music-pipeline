@@ -49,6 +49,10 @@ class Tool:
     # (normalised args, apply) -> the commands, run in order
     commands: Callable[[dict, bool], list[list[str]]]
     locks: tuple[str, ...] = ()
+    # homelab#2553: the long lane (one job at a time beside the short tools), and
+    # whether a restart resumes the job (a long job) or its apply (a write tool).
+    lane: str = "short"
+    resumable: bool = False
 
 
 # ---------------------------------------------------------------------------
@@ -443,12 +447,48 @@ def _canon_argv(args: dict, apply: bool) -> list[list[str]]:
     return [_apply(argv, apply)]
 
 
+# A recorded run's ID (music_scan.recheck_runs.RUN_ID): never a flag.
+RUN_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$")
+JOB_ID = "{job_id}"  # mcp_jobs.JOB_ID: the job's own ID, filled in at submit
+
+
+def _run_id(value, name: str) -> str:
+    if not isinstance(value, str) or not RUN_ID.match(value):
+        raise BadRequest(f"{name} must be a run ID (the job_id of a recheck_recordings job)")
+    return value
+
+
+def _recheck(body: dict, _: Albums) -> dict:
+    _only(body, "ids", "resume")
+    ids = _ids(body["ids"], "ids") if body.get("ids") is not None else []
+    resume = body.get("resume")
+    if resume is not None:
+        if ids:
+            raise BadRequest("ids or resume, not both: a resumed run checks the items it was started with")
+        return {"ids": [], "resume": _run_id(resume, "resume")}
+    return {"ids": ids, "resume": None}
+
+
+def _recheck_argv(args: dict, _: bool) -> list[list[str]]:
+    # A new run's ID is its job's; positional item IDs are integers, never flags.
+    argv = ["music-mb-fingerprint", "--recheck", f"--run-id={args['resume'] or JOB_ID}"]
+    return [argv + (["--", *map(str, args["ids"])] if args["ids"] else [])]
+
+
+def _apply_recheck(body: dict, _: Albums) -> dict:
+    _only(body, "run_id")
+    return {"run_id": _run_id(body.get("run_id"), "run_id")}
+
+
 TOOLS: dict[str, Tool] = {t.name: t for t in [
     Tool("audit_dupes", READ, _audit_dupes, _audit_dupes_argv),
     Tool("audit_lengths", READ, _audit_lengths,
          lambda a, _: [["music-audit-lengths", "--silence"] if a["silence"] else ["music-audit-lengths"]]),
     Tool("audit_releases", READ, _audit_releases, _audit_releases_argv),
     Tool("audit_want_albums", READ, _none, lambda a, _: [["music-audit-want-albums"]]),
+    # homelab#2553: an hour-long AcoustID run in the long lane, resumed after a
+    # restart from its checkpoint; its findings are applied with apply_recheck.
+    Tool("recheck_recordings", READ, _recheck, _recheck_argv, lane="long", resumable=True),
     # MusicBrainz only (homelab#2478): the query the caller typed, after "--".
     Tool("search_releases", READ, _search_releases,
          lambda a, _: [["music-requests", "search", f"--limit={a['limit']}", "--", a["query"]]]),
@@ -470,6 +510,11 @@ TOOLS: dict[str, Tool] = {t.name: t for t in [
          ("pipeline",)),
     Tool("embed_covers", WRITE, _none, lambda a, apply: [_apply(["music-embed-covers"], apply)], ("pipeline",)),
     Tool("canon_albums", WRITE, _canon_albums, _canon_argv, ("pipeline",)),
+    # A recorded recheck's replacements (homelab#2553): the dry run reads the
+    # findings, never AcoustID; an apply a restart cuts short is resumed.
+    Tool("apply_recheck", WRITE, _apply_recheck,
+         lambda a, apply: [_apply(["music-mb-fingerprint", f"--replace-run={a['run_id']}"], apply)],
+         ("pipeline",), resumable=True),
     # Rows of their own tables, which the tick reads at its start: no lock.
     Tool("set_search_override", WRITE, _set_search, _overrides("search", "reason")),
     Tool("clear_search_override", WRITE, _album_only, _overrides("clear-search")),

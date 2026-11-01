@@ -4,8 +4,8 @@
 
 | Tier | Who | Tools |
 |------|-----|-------|
-| Read | anyone signed in to the connector, and Claude Code's static token | the structured reads, the audits, `get_job`, `get_guide` |
-| Recoverable write | the claude.ai connector (a Pocket ID user in the `music` group) | `reset_album`, `requeue_albums`, `merge_items`, `replace_item`, `unlink_spotify_id`, `embed_covers`, `canon_albums`, `set_search_override`, `clear_search_override`, `hold_album`, `release_album`, `pin_track`, `unpin_track`, `trigger_scan`, `trigger_album_tick` |
+| Read | anyone signed in to the connector, and Claude Code's static token | the structured reads, the audits, `recheck_recordings`, `get_job`, `get_guide` |
+| Recoverable write | the claude.ai connector (a Pocket ID user in the `music` group) | `reset_album`, `requeue_albums`, `merge_items`, `replace_item`, `unlink_spotify_id`, `embed_covers`, `canon_albums`, `apply_recheck`, `set_search_override`, `clear_search_override`, `hold_album`, `release_album`, `pin_track`, `unpin_track`, `trigger_scan`, `trigger_album_tick` |
 | Irreversible | not exposed | the workstation commands below |
 
 The tier belongs to the token, not to the client: the static token is read-only, and an OAuth
@@ -30,9 +30,25 @@ file goes to `quarantine/replaced/` for 14 days. Still, apply only what the user
 ## Jobs
 
 The CLI tools run one at a time in a queue of depth 5. A call answers inline within about
-20 s. Otherwise it returns a job (`queued`, `waiting_for_lock`, `running`): poll `get_job` with
+60 s. Otherwise it returns a job (`queued`, `waiting_for_lock`, `running`): poll `get_job` with
 its `job_id`. A sixth call gets `busy` and the queue. A job interrupted by a pod restart is
 never retried: run it again.
+
+**Long jobs.** `recheck_recordings` runs in a lane of its own, one at a time beside the queue,
+so the other tools keep working while it runs (about an hour for the whole library). A second
+one gets `busy` with the one running. It survives a pod restart: it is resumed from its
+checkpoint (`resumes` counts how often, at most 5) with its output kept. `get_job`'s `progress`
+is its latest `[PROGRESS]` line (`done`, `total`, `at`), so poll that rather than paging the
+output. A run that ends `failed` (AcoustID down) or `interrupted` continues with
+`recheck_recordings` and `resume` set to its `job_id`.
+
+**Applying a recheck.** The finished run's `job_id` is its run ID. `apply_recheck` with it is a
+write like the others, dry run first. Its dry run reads the run's findings, not AcoustID, so it
+takes seconds and lists each replacement (`[WOULD-REPLACE]`) or why an item is skipped (it left
+the library, its `mb_trackid` changed, or its file changed since the check: recheck those by ID).
+The apply is refused for a run not finished or finished more than 7 days ago: run a new one. An
+apply cut short by a restart is resumed and checks each item again. Run again by hand, one that
+already holds its replacement shows `[DONE]`.
 
 Output comes 200 lines or 32 KB at a time. Pass `next_offset` as `offset` to `get_job` for the
 rest. Lists (`get_playlist`, `list_quarantine`) page the same way.
