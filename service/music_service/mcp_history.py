@@ -157,20 +157,22 @@ def stuck(records: dict[str, dict], now: datetime) -> dict:
     return {k: listed(v) for k, v in out.items()}
 
 
-def requests(state) -> dict:
+def requests(state, rejected: Path) -> dict:
     """The album requests (homelab#2478) whose album ended ``missing`` or
     ``failed``, or is in ``fallback`` with tracks spotdl hasn't got (each
-    entry's ``album.fallback_left``), and an ``error`` when the database
-    can't be read."""
+    entry's ``album.fallback_left``, with ``fallback_rejected`` and
+    ``acoustid_unknown_only`` read from the rejects in *rejected*,
+    homelab#2546), and an ``error`` when the database can't be read."""
     import psycopg  # noqa: PLC0415
 
     from music_fetch import album_requests  # noqa: PLC0415
     from music_fetch import state as statedb  # noqa: PLC0415
+    from music_scan.guard import request_rejects  # noqa: PLC0415
 
     out: dict[str, list[dict]] = {"missing": [], "failed": [], "fallback": []}
     try:
         with statedb.session() as conn:
-            found = album_requests.listing(conn, state)
+            found = album_requests.listing(conn, state, rejects=request_rejects(rejected))
     except (statedb.Unavailable, psycopg.Error) as exc:
         return {"error": f"the music database: {type(exc).__name__}", **{k: listed(v) for k, v in out.items()}}
     for entry in found:

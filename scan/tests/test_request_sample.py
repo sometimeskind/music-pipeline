@@ -39,10 +39,10 @@ def test_candidates_are_held_albums_with_a_release_group_and_one_release():
 
 def test_sample_judges_each_track_and_keeps_nothing(tmp_path: Path, clip, monkeypatch):
     monkeypatch.setattr("music_scan.guard.ACOUSTID_DELAY", 0)
-    held = {_rec(i): FakeItem(i) for i in (1, 2, 3)}
+    held = {_rec(i): FakeItem(i) for i in (1, 2, 3, 4, 5)}
     album = request_sample.Album("1", "Band — One", {"status": "imported"}, "R1", held)
     songs = [{"song_id": _rec(i), "url": f"https://musicbrainz.org/recording/{_rec(i)}", "duration": 30}
-             for i in (1, 2, 3, 4)]
+             for i in (1, 2, 3, 4, 5, 6)]
     asked = []
 
     def songs_of(record):
@@ -53,9 +53,11 @@ def test_sample_judges_each_track_and_keeps_nothing(tmp_path: Path, clip, monkey
         clip(folder / "a.m4a", ("tone", 30), url=batch[0]["url"])  # accepted, the library's audio
         clip(folder / "b.m4a", ("tone", 30), url=batch[1]["url"])  # AcoustID names another recording
         clip(folder / "c.m4a", ("tone", 20), url=batch[2]["url"])  # too short
-        # the fourth: spotdl found nothing
+        clip(folder / "d.m4a", ("tone", 30), url=batch[3]["url"])  # AcoustID knows no recording for it
+        clip(folder / "e.m4a", ("tone", 30), url=batch[4]["url"])  # the same, and the library's audio
+        # the sixth: spotdl found nothing
 
-    found = {_rec(1): {_rec(1)}, _rec(2): {_rec(9)}}
+    found = {_rec(1): {_rec(1): 0.95}, _rec(2): {_rec(9): 0.95}, _rec(4): {}, _rec(5): {}}
 
     def recordings(path):
         from music_scan.guard import song_url
@@ -63,14 +65,16 @@ def test_sample_judges_each_track_and_keeps_nothing(tmp_path: Path, clip, monkey
         return found[song_url(path).rsplit("/", 1)[1]]
 
     [(_, outcomes)] = request_sample.sample([album], songs_of, download, recordings,
-                                            lambda path, item: item.id in (1, 2), tmp_path / "scratch")
+                                            lambda path, item: item.id in (1, 2, 5), tmp_path / "scratch")
     assert asked == ["R1"]
     assert [(o.verdict, o.same_audio) for o in outcomes] == [
-        ("accepted", True), ("fingerprint", True), ("duration", False), ("not found", None)]
+        ("accepted", True), ("fingerprint", True), ("duration", False), ("acoustid-unknown", False),
+        ("acoustid-unknown", True), ("not found", None)]
     assert not (tmp_path / "scratch" / "1").exists()
     line = request_sample.summary(outcomes)
-    assert line.startswith("4 track(s); 1 accepted; 1 of them the library's audio, 0 not; 2 rejected "
-                           "(duration 1, fingerprint 1), 1 of them the library's audio; 1 not found by spotdl")
+    assert line == ("6 track(s); 1 accepted; 1 of them the library's audio, 0 not; 4 rejected "
+                    "(duration 1, fingerprint 1, acoustid-unknown 2), 2 of them the library's audio; "
+                    "2 unknown to AcoustID, 1 of them the library's audio; 1 not found by spotdl")
 
 
 def test_music_requests_fallback_sample_refuses_a_sample_too_large():

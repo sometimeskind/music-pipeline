@@ -60,10 +60,23 @@ A request Usenet misses (or whose releases all fail) falls back to spotdl from i
 tracklist: `fallback`, and `filled` once the library holds every track. spotdl finds each track
 on YouTube Music by its ISRC, else its artists, title and length (a joint credit that finds nothing
 is searched again by its first credited artist alone, `[ALONE]`), and the scan imports a download
-only when AcoustID's fingerprint lookup names that track's own MusicBrainz recording (`[VERIFIED]`;
-anything else is `[REJECT] … fingerprint`, kept in `quarantine/rejected/request/` and never
-downloaded again). So a track AcoustID doesn't know stays a gap: `list_requests` shows how many
-the album still lacks (its fallback_left), and the album is not `filled` (nor on Later's `.m3u`) until it has none.
+only when AcoustID's fingerprint lookup names that track's own MusicBrainz recording (`[VERIFIED]`).
+Anything else is a `[REJECT]`, kept in `quarantine/rejected/request/` and never downloaded again,
+for one of these reasons:
+
+| Reason | Meaning |
+|--------|---------|
+| `fingerprint` | AcoustID named other recordings (or this one too weakly), or the file couldn't be fingerprinted: the wrong audio |
+| `acoustid-unknown` | AcoustID has no MusicBrainz recording for the audio at all. The file may well be right (a new or obscure release AcoustID hasn't linked yet), but nothing confirms it, so it isn't imported |
+| `duration`, `silence` | The length guard's: the wrong length, or silence padding |
+
+So a track AcoustID doesn't know stays a gap: `list_requests` shows how many the album still
+lacks (its fallback_left), and the album is not `filled` (nor on Later's `.m3u`) until it has none.
+Its fallback_rejected counts those tracks whose download was rejected, by reason, and
+acoustid_unknown_only is true when every one is `acoustid-unknown`: the album isn't unfetchable,
+AcoustID just doesn't know it. That is the operator's call (Usenet only, a manual source, or a
+later retry once AcoustID catches up); say which album it is and leave it. Rejects from before
+homelab#2546 all read `fingerprint`. A failed AcoustID lookup is no reject: the file waits for the next scan.
 The tracks it has are one album, named from MusicBrainz (album, artist, release IDs).
 
 While it has gaps, the album is searched on Usenet again every 7 days; a release found then is

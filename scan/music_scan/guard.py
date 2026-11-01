@@ -31,9 +31,14 @@ MusicBrainz recording URL): the length and silence checks above against
 MusicBrainz's length, then an AcoustID lookup of its fingerprint.  A file is
 accepted, and moved to ``inbox/spotdl/request/`` for the import, only when
 AcoustID names the track's own recording: two items are one track only when
-an ID agrees, never by title.  Any other answer, none included, rejects it
-(``fingerprint``), whatever ``LENGTH_GUARD`` says; a lookup that fails leaves
-it for the next scan.
+an ID agrees, never by title.  Any other answer rejects it, whatever
+``LENGTH_GUARD`` says, for one of two reasons (homelab#2546): AcoustID has no
+MusicBrainz recording for the audio at all (``acoustid-unknown``: a new or
+obscure release AcoustID hasn't linked yet, so the file may well be right), or
+it names other recordings, or ours only below the score (``fingerprint``).  A
+file that can't be fingerprinted is ``fingerprint`` too.  A lookup that fails
+leaves it for the next scan.  :func:`request_rejects` reads the reasons back
+for ``list_requests``.
 """
 
 from __future__ import annotations
@@ -47,9 +52,11 @@ import time
 from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable
+from typing import Callable, Mapping
 
 from music_fetch import events
+from music_fetch.album_requests import UNKNOWN_REJECT
+from music_scan.held import QUARANTINE_DIR
 
 logger = logging.getLogger(__name__)
 
@@ -57,11 +64,15 @@ TOLERANCE = 0.10
 SILENCE_NOISE = "-50dB"
 SILENCE_MIN_SECONDS = 8
 EDGE_SECONDS = 5
-REASONS = ("duration", "silence", "fingerprint")
+# A request fallback download AcoustID knows no MusicBrainz recording for (homelab#2546).
+UNKNOWN = UNKNOWN_REJECT
+REASONS = ("duration", "silence", "fingerprint", UNKNOWN)
 # AcoustID's fingerprint score a request fallback's recording must reach (music-mb-fingerprint's).
 FINGERPRINT_MIN_SCORE = 0.85
 # AcoustID asks for at most three lookups a second.
 ACOUSTID_DELAY = 0.35
+# Seconds an AcoustID lookup may take before it counts as failed (music-mb-fingerprint's).
+LOOKUP_TIMEOUT = 30
 
 _SILENCE_START = re.compile(r"silence_start:\s*(-?[\d.]+)")
 _SILENCE_END = re.compile(r"silence_end:\s*(-?[\d.]+)")
@@ -184,23 +195,76 @@ class LookupFailed(RuntimeError):
     """AcoustID couldn't be asked: the file waits for the next scan."""
 
 
-def acoustid_recordings(path: Path) -> set[str]:
-    """The MusicBrainz recordings AcoustID links to *path*'s fingerprint with a
-    score of at least :data:`FINGERPRINT_MIN_SCORE`.  Raises
-    :class:`LookupFailed` when there is no API key or the web service fails,
-    and ``ValueError`` when the file can't be fingerprinted (a rejection)."""
+def acoustid_recordings(path: Path) -> dict[str, float]:
+    """Every MusicBrainz recording AcoustID links to *path*'s fingerprint, at
+    its best score, whatever the score: empty when AcoustID has no result, or
+    only results with no recording (pyacoustid skips those).  Raises
+    :class:`LookupFailed` when there is no API key or the web service fails or
+    times out, and ``ValueError`` when the file can't be fingerprinted (a
+    rejection)."""
     import acoustid  # noqa: PLC0415
 
     key = os.environ.get("ACOUSTID_APIKEY")
     if not key:
         raise LookupFailed("ACOUSTID_APIKEY is not set")
+    best: dict[str, float] = {}
     try:
-        results = list(acoustid.match(key, str(path)))
+        for score, rid, *_ in acoustid.match(key, str(path), timeout=LOOKUP_TIMEOUT):
+            if rid:
+                best[rid] = max(score or 0.0, best.get(rid, 0.0))
     except acoustid.FingerprintGenerationError as exc:
         raise ValueError(f"no fingerprint: {exc}") from exc
     except acoustid.WebServiceError as exc:
         raise LookupFailed(str(exc)) from exc
-    return {rid for score, rid, *_ in results if rid and score >= FINGERPRINT_MIN_SCORE}
+    return best
+
+
+def fingerprint_rejection(recording: str, found: Mapping[str, float]) -> Rejection | None:
+    """Why AcoustID's answer *found* (:func:`acoustid_recordings`) rejects a
+    download that should be *recording*, or None when it names *recording* at
+    :data:`FINGERPRINT_MIN_SCORE` or more.  No recording at all is
+    :data:`UNKNOWN` (homelab#2546): AcoustID can't tell, so the file may be
+    right.  Any recording named, ours below the score included, is
+    ``fingerprint``: AcoustID heard something, and it isn't confidently ours."""
+    if found.get(recording, 0.0) >= FINGERPRINT_MIN_SCORE:
+        return None
+    if not found:
+        return Rejection(UNKNOWN, f"not recording {recording}: AcoustID knows no MusicBrainz recording for it")
+    others = {r: s for r, s in found.items() if r != recording}
+    if not others:
+        return Rejection("fingerprint", f"not recording {recording}: AcoustID names it only at score "
+                                        f"{found[recording]:.2f}")
+    top, score = max(others.items(), key=lambda kv: (kv[1], kv[0]))
+    return Rejection("fingerprint", f"not recording {recording}: AcoustID names {len(others)} other recording(s) "
+                                    f"(best {top} at {score:.2f})")
+
+
+def request_rejects(rejected_dir: Path = QUARANTINE_DIR / "rejected") -> dict[str, str]:
+    """``{recording: reason}`` of the album request fallback downloads held in
+    *rejected_dir*/``request/`` (homelab#2546), from each file's ``WOAS`` and
+    its ``.reason`` sidecar, for ``list_requests``.  A recording rejected twice
+    keeps a reason other than :data:`UNKNOWN`, so a request reads as unknown to
+    AcoustID only when every download of it was.  Empty when the directory
+    can't be read."""
+    from music_fetch.album_requests import SOURCE, url_recording  # noqa: PLC0415
+
+    out: dict[str, str] = {}
+    try:
+        sidecars = sorted((rejected_dir / SOURCE).rglob("*.reason"))
+    except OSError:
+        return out
+    for sidecar in sidecars:
+        audio = sidecar.with_name(sidecar.name.removesuffix(".reason"))
+        try:
+            reason = sidecar.read_text(encoding="utf-8").split(":", 1)[0].strip()
+        except OSError:
+            continue
+        if not audio.is_file() or not reason:
+            continue  # the operator took the file away: the nightly fetches it again
+        recording = url_recording(song_url(audio))
+        if recording and out.get(recording) in (None, UNKNOWN):
+            out[recording] = reason
+    return out
 
 
 def request_songs() -> dict[str, dict]:
@@ -218,7 +282,7 @@ def request_songs() -> dict[str, dict]:
 
 def verify_requests(unverified: Path, inbox: Path, rejected_dir: Path, audio_exts: set[str],
                     songs: dict[str, dict] | None = None,
-                    recordings: Callable[[Path], set[str]] = acoustid_recordings) -> Counter:
+                    recordings: Callable[[Path], Mapping[str, float]] = acoustid_recordings) -> Counter:
     """Check every album request fallback download in *unverified*
     (``<source>/<file>``) against the track its ``WOAS`` names (homelab#2478):
     move it to *inbox*/``<source>/`` when AcoustID names that track's own
@@ -251,14 +315,11 @@ def verify_requests(unverified: Path, inbox: Path, rejected_dir: Path, audio_ext
                                source, f.name, exc)
                 continue
             except ValueError as exc:
-                found, why = set(), str(exc)
+                rejection = Rejection("fingerprint", f"not recording {recording}: {exc}")
             else:
-                why = (f"AcoustID names {len(found)} other recording(s)" if found
-                       else "AcoustID knows no recording for it")
+                rejection = fingerprint_rejection(recording, found)
             finally:
                 time.sleep(ACOUSTID_DELAY)
-            if recording not in found:
-                rejection = Rejection("fingerprint", f"not recording {recording}: {why}")
         if rejection is not None:
             dest = reject(f, rejection, unverified, rejected_dir)
             rejected[rejection.reason] += 1

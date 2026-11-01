@@ -52,7 +52,7 @@ class Album:
 class Outcome:
     """One sampled track: what the fallback would have done with it."""
 
-    verdict: str  # "accepted", "duration", "silence", "fingerprint", "lookup", "not found"
+    verdict: str  # "accepted", one of guard.REASONS, "lookup" or "not found"
     same_audio: bool | None  # the download's fingerprint matches the library's copy (None: no copy or no file)
 
 
@@ -77,10 +77,12 @@ def candidates(records: Mapping[str, dict], items: list) -> list[Album]:
     return out
 
 
-def judge(path: Path, song: dict, held, recordings: Callable[[Path], set[str]],
+def judge(path: Path, song: dict, held, recordings: Callable[[Path], Mapping[str, float]],
           same: Callable[[Path, object], bool]) -> Outcome:
-    """The fallback's verdict on one download, and whether it is the library's audio."""
-    from music_scan.guard import LookupFailed, check_file  # noqa: PLC0415
+    """The fallback's verdict on one download (the scan's own, so ``fingerprint``
+    and ``acoustid-unknown`` split as there, homelab#2546), and whether it is
+    the library's audio."""
+    from music_scan.guard import LookupFailed, check_file, fingerprint_rejection  # noqa: PLC0415
 
     right = same(path, held) if held is not None else None
     rejection = check_file(path, song.get("duration") or None)
@@ -91,12 +93,13 @@ def judge(path: Path, song: dict, held, recordings: Callable[[Path], set[str]],
     except LookupFailed:
         return Outcome("lookup", right)
     except ValueError:
-        found = set()
-    return Outcome("accepted" if song["song_id"] in found else "fingerprint", right)
+        return Outcome("fingerprint", right)
+    rejection = fingerprint_rejection(song["song_id"], found)
+    return Outcome("accepted" if rejection is None else rejection.reason, right)
 
 
 def sample(albums: list[Album], songs_of: Callable[[dict], list[dict]], download: Download,
-           recordings: Callable[[Path], set[str]], same: Callable[[Path, object], bool],
+           recordings: Callable[[Path], Mapping[str, float]], same: Callable[[Path, object], bool],
            scratch: Path) -> list[tuple[Album, list[Outcome]]]:
     """Run the fallback on each album into *scratch*; its files are deleted after each album."""
     from music_scan.guard import song_url  # noqa: PLC0415
@@ -127,14 +130,20 @@ def sample(albums: list[Album], songs_of: Callable[[dict], list[dict]], download
 
 
 def summary(outcomes: list[Outcome]) -> str:
+    from music_scan.guard import REASONS, UNKNOWN  # noqa: PLC0415
+
     verdicts = Counter(o.verdict for o in outcomes)
     accepted = [o for o in outcomes if o.verdict == "accepted"]
     rejected = [o for o in outcomes if o.verdict not in ("accepted", "not found", "lookup")]
     parts = [f"{len(outcomes)} track(s)", f"{verdicts['accepted']} accepted"]
     parts.append(f"{sum(1 for o in accepted if o.same_audio)} of them the library's audio, "
                  f"{sum(1 for o in accepted if o.same_audio is False)} not")
-    parts.append(f"{len(rejected)} rejected ({', '.join(f'{r} {verdicts[r]}' for r in ('duration', 'silence', 'fingerprint') if verdicts[r]) or 'none'}), "
+    parts.append(f"{len(rejected)} rejected ({', '.join(f'{r} {verdicts[r]}' for r in REASONS if verdicts[r]) or 'none'}), "
                  f"{sum(1 for o in rejected if o.same_audio)} of them the library's audio")
+    if verdicts[UNKNOWN]:
+        # The rejects AcoustID couldn't judge (homelab#2546): how many were right after all.
+        parts.append(f"{verdicts[UNKNOWN]} unknown to AcoustID, "
+                     f"{sum(1 for o in rejected if o.verdict == UNKNOWN and o.same_audio)} of them the library's audio")
     parts.append(f"{verdicts['not found']} not found by spotdl")
     if verdicts["lookup"]:
         parts.append(f"{verdicts['lookup']} AcoustID lookup(s) failed")

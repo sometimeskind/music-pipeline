@@ -76,6 +76,9 @@ _FLAG_WORDS = re.compile(r"\b(live|demo|remix(?:es)?|compilation)\b")
 
 _MBID = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
 
+# The scan's reject reason for a fallback download AcoustID knows no recording for
+# (music_scan.guard.UNKNOWN, homelab#2546).
+UNKNOWN_REJECT = "acoustid-unknown"
 # A fallback song's URL: its MusicBrainz recording (:func:`recording_url`).
 RECORDING_URL = "https://musicbrainz.org/recording/"
 # Where the nightly downloads a request's fallback songs (:mod:`music_fetch.ingest`):
@@ -437,8 +440,17 @@ def iso(t: datetime | None) -> str | None:
     return None if t is None else t.astimezone(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
 
 
-def entry(request: Request, rows: statedb.AlbumRows) -> dict:
-    """One request as ``list_requests`` shows it: its album row's key, status and origin, or ``pending``."""
+def fallback_rejected(record: Mapping, rejects: Mapping[str, str]) -> dict[str, int]:
+    """Of a fallback album's tracks left (``fallback_tracks``), those whose
+    download the scan rejected, by reason (*rejects*:
+    ``music_scan.guard.request_rejects``, homelab#2546)."""
+    left = [r for ids in (record.get("fallback_tracks") or {}).values() for r in ids]
+    return dict(sorted(Counter(rejects[r] for r in left if r in rejects).items()))
+
+
+def entry(request: Request, rows: statedb.AlbumRows, rejects: Mapping[str, str] | None = None) -> dict:
+    """One request as ``list_requests`` shows it: its album row's key, status and origin, or ``pending``.
+    A fallback album also shows its tracks left and, given *rejects*, why their downloads were rejected."""
     found = find_row(rows, request.release_group)
     album: dict[str, Any] | None = None
     if found is not None:
@@ -448,6 +460,12 @@ def entry(request: Request, rows: statedb.AlbumRows) -> dict:
         if record.get("status") == "fallback":
             # The tracks spotdl still has to get from MusicBrainz's tracklist (homelab#2478).
             album["fallback_left"] = sum(len(ids) for ids in (record.get("fallback_tracks") or {}).values())
+            if rejects is not None:
+                # homelab#2546: a fallback whose every reject is AcoustID not knowing the audio may be
+                # right all along (a release AcoustID hasn't linked yet); the operator decides.
+                rejected = fallback_rejected(record, rejects)
+                album["fallback_rejected"] = rejected
+                album["acoustid_unknown_only"] = bool(rejected) and set(rejected) == {UNKNOWN_REJECT}
     return {"release_group": request.release_group, "artist": request.artist, "name": request.name,
             "preferred_release": request.preferred_release, "tracklist_release": request.tracklist_release,
             "tracks": len(request.tracks), "requested_by": request.requested_by,
@@ -455,7 +473,9 @@ def entry(request: Request, rows: statedb.AlbumRows) -> dict:
             "status": album["status"] if album else PENDING, "album": album}
 
 
-def listing(conn: psycopg.Connection, rows: statedb.AlbumRows, status: str | None = None) -> list[dict]:
-    """Every request, oldest first, with its album's status; only *status*'s when given."""
-    out = [entry(r, rows) for r in load(conn)]
+def listing(conn: psycopg.Connection, rows: statedb.AlbumRows, status: str | None = None,
+            rejects: Mapping[str, str] | None = None) -> list[dict]:
+    """Every request, oldest first, with its album's status; only *status*'s when given.
+    *rejects*: :func:`entry`'s."""
+    out = [entry(r, rows, rejects) for r in load(conn)]
     return [e for e in out if status is None or e["status"] == status]

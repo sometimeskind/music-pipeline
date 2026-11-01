@@ -90,7 +90,7 @@ def test_guard_rejects_into_playlist_dir_with_reason(dirs, clip, monkeypatch) ->
 
     counts = guard_inbox(inbox, rejected, AUDIO_EXTS, mode="on")
 
-    assert counts == {"duration": 1, "silence": 0, "fingerprint": 0}
+    assert counts == {"duration": 1, "silence": 0, "fingerprint": 0, "acoustid-unknown": 0}
     (kind, message, kw), = recorded
     assert kind == "reject" and message.startswith("[REJECT] wedding: Artist - Song.m4a — duration: ")
     assert kw["data"]["playlist"] == "wedding" and kw["data"]["reason"] == "duration"
@@ -195,6 +195,7 @@ def test_asis_pass_skips_rejected(tmp_path: Path, clip) -> None:
 
 REC = "00000001-0000-4000-8000-000000000001"
 REC_URL = f"https://musicbrainz.org/recording/{REC}"
+OTHER = "00000002-0000-4000-8000-000000000002"
 
 
 @pytest.fixture
@@ -223,29 +224,35 @@ def _verify(dirs, found, songs=None):
 def test_a_fallback_download_acoustid_names_as_its_recording_moves_to_the_inbox(requests_dirs, clip) -> None:
     unverified, inbox, rejected = requests_dirs
     clip(unverified / "request" / "Band - Song.m4a", ("tone", 30), url=REC_URL)
-    counts = _verify(requests_dirs, {REC, "00000002-0000-4000-8000-000000000002"})
+    counts = _verify(requests_dirs, {REC: 0.91, OTHER: 0.95})
     assert sum(counts.values()) == 0
     assert (inbox / "request" / "Band - Song.m4a").exists()
     assert not (unverified / "request" / "Band - Song.m4a").exists()
 
 
-@pytest.mark.parametrize("found,why", [
-    ({"00000002-0000-4000-8000-000000000002"}, "AcoustID names 1 other recording(s)"),
-    (set(), "AcoustID knows no recording for it"),
-    (ValueError("no fingerprint: bad file"), "no fingerprint: bad file"),
+@pytest.mark.parametrize("found,reason,why", [
+    # The strict rule (music-pipeline#375): another recording rejects, even with ours beside it below the score.
+    ({OTHER: 0.97}, "fingerprint", f"AcoustID names 1 other recording(s) (best {OTHER} at 0.97)"),
+    ({REC: 0.6, OTHER: 0.4}, "fingerprint", f"AcoustID names 1 other recording(s) (best {OTHER} at 0.40)"),
+    # Ours, but too weakly to count as a match.
+    ({REC: 0.6}, "fingerprint", "AcoustID names it only at score 0.60"),
+    (ValueError("no fingerprint: bad file"), "fingerprint", "no fingerprint: bad file"),
+    # homelab#2546: AcoustID has nothing to say, which is not a mismatch.
+    ({}, "acoustid-unknown", "AcoustID knows no MusicBrainz recording for it"),
 ])
-def test_a_fallback_download_no_id_confirms_is_rejected(requests_dirs, clip, found, why) -> None:
+def test_a_fallback_download_no_id_confirms_is_rejected(requests_dirs, clip, found, reason, why) -> None:
     unverified, inbox, rejected = requests_dirs
     clip(unverified / "request" / "Band - Song.m4a", ("tone", 30), url=REC_URL)
     counts = _verify(requests_dirs, found)
-    assert counts["fingerprint"] == 1
+    assert counts == {**dict.fromkeys(guard.REASONS, 0), reason: 1}
     assert not (inbox / "request").exists()
-    reason = (rejected / "request" / "Band - Song.m4a.reason").read_text()
-    assert reason.startswith(f"fingerprint: not recording {REC}: {why}")
-    # Held from then on: the nightly doesn't download the same video again.
+    sidecar = (rejected / "request" / "Band - Song.m4a.reason").read_text()
+    assert sidecar == f"{reason}: not recording {REC}: {why}\n"
+    # Held from then on, whatever the reason: the nightly doesn't download the same video again.
     from music_scan.held import held_urls
 
     assert REC_URL in held_urls(rejected.parent, inbox, unverified)
+    assert guard.request_rejects(rejected) == {REC: reason}
 
 
 def test_a_fallback_download_of_the_wrong_length_is_rejected_before_the_lookup(requests_dirs, clip) -> None:
@@ -269,6 +276,107 @@ def test_a_download_no_request_wants_is_rejected(requests_dirs, clip) -> None:
     counts = _verify(requests_dirs, AssertionError("not looked up"), songs={})
     assert counts["fingerprint"] == 1
     assert "no album request's track is" in (rejected / "request" / "Band - Song.m4a.reason").read_text()
+
+
+# AcoustID's lookup responses (homelab#2546), through pyacoustid's own parsing: only the
+# web service and the fingerprinting are faked.
+def _response(*results):
+    return {"status": "ok", "results": list(results)}
+
+
+@pytest.mark.parametrize("response,expected", [
+    (_response(), {}),  # no result: AcoustID doesn't know the fingerprint
+    (_response({"id": "a1", "score": 0.97}), {}),  # a known fingerprint linked to no recording
+    (_response({"id": "a1", "score": 0.97, "recordings": []}), {}),
+    (_response({"id": "a1", "score": 0.97, "recordings": [{"id": OTHER}]},
+               {"id": "a2", "score": 0.6, "recordings": [{"id": REC}, {"id": OTHER}]}),
+     {OTHER: 0.97, REC: 0.6}),  # each recording once, at its best score
+])
+def test_acoustid_recordings_reads_each_response_shape(monkeypatch, tmp_path, response, expected) -> None:
+    import acoustid
+
+    monkeypatch.setenv("ACOUSTID_APIKEY", "key")
+    monkeypatch.setattr(acoustid, "fingerprint_file", lambda path, force_fpcalc=False: (30.0, "FP"))
+    asked = []
+    monkeypatch.setattr(acoustid, "lookup", lambda key, fp, duration, meta, timeout: asked.append(timeout) or response)
+    assert guard.acoustid_recordings(tmp_path / "a.m4a") == expected
+    assert asked == [guard.LOOKUP_TIMEOUT]
+
+
+@pytest.mark.parametrize("failure", [
+    {"status": "error", "error": {"code": 4, "message": "invalid API key"}},
+    "HTTP request timed out (30s)",
+])
+def test_an_acoustid_error_or_timeout_is_a_failed_lookup_not_a_reason(monkeypatch, tmp_path, failure) -> None:
+    import acoustid
+
+    def lookup(*args, **kwargs):
+        if isinstance(failure, str):
+            raise acoustid.WebServiceError(failure)
+        return failure
+
+    monkeypatch.setenv("ACOUSTID_APIKEY", "key")
+    monkeypatch.setattr(acoustid, "fingerprint_file", lambda path, force_fpcalc=False: (30.0, "FP"))
+    monkeypatch.setattr(acoustid, "lookup", lookup)
+    with pytest.raises(guard.LookupFailed):
+        guard.acoustid_recordings(tmp_path / "a.m4a")
+
+
+def test_a_file_that_cant_be_fingerprinted_is_a_value_error(monkeypatch, tmp_path) -> None:
+    import acoustid
+
+    def broken(path, force_fpcalc=False):
+        raise acoustid.FingerprintGenerationError("fpcalc exited with status 2")
+
+    monkeypatch.setenv("ACOUSTID_APIKEY", "key")
+    monkeypatch.setattr(acoustid, "fingerprint_file", broken)
+    with pytest.raises(ValueError, match="no fingerprint"):
+        guard.acoustid_recordings(tmp_path / "a.m4a")
+
+
+@pytest.mark.parametrize("response,reason", [
+    (_response(), "acoustid-unknown"),
+    (_response({"id": "a1", "score": 0.97}), "acoustid-unknown"),
+    (_response({"id": "a1", "score": 0.97, "recordings": [{"id": OTHER}]}), "fingerprint"),
+    (_response({"id": "a1", "score": 0.97, "recordings": [{"id": OTHER}, {"id": REC}]}), None),
+])
+def test_the_scan_splits_the_reasons_on_the_real_lookup(requests_dirs, clip, monkeypatch, response, reason) -> None:
+    import acoustid
+
+    unverified, inbox, rejected = requests_dirs
+    monkeypatch.setenv("ACOUSTID_APIKEY", "key")
+    monkeypatch.setattr(acoustid, "fingerprint_file", lambda path, force_fpcalc=False: (30.0, "FP"))
+    monkeypatch.setattr(acoustid, "lookup", lambda *a, **kw: response)
+    clip(unverified / "request" / "Band - Song.m4a", ("tone", 30), url=REC_URL)
+    songs = {REC_URL: {"url": REC_URL, "song_id": REC, "duration": 30}}
+    counts = guard.verify_requests(unverified, inbox, rejected, AUDIO_EXTS, songs)
+    if reason is None:
+        assert sum(counts.values()) == 0 and (inbox / "request" / "Band - Song.m4a").exists()
+    else:
+        assert counts[reason] == 1 and (rejected / "request" / "Band - Song.m4a").exists()
+
+
+def _held(rejected: Path, clip, name: str, url: str | None, reason: str) -> Path:
+    (rejected / "request").mkdir(parents=True, exist_ok=True)
+    path = clip(rejected / "request" / name, ("tone", 1), url=url)
+    path.with_name(name + ".reason").write_text(f"{reason}: detail\n", encoding="utf-8")
+    return path
+
+
+def test_request_rejects_reads_each_held_download_by_its_recording(tmp_path, clip) -> None:
+    rejected = tmp_path / "rejected"
+    third = "00000003-0000-4000-8000-000000000003"
+    _held(rejected, clip, "a.m4a", REC_URL, "acoustid-unknown")
+    _held(rejected, clip, "b.m4a", f"https://musicbrainz.org/recording/{OTHER}", "acoustid-unknown")
+    _held(rejected, clip, "c.m4a", f"https://musicbrainz.org/recording/{OTHER}", "fingerprint")  # rejected twice
+    gone = _held(rejected, clip, "d.m4a", f"https://musicbrainz.org/recording/{third}", "duration")
+    gone.unlink()  # the operator took it away: the nightly fetches it again
+    _held(rejected, clip, "e.m4a", URL, "duration")  # not a recording URL
+    (rejected / "chill").mkdir()
+    other_playlist = clip(rejected / "chill" / "f.m4a", ("tone", 1), url=REC_URL)  # the length guard's, not a request's
+    other_playlist.with_name("f.m4a.reason").write_text("silence: detail\n", encoding="utf-8")
+    assert guard.request_rejects(rejected) == {REC: "acoustid-unknown", OTHER: "fingerprint"}
+    assert guard.request_rejects(tmp_path / "nowhere") == {}
 
 
 def test_the_length_guard_leaves_verified_request_files_alone(dirs, clip, monkeypatch) -> None:
