@@ -43,12 +43,15 @@ def preflight_task(metrics) -> None:
 
 @task(name="reconcile-playlists", log_prints=True)
 def reconcile_playlists_task(metrics) -> None:
-    """Reconcile playlists.conf: provision new entries, delete removed ones."""
+    """Reconcile playlists.conf: provision new entries, delete removed ones,
+    then sweep Navidrome's playlists imported from a removed .m3u (homelab#2541)."""
     logger = get_run_logger()
 
+    keep: set[str] | None = None
     if ingest.CONF_PATH.exists():
         try:
             playlists = load_playlists(ingest.CONF_PATH)
+            keep = {p.name for p in playlists}
             active = [p for p in playlists if not p.nosync]
             nosync = [p for p in playlists if p.nosync]
             logger.info(
@@ -73,6 +76,24 @@ def reconcile_playlists_task(metrics) -> None:
         logger.info("Removed from config (store and playlist deleted): %s", ", ".join(removed))
     else:
         logger.info("No playlists removed from config")
+
+    if keep is not None:
+        _sweep_navidrome_playlists(keep)
+
+
+def _sweep_navidrome_playlists(keep: set[str]) -> None:
+    """Delete the Navidrome playlists whose .m3u is gone (homelab#2541).  Never
+    raises: Navidrome being down must not fail the reconcile, and the next
+    nightly's sweep retries."""
+    logger = get_run_logger()
+    from music_scan.navidrome import sweep_playlists  # noqa: PLC0415
+    try:
+        deleted = sweep_playlists(ingest.PLAYLISTS_DIR, keep)
+    except Exception:
+        logger.error("Navidrome playlist sweep failed; the next nightly retries", exc_info=True)
+        return
+    if deleted:
+        logger.info("Deleted from Navidrome (its .m3u is gone): %s", ", ".join(deleted))
 
 
 @task(name="spotdl-sync", log_prints=True, persist_result=False)

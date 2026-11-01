@@ -50,6 +50,46 @@ def test_reconcile_playlists_task_deletes_removed_playlists_and_queues_nothing()
         mock_ingest.reconcile_playlists.assert_called_once_with()
 
 
+def test_reconcile_playlists_task_sweeps_navidrome_with_the_conf_playlists():
+    """homelab#2541: after the reconcile, Navidrome's playlists imported from a
+    removed .m3u are swept; the playlists.conf names are never swept."""
+    from music_service.flows import reconcile_playlists_task
+    mix = MagicMock(nosync=False)
+    mix.name = "mix"
+    with patch("music_service.flows.ingest") as mock_ingest, \
+            patch("music_service.flows.load_playlists", return_value=[mix]), \
+            patch("music_scan.navidrome.sweep_playlists", return_value=["keep"]) as mock_sweep:
+        mock_ingest.CONF_PATH.exists.return_value = True
+        mock_ingest.reconcile_playlists.return_value = ["keep"]
+        reconcile_playlists_task(MagicMock())
+    mock_sweep.assert_called_once_with(mock_ingest.PLAYLISTS_DIR, {"mix"})
+
+
+def test_reconcile_playlists_task_survives_a_navidrome_failure():
+    from music_service.flows import reconcile_playlists_task
+    metrics = MagicMock(failure_reason="")
+    with patch("music_service.flows.ingest") as mock_ingest, \
+            patch("music_service.flows.load_playlists", return_value=[]), \
+            patch("music_scan.navidrome.sweep_playlists",
+                  side_effect=RuntimeError("Navidrome login failed")) as mock_sweep:
+        mock_ingest.CONF_PATH.exists.return_value = True
+        mock_ingest.reconcile_playlists.return_value = []
+        assert reconcile_playlists_task(metrics) is None
+    mock_sweep.assert_called_once()
+    assert metrics.failure_reason == ""
+
+
+def test_reconcile_playlists_task_skips_the_sweep_without_playlists_conf():
+    """No playlists.conf, no reconcile: nothing says which playlists to keep."""
+    from music_service.flows import reconcile_playlists_task
+    with patch("music_service.flows.ingest") as mock_ingest, \
+            patch("music_scan.navidrome.sweep_playlists") as mock_sweep:
+        mock_ingest.CONF_PATH.exists.return_value = False
+        mock_ingest.reconcile_playlists.return_value = []
+        reconcile_playlists_task(MagicMock())
+    mock_sweep.assert_not_called()
+
+
 def test_reconcile_playlists_task_marks_a_failure():
     from music_service.flows import reconcile_playlists_task
     metrics = MagicMock(failure_reason="")
