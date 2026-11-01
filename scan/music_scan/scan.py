@@ -51,10 +51,10 @@ LIBRARY_DB = Path("/root/.config/beets/library.db")
 EMPTY_SLOTS_LISTED = 25
 
 
-def _snapshot_inbox(inbox: Path) -> list[str]:
-    """Return sorted list of audio filename stems currently in the inbox tree."""
+def _snapshot_inbox(inbox: Path) -> list[Path]:
+    """Return the sorted audio files currently in the inbox tree."""
     return sorted(
-        f.stem for f in inbox.rglob("*")
+        f for f in inbox.rglob("*")
         if f.is_file() and f.suffix.lower() in AUDIO_EXTS
     )
 
@@ -107,8 +107,10 @@ def run_inbox_import(skip_limit: int | None = None) -> list[tuple[str, str]]:
     """Snapshot inbox, run beet import, check names. Returns (title, artist) pairs.
 
     Raises MusicBrainzUnavailable, after the import, when beets logged that
-    MusicBrainz was unreachable: what it imported stays imported, the rest
-    stays in the inbox."""
+    MusicBrainz was unreachable and left inbox files behind: what it imported
+    stays imported, the rest stays in the inbox.  When it left none (beets
+    runs several searches per singleton, so one 503 rarely costs a match), the
+    errors are only a warning: there is nothing to retry (music-pipeline#286)."""
     if skip_limit is None:
         skip_limit_env = os.environ.get("BEET_SKIP_LIMIT")
         skip_limit = int(skip_limit_env) if skip_limit_env else None
@@ -122,10 +124,17 @@ def run_inbox_import(skip_limit: int | None = None) -> list[tuple[str, str]]:
         imported = lib.items_added_since(import_start)
     logger.info("Newly imported : %d track(s)", len(imported))
     if mb_errors:
-        raise MusicBrainzUnavailable(
-            f"beets could not reach MusicBrainz ({mb_errors} error line(s)); "
-            f"{len(imported)} of {len(inbox_snapshot)} inbox file(s) imported, the rest stay in the inbox",
-            imported,
+        left = sum(1 for f in inbox_snapshot if f.exists())
+        if left:
+            raise MusicBrainzUnavailable(
+                f"beets could not reach MusicBrainz ({mb_errors} error line(s)); "
+                f"{len(imported)} track(s) imported, {left} of {len(inbox_snapshot)} inbox file(s) "
+                "stay in the inbox",
+                imported,
+            )
+        logger.warning(
+            "beets logged %d MusicBrainz error line(s), but left none of the %d inbox file(s) behind",
+            mb_errors, len(inbox_snapshot),
         )
     if inbox_snapshot and not imported:
         logger.warning(
@@ -133,7 +142,7 @@ def run_inbox_import(skip_limit: int | None = None) -> list[tuple[str, str]]:
             "Check ~/.config/beets/import.log for skip details.",
             len(inbox_snapshot),
         )
-    _check_import_names(inbox_snapshot, imported)
+    _check_import_names([f.stem for f in inbox_snapshot], imported)
     return imported
 
 

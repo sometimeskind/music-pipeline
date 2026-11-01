@@ -339,9 +339,9 @@ def test_snapshot_inbox_finds_audio_files(tmp_path: Path) -> None:
     (inbox / "readme.txt").touch()
 
     with mock.patch("music_scan.scan.AUDIO_EXTS", {".m4a", ".flac"}):
-        stems = _snapshot_inbox(inbox)
+        files = _snapshot_inbox(inbox)
 
-    assert stems == ["DJ Koze - Pick Up", "Four Tet - Pyramid"]
+    assert files == [inbox / "DJ Koze - Pick Up.m4a", inbox / "sub" / "Four Tet - Pyramid.flac"]
 
 
 def test_name_words_normalises_correctly() -> None:
@@ -1052,6 +1052,26 @@ def test_run_inbox_import_raises_when_musicbrainz_was_down(tmp_path: Path) -> No
     assert (job / "01-on_sight.flac").exists()
 
 
+def test_run_inbox_import_carries_on_when_musicbrainz_errors_left_nothing_behind(tmp_path: Path) -> None:
+    """beets 503'd on a search but still imported every inbox file: nothing to retry (#286)."""
+    import music_scan.scan as scan
+
+    job = tmp_path / "usenet" / "keep" / "Kanye West-Yeezus-CD-FLAC-2013-PERFECT"
+    job.mkdir(parents=True)
+    (job / "01-on_sight.flac").touch()
+    lib = _make_mock_lib()
+    lib.items_added_since.return_value = [("On Sight", "Kanye West")]
+
+    def import_everything(*_args, **_kwargs) -> int:
+        (job / "01-on_sight.flac").unlink()  # moved into the library (and converted)
+        return 3
+
+    with mock.patch.object(scan, "INBOX", tmp_path), \
+         mock.patch.object(scan, "run_beet_import", side_effect=import_everything), \
+         mock.patch.object(scan, "MusicLibrary", return_value=lib):
+        assert scan.run_inbox_import() == [("On Sight", "Kanye West")]
+
+
 def test_run_marks_a_musicbrainz_outage(tmp_path: Path) -> None:
     """The skipped files stay in the inbox for the next scan, not quarantine (#264)."""
     from music_scan import scan
@@ -1087,6 +1107,49 @@ def test_run_marks_a_musicbrainz_outage(tmp_path: Path) -> None:
     assert captured[0].success is False and captured[0].failure_reason == "musicbrainz_unavailable"
     assert (inbox / "spotdl" / "keep" / "Artist - Song.m4a").exists()
     regen.assert_called_once()
+    rescan.assert_called_once()
+
+
+def test_run_succeeds_when_musicbrainz_errors_left_nothing_behind(tmp_path: Path) -> None:
+    """A scan that imported every inbox file despite MusicBrainz errors is a success (#286)."""
+    from music_scan import scan
+
+    captured = []
+
+    class FakeMetrics(scan.ScanMetrics):
+        def __init__(self):
+            super().__init__()
+            captured.append(self)
+
+        def push(self):
+            pass
+
+    inbox = tmp_path / "inbox"
+    track = inbox / "usenet" / "keep" / "job" / "01-song.flac"
+    track.parent.mkdir(parents=True)
+    track.touch()
+    lib = _make_mock_lib()
+    lib.items_added_since.return_value = [("Song", "Artist")]
+
+    def import_everything(*_args, **_kwargs) -> int:
+        track.unlink()
+        return 3
+
+    with mock.patch("music_scan.scan.MusicLibrary", return_value=lib), \
+         mock.patch("music_scan.scan.run_beet_import", side_effect=import_everything), \
+         mock.patch("music_scan.scan.guard_inbox", return_value={}), \
+         mock.patch("music_scan.scan.UNVERIFIED", tmp_path / "unverified"), \
+         mock.patch("music_scan.scan.INBOX", inbox), \
+         mock.patch("music_scan.scan.SPOTDL_DIR", inbox / "spotdl"), \
+         mock.patch("music_scan.scan.QUARANTINE", tmp_path / "quarantine"), \
+         mock.patch("music_scan.scan.ScanMetrics", FakeMetrics), \
+         mock.patch("music_scan.scan.count_lossless_items", return_value=0), \
+         mock.patch("music_scan.scan.run_beet_update"), \
+         mock.patch("music_scan.scan.regen_playlists"), \
+         mock.patch("music_scan.scan.trigger_scan") as rescan:
+        scan.run()
+
+    assert captured[0].success is True and not captured[0].failure_reason
     rescan.assert_called_once()
 
 
