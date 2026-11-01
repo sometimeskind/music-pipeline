@@ -494,6 +494,8 @@ TOOLS: dict[str, Tool] = {t.name: t for t in [
          lambda a, _: [["music-audit-lengths", "--silence"] if a["silence"] else ["music-audit-lengths"]]),
     Tool("audit_releases", READ, _audit_releases, _audit_releases_argv),
     Tool("audit_want_albums", READ, _none, lambda a, _: [["music-audit-want-albums"]]),
+    # Version-named titles Spotify's slot doesn't name (homelab#2544): no arguments.
+    Tool("audit_titles", READ, _none, lambda a, _: [["music-audit-titles"]]),
     # homelab#2553: an hour-long AcoustID run in the long lane, resumed after a
     # restart from its checkpoint; its findings are applied with apply_recheck.
     Tool("recheck_recordings", READ, _recheck, _recheck_argv, lane="long", resumable=True),

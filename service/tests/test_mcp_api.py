@@ -81,6 +81,9 @@ def test_read_tier_runs_the_audit_dry_runs(client, env):
     assert env["commands"].ran == [["music-audit-lengths", "--silence"]]
     assert resp.json["caller"] == "sub-1" and resp.json["tier"] == "read"
     assert client.post("/mcp-api/run/audit_lengths", json={"apply": True}, headers=WRITE).status_code == 400
+    titles = client.post("/mcp-api/run/audit_titles", json={}, headers=READ)
+    assert titles.status_code == 200 and env["commands"].ran[-1] == ["music-audit-titles"]
+    assert client.post("/mcp-api/run/audit_titles", json={"album": "x"}, headers=READ).status_code == 400
 
 
 # ---------------------------------------------------------------------------

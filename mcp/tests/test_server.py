@@ -19,7 +19,7 @@ TOM = Caller("sub-tom", "write")
 PILOT = Caller("pilot", "read")
 
 READS = {"library_status", "find_albums", "get_album", "get_item", "list_quarantine", "get_playlist",
-         "get_job", "get_guide", "audit_dupes", "audit_lengths", "audit_releases", "audit_want_albums", "recheck_recordings", "search_releases",
+         "get_job", "get_guide", "audit_dupes", "audit_lengths", "audit_releases", "audit_want_albums", "audit_titles", "recheck_recordings", "search_releases",
          "album_history", "digest_summary", "list_overrides", "list_requests", "get_later"}
 WRITES = {"reset_album", "requeue_albums", "merge_items", "replace_item", "unlink_spotify_id", "embed_covers", "canon_albums",
           "apply_recheck",
@@ -106,6 +106,7 @@ async def test_reads_route_to_the_contract(pipeline, fake, tool, args, method, p
     ("audit_releases", {}, "/mcp-api/run/audit_releases", {}),
     ("audit_releases", {"replaced_query": ""}, "/mcp-api/run/audit_releases", {"replaced_query": ""}),
     ("audit_want_albums", {}, "/mcp-api/run/audit_want_albums", {}),
+    ("audit_titles", {}, "/mcp-api/run/audit_titles", {}),
     ("recheck_recordings", {}, "/mcp-api/run/recheck_recordings", {}),
     ("recheck_recordings", {"ids": [6994, 5672]}, "/mcp-api/run/recheck_recordings", {"ids": [6994, 5672]}),
     ("recheck_recordings", {"resume": "3f2a9c0d1e2b4a5c"}, "/mcp-api/run/recheck_recordings",
