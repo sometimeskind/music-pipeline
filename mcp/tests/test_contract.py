@@ -139,6 +139,12 @@ async def test_history_reads(pipeline_url):
         assert history["status"] == "ok" and history["events"] == []  # the harness records none
         assert (await c.call_tool("album_history", {"query": "abbey"})).data["status"] == "ambiguous"
 
+        found = (await c.call_tool("find_events", {"kind": ["import_incomplete", "grab"]})).data
+        assert found["status"] == "ok" and found["kinds"] == ["import_incomplete", "grab"]
+        assert found["counts"] == {} and found["events"] == [] and found["next_offset"] is None
+        with pytest.raises(ToolError, match="unknown event kind"):
+            await c.call_tool("find_events", {"kind": ["imported_maybe"]})
+
         digest = (await c.call_tool("digest_summary", {"since": "2026-10-28T05:00:00Z"})).data
         assert digest["status"] == "ok" and digest["since"] == "2026-10-28T05:00:00Z"
         assert "error" not in digest["history"]

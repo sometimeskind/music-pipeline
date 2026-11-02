@@ -1,4 +1,4 @@
-"""The Music MCP's history reads (homelab#2413): ``album_history`` and ``digest_summary``.
+"""The Music MCP's history reads (homelab#2413): ``album_history``, ``find_events`` and ``digest_summary``.
 
 History is the event store's (:mod:`music_fetch.events`), opened for each
 request.  ``digest_summary``'s library issues come from the album store,
@@ -100,6 +100,51 @@ def album_history(conn, refs: list[str], release_group: str | None, since: str |
         " ORDER BY at DESC, id DESC",
         {"refs": list(refs), "group": release_group, "since": since}).fetchall()
     return [event_view(r) for r in rows]
+
+
+# ---------------------------------------------------------------------------
+# find_events (homelab#2590)
+# ---------------------------------------------------------------------------
+
+# The window find_events reads without a since.
+FIND_DAYS = 7
+
+# Every filter rides the (kind, at) index; item_id and source only narrow what it finds.
+_FIND = (" FROM events WHERE kind = ANY(%(kinds)s)"
+         "   AND at >= %(since)s::timestamptz AND at < %(until)s::timestamptz"
+         "   AND (%(item_id)s::integer IS NULL OR item_id = %(item_id)s::integer)"
+         "   AND (%(source)s::text IS NULL OR source = %(source)s::text)")
+
+
+def find_events(conn, kinds: list[str], since: str, until: str, *, item_id: int | None = None,
+                source: str | None = None, offset: int = 0, limit: int = mcp_reads.PAGE_ENTRIES,
+                data: bool = False) -> tuple[dict[str, int], list[dict]]:
+    """The events of *kinds* in [*since*, *until*): each kind's count over the whole
+    window, and up to *limit* events from *offset*, newest first.  An event names its
+    album by ``data.key`` (the album store's key), its Spotify album ID and release
+    group; *data* keeps the rest of ``data``, which makes the output large."""
+    params = {"kinds": list(kinds), "since": since, "until": until, "item_id": item_id, "source": source}
+    counts = dict(conn.execute("SELECT kind, count(*)" + _FIND + " GROUP BY kind ORDER BY kind",
+                               params).fetchall())
+    rows = conn.execute(
+        f"SELECT {_FIELDS}" + _FIND + " ORDER BY at DESC, id DESC LIMIT %(limit)s OFFSET %(offset)s",  # noqa: S608 — constants
+        {**params, "limit": limit, "offset": offset}).fetchall()
+    return counts, [found_view(r, data) for r in rows]
+
+
+def found_view(row, with_data: bool) -> dict:
+    view = event_view(row)
+    extra = view.pop("data") or {}
+    key = extra.get("key") if isinstance(extra, dict) else None
+    out = {"at": view.pop("at"), "kind": view.pop("kind"), "source": view.pop("source"),
+           "key": None if key is None else str(key), **view}
+    if with_data:
+        out["data"] = extra
+    return out
+
+
+def find_since_default(now: datetime) -> str:
+    return _utc(now - timedelta(days=FIND_DAYS))
 
 
 # ---------------------------------------------------------------------------

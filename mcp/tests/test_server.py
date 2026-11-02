@@ -20,7 +20,7 @@ PILOT = Caller("pilot", "read")
 
 READS = {"library_status", "find_albums", "get_album", "get_item", "list_quarantine", "get_playlist",
          "get_job", "get_guide", "audit_dupes", "audit_lengths", "audit_releases", "audit_want_albums", "audit_titles", "recheck_recordings", "search_releases",
-         "album_history", "digest_summary", "list_overrides", "list_requests", "get_later"}
+         "album_history", "find_events", "digest_summary", "list_overrides", "list_requests", "get_later"}
 WRITES = {"reset_album", "requeue_albums", "merge_items", "replace_item", "unlink_spotify_id", "embed_covers", "canon_albums",
           "apply_recheck",
           "trigger_scan", "trigger_album_tick", "set_search_override", "clear_search_override", "hold_album",
@@ -79,6 +79,12 @@ async def test_tool_surface_is_the_v1_list_and_nothing_irreversible(pipeline):
     ("album_history", {"query": "abbey road"}, "GET", "/mcp-api/album_history", {"query": "abbey road", "offset": "0"}),
     ("album_history", {"query": "ALB1", "since": "2026-10-01T00:00:00Z", "offset": 200}, "GET",
      "/mcp-api/album_history", {"query": "ALB1", "since": "2026-10-01T00:00:00Z", "offset": "200"}),
+    ("find_events", {"kind": ["import_incomplete"]}, "GET", "/mcp-api/find_events",
+     {"kind": "import_incomplete", "offset": "0"}),
+    ("find_events", {"kind": ["grab", "failure"], "since": "2026-10-01T00:00:00Z", "until": "2026-11-01T00:00:00Z",
+                     "item_id": 7, "source": "albums", "data": True, "offset": 200}, "GET", "/mcp-api/find_events",
+     {"kind": "grab,failure", "since": "2026-10-01T00:00:00Z", "until": "2026-11-01T00:00:00Z", "item_id": "7",
+      "source": "albums", "data": "true", "offset": "200"}),
     ("digest_summary", {}, "GET", "/mcp-api/digest_summary", {}),
     ("digest_summary", {"since": "2026-10-28T05:00:00Z"}, "GET", "/mcp-api/digest_summary",
      {"since": "2026-10-28T05:00:00Z"}),

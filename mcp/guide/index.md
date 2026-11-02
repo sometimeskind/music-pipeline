@@ -27,6 +27,14 @@ its events, the last a dropped-record event: look it up by the key, Spotify ID o
 time, plus the library issues standing now. History is kept 90 days, and each album's latest
 20 events longer.
 
+`find_events` answers "how often does X happen" and "which albums had Y" across the library:
+give it one or more event kinds (an incomplete import is kind import_incomplete, a search that
+matched nothing search_miss, a grab grab) and a window (`since`, default the last 7 days). Its
+counts are each kind's total over the whole window, so one call answers "how many"; its events,
+newest first and paged, name each album by key for `get_album` or `album_history`. Ask for
+data only when the message isn't enough: it makes the output large. Use it instead of
+`digest_summary` for any window longer than a day, where the digest lists only 25 per kind.
+
 ## Overrides, holds and pins
 
 `list_overrides` shows the search overrides (an album's Usenet search words), the holds (an

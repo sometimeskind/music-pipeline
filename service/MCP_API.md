@@ -135,6 +135,18 @@ One album's events, newest first. The query resolves as for `get_album` (ambiguo
              "message": "[DONE] The Beatles — Abbey Road: 17 file(s) from …", "data": {"album": "…", "key": "0ETF…", "origin": "album"}}]}
 ```
 
+### `GET /mcp-api/find_events?kind=K[,K…][&since=T][&until=T][&item_id=N][&source=S][&data=true][&offset=N]` (`find_events`)
+
+Events of one or more kinds across all albums, newest first (homelab#2590): "how often does X happen, and to which albums". `kind` is required, comma-separated or repeated, each one of `music_fetch.db.EVENT_KINDS`; an unknown kind is `400` with the known ones listed. The window is `[since, until)`: `since` defaults to 7 days ago, `until` to the next whole second, and the response echoes both, so passing its `until` back with `next_offset` pages one fixed window. `item_id` (a beets item) and `source` (the recording component: `albums`, `scan`, `canon`, `dupes`, `mcp`, …) narrow it further. `counts` is each kind's total over the whole window (not the page) and `total` their sum, so a "how many" question takes one call; a page holds at most 200 events and about 32 KiB. Each event names its album by `key` (the album store's key, the event's `data.key`), `spotify_album_id` and `release_group`, any of which may be null; `data` is included only with `data=true`, since it makes pages much larger. Event store unavailable: `503` as above.
+
+```json
+{"status": "ok", "kinds": ["import_incomplete"], "since": "2026-10-03T00:00:00Z", "until": "2026-11-02T15:04:06Z",
+ "item_id": null, "source": null, "counts": {"import_incomplete": 41}, "total": 41, "offset": 0, "next_offset": null,
+ "events": [{"at": "2026-11-02T03:12:40Z", "kind": "import_incomplete", "source": "albums", "key": "1734",
+             "spotify_album_id": "0ETF…", "release_group": "9162580e-…", "item_id": null, "caller": null, "job_id": null,
+             "message": "[INCOMPLETE] The Beatles — Abbey Road: 15/17 track(s) …"}]}
+```
+
 ### `GET /mcp-api/digest_summary[?since=T]` (`digest_summary`)
 
 What happened since `since` (default: 24 hours ago), and the library issues standing now, for the nightly digest. Every list is `{"total": n, "listed": [first 25]}`.
