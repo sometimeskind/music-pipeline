@@ -96,7 +96,7 @@ from music_fetch import state as statedb
 from music_fetch.ids import spotify_key
 from music_fetch.metrics import _gauge, _push
 from music_fetch.usenet import (
-    Release, clean_album, edition, normalise, rank, readable, search_title, why_none, words,
+    Release, clean_album, edition, normalise, rank, readable, repost_name, search_title, why_none, words,
 )
 
 logger = logging.getLogger(__name__)
@@ -1049,10 +1049,19 @@ def top_up(
             # An incomplete copy is in the library: only the same edition replaces it (#279).
             other_edition = len(ranked)
             ranked = [r for r in ranked if sorted(edition(r.title)) == record["edition"]]
+            reposts = 0
+            if record.get("best_copy"):
+                # An indexer's repost of the kept copy is the same files (homelab#2593).
+                kept = repost_name(record["best_copy"]["title"])
+                reposts = sum(repost_name(r.title) == kept for r in ranked)
+                ranked = [r for r in ranked if repost_name(r.title) != kept]
             if not ranked and record.get("best_copy"):
                 best_copy = record["best_copy"]
-                _done(key, record, label, f": no other copy of {best_copy['title']}'s edition; it is the album, "
-                                     f"lacking {best_copy['missing']} track(s) of its own release")
+                skipped = f" ({reposts} repost(s) of it skipped)" if reposts else ""
+                _done(key, record, label, f": no other copy of {best_copy['title']}'s edition{skipped}; it is the "
+                                     f"album, lacking {best_copy['missing']} track(s) of its own release",
+                      why="no other copy of the edition", reposts=reposts, missing=best_copy["missing"],
+                      lacking=best_copy.get("lacking"))
                 continue
         if not ranked and record.get("reimport"):
             # The library holds the album; a reimport finding nothing better leaves it (#305).
@@ -1634,14 +1643,26 @@ def wrong_album(found: int, total: int) -> bool:
     return total >= WRONG_ALBUM_MIN_TRACKS and found * 2 < total
 
 
-def _done(key: str, record: dict, label: str, note: str) -> str:
+def _done(key: str, record: dict, label: str, note: str, **data) -> str:
+    """The album is imported; *data* (an incomplete copy's ``why``) goes in its event."""
     record["status"] = IMPORTED
     record["imported_at"] = _iso(_now())
     for field in ("best_copy", "edition", "reimport", "gaps", "rejected_tracks"):
         record.pop(field, None)
     logger.info("[DONE] %s%s", label, note)
-    _event("import_done", key, record, f"[DONE] {label}{note}")
+    _event("import_done", key, record, f"[DONE] {label}{note}", **data)
     return IMPORTED
+
+
+def same_gap(kept: dict, copy: dict) -> bool:
+    """Whether *copy* lacks the same tracks of its release as *kept*, the copy
+    it would replace (homelab#2593): the same positions of the same MusicBrainz
+    release when both record them, else the same count.  Then the gap is the
+    edition's, not the upload's, and no other upload of it fills it."""
+    if kept.get("lacking") is not None and copy.get("lacking") is not None \
+            and kept.get("mb_albumid") == copy.get("mb_albumid"):
+        return sorted(kept["lacking"]) == sorted(copy["lacking"])
+    return kept["missing"] == copy["missing"]
 
 
 def complete(
@@ -1674,7 +1695,8 @@ def complete(
       album (``[WRONG]``): its items are retired, and it is blocklisted;
     - a release missing tracks of its own MusicBrainz release is an incomplete
       copy (``[INCOMPLETE]``): blocklisted, and the next release of the same
-      edition is grabbed.  The most complete copy stays in the library; after
+      edition is grabbed.  The most complete copy stays in the library; once a
+      retry lacks the same tracks as it (:func:`same_gap`, homelab#2593), after
       MAX_ATTEMPTS, or when no copy of that edition is left (:func:`top_up`),
       it is the album;
     - anything else is ``[DONE]``, with a note when the tracklist differs from
@@ -1816,15 +1838,20 @@ def complete(
                 tag()
                 retired = f"; {n} item(s) of other copies → quarantine/replaced/" if n else ""
                 return _done(key, record, label, f": {len(titles)} file(s) from {title}{note}{retired}")
-            mine = {"guid": guid, "release": this, "title": title, "missing": missing}
+            mine = {"guid": guid, "release": this, "title": title, "missing": missing,
+                    **{k: v for k in ("mb_albumid", "lacking") if (v := (identity or {}).get(k)) is not None}}
+            same = bool(best) and same_gap(best, mine)
             if best and best["missing"] <= missing:
                 retire(key, record, best.get("release", best["guid"]), None)
-                logger.info("[INCOMPLETE] %s: %s lacks %d track(s) of its own release; %s (%d) stays",
-                            label, title, missing, best["title"], best["missing"])
+                logger.info("[INCOMPLETE] %s: %s lacks %d track(s) of its own release; %s (%d) stays%s",
+                            label, title, missing, best["title"], best["missing"],
+                            "; the same track(s): the edition lacks them" if same else "")
                 _event("import_incomplete", key, record,
                        f"[INCOMPLETE] {label}: {title} lacks {missing} track(s) of its own release; "
-                       f"{best['title']} ({best['missing']}) stays",
-                       release=title, missing=missing, kept=best["title"])
+                       f"{best['title']} ({best['missing']}) stays"
+                       f"{'; the same track(s): the edition lacks them' if same else ''}",
+                       release=title, missing=missing, lacking=mine.get("lacking"), kept=best["title"],
+                       same_gap=same)
             else:
                 retire(key, record, this, None)
                 tag()
@@ -1834,13 +1861,22 @@ def complete(
                 _event("import_incomplete", key, record,
                        f"[INCOMPLETE] {label}: {title} lacks {missing} track(s) of its own release "
                        f"({identity.get('album') or identity.get('mb_albumid')}); kept for now",
-                       release=title, missing=missing, kept=title)
+                       release=title, missing=missing, lacking=mine.get("lacking"), kept=title)
             if guid and guid not in record["blocklist"]:
                 record["blocklist"].append(guid)
             record["attempts"] = record.get("attempts", 0) + 1
+            if same:
+                # Another upload lacked what this one does: no upload of the edition fills it (homelab#2593).
+                return _done(key, record, label, f": {title} lacks the same {missing} track(s) of its own release "
+                                            f"as {best['title']}; the edition lacks them, so {best['title']} is "
+                                            f"the album{note}",
+                             why="edition lacks the same tracks", missing=best["missing"],
+                             lacking=best.get("lacking"), kept=best["title"])
             if record["attempts"] >= MAX_ATTEMPTS:
                 return _done(key, record, label, f": the most complete copy, {best['title']}, lacks {best['missing']} "
-                                            f"track(s) of its own release{note}")
+                                            f"track(s) of its own release{note}",
+                             why="the most complete copy after the last attempt", missing=best["missing"],
+                             lacking=best.get("lacking"), kept=best["title"])
             record["edition"] = sorted(edition(title))
             record["status"] = WANTED
             return WANTED
@@ -1871,7 +1907,9 @@ def complete(
         _event("failure", key, record, f"[FAIL] {label}: {reason} — gave up after {record['attempts']} release(s)",
                reason=reason, attempts=record["attempts"], gave_up=True)
         return _done(key, record, label, f": the most complete copy, {best['title']}, lacks {best['missing']} "
-                                    "track(s) of its own release")
+                                    "track(s) of its own release",
+                     why="the most complete copy after the last attempt", missing=best["missing"],
+                     lacking=best.get("lacking"), kept=best["title"])
     record["status"] = FAILED if record["attempts"] >= MAX_ATTEMPTS else WANTED
     if record["status"] == FAILED:
         logger.warning("[FAIL] %s: %s — gave up after %d release(s)%s", label, reason, record["attempts"],

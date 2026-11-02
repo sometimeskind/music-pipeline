@@ -1396,6 +1396,125 @@ def test_every_copy_incomplete_keeps_the_most_complete(roots, caplog) -> None:
     assert retired == [("r0", None)] and state.albums["a0"]["best_copy"]["guid"] == "r0"
 
 
+def _retry(state, roots, retired, guid, job, identity):
+    """The album's next grab, *guid*, imported from *job* as *identity*."""
+    record = state.albums["a0"]
+    record.update(status=albums.GRABBED, nzo_id=f"nzo-{guid}", candidate={"guid": guid, "title": f"BIG-{job}"})
+    (roots[0] / "album" / job).mkdir(parents=True)
+    (roots[0] / "album" / job / "01.flac").write_bytes(b"x")
+    status, _, _ = run_complete(state, albums.Completion(f"nzo-{guid}", True, f"album/{job}"), roots,
+                                titles=RTD[:-1], retired=retired, identity=identity)
+    return status
+
+
+def test_a_retry_lacking_the_same_tracks_settles_the_album(roots, recorded) -> None:
+    """homelab#2593: Destiny's Child's PERFECT, REPACK and PERFECT-1 all lacked
+    the same track.  The first retry still happens; once it lacks the same
+    tracks, the edition lacks them, and the kept copy is the album."""
+    state = ready_to_die()
+    retired = []
+    identity = {"mb_albumid": "cd94", "album": "Ready to Die", "missing": 1, "lacking": ["1-17"]}
+    status, _, _ = run_complete(state, albums.Completion("nzo1", True, "album/Artist-Album-FLAC"), roots,
+                                titles=RTD[:-1], retired=retired, identity=identity)
+    record = state.albums["a0"]
+    assert status == albums.WANTED  # the first retry still happens
+    assert record["best_copy"]["lacking"] == ["1-17"] and record["best_copy"]["mb_albumid"] == "cd94"
+    kept = record["best_copy"]["release"]
+
+    status = _retry(state, roots, retired, "r2", "Two", dict(identity))
+    assert status == albums.IMPORTED and "best_copy" not in record and "edition" not in record
+    assert retired[-1] == (kept, None)  # the retry goes, the first copy stays
+    assert record["blocklist"] == ["r1", "r2"]
+    (incomplete, _, ikw), (done, message, dkw) = recorded[-2:]
+    assert incomplete == "import_incomplete" and ikw["data"]["same_gap"] is True
+    assert ikw["data"]["lacking"] == ["1-17"]
+    assert done == "import_done" and "lacks the same 1 track(s)" in message and "the edition lacks them" in message
+    assert dkw["data"]["why"] == "edition lacks the same tracks"
+    assert dkw["data"]["kept"] == "The_Notorious_BIG-Ready_To_Die-CD-FLAC-1994"
+    assert dkw["data"]["lacking"] == ["1-17"] and dkw["data"]["missing"] == 1
+
+
+def test_a_retry_lacking_other_tracks_of_the_same_count_retries_again(roots, recorded) -> None:
+    """Another track gone is a broken upload, not the edition: the next copy may fill it."""
+    state = ready_to_die()
+    retired = []
+    run_complete(state, albums.Completion("nzo1", True, "album/Artist-Album-FLAC"), roots, titles=RTD[:-1],
+                 retired=retired, identity={"mb_albumid": "cd94", "album": "Ready to Die", "missing": 1,
+                                            "lacking": ["1-17"]})
+    status = _retry(state, roots, retired, "r2", "Two",
+                    {"mb_albumid": "cd94", "album": "Ready to Die", "missing": 1, "lacking": ["1-3"]})
+    record = state.albums["a0"]
+    assert status == albums.WANTED and record["best_copy"]["guid"] == "r1" and record["attempts"] == 2
+    assert recorded[-1][2]["data"]["same_gap"] is False
+
+
+def test_a_retry_lacking_fewer_tracks_is_kept_and_retries_again(roots, recorded) -> None:
+    state = ready_to_die()
+    retired = []
+    run_complete(state, albums.Completion("nzo1", True, "album/Artist-Album-FLAC"), roots, titles=RTD[:-1],
+                 retired=retired, identity={"mb_albumid": "cd94", "album": "Ready to Die", "missing": 2,
+                                            "lacking": ["1-3", "1-17"]})
+    status = _retry(state, roots, retired, "r2", "Two",
+                    {"mb_albumid": "cd94", "album": "Ready to Die", "missing": 1, "lacking": ["1-17"]})
+    record = state.albums["a0"]
+    assert status == albums.WANTED and record["attempts"] == 2
+    best = record["best_copy"]
+    assert best["guid"] == "r2" and best["missing"] == 1 and best["lacking"] == ["1-17"]
+    assert retired[-1] == (best["release"], None)  # the better copy stays, the first goes
+    assert "kept for now" in recorded[-1][1]
+
+
+def test_a_retry_lacking_as_many_tracks_settles_when_positions_are_unknown(roots, recorded) -> None:
+    """A copy kept before #2593 records no positions: the same count is the same gap."""
+    state = ready_to_die()
+    record = state.albums["a0"]
+    record.update(attempts=1, blocklist=["r0"], edition=[],
+                  best_copy={"guid": "r0", "release": "r0@1000", "title": "older", "missing": 1})
+    retired = []
+    status, _, _ = run_complete(state, albums.Completion("nzo1", True, "album/Artist-Album-FLAC"), roots,
+                                titles=RTD[:-1], retired=retired,
+                                identity={"mb_albumid": "cd94", "album": "Ready to Die", "missing": 1,
+                                          "lacking": ["1-17"]})
+    assert status == albums.IMPORTED and retired == [("r0@1000", None)]
+    assert recorded[-1][2]["data"]["why"] == "edition lacks the same tracks"
+
+
+def test_same_gap_compares_positions_of_one_release_else_counts() -> None:
+    kept = {"missing": 2, "mb_albumid": "cd94", "lacking": ["1-3", "1-17"]}
+    assert albums.same_gap(kept, {"missing": 2, "mb_albumid": "cd94", "lacking": ["1-17", "1-3"]})
+    assert not albums.same_gap(kept, {"missing": 2, "mb_albumid": "cd94", "lacking": ["1-3", "1-9"]})
+    # Another MusicBrainz release numbers its tracks its own way: only the count compares.
+    assert albums.same_gap(kept, {"missing": 2, "mb_albumid": "lp94", "lacking": ["2-1", "2-2"]})
+    assert not albums.same_gap(kept, {"missing": 1})
+    assert albums.same_gap({"missing": 1}, {"missing": 1, "mb_albumid": "cd94", "lacking": ["1-1"]})
+
+
+def test_a_repost_of_the_kept_copy_is_not_another_copy(recorded) -> None:
+    """homelab#2593: PERFECT then PERFECT-1, FiXIE then FiXIE-1, OBZEN then OBZEN-FTP."""
+    state = wanted_state()
+    record = state.albums["a0"]
+    record.update(edition=["remaster"], blocklist=["r0"],
+                  best_copy={"guid": "r0", "title": "Artist-Album-REMASTERED-FLAC-PERFECT", "missing": 1})
+    prowlarr, sab = fakes([release("r2", "Artist-Album-REMASTERED-FLAC-PERFECT-1"),
+                           release("r3", "Artist-Album-REMASTERED-FLAC-PERFECT")])
+    top_up(state, Settings(mode="on"), prowlarr, sab, never_have, albums.TickResult(), now=lambda: NOW)
+    assert record["status"] == albums.IMPORTED and "best_copy" not in record
+    sab.add_url.assert_not_called()
+    kind, message, kw = recorded[-1]
+    assert kind == "import_done" and "(2 repost(s) of it skipped)" in message
+    assert kw["data"]["why"] == "no other copy of the edition" and kw["data"]["reposts"] == 2
+
+    # A REPACK is another upload: it gets its chance.
+    state = wanted_state()
+    record = state.albums["a0"]
+    record.update(edition=["remaster"], blocklist=["r0"],
+                  best_copy={"guid": "r0", "title": "Artist-Album-REMASTERED-FLAC-PERFECT", "missing": 1})
+    prowlarr, sab = fakes([release("r2", "Artist-Album-REMASTERED-FLAC-PERFECT-1"),
+                           release("r4", "Artist-Album-REMASTERED-REPACK-FLAC-PERFECT")])
+    top_up(state, Settings(mode="on"), prowlarr, sab, never_have, albums.TickResult(), now=lambda: NOW)
+    assert record["status"] == albums.GRABBED and record["candidate"]["guid"] == "r4"
+
+
 def test_an_unmatched_file_in_a_complete_release_is_not_missing(roots) -> None:
     """A file beets can't match is imported as it is (import_rest) and counts for nothing."""
     state = ready_to_die()

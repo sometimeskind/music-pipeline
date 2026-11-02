@@ -66,6 +66,19 @@ def test_match_folder_reports_the_closest_release_and_its_missing_tracks(tmp_pat
                                                    "mb_albumartistid": "A1", "mb_albumartistids": ["A1"]}
 
 
+def test_match_folder_says_where_the_missing_tracks_sit(tmp_path, ffmpeg) -> None:
+    """homelab#2593: a retry lacking the same positions lacks the edition's tracks."""
+    files = [_m4a(tmp_path / "01.m4a")]
+    match = _match(0.05, "CD94")
+    match.extra_tracks = [SimpleNamespace(medium=1, medium_index=3), SimpleNamespace(medium=2, medium_index=10)]
+    found = release.match_folder(files, tag_album=lambda s: SimpleNamespace(candidates=[match]))
+    assert found["missing"] == 2 and found["lacking"] == ["1-3", "2-10"]
+    # One beets didn't place: no positions, the count stands.
+    match.extra_tracks = [SimpleNamespace(medium=1, medium_index=3), SimpleNamespace(medium=None, medium_index=None)]
+    found = release.match_folder(files, tag_album=lambda s: SimpleNamespace(candidates=[match]))
+    assert found["missing"] == 2 and "lacking" not in found
+
+
 def test_match_folder_with_no_close_release_identifies_nothing(tmp_path, ffmpeg) -> None:
     files = [_m4a(tmp_path / "01.m4a")]
     assert release.match_folder(files, tag_album=lambda s: SimpleNamespace(candidates=[_match(0.4)])) is None

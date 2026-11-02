@@ -189,6 +189,17 @@ def edition(text: str) -> frozenset[str]:
     return frozenset(_EDITION_WORDS[w] for w in words(text) if w in _EDITION_WORDS)
 
 
+# What an indexer appends to a repost's name: ``-1``, ``.1``, ``-FTP`` (homelab#2593).
+_REPOST_SUFFIX = re.compile(r"(?:[-.][1-9]|-ftp)$", re.IGNORECASE)
+
+
+def repost_name(title: str) -> str:
+    """A release title without the suffix an indexer gives a repost of it
+    (homelab#2593): ``Artist-Album-FLAC-PERFECT-1`` → ``artist-album-flac-perfect``.
+    Only one suffix goes, and only those: a year (``-2006``) or a REPACK stays."""
+    return _REPOST_SUFFIX.sub("", title.strip()).lower()
+
+
 def edition_miss(release: Release, album: str) -> int:
     """How far the release's edition is from the Spotify album's: edition
     words one names and the other doesn't.  0 is the same edition."""

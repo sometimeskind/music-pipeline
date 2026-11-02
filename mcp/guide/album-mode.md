@@ -47,7 +47,9 @@ Search the album's name in the log. The import logs `[RELEASE]`/`[NOMB]`, then o
   `quarantine/replaced/`. `[LOCAL]` keeps copies the release lacks as extras.
 - `[WRONG]`: the release is blocklisted and the next tick grabs the next one, up to 3
   releases. Then the album is `failed` and falls back to spotdl. `[INCOMPLETE]`: the copy is
-  kept while a more complete copy of the same edition is tried. No action for either.
+  kept while a more complete copy of the same edition is tried (not a repost of it: `-1`,
+  `-FTP`). Once a retry lacks the same tracks, the edition lacks them: the kept copy is the
+  album (`[DONE] … the edition lacks them`, its event's `why`). No action for either.
 - `[RETRY] … (n/12)` with `musicbrainz_unavailable`: MusicBrainz is answering 503. The job
   stays grabbed and is retried once it has been grabbed for 1 h. The 13th deferral blames the
   release.
