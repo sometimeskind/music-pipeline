@@ -165,7 +165,7 @@ def test_beet_import_task_returns_imported():
         result = beet_import_task()
         assert result == [("Title", "Artist")]
         mock_scan.run_inbox_import.assert_called_once()
-        mock_concurrency.assert_called_once_with("beet-import", occupy=1)
+        mock_concurrency.assert_called_once_with("beet-import", occupy=1, timeout_seconds=5)
 
 
 def test_quarantine_task_calls_quarantine():
@@ -724,3 +724,70 @@ def test_album_request_recordings_reads_the_stamped_items_once():
     # An album playlist's copies, on its Spotify album, before the cutover made it a request's.
     assert recordings("9", {"spotify_album_ids": ["sp1"]}) == {"r5"}
     lib.all_items.assert_called_once()
+
+
+def test_hold_takes_a_free_slot_without_a_wait_line():
+    from music_service import flows
+    with patch.object(flows, "concurrency") as mock_concurrency, \
+         patch.object(flows, "get_run_logger") as mock_logger:
+        with flows.hold("pipeline"):
+            pass
+    mock_concurrency.assert_called_once_with("pipeline", occupy=1, timeout_seconds=flows.SKIP_IF_BUSY_SECONDS)
+    mock_logger.assert_not_called()
+
+
+def test_hold_says_it_waits_for_a_held_slot():
+    """homelab#2596: a flow waiting on a slot was silent."""
+    from music_service import flows
+    busy, free = MagicMock(), MagicMock()
+    busy.__enter__.side_effect = TimeoutError
+    with patch.object(flows, "concurrency", side_effect=[busy, free]) as mock_concurrency, \
+         patch.object(flows, "get_run_logger") as mock_logger:
+        with flows.hold("albums"):
+            free.__enter__.assert_called_once()
+    assert mock_concurrency.call_args_list[1] == (("albums",), {"occupy": 1})
+    free.__exit__.assert_called_once()
+    lines = [c.args[0] % c.args[1:] for c in mock_logger.return_value.info.call_args_list]
+    assert lines[0] == "[WAIT] The albums slot is held by another run; waiting for it"
+    assert lines[1].startswith("[WAIT] Got the albums slot after ")
+
+
+def test_hold_does_not_retry_a_timeout_from_its_block():
+    from music_service import flows
+    with patch.object(flows, "concurrency") as mock_concurrency, \
+         patch.object(flows, "get_run_logger"):
+        with pytest.raises(TimeoutError):
+            with flows.hold("pipeline"):
+                raise TimeoutError
+    mock_concurrency.assert_called_once()
+
+
+def test_hold_waits_for_a_held_limit_then_takes_it():
+    """Against the test server: the timed-out first try leaves the wait working."""
+    import threading
+    import time
+    from prefect import flow
+    from prefect.concurrency.sync import concurrency
+    from music_service import flows
+    _create_limit("hold-held")
+    taken, release = threading.Event(), threading.Event()
+
+    def holder():
+        with concurrency("hold-held", occupy=1):
+            taken.set()
+            release.wait(30)
+
+    thread = threading.Thread(target=holder)
+    thread.start()
+    assert taken.wait(30)
+    threading.Timer(flows.SKIP_IF_BUSY_SECONDS + 2, release.set).start()
+
+    @flow
+    def waiter() -> float:
+        start = time.monotonic()
+        with flows.hold("hold-held"):
+            return time.monotonic() - start
+
+    waited = waiter()
+    thread.join(30)
+    assert waited >= flows.SKIP_IF_BUSY_SECONDS
