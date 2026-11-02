@@ -244,6 +244,14 @@ def _build_frozen(name: str, url: str) -> None:
         logger.error("Could not build the store of nosync playlist %s from Spotify", name, exc_info=True)
 
 
+def _defer_requests(album_state: albums.State, held: frozenset[str], why: str) -> None:
+    """The requests' fallback waits for the next session: each album's event, and one line."""
+    waiting = albums.fallback_deferred(album_state, album_requests.SOURCE, held, why)
+    if waiting:
+        logger.info("==> Album requests: [DEFERRED] %d track(s) from MusicBrainz tracklists wait for the next "
+                    "session: %s", waiting, why)
+
+
 def _sync_requests(album_state: albums.State, held: frozenset[str], metrics: IngestMetrics,
                    track_limit: int | None) -> int:
     """Download the album requests' fallback songs (homelab#2478), built from
@@ -257,8 +265,7 @@ def _sync_requests(album_state: albums.State, held: frozenset[str], metrics: Ing
     if not songs:
         return 0
     if track_limit == 0:
-        logger.info("==> Album requests: [DEFERRED] %d track(s) from MusicBrainz tracklists wait for the next "
-                    "session: the track budget (SYNC_TRACK_LIMIT) went to the playlists", len(songs))
+        _defer_requests(album_state, held, "the track budget (SYNC_TRACK_LIMIT) went to the playlists")
         return 0
     logger.info("==> Album requests: [FALLBACK] %d track(s) from MusicBrainz tracklists", len(songs))
     output_dir = album_requests.UNVERIFIED / album_requests.SOURCE
@@ -453,10 +460,11 @@ def sync_playlists(
         time.sleep(5)
 
     # The requests' fallback runs after the playlists, on what is left of the budget: a spent
-    # budget defers it, and says so (homelab#2478: a backlog of wanted playlist tracks deferred
-    # it every night, without a line).
+    # budget or the soft timeout defers it, recorded as each album's fallback_deferred event
+    # (homelab#2478: a backlog of wanted playlist tracks deferred it every night, unrecorded).
     if _deadline_reached(time.monotonic() - start, soft_timeout):
         logger.info("==> Soft timeout reached — deferring the album requests' fallback to next session")
+        _defer_requests(album_state, held, "the session reached its soft timeout")
     else:
         attempted = _sync_requests(album_state, held, metrics, None if remaining is None else max(remaining, 0))
         if remaining is not None:

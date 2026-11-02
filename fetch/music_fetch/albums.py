@@ -545,10 +545,11 @@ def _release_group(record: dict) -> str | None:
     return record.get("release_group") or ((record.get("release_files") or {}).get("mb") or {}).get("mb_releasegroupid")
 
 
-def _event(kind: str, key: str, record: dict, message: str, **data) -> None:
-    """Record an album's event in the event store (homelab#2413); *message* is its log line."""
+def _event(kind: str, key: str, record: dict, message: str, *, once_hours: int | None = None, **data) -> None:
+    """Record an album's event in the event store (homelab#2413); *message* is its log line.
+    With *once_hours*, the same event in the last *once_hours* hours stands for this one."""
     events.record(kind, message, source="albums", spotify_album_id=statedb.primary_spotify(record),
-                  release_group=_release_group(record),
+                  release_group=_release_group(record), once_hours=once_hours,
                   data={"album": f"{record.get('artist')} — {record.get('name')}", "key": key,
                         "origin": record.get("origin") or "album", **data})
 
@@ -1330,6 +1331,31 @@ def fallback_songs(state: State, playlist: str, songs: list[dict]) -> list[dict]
                 seen.add(song["song_id"])
                 out.append(song)
     return out
+
+
+# A deferral is recorded once a day per album: the nightly defers it at most once a session.
+DEFERRED_ONCE_HOURS = 20
+
+
+def fallback_deferred(state: State, playlist: str, held: Collection[str], why: str) -> int:
+    """Record that the spotdl fallback of each album with songs of *playlist* left
+    (not *held*) waits for the next session, and *why*: a ``fallback_deferred``
+    event per album, at most one a day (homelab#2478).  The requests' fallback
+    runs after the playlists, on what they left of the track budget, so a
+    playlist backlog defers it night after night, and without the event a
+    request stuck in ``fallback`` has nothing in its history to say why.
+    Returns the songs deferred."""
+    total = 0
+    for key, record in state.albums.items():
+        ids = set(_spotdl_tracks(record).get(playlist, []))
+        waiting = [s for s in record.get("album_songs") or [] if s.get("song_id") in ids and s.get("url") not in held]
+        if not waiting:
+            continue
+        total += len(waiting)
+        _event("fallback_deferred", key, record,
+               f"[DEFERRED] {_label(record)}: {len(waiting)} track(s) wait for the next session: {why}",
+               once_hours=DEFERRED_ONCE_HOURS, tracks=len(waiting), why=why)
+    return total
 
 
 def status_counts(state: State) -> dict[str, int]:

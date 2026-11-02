@@ -94,6 +94,9 @@ EVENT_KINDS = (
     # its replaced recording (music-mb-fingerprint --refresh-replaced --apply).
     "album_dropped",
     "recording_refreshed",
+    # Migration 14 (homelab#2478): a request album's spotdl fallback deferred to the
+    # next session (the track budget spent on the playlists, or the soft timeout).
+    "fallback_deferred",
 )
 
 MIGRATIONS: list[str] = [
@@ -376,6 +379,18 @@ MIGRATIONS: list[str] = [
         'album_requested', 'later_added', 'later_removed', 'spotify_id_resolved',
         'filled', 'wrong_version', 'moved', 'override_set', 'override_cleared',
         'state_edited', 'recording_replaced', 'album_dropped', 'recording_refreshed'));
+    """,
+    # 14: the fallback_deferred kind (homelab#2478).
+    """
+    ALTER TABLE events DROP CONSTRAINT events_kind_check;
+    ALTER TABLE events ADD CONSTRAINT events_kind_check CHECK (kind IN (
+        'import_done', 'import_wrong', 'import_incomplete', 'import_lost',
+        'retire', 'local', 'merge', 'clash', 'mixed',
+        'grab', 'autoreset', 'fallback', 'failure', 'reject', 'mcp_job',
+        'album_requested', 'later_added', 'later_removed', 'spotify_id_resolved',
+        'filled', 'wrong_version', 'moved', 'override_set', 'override_cleared',
+        'state_edited', 'recording_replaced', 'album_dropped', 'recording_refreshed',
+        'fallback_deferred'));
     """,
 ]
 

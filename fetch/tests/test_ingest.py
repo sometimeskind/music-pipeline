@@ -1000,14 +1000,17 @@ def test_a_spent_budget_defers_the_requests_fallback_and_says_so(tmp_path: Path,
     conf = tmp_path / "playlists.conf"
     conf.write_text("aaaaaaah  https://open.spotify.com/playlist/A000000000000000000000\n", encoding="utf-8")
     songs = [{"url": album_requests.recording_url(f"r{i}"), "song_id": f"r{i}", "name": f"T{i}"} for i in range(3)]
-    _seed_albums({"7": {"status": albums.FALLBACK, "origin": albums.REQUEST, "album_songs": songs,
+    _seed_albums({"7": {"status": albums.FALLBACK, "origin": albums.REQUEST, "artist": "Band", "name": "Transa",
+                        "album_songs": songs,
                         "fallback_tracks": {album_requests.SOURCE: ["r0", "r1", "r2"]}}})
 
     def fake_sync(name, track_limit=None, **_kwargs):
         return SyncResult(set(), track_limit, track_limit, 0, 0, {})
 
     fallback = mock.Mock()
-    with mock.patch.object(ingest, "SPOTDL_DIR", spotdl_dir), \
+    recorded = []
+    with mock.patch.object(albums.events, "record", lambda kind, message, **kw: recorded.append((kind, message, kw))), \
+         mock.patch.object(ingest, "SPOTDL_DIR", spotdl_dir), \
          mock.patch.object(ingest, "CONF_PATH", conf), \
          mock.patch.object(ingest, "COOKIE_FILE", tmp_path / "cookies.txt"), \
          mock.patch.object(album_requests, "UNVERIFIED", tmp_path / "unverified"), \
@@ -1019,6 +1022,12 @@ def test_a_spent_budget_defers_the_requests_fallback_and_says_so(tmp_path: Path,
 
     fallback.assert_not_called()
     assert "Album requests: [DEFERRED] 3 track(s) from MusicBrainz tracklists wait for the next session" in caplog.text
+    # Each album's own event (homelab#2478), so album_history says why its request waits; once a day.
+    (kind, message, kw), = recorded
+    assert kind == "fallback_deferred" and message.startswith("[DEFERRED] Band — Transa (request): 3 track(s) wait")
+    assert kw["once_hours"] == albums.DEFERRED_ONCE_HOURS
+    assert kw["data"]["key"] == "7" and kw["data"]["tracks"] == 3
+    assert kw["data"]["why"] == "the track budget (SYNC_TRACK_LIMIT) went to the playlists"
 
 
 def test_sync_playlists_downloads_the_requests_fallback_into_unverified_after_the_playlists(tmp_path: Path) -> None:
