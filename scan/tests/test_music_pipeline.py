@@ -32,12 +32,14 @@ def _make_plugin() -> MusicPipelinePlugin:
     plugin._pending_via = {}
     plugin._pending_job = {}
     plugin._file_tags = {}
+    plugin._retitled = {}
     return plugin
 
 
 def _item(path: str | bytes, sources: str = "", via: str = "", title: str = "") -> MagicMock:
     """Mock beets Item with a path and readable/writable flexible attributes."""
     m = MagicMock()
+    m.id = 0  # item_imported's item is stored: its events name it
     m.path = path
     m.title = title
     data = {"sources": sources, "via": via}
@@ -1297,3 +1299,116 @@ def test_beets_keeps_the_item_object_from_created_to_apply(monkeypatch, tmp_path
     assert seen == [("Oh! Sweet Nuthin' (5.1 mix)", None)]
     stored, = lib.items()
     assert (stored.title, stored.trackdisambig, stored.mb_trackid) == ("Oh! Sweet Nuthin'", "", "d0063aee")
+
+
+# ---------------------------------------------------------------------------
+# imported and retitled events (homelab#2590)
+# ---------------------------------------------------------------------------
+
+def _recorded(monkeypatch) -> list:
+    from music_scan import music_pipeline
+
+    recorded = []
+    monkeypatch.setattr(music_pipeline.events, "record", lambda kind, message, **kw: recorded.append((kind, message, kw)))
+    return recorded
+
+
+def _stored(plugin, item, item_id: int, path: str) -> None:
+    """item_imported: beets stored the item (it has an ID) and moved its file."""
+    item.id = item_id
+    item.path = path.encode()
+    with patch.object(type(item), "store"):
+        plugin.tag_source_on_stored(lib=MagicMock(), item=item)
+
+
+def test_a_title_put_back_is_a_retitled_event_on_the_stored_item(monkeypatch) -> None:
+    recorded = _recorded(monkeypatch)
+    plugin = _make_plugin()
+    item = _file(f"{DYLAN}/1-05 - Romance in Durango.flac", DURANGO, track=5)
+    task = _created(plugin, item)
+    _match(item, title=BABE, trackdisambig="live, 1975-11-20", mb_trackid="babe-rec")
+    plugin.restore_file_title(session=MagicMock(), task=task)
+    assert recorded == []  # no item ID yet: the event waits for item_imported
+
+    _stored(plugin, item, 77, "/root/Music/library/Bob Dylan/Live 1975/1-05 - Romance in Durango.flac")
+
+    (kind, message, kw), = recorded
+    assert kind == "retitled" and kw["item_id"] == 77 and kw["source"] == "import"
+    assert message == f"[TITLE] {BABE} → {DURANGO} (recording dropped)"
+    data = kw["data"]
+    assert (data["matched"], data["title"], data["trackdisambig"]) == (BABE, DURANGO, "live, 1975-11-20")
+    assert data["recording_dropped"] is True and data["dropped_mb_trackid"] == "babe-rec"
+    assert data["usenet_job"] == DYLAN.rsplit("/", 1)[1]
+    assert plugin._retitled == {}
+
+
+def test_a_cleared_trackdisambig_alone_is_a_retitled_event(monkeypatch) -> None:
+    recorded = _recorded(monkeypatch)
+    plugin = _make_plugin()
+    item = _file(f"{LOADED}/03 - Don't Ask For The Water.flac", "Don't Ask For The Water", track=3)
+    task = _created(plugin, item)
+    _match(item, title="Don’t Ask for the Water", trackdisambig="live", mb_trackid="water-rec")
+    plugin.restore_file_title(session=MagicMock(), task=task)
+
+    _stored(plugin, item, 78, "/root/Music/library/Artist/Album/03 - Don’t Ask for the Water.flac")
+
+    retitled = [(m, kw) for kind, m, kw in recorded if kind == "retitled"]
+    assert retitled == [("[TITLE] Don’t Ask for the Water: trackdisambig 'live' cleared", retitled[0][1])]
+    assert retitled[0][1]["data"]["recording_dropped"] is False
+    assert retitled[0][1]["data"]["dropped_mb_trackid"] is None
+    # A Usenet item is one of a release: its album's [DONE] stands for the import.
+    assert [kind for kind, _, _ in recorded] == ["retitled"]
+
+
+def test_a_title_left_as_matched_records_nothing(monkeypatch) -> None:
+    recorded = _recorded(monkeypatch)
+    plugin = _make_plugin()
+    item = _file(f"{LOADED}/12 - In My Time Of Need.flac", "In My Time Of Need", track=12)
+    task = _created(plugin, item)
+    _match(item, title="In My Time of Need", trackdisambig="", mb_trackid="need-rec")
+    plugin.restore_file_title(session=MagicMock(), task=task)
+
+    _stored(plugin, item, 79, "/root/Music/library/Artist/Album/12 - In My Time of Need.m4a")
+
+    assert recorded == [] and plugin._retitled == {}
+
+
+def test_a_spotdl_import_is_an_imported_event(monkeypatch) -> None:
+    recorded = _recorded(monkeypatch)
+    plugin = _make_plugin()
+    plugin._pending_sources = {"my track": "jazz"}
+    plugin._pending_spotdl = {"my track": SpotdlTags(URL_X, "GBAAA001001")}
+    item = _item("/root/Music/library/Artist/Album/03 - My Track.m4a", title="My Track")
+    item.id = 42
+
+    plugin.tag_source_on_stored(lib=MagicMock(), item=item)
+
+    (kind, message, kw), = recorded
+    assert kind == "imported" and kw["item_id"] == 42 and kw["source"] == "import"
+    assert message.startswith("[IMPORTED] jazz: ")
+    assert kw["data"]["playlist"] == "jazz" and kw["data"]["spotify_ids"] == ["X"]
+    assert kw["data"]["fallback_recording"] is None
+
+
+def test_a_request_fallback_import_says_its_recording_was_verified(monkeypatch) -> None:
+    recorded = _recorded(monkeypatch)
+    plugin = _make_plugin()
+    plugin._pending_sources = {"song": "request"}
+    plugin._pending_spotdl = {"song": SpotdlTags(REC_URL, None)}
+    item = _item("/root/Music/library/Band/Album/01 - Song.m4a", title="Song")
+
+    plugin.tag_source_on_stored(lib=MagicMock(), item=item)
+
+    (kind, message, kw), = recorded
+    assert kind == "imported" and message.endswith(f"(fallback, recording {REC} verified)")
+    assert kw["data"]["fallback_recording"] == REC and kw["data"]["mb_trackid"] == REC
+
+
+def test_an_item_from_no_playlist_records_nothing(monkeypatch) -> None:
+    recorded = _recorded(monkeypatch)
+    plugin = _make_plugin()
+    item = _item("/root/Music/library/Artist/Album/track.m4a", title="Track")
+
+    plugin.tag_source_on_stored(lib=MagicMock(), item=item)
+
+    assert recorded == []

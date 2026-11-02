@@ -109,6 +109,11 @@ EVENT_KINDS = (
     "status_changed",
     "album_queued",
     "album_merged",
+    # Migration 16 (homelab#2590): a spotdl download imported into the library (one
+    # item, the nightly's or a request's verified fallback), and a Usenet item's
+    # title or trackdisambig put back from its file at import (the [TITLE] lines).
+    "imported",
+    "retitled",
 )
 
 MIGRATIONS: list[str] = [
@@ -417,6 +422,19 @@ MIGRATIONS: list[str] = [
         'state_edited', 'recording_replaced', 'album_dropped', 'recording_refreshed',
         'fallback_deferred', 'reset', 'requeued', 'replaced', 'search_miss', 'status_changed',
         'album_queued', 'album_merged'));
+    """,
+    # 16: the imported and retitled kinds (homelab#2590).
+    """
+    ALTER TABLE events DROP CONSTRAINT events_kind_check;
+    ALTER TABLE events ADD CONSTRAINT events_kind_check CHECK (kind IN (
+        'import_done', 'import_wrong', 'import_incomplete', 'import_lost',
+        'retire', 'local', 'merge', 'clash', 'mixed',
+        'grab', 'autoreset', 'fallback', 'failure', 'reject', 'mcp_job',
+        'album_requested', 'later_added', 'later_removed', 'spotify_id_resolved',
+        'filled', 'wrong_version', 'moved', 'override_set', 'override_cleared',
+        'state_edited', 'recording_replaced', 'album_dropped', 'recording_refreshed',
+        'fallback_deferred', 'reset', 'requeued', 'replaced', 'search_miss', 'status_changed',
+        'album_queued', 'album_merged', 'imported', 'retitled'));
     """,
 ]
 

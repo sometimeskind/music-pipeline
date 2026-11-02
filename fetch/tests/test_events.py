@@ -201,17 +201,31 @@ def test_an_image_before_migration_14_runs_on_schema_14(pg_url, monkeypatch, cap
 @needs_pg
 def test_an_image_before_migration_15_runs_on_schema_15(pg_url, monkeypatch, caplog):
     """The rollback path for homelab#2590: migration 15 only widens the kinds."""
+    full = db.MIGRATIONS
+    monkeypatch.setattr(db, "MIGRATIONS", full[:15])
     with psycopg.connect(pg_url, autocommit=True) as conn:
         assert db.migrate(conn) == 15
-    monkeypatch.setattr(db, "MIGRATIONS", db.MIGRATIONS[:14])
+    monkeypatch.setattr(db, "MIGRATIONS", full[:14])
     with db.connect(pg_url) as conn:
         assert db.migrate(conn) == 15
         events.insert(conn, "fallback_deferred", "[DEFER] A — B", source="albums")
     assert "music database is at schema 15, this image knows 14" in caplog.text
 
 
+@needs_pg
+def test_an_image_before_migration_16_runs_on_schema_16(pg_url, monkeypatch, caplog):
+    """The rollback path for the imported and retitled kinds: migration 16 only widens the kinds."""
+    with psycopg.connect(pg_url, autocommit=True) as conn:
+        assert db.migrate(conn) == 16
+    monkeypatch.setattr(db, "MIGRATIONS", db.MIGRATIONS[:15])
+    with db.connect(pg_url) as conn:
+        assert db.migrate(conn) == 16
+        events.insert(conn, "album_queued", "[QUEUED] 1 A — B: new wants record", source="albums")
+    assert "music database is at schema 16, this image knows 15" in caplog.text
+
+
 NEW_KINDS = ("album_dropped", "recording_refreshed", "fallback_deferred", "reset", "requeued", "replaced",
-             "search_miss", "status_changed", "album_queued", "album_merged")
+             "search_miss", "status_changed", "album_queued", "album_merged", "imported", "retitled")
 
 
 @needs_pg
