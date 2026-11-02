@@ -739,17 +739,66 @@ def test_the_apply_refreshes_each_replaced_items_fields_with_its_event(pg_url, m
 
 
 @needs_pg
-def test_a_failed_lookup_still_replaces_and_leaves_the_fields(pg_url, monkeypatch, caplog):
+def test_a_failed_lookup_leaves_the_guess(pg_url, monkeypatch, caplog):
+    """homelab#2583: the lookup is the check that the new recording is the same song, so
+    an item it couldn't check keeps its guess until a run again."""
     caplog.set_level("INFO")
     monkeypatch.setattr(mbf, "musicbrainz_recordings", lambda: _recordings(fails={STEREO}))
     items = _library()
     _, flagged = _recheck(items, _lookup())
-    assert mbf.replace(FakeLib(items), flagged) == 3
+    assert mbf.replace(FakeLib(items), flagged) == 1
     by_id = {i.id: i for i in items}
-    assert by_id[6994]["mb_trackid"] == STEREO and by_id[6994]["title"] == "Oh! Sweet Nuthin’ (5.1 mix)"
-    assert by_id[5672]["title"] == "The Big Country"
-    assert "refreshed" not in {r[2]: r[4] for r in _events(pg_url)}[6994]
+    assert by_id[6994]["mb_trackid"] == SURROUND and by_id[6994]["title"] == "Oh! Sweet Nuthin’ (5.1 mix)"
+    assert by_id[5672]["mb_trackid"] == LIVE and by_id[5672]["title"] == "The Big Country"
+    assert [r[2] for r in _events(pg_url)] == [5672]
     assert "[NOREFRESH] 6994" in caplog.text
+    assert ("[SKIP] 6994 — Oh! Sweet Nuthin’ (5.1 mix): MusicBrainz couldn't be asked whether its new recording "
+            f"is the same song; run it again; mb_trackid {SURROUND} left alone") in caplog.text
+
+
+ANOTHER_SONG = {**RECORDINGS, STEREO: {"id": STEREO, "title": "Tu Is Tarah Se Mere Zindagi Main", "disambiguation": ""}}
+
+
+@needs_pg
+def test_a_recording_naming_another_song_is_not_replaced(pg_url, monkeypatch, caplog):
+    """homelab#2583: the 2026-10-31 apply gave 9127 *The Skin of My Yellow Country Teeth*
+    a recording titled "Tu Is Tarah Se Mere Zindagi Main" (an AcoustID collision)."""
+    caplog.set_level("INFO")
+    monkeypatch.setattr(mbf, "musicbrainz_recordings", lambda: _recordings(ANOTHER_SONG))
+    items = _library()
+    _, flagged = _recheck(items, _lookup())
+    assert mbf.replace(FakeLib(items), flagged) == 1
+    by_id = {i.id: i for i in items}
+    assert by_id[6994]["mb_trackid"] == SURROUND and not by_id[6994].written
+    assert [r[2] for r in _events(pg_url)] == [5672]
+    assert "[SUSPECT] 6994" in caplog.text
+    assert ("[SKIP] 6994 — Oh! Sweet Nuthin’ (5.1 mix): its new recording names another song; check it by hand; "
+            f"mb_trackid {SURROUND} left alone") in caplog.text
+
+
+@needs_pg
+def test_a_recorded_runs_apply_leaves_another_song_with_its_outcome(pg_url, monkeypatch, caplog):
+    caplog.set_level("INFO")
+    items = _library()
+    lib = RunLib(items)
+    _recorded_run(pg_url, monkeypatch, lib)
+    monkeypatch.setattr(mbf, "musicbrainz_recordings", lambda: _recordings(ANOTHER_SONG, fails={LIVE}))
+    counts = mbf.replace_run("r1", apply=True)
+    assert counts["replaced"] == 0 and counts["skipped"] == 3 and (counts["suspect"], counts["norefresh"]) == (2, 1)
+    by_id = {i.id: i for i in items}
+    assert (by_id[6994]["mb_trackid"], by_id[6930]["mb_trackid"], by_id[5672]["mb_trackid"]) == (
+        SURROUND, SURROUND, ALTERNATE)
+    another, unasked = ("its new recording names another song; check it by hand",
+                        "MusicBrainz couldn't be asked whether its new recording is the same song; run it again")
+    assert _rows(pg_url, "SELECT item_id, outcome, outcome_reason FROM recheck_findings "
+                         "WHERE replacement IS NOT NULL ORDER BY item_id") == [
+        (5672, "skipped", unasked), (6930, "skipped", another), (6994, "skipped", another)]
+    assert "not replaced: 1 whose MusicBrainz lookup failed (run it again), 2 [SUSPECT]" in caplog.text
+    assert _events(pg_url) == []
+
+    monkeypatch.setattr(mbf, "musicbrainz_recordings", lambda: _recordings())
+    again = mbf.replace_run("r1", apply=True)  # each is tried again: now the recordings are the same songs
+    assert again["replaced"] == 3 and by_id[5672]["mb_trackid"] == LIVE and by_id[6994]["mb_trackid"] == STEREO
 
 
 # --- --refresh-replaced: the items replaced before the refresh existed ---

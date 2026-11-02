@@ -49,11 +49,12 @@ the library, its `mb_trackid` changed, or its file changed since the check: rech
 The apply also refreshes each replaced item's `trackdisambig` and `title` from its new recording
 on MusicBrainz (`[REFRESH]`, about a second an item); a Usenet album track keeps its file's own
 title unless it names a version (5.1, live, demo…) the recording doesn't. A
-`[NOREFRESH]` item (its MusicBrainz lookup failed) is replaced anyway; its fields are caught up
-by the operator's `music-mb-fingerprint --refresh-replaced` on the workstation. A `[SUSPECT]`
-item's new recording names another song: it is replaced but not retitled. Show it to the user:
-either the recheck matched the wrong recording (an AcoustID collision) or the file is a wrong
-download (`replace_item`); never retitle it to the other song.
+`[NOREFRESH]` item (its MusicBrainz lookup failed) is not replaced, since nothing checked that
+its new recording is the same song: apply the run again later to retry it. A `[SUSPECT]` item's
+new recording names another song: it is not replaced either (`[SKIP]`). The dry run doesn't
+know either kind yet (it makes no MusicBrainz call) and lists them as `[WOULD-REPLACE]`. Show a
+`[SUSPECT]` to the user: either the recheck matched the wrong recording (an AcoustID collision)
+or the file is a wrong download (`replace_item`); never retitle it to the other song.
 The apply is refused for a run not finished or finished more than 7 days ago: run a new one. An
 apply cut short by a restart is resumed and checks each item again. Run again by hand, one that
 already holds its replacement shows `[DONE]`.
