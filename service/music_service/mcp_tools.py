@@ -93,14 +93,14 @@ def _ids(value, name: str) -> list[int]:
     return sorted({_id(v, name) for v in value})
 
 
-def utc_iso(value) -> str:
+def utc_iso(value, name: str = "since") -> str:
     """ISO 8601 *value* in UTC (UTC when it has no offset), to the second."""
     if not isinstance(value, str) or not value.strip():
-        raise BadRequest("since must be an ISO 8601 time")
+        raise BadRequest(f"{name} must be an ISO 8601 time")
     try:
         t = datetime.fromisoformat(value.strip().replace("Z", "+00:00"))
     except ValueError as exc:
-        raise BadRequest(f"since is not ISO 8601: {value!r}") from exc
+        raise BadRequest(f"{name} is not ISO 8601: {value!r}") from exc
     if t.tzinfo is None:
         t = t.replace(tzinfo=timezone.utc)
     return t.astimezone(timezone.utc).isoformat(timespec="seconds")

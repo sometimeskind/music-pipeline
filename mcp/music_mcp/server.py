@@ -198,6 +198,30 @@ def build_server(
                           lambda c: pipeline.get(c, "/album_history", query=query, since=since, offset=offset))
 
     @mcp.tool(annotations={"readOnlyHint": True})
+    async def find_events(
+        kind: Annotated[
+            list[str],
+            Field(description="event kinds, e.g. import_incomplete, search_miss, grab, failure, retire, merge; "
+                              "an unknown one is refused with the list of known kinds", min_length=1),
+        ],
+        since: Annotated[str | None, Field(description="ISO 8601 time; default: the last 7 days")] = None,
+        until: Annotated[str | None, Field(description="ISO 8601 time, not included; default: now. Pass "
+                                                       "the response's until with next_offset to page one window")] = None,
+        item_id: Annotated[int | None, Field(description="only this beets item's events")] = None,
+        source: Annotated[str | None, Field(description="only events from this component, e.g. albums, scan, "
+                                                        "canon, dupes, mcp")] = None,
+        data: Annotated[bool, Field(description="include each event's data (large)")] = False,
+        offset: Offset = 0,
+    ) -> dict:
+        """Events of the given kinds across all albums, newest first: how often something
+        happened and to which albums. counts holds each kind's total over the whole window,
+        not just the page. Each event names its album by key, Spotify album ID and release
+        group (for get_album or album_history), with its item, caller, job and message."""
+        return await call("find_events", lambda c: pipeline.get(
+            c, "/find_events", kind=",".join(kind), since=since, until=until, item_id=item_id, source=source,
+            data="true" if data else None, offset=offset))
+
+    @mcp.tool(annotations={"readOnlyHint": True})
     async def digest_summary(
         since: Annotated[str | None, Field(description="ISO 8601 time; default: the last 24 hours")] = None,
     ) -> dict:

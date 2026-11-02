@@ -411,6 +411,7 @@ def test_no_read_returns_a_credential(client, env, no_event_store):
         "/mcp-api/quarantine": ["/mcp-api/quarantine?kind=unmatched"],
         "/mcp-api/playlists/<name>": ["/mcp-api/playlists/chill"],
         "/mcp-api/album_history": ["/mcp-api/album_history?query=ALB1"],
+        "/mcp-api/find_events": ["/mcp-api/find_events?kind=failure&data=true"],
         "/mcp-api/digest_summary": ["/mcp-api/digest_summary"],
         "/mcp-api/overrides": ["/mcp-api/overrides"],
         "/mcp-api/requests": ["/mcp-api/requests"],
@@ -593,9 +594,117 @@ def test_event_history_returns_no_credential(env, client, event_store):
     reason = f"Max retries exceeded with url: /1/download?apikey={mcp_harness.SECRET}"
     event_store.record("failure", f"[FAIL] Abbey Road: {reason}", source="albums", spotify_album_id="ALB1",
                        data={"reason": reason, "gave_up": True})
-    for path in ["/mcp-api/album_history?query=ALB1", "/mcp-api/digest_summary"]:
+    for path in ["/mcp-api/album_history?query=ALB1", "/mcp-api/digest_summary",
+                 "/mcp-api/find_events?kind=failure", "/mcp-api/find_events?kind=failure&data=true"]:
         resp = client.get(path, headers=READ)
         assert resp.status_code == 200 and mcp_harness.SECRET not in resp.get_data(as_text=True), path
+
+
+def _backdate(message: str, at: str) -> None:
+    from music_fetch import db
+
+    with db.connect() as conn:
+        conn.execute("UPDATE events SET at = %s::timestamptz WHERE message = %s", (at, message))
+
+
+def test_find_events_without_the_event_store_is_unavailable(client, no_event_store):
+    resp = client.get("/mcp-api/find_events?kind=import_incomplete", headers=READ)
+    assert resp.status_code == 503
+    assert resp.get_json()["status"] == "unavailable" and "event store is unavailable" in resp.get_json()["error"]
+
+
+@pytest.mark.parametrize(("query", "error"), [
+    ("", "kind is required"),
+    ("kind=import_incomplete,imported_maybe", "unknown event kind(s) imported_maybe"),
+    ("kind=grab&since=yesterday", "since is not ISO 8601"),
+    ("kind=grab&until=tomorrow", "until is not ISO 8601"),
+    ("kind=grab&item_id=x", "item_id must be an integer"),
+    ("kind=grab&data=maybe", "data must be true or false"),
+    ("kind=grab&offset=-", "offset must be"),
+])
+def test_find_events_refuses_bad_arguments(client, no_event_store, query, error):
+    """Refused before the event store is read: no_event_store would answer 503."""
+    resp = client.get(f"/mcp-api/find_events?{query}", headers=READ)
+    assert resp.status_code == 400 and error in resp.get_json()["error"], resp.get_json()
+
+
+@needs_pg
+def test_find_events_lists_kinds_across_albums_newest_first(client, event_store):
+    event_store.record("import_incomplete", "[INCOMPLETE] old", source="albums", spotify_album_id="ALB1",
+                       data={"key": 611, "missing": 2})
+    event_store.record("grab", "[GRAB] one", source="albums", spotify_album_id="ALB2", data={"key": "612"})
+    event_store.record("import_incomplete", "[INCOMPLETE] new", source="albums", release_group=RG,
+                       data={"key": "613", "missing": 1})
+    event_store.record("retire", "[RETIRE] other kind", source="release", item_id=7)
+    _backdate("[INCOMPLETE] old", "2026-10-01T12:00:00Z")
+    _backdate("[GRAB] one", "2026-10-02T12:00:00Z")
+    _backdate("[INCOMPLETE] new", "2026-10-03T12:00:00Z")
+
+    body = client.get("/mcp-api/find_events?kind=import_incomplete&since=2026-09-01T00:00:00Z",
+                      headers=READ).get_json()
+    assert body["status"] == "ok" and body["kinds"] == ["import_incomplete"]
+    assert body["counts"] == {"import_incomplete": 2} and body["total"] == 2 and body["next_offset"] is None
+    assert body["since"] == "2026-09-01T00:00:00Z" and body["until"].endswith("Z")
+    assert body["events"] == [
+        {"at": "2026-10-03T12:00:00Z", "kind": "import_incomplete", "source": "albums", "key": "613",
+         "spotify_album_id": None, "release_group": RG, "item_id": None, "caller": None, "job_id": None,
+         "message": "[INCOMPLETE] new"},
+        {"at": "2026-10-01T12:00:00Z", "kind": "import_incomplete", "source": "albums", "key": "611",
+         "spotify_album_id": "ALB1", "release_group": None, "item_id": None, "caller": None, "job_id": None,
+         "message": "[INCOMPLETE] old"},
+    ]
+    # Several kinds, repeated or comma-separated; data only when asked.
+    both = client.get("/mcp-api/find_events?kind=grab&kind=import_incomplete&since=2026-09-01T00:00:00Z&data=true",
+                      headers=READ).get_json()
+    assert both["counts"] == {"grab": 1, "import_incomplete": 2}
+    assert [e["message"] for e in both["events"]] == ["[INCOMPLETE] new", "[GRAB] one", "[INCOMPLETE] old"]
+    assert both["events"][0]["data"] == {"key": "613", "missing": 1}
+    assert client.get("/mcp-api/find_events?kind=grab,import_incomplete&since=2026-09-01T00:00:00Z",
+                      headers=READ).get_json()["counts"] == both["counts"]
+    # [since, until): the until bound is left out.
+    window = client.get("/mcp-api/find_events?kind=grab,import_incomplete&since=2026-10-02T00:00:00Z"
+                        "&until=2026-10-03T12:00:00Z", headers=READ).get_json()
+    assert window["counts"] == {"grab": 1} and window["until"] == "2026-10-03T12:00:00Z"
+    # The default window is the last 7 days: only the retire recorded now.
+    recent = client.get("/mcp-api/find_events?kind=retire,import_incomplete", headers=READ).get_json()
+    assert recent["counts"] == {"retire": 1} and recent["events"][0]["item_id"] == 7
+    # The cheap filters: item ID and source.
+    assert client.get("/mcp-api/find_events?kind=retire&item_id=8", headers=READ).get_json()["total"] == 0
+    assert client.get("/mcp-api/find_events?kind=retire&item_id=7&source=release",
+                      headers=READ).get_json()["total"] == 1
+    assert client.get("/mcp-api/find_events?kind=retire&source=albums", headers=READ).get_json()["counts"] == {}
+
+
+@needs_pg
+def test_find_events_pages_and_counts_the_whole_window(client, event_store):
+    from music_service import mcp_reads
+
+    many = mcp_reads.PAGE_ENTRIES + 30
+    for n in range(many):
+        event_store.record("search_miss", f"[MISS] {n}", source="albums", data={"key": str(n), "why": "x" * 50})
+    event_store.record("grab", "[GRAB] one", source="albums")
+
+    def every(query):
+        pages, offset = [], 0
+        while offset is not None:
+            page = client.get(f"/mcp-api/find_events?{query}&offset={offset}", headers=READ).get_json()
+            assert page["events"] and page["offset"] == offset
+            # Every page counts the whole window, not itself.
+            assert page["counts"] == {"grab": 1, "search_miss": many} and page["total"] == many + 1
+            pages.append(page)
+            offset = page["next_offset"]
+        return pages
+
+    plain = every("kind=search_miss,grab")
+    assert len(plain) > 1 and plain[0]["next_offset"] == len(plain[0]["events"])
+    events = [e for page in plain for e in page["events"]]
+    assert all("data" not in e for e in events)
+    assert [e["message"] for e in events] == ["[GRAB] one"] + [f"[MISS] {n}" for n in range(many - 1, -1, -1)]
+    # With data each event is larger, so a page holds fewer (about PAGE_BYTES), and paging still covers every one.
+    full = every("kind=search_miss,grab&data=true")
+    assert len(full[0]["events"]) < len(plain[0]["events"])
+    assert [e["key"] for page in full for e in page["events"]] == [None] + [str(n) for n in range(many - 1, -1, -1)]
+    assert full[0]["events"][1]["data"] == {"key": str(many - 1), "why": "x" * 50}
 
 
 @needs_pg

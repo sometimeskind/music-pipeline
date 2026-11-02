@@ -9,7 +9,7 @@ from __future__ import annotations
 import functools
 import logging
 import os
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from flask import Blueprint, current_app, g, jsonify, request
@@ -41,6 +41,38 @@ def _since() -> str | None:
     """The ``since`` argument as UTC ISO 8601, or None when it isn't given."""
     since = request.args.get("since")
     return None if since is None else utc_iso(since)
+
+
+def _kinds() -> list[str]:
+    """The ``kind`` argument (repeated, or comma-separated) as known event kinds, in order."""
+    from music_fetch import db  # noqa: PLC0415
+
+    kinds = list(dict.fromkeys(k.strip() for v in request.args.getlist("kind") for k in v.split(",") if k.strip()))
+    if not kinds:
+        raise BadRequest(f"kind is required: one or more of {', '.join(db.EVENT_KINDS)}")
+    unknown = [k for k in kinds if k not in db.EVENT_KINDS]
+    if unknown:
+        raise BadRequest(f"unknown event kind(s) {', '.join(unknown)}; known: {', '.join(db.EVENT_KINDS)}")
+    return kinds
+
+
+def _item_id() -> int | None:
+    value = request.args.get("item_id")
+    if value is None or value == "":
+        return None
+    try:
+        return int(value)
+    except ValueError:
+        raise BadRequest("item_id must be an integer") from None
+
+
+def _flag(name: str) -> bool:
+    value = request.args.get(name, "").strip().lower()
+    if value in ("", "0", "false", "no"):
+        return False
+    if value in ("1", "true", "yes"):
+        return True
+    raise BadRequest(f"{name} must be true or false")
 
 
 def _z(iso: str | None) -> str | None:
@@ -253,6 +285,39 @@ def make_blueprint(jobs: mcp_jobs.JobQueue) -> Blueprint:
                                   "status": record.get("status"), "release_group": group},
                         "since": _z(since), "total": len(found), "offset": offset, "next_offset": next_offset,
                         "events": shown})
+
+    @bp.get("/find_events")
+    def find_events():
+        """Events of some kinds across albums (homelab#2590): each kind's count over the
+        window, and one page of the events, newest first."""
+        import psycopg  # noqa: PLC0415
+
+        now = datetime.now(timezone.utc)
+        kinds = _kinds()
+        since = _since() or mcp_history.find_since_default(now)
+        until = request.args.get("until")
+        # Without one, until is the next whole second, so an event recorded this second is in
+        # the window and the response's until, passed back, pages the same window.
+        until = (utc_iso(until, "until") if until is not None
+                 else (now.replace(microsecond=0) + timedelta(seconds=1)).isoformat())
+        item_id = _item_id()
+        source = request.args.get("source") or None
+        data = _flag("data")
+        offset = _offset()
+        read("find_events", kind=",".join(kinds), since=since, until=until, item_id=item_id, source=source,
+             data=data, offset=offset)
+        try:
+            with mcp_history.connect() as conn:
+                counts, found = mcp_history.find_events(conn, kinds, since, until, item_id=item_id, source=source,
+                                                        offset=offset, data=data)
+        except (mcp_history.Unavailable, psycopg.Error) as exc:
+            return jsonify({"status": "unavailable", "error": unavailable(exc)}), 503
+        total = sum(counts.values())
+        shown, _ = mcp_reads.page(found, 0)
+        next_offset = offset + len(shown) if offset + len(shown) < total else None
+        return jsonify({"status": "ok", "kinds": kinds, "since": _z(since), "until": _z(until),
+                        "item_id": item_id, "source": source, "counts": counts, "total": total,
+                        "offset": offset, "next_offset": next_offset, "events": shown})
 
     @bp.get("/digest_summary")
     def digest_summary():
