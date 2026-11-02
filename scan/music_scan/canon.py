@@ -639,8 +639,9 @@ def plan_changes(
                     plan.twin_waiting += 1
                 elif twin is None:
                     plan.apart += 1
-                    logger.info("  [NOTWIN] %s: %s (%s) stays apart from %s: ISRC %s is not on it", _path(item),
-                                p.release.name, p.release.album_id, group.representative.album_id, p.isrc or "?")
+                    # DEBUG: the same items every scan, nothing changes; the Twins line counts them (homelab#2590).
+                    logger.debug("  [NOTWIN] %s: %s (%s) stays apart from %s: ISRC %s is not on it", _path(item),
+                                 p.release.name, p.release.album_id, group.representative.album_id, p.isrc or "?")
                 else:
                     logger.debug("  [TWIN] %s: %s → %s by ISRC %s", _path(item), p.release.album_id,
                                  twin.release.album_id, p.isrc)
@@ -792,15 +793,17 @@ def _plan_fields(item, p: Placement, fields: dict, plan: Plan, dests: dict, in_p
     if dest != _path(item) and (dest in dests or os.path.exists(dest)):
         plan.clashes += 1
         if not in_place:
-            # Moving would overwrite another file: leave this item as it is (a duplicate, #210).
-            logger.warning("  [CLASH] %s → %s: another item already has that path; left as it is",
-                           _path(item), dest)
+            # Moving would overwrite another file: leave this item as it is (a duplicate, #210).  The line
+            # repeats every scan while the clash stands: the once-a-day event is the report, the Changes
+            # line counts them (homelab#2590).
+            logger.debug("  [CLASH] %s → %s: another item already has that path; left as it is",
+                         _path(item), dest)
             _clash_event(item, dest, f"[CLASH] {_path(item)} → {dest}: another item already has that path; "
                                      "left as it is", in_place=False)
             return
         # The release's track stays on its album, where it is; the next scan tries the move again.
-        logger.warning("  [CLASH] %s %s → %s: another item already has that path; tagged in place",
-                       item.id, _path(item), dest)
+        logger.debug("  [CLASH] %s %s → %s: another item already has that path; tagged in place",
+                     item.id, _path(item), dest)
         _clash_event(item, dest, f"[CLASH] {item.id} {_path(item)} → {dest}: another item already has that path; "
                                  "tagged in place", in_place=True, album=fields.get("spotify_album_id"))
         fields[CLASH] = "1"

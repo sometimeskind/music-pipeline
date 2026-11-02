@@ -127,6 +127,10 @@ def test_no_id_match_keeps_both_and_reports(tmp_path, ffmpeg, lib, caplog, field
     assert pairs == [] and [k.item.id for k in kept] == [loose.id]
     supersede.log(pairs, kept, apply=False)
     assert "[KEEP]" in caplog.text
+    # An apply repeats the dry run's decision at every import: DEBUG, out of Loki (homelab#2590).
+    caplog.clear()
+    supersede.log(pairs, kept, apply=True)
+    assert "[KEEP]" not in caplog.text
 
 
 def test_a_recording_id_at_another_length_does_not_supersede(tmp_path, ffmpeg, lib):

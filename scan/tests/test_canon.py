@@ -1053,7 +1053,8 @@ def test_an_album_records_item_whose_path_is_taken_is_tagged_in_place(tmp_path, 
         assert kw["item_id"] == track.id and kw["spotify_album_id"] == "MC30" and kw["once_hours"] == 24
         assert kw["data"]["in_place"] is True
         assert Path(os.fsdecode(item.path)) == stray and item.get("canon_clash") == "1"
-        assert f"[CLASH] {track.id} {stray} →" in caplog.text and "tagged in place" in caplog.text
+        # Every scan sees it again while it stands: the once-a-day event is the report (homelab#2590).
+        assert "[CLASH]" not in caplog.text
         assert Path(os.fsdecode(lib.get_item(extra.id).path)).exists()
         # Still taken: nothing to change, nothing written again.
         assert canon.canonicalize_items([lib.get_item(track.id)], songs, budget=None, records=records) == 0
