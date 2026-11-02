@@ -129,6 +129,8 @@ ALBUM, WANTS, LIBRARY, REQUEST = "album", "wants", "library", "request"
 WAITING = (WANTED, DRY_RUN, MISSING, HAVE)
 
 MISSING_RETRY = timedelta(days=7)
+# A search_miss event stands this long for the same miss: a changed query searches again sooner.
+MISS_EVENT_HOURS = 24
 # Releases tried per album before giving up, so an album beets can't match
 # doesn't burn the grab budget.
 MAX_ATTEMPTS = 3
@@ -453,6 +455,7 @@ def refresh_playlists(
         held: set[str] = set()
         for album_id, album in wanted.items():
             key = refs.get(album_id, album_id)
+            new = key not in state.albums
             record = state.albums.setdefault(key, statedb.new_record(key, status=WANTED, blocklist=[]))
             if record.pop("origin", None) in (WANTS, LIBRARY):
                 # The album playlist wants it whole: its wanted tracks are no longer the point.
@@ -463,6 +466,8 @@ def refresh_playlists(
             tracks = record.setdefault("playlists", {})
             tracks[name] = [*tracks[name], *album["tracks"]] if key in held else album["tracks"]
             held.add(key)
+            if new:
+                _queued(key, record, f"on {name}")
         # Albums this playlist no longer holds.
         for key, record in list(state.albums.items()):
             if key not in held and name in record.get("playlists", {}):
@@ -470,6 +475,7 @@ def refresh_playlists(
                 if not record["playlists"] and not record.get("requested") \
                         and record.get("status") in (WANTED, DRY_RUN, MISSING, HAVE, IMPORTED, FAILED, FALLBACK, FILLED):
                     # A requested album stays: feed_requests gives it the request's tracks (homelab#2478).
+                    _dropped(key, record, f"no album playlist holds it any more (last: {name})", [name])
                     del state.albums[key]
         entry["snapshot_id"] = snapshot
         result.refreshed.append(name)
@@ -554,6 +560,27 @@ def _event(kind: str, key: str, record: dict, message: str, *, once_hours: int |
                         "origin": record.get("origin") or "album", **data})
 
 
+def _queued(key: str, record: dict, why: str) -> None:
+    """A feed created *record* (homelab#2590): its origin, and what put it there."""
+    origin = record.get("origin") or "album playlist"
+    message = f"[QUEUED] {key} {_label(record)}: new {origin} record ({why})"
+    logger.info(message)
+    _event("album_queued", key, record, message, why=why)
+
+
+def _dropped(key: str, record: dict, why: str, playlists: list[str]) -> None:
+    """A feed dropped *record*: its event is all album_history has left of it (homelab#2544, homelab#2590)."""
+    message = f"[DROPPED] {key} {_label(record)}: {why}; record dropped"
+    logger.info(message)
+    _event("album_dropped", key, record, message, status=record.get("status"), playlists=playlists)
+
+
+def _status_changed(key: str, record: dict, was: str | None, message: str, why: str) -> None:
+    """An album's status changed where no other event says so (homelab#2590); nothing when it didn't."""
+    if record.get("status") != was:
+        _event("status_changed", key, record, message, why=why, **{"from": was, "to": record.get("status")})
+
+
 def _track_id(song: dict) -> str:
     return song.get("song_id") or song.get("url") or f"{song.get('name')}/{(song.get('artists') or [''])[0]}"
 
@@ -602,6 +629,7 @@ def feed_wants(
     ranked = sorted((k for k in found if total(k) >= settings.want_min), key=lambda k: (-total(k), found[k]["at"]))
     listed_on: dict[str, set[str]] = {name: set() for name in playlists}
     skipped_on: dict[str, dict[str, int]] = {name: {} for name in playlists}
+    queued: list[str] = []
     for key in ranked:
         on = found[key]["on"]
         record = state.albums.get(key)
@@ -617,6 +645,7 @@ def feed_wants(
             continue
         if record is None:
             record = state.albums[key] = statedb.new_record(key, status=WANTED, blocklist=[], origin=WANTS)
+            queued.append(key)
         elif _library(record):
             # A waiting library record (homelab#2403): the wanted tracks take it over.
             record.update(origin=WANTS, playlists={})
@@ -627,6 +656,8 @@ def feed_wants(
             playlists_of = record.setdefault("playlists", {})
             for name, songs in on.items():
                 playlists_of[name] = [track_entry(s) for s in songs]
+    for key in queued:
+        _queued(key, state.albums[key], f"wanted on {', '.join(found[key]['on'])}")
     for key, record in list(state.albums.items()):
         # A reset to import again (reset_album --reimport) is waiting too, but its album is in the
         # library and its tracks no longer on a want list: pruning it would drop the reimport and
@@ -709,9 +740,14 @@ def feed_library(state: State, library: LibraryAlbums, settings: Settings) -> No
             record["tracks_count"] = record.get("tracks_count") or tracks
             record["references"] = refs
             record["playlists"] = {name: [track_entry(s) for s in songs] for name, songs in on.items()}
+            if key in new:
+                _queued(key, record, f"{refs} track(s) referenced")
     listed = {key for key, *_ in ranked}
     for key, record in list(state.albums.items()):
         if _library(record) and record.get("status") in WAITING and key not in listed:
+            why = ("ALBUM_LIBRARY is off" if mode == "off"
+                   else "no longer queued (fewer references, held whole, or on no playlist)")
+            _dropped(key, record, why, sorted(record.get("playlists", {})))
             del state.albums[key]
     order = [k for k, r in state.albums.items() if not _fed(r)] + [k for k, r in state.albums.items() if _wants(r)]
     order += [k for k, *_ in ranked if k in state.albums]
@@ -946,9 +982,10 @@ def top_up(
             continue
         if not search.queries:
             # Costs nothing, so it is logged even when no slot is free.
-            record.update(status=MISSING if record.get("status") != FALLBACK else FALLBACK,
-                          searched_at=_iso(now()), query="")
+            was = record.get("status")
+            record.update(status=MISSING if was != FALLBACK else FALLBACK, searched_at=_iso(now()), query="")
             logger.warning("[NOWORDS] %s: %s: add a search override", key, label)
+            _status_changed(key, record, was, f"[NOWORDS] {key}: {label}: add a search override", "no search words")
             continue
         # In dry-run, re-checking a sampled miss after its query changed takes no sample slot.
         recheck = settings.mode != "on" and record.get("dry_run") and _requery(record, search)
@@ -956,8 +993,11 @@ def top_up(
             continue
         # A copy kept for now, or a reset to import again, isn't "have" (#279).
         if not (record.get("best_copy") or record.get("reimport")) and have(key, record):
+            was = record.get("status")
             record["status"] = HAVE
             record.pop("lost", None)
+            _status_changed(key, record, was, f"[HELD] {label}: the library holds its tracks; not searched",
+                            "the library holds its tracks")
             continue
         if state.used("hit", now()) >= settings.hits_per_day:
             logger.info("Indexer API budget spent (%d/24h) — stopping", settings.hits_per_day)
@@ -1016,14 +1056,18 @@ def top_up(
                 continue
         if not ranked and record.get("reimport"):
             # The library holds the album; a reimport finding nothing better leaves it (#305).
+            was = record.get("status")
             record["status"] = IMPORTED
             record.pop("reimport", None)
-            logger.info("[STAYS] %s%s: %d result(s), no release left to reimport (%d blocklisted); the album stays "
-                        "as it is", label, search.note, len(releases), len(record["blocklist"]))
+            message = (f"[STAYS] {label}{search.note}: {len(releases)} result(s), no release left to reimport "
+                       f"({len(record['blocklist'])} blocklisted); the album stays as it is")
+            logger.info(message)
+            _status_changed(key, record, was, message, "no release left to reimport")
             continue
         if not ranked:
             # A request's fallback goes on: its gaps stay with spotdl until the next retry.
-            if record.get("status") != FALLBACK:
+            was = record.get("status")
+            if was != FALLBACK:
                 record["status"] = MISSING
             # Why, so a miss can be judged from the log (homelab#2568).
             if other_edition:
@@ -1031,10 +1075,14 @@ def top_up(
                        f"({' '.join(record['edition']) or 'plain'})")
             else:
                 why = why_none(releases, search.artist, search.album, tracks, blocklist, **match_args)
-            logger.info("[MISS] %s%s: %d result(s), none match; queries: %s%s%s",
-                        label, search.note, len(releases), ", ".join(f'"{q}"' for q in sent),
-                        f"; {why}" if why else "",
-                        "; its gaps stay with spotdl" if record["status"] == FALLBACK else _back(record))
+            queries = ", ".join(f'"{q}"' for q in sent)
+            message = (f"[MISS] {label}{search.note}: {len(releases)} result(s), none match; queries: {queries}"
+                       f"{f'; {why}' if why else ''}"
+                       f"{'; its gaps stay with spotdl' if record['status'] == FALLBACK else _back(record)}")
+            logger.info(message)
+            # Why the album wasn't grabbed (homelab#2590); a requery the same day says the same.
+            _event("search_miss", key, record, message, once_hours=MISS_EVENT_HOURS, results=len(releases),
+                   queries=sent, why=why, status=record["status"])
             continue
 
         best: Release = ranked[0]
@@ -1058,6 +1106,8 @@ def top_up(
         except Exception as exc:
             # Release-specific (gone from the indexer, or refused): try the next one later.
             logger.warning("[ERR]  %s: grab of %s failed, blocklisting: %s", label, best.title, exc)
+            _event("failure", key, record, f"[ERR] {label}: grab of {best.title} failed, blocklisting: {exc}",
+                   reason=str(exc), release=best.title, what="grab", gave_up=False)
             record["blocklist"].append(best.guid)
             record["status"] = WANTED
             continue
@@ -1268,8 +1318,10 @@ def fallbacks(state: State, missing: Missing, album_songs: AlbumSongs | None = N
         if _fed(record) or _requested(record):
             continue
         if settle_imported(record):
-            logger.info("[SETTLED] %s — %s: the release is the album; its %s fallback is no longer chased",
-                        record["artist"], record["name"], record["settled_from"])
+            message = (f"[SETTLED] {record['artist']} — {record['name']}: the release is the album; its "
+                       f"{record['settled_from']} fallback is no longer chased")
+            logger.info(message)
+            _status_changed(key, record, FALLBACK, message, "the release is the album")
             continue
         status = record.get("status")
         if status not in (MISSING, FAILED, FALLBACK):
@@ -1419,6 +1471,7 @@ def resolve_keys(state: State, fixes: list[overrides.AlbumOverride] | None = Non
         return None
     if report.rekeyed or report.merged or report.conflicts:
         report.log()
+    report.record_events()  # the tick saves the state it changed
     return report
 
 
@@ -2005,12 +2058,17 @@ def reset_main() -> None:
         fields = ("status", "attempts", "blocklist", "candidate", "nzo_id", "fallback_from", "fallback_tracks",
                   "rejected_tracks", "best_copy", "edition", "reimport")
         logger.info("%s: %s — %s", key, after.get("artist"), after.get("name"))
-        for f in fields:
-            if before.get(f) != after.get(f):
-                logger.info("  %s: %s → %s", f, json.dumps(before.get(f)), json.dumps(after.get(f)))
+        changed = [f for f in fields if before.get(f) != after.get(f)]
+        for f in changed:
+            logger.info("  %s: %s → %s", f, json.dumps(before.get(f)), json.dumps(after.get(f)))
         if args.apply:
             state.save()
             logger.info("Saved; the next album tick searches it again")
+            # A hand reset is why the album is searched again: album_history says so (homelab#2590).
+            _event("reset", key, after, f"[RESET] {_label(after)} ({key}): {before.get('status')} → "
+                                        f"{after.get('status')}{', to import again' if args.reimport else ''}",
+                   reimport=args.reimport, before={f: before.get(f) for f in changed},
+                   after={f: after.get(f) for f in changed})
         else:
             logger.info("Dry run; --apply to write")
 
@@ -2072,15 +2130,20 @@ def requeue_main() -> None:
     with _state_lock(args.apply):
         state = State.load()
         found = requeue(state, since, args.keys)
+        lines = []
         for key, before in found:
             n = sum(len(ids) for ids in before.get("fallback_tracks", {}).values())
-            logger.info("%s: %s — %s (fell back %s): wanted, %d track(s) off the spotdl queue",
-                        key, before.get("artist"), before.get("name"), before.get("fallback_at"), n)
+            line = (f"{key}: {before.get('artist')} — {before.get('name')} (fell back {before.get('fallback_at')}): "
+                    f"wanted, {n} track(s) off the spotdl queue")
+            logger.info(line)
+            lines.append((key, state.albums[key], line, before.get("fallback_at"), n))
         logger.info("%d album(s) to requeue", len(found))
         if not found:
             return
         if args.apply:
             state.save()
             logger.info("Saved; the next album tick searches them again")
+            for key, record, line, at, n in lines:
+                _event("requeued", key, record, f"[REQUEUE] {line}", fell_back_at=at, tracks=n)
         else:
             logger.info("Dry run; --apply to write")

@@ -427,3 +427,18 @@ def test_want_min_zero_turns_the_feed_off_and_drops_the_waiting_records(tmp_path
         tick([], MagicMock(), MagicMock(), MagicMock(), lambda k, r: False, Settings(mode="on", want_min=0),
              want_playlists=["disc"], wants=hook({"disc": [("C", [song(1, "C")])]}, calls))
     assert calls == [] and list(State.load().albums) == ["B"]
+
+
+def test_a_new_wants_record_is_an_event(monkeypatch) -> None:
+    """homelab#2590: album_history says which feed created the record, and why."""
+    recorded = []
+    monkeypatch.setattr(albums.events, "record", lambda kind, message, **kw: recorded.append((kind, message, kw)))
+    state = State()
+    feed_wants(state, ["disc"], hook({"disc": [("A", [song(3), song(7)])]}), Settings(mode="on"))
+    (kind, message, kw), = recorded
+    assert kind == "album_queued" and message == "[QUEUED] A Artist — Album A (wants: disc): new wants record " \
+                                                 "(wanted on disc)"
+    assert kw["data"]["origin"] == albums.WANTS and kw["data"]["key"] == "A"
+    recorded.clear()
+    feed_wants(state, ["disc"], hook({"disc": [("A", [song(3), song(7)])]}), Settings(mode="on"))
+    assert recorded == []  # an update is no new record

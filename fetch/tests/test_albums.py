@@ -1707,3 +1707,99 @@ def test_a_local_files_album_key_is_no_spotify_id(recorded) -> None:
     albums._event("grab", "Artist/Album", {"artist": "Artist", "name": "Album"}, "m")
     (_, _, kw), = recorded
     assert kw["spotify_album_id"] is None and kw["data"]["key"] == "Artist/Album"
+
+
+# ---------------------------------------------------------------------------
+# homelab#2590: every change to an album record is an event
+# ---------------------------------------------------------------------------
+
+
+def test_a_miss_is_an_event_with_why(recorded) -> None:
+    state = wanted_state()
+    prowlarr, sab = fakes([release("r1", "Artist-Other-WEB-FLAC-2020")])
+    top_up(state, Settings(mode="on"), prowlarr, sab, never_have, albums.TickResult(), now=lambda: NOW)
+    (kind, message, kw), = recorded
+    assert kind == "search_miss" and message.startswith("[MISS] Artist — Album: 1 result(s), none match")
+    assert kw["once_hours"] == albums.MISS_EVENT_HOURS
+    assert kw["data"]["why"].startswith("rejected: 1 album words") and kw["data"]["results"] == 1
+    assert kw["data"]["queries"] == ["artist album"] and kw["data"]["status"] == albums.MISSING
+
+
+def test_a_failed_grab_is_a_failure_not_given_up(recorded) -> None:
+    state = wanted_state()
+    prowlarr, sab = fakes()
+    prowlarr.nzb_location.side_effect = RuntimeError("404")
+    top_up(state, Settings(mode="on"), prowlarr, sab, never_have, albums.TickResult(), now=lambda: NOW)
+    (kind, message, kw), = recorded
+    assert kind == "failure" and message.startswith("[ERR] Artist — Album: grab of Artist-Album-WEB-FLAC-2020 failed")
+    assert kw["data"]["what"] == "grab" and kw["data"]["gave_up"] is False and kw["data"]["reason"] == "404"
+
+
+def test_have_and_nowords_are_status_changes_once(recorded) -> None:
+    state = wanted_state()
+    prowlarr, sab = fakes()
+    top_up(state, Settings(mode="on"), prowlarr, sab, lambda key, r: True, albums.TickResult(), now=lambda: NOW)
+    (kind, message, kw), = recorded
+    assert kind == "status_changed" and message.startswith("[HELD] Artist — Album")
+    assert (kw["data"]["from"], kw["data"]["to"]) == (albums.WANTED, albums.HAVE)
+    recorded.clear()
+    state = one_album(GLYPH_ARTIST, GLYPH_TITLE, key="5glyphAlbumId")
+    top_up(state, Settings(mode="on"), prowlarr, sab, never_have, albums.TickResult(), now=lambda: NOW)
+    (kind, message, kw), = recorded
+    assert kind == "status_changed" and message.startswith("[NOWORDS] 5glyphAlbumId:")
+    assert (kw["data"]["from"], kw["data"]["to"], kw["data"]["why"]) == (albums.WANTED, albums.MISSING,
+                                                                         "no search words")
+    recorded.clear()
+    top_up(state, Settings(mode="on"), prowlarr, sab, never_have, albums.TickResult(),
+           now=lambda: NOW + albums.MISSING_RETRY)
+    assert recorded == []  # missing again: no change
+
+
+def test_a_settled_fallback_is_a_status_change(recorded) -> None:
+    state = wanted_state()
+    state.albums["a0"].update(status=albums.FALLBACK, fallback_from=albums.PARTIAL, fallback_tracks={"later": []})
+    albums.fallbacks(state, lambda playlist, tracks: tracks)
+    (kind, message, kw), = recorded
+    assert kind == "status_changed" and message.startswith("[SETTLED] Artist — Album")
+    assert (kw["data"]["from"], kw["data"]["to"]) == (albums.FALLBACK, albums.IMPORTED)
+
+
+def test_an_album_playlist_record_queued_and_dropped_is_an_event(recorded) -> None:
+    state = State()
+    refresh_playlists(state, [("later", "url")], FakeSpotify("s1", [song("One", "A")]), albums.TickResult())
+    refresh_playlists(state, [("later", "url")], FakeSpotify("s2", [song("One", "A")]), albums.TickResult())
+    refresh_playlists(state, [("later", "url")], FakeSpotify("s3", []), albums.TickResult())
+    assert [k for k, _, _ in recorded] == ["album_queued", "album_dropped"]
+    assert recorded[0][1] == "[QUEUED] A Artist — Album: new album playlist record (on later)"
+    assert recorded[1][1].startswith("[DROPPED] A Artist — Album: no album playlist holds it any more")
+    assert state.albums == {}
+
+
+def test_reset_and_requeue_record_an_event_on_apply_only(recorded, monkeypatch) -> None:
+    state = grabbed_state()
+    state.albums["a0"].update(status=albums.FAILED, attempts=3, blocklist=["r1"])
+    seed(state)
+    monkeypatch.delenv("PREFECT_API_URL", raising=False)
+    monkeypatch.setattr("sys.argv", ["music-album-reset", "Artist — Album"])
+    albums.reset_main()
+    assert recorded == []
+    monkeypatch.setattr("sys.argv", ["music-album-reset", "Artist — Album", "--reimport", "--apply"])
+    albums.reset_main()
+    (kind, message, kw), = recorded
+    assert kind == "reset" and message.startswith("[RESET] Artist — Album (") and message.endswith(
+        "failed → wanted, to import again")
+    assert kw["data"]["reimport"] is True
+    assert kw["data"]["before"]["status"] == albums.FAILED and kw["data"]["after"]["status"] == albums.WANTED
+    assert kw["data"]["before"]["attempts"] == 3 and kw["data"]["after"]["attempts"] == 0
+
+    recorded.clear()
+    seed(demoted_state())
+    monkeypatch.setattr("sys.argv", ["music-album-requeue", "--since", "2026-10-10T22:00"])
+    albums.requeue_main()
+    assert recorded == []
+    monkeypatch.setattr("sys.argv", ["music-album-requeue", "--since", "2026-10-10T22:00", "--apply"])
+    albums.requeue_main()
+    (kind, message, kw), = recorded
+    assert kind == "requeued" and message.startswith("[REQUEUE] ")
+    assert message.endswith("wanted, 1 track(s) off the spotdl queue")
+    assert kw["data"]["fell_back_at"] == "2026-10-10T23:15:02+00:00" and kw["data"]["tracks"] == 1

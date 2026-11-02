@@ -140,3 +140,23 @@ def test_library_groups_reads_beets(tmp_path):
             (1, "spotify_album_id", "sp1"), (2, "spotify_album_id", "sp1"), (3, "spotify_album_id", "sp2"),
             (4, "spotify_album_id", "sp2"), (5, "sources", "later")])
     assert resolve.library_groups(path) == {"sp1": {RG}, "sp2": {RG2}}
+
+
+# --- events (homelab#2590) ---
+
+
+def test_a_merge_and_a_rekey_are_events_once_recorded(monkeypatch):
+    recorded = []
+    monkeypatch.setattr(resolve.events, "record", lambda kind, message, **kw: recorded.append((kind, message, kw)))
+    rows = state.AlbumRows(albums={"sp1": _rec("sp1"), "sp2": _rec("sp2", status="imported"), "sp3": _rec("sp3")})
+    report = resolve.resolve(rows, {"sp1": _cached(RG), "sp2": _cached(RG, "upc"), "sp3": _cached(RG2)}, {})
+    assert recorded == []  # a dry run records nothing
+    report.record_events()
+    assert [(k, m.split(" ")[0]) for k, m, _ in recorded] == [
+        ("album_merged", "[MERGE]"), ("spotify_id_resolved", "[REKEY]"), ("spotify_id_resolved", "[REKEY]")]
+    (_, _, merged), (_, _, rekeyed), (_, _, other) = recorded
+    assert merged["release_group"] == RG and merged["spotify_album_id"] == "sp2" and merged["source"] == "resolve"
+    assert [a["key"] for a in merged["data"]["absorbed"]] == ["sp1"]
+    assert merged["data"]["absorbed"][0]["spotify_album_ids"] == ["sp1"]
+    assert rekeyed["data"]["key"] == "sp2" and rekeyed["data"]["via"] == "cache:upc"
+    assert other["release_group"] == RG2 and other["data"]["via"] == "cache:url"

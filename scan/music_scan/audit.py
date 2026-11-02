@@ -35,6 +35,7 @@ import shutil
 import tempfile
 from pathlib import Path
 
+from music_fetch import events
 from music_fetch.ids import youtube_url
 from music_scan import guard
 from music_scan.identity import BY_WORDS, ItemIndex, fingerprint, item_spotify_ids, spotify_id, split_list
@@ -223,10 +224,18 @@ def replace(item, song: dict, youtube: str | None, cookie_file: Path, force: boo
             logger.warning("[REPLACE] %s: the new download fails the guard too (%s: %s); --force to use it anyway",
                            _label(song), rejection.reason, rejection.detail)
             return False
+        old_url, old_path, old_length = item.get("comments") or None, str(item_path(item)), float(item.length or 0)
         with pipeline_lock():
             backup = swap_in(item, new, replaced_dir, url)
-    logger.info("[REPLACE] %s: item %s now %s from %s (%.0fs); old file → %s",
-                _label(song), item.id, item_path(item), url or "?", float(item.length or 0), backup)
+    message = (f"[REPLACE] {_label(song)}: item {item.id} now {item_path(item)} from {url or '?'} "
+               f"({float(item.length or 0):.0f}s); old file → {backup}")
+    logger.info(message)
+    # The old audio is gone from the item: the event says where it went (homelab#2590).
+    events.record("replaced", message, source="audit",
+                  spotify_album_id=events.spotify_album(item.get("spotify_album_id")),
+                  release_group=item.get("mb_releasegroupid"), item_id=item.id,
+                  data={**events.item_fields(item), "old_source": old_url, "new_source": url, "old_path": old_path,
+                        "old_length": old_length, "quarantined": str(backup), "forced": bool(force)})
     return True
 
 
