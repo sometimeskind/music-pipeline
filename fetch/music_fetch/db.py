@@ -73,7 +73,7 @@ EVENT_KINDS = (
     # Requests and the Later queue (homelab#2478): an album requested
     # (music-requests, migration 7), added to or removed from Later
     # (music-later, migration 8), and a Spotify ID resolved for a release
-    # group; the last is not emitted yet.
+    # group (the resolve pass keying a record by it, since homelab#2590).
     "album_requested",
     "later_added",
     "later_removed",
@@ -97,6 +97,18 @@ EVENT_KINDS = (
     # Migration 14 (homelab#2478): a request album's spotdl fallback deferred to the
     # next session (the track budget spent on the playlists, or the soft timeout).
     "fallback_deferred",
+    # Migration 15 (homelab#2590): an album reset or requeued by hand (music-album-reset,
+    # music-album-requeue, the MCP's reset_album and requeue_albums), an item's audio
+    # replaced (replace_item), a search that found nothing to grab, an album's status
+    # changed with no other event (data.from, data.to, data.why), an album record a
+    # feed created, and two records merged into one by the resolve pass.
+    "reset",
+    "requeued",
+    "replaced",
+    "search_miss",
+    "status_changed",
+    "album_queued",
+    "album_merged",
 )
 
 MIGRATIONS: list[str] = [
@@ -391,6 +403,20 @@ MIGRATIONS: list[str] = [
         'filled', 'wrong_version', 'moved', 'override_set', 'override_cleared',
         'state_edited', 'recording_replaced', 'album_dropped', 'recording_refreshed',
         'fallback_deferred'));
+    """,
+    # 15: the reset, requeued, replaced, search_miss, status_changed, album_queued and
+    # album_merged kinds (homelab#2590).
+    """
+    ALTER TABLE events DROP CONSTRAINT events_kind_check;
+    ALTER TABLE events ADD CONSTRAINT events_kind_check CHECK (kind IN (
+        'import_done', 'import_wrong', 'import_incomplete', 'import_lost',
+        'retire', 'local', 'merge', 'clash', 'mixed',
+        'grab', 'autoreset', 'fallback', 'failure', 'reject', 'mcp_job',
+        'album_requested', 'later_added', 'later_removed', 'spotify_id_resolved',
+        'filled', 'wrong_version', 'moved', 'override_set', 'override_cleared',
+        'state_edited', 'recording_replaced', 'album_dropped', 'recording_refreshed',
+        'fallback_deferred', 'reset', 'requeued', 'replaced', 'search_miss', 'status_changed',
+        'album_queued', 'album_merged'));
     """,
 ]
 

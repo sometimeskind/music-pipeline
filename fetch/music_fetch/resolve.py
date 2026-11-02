@@ -48,7 +48,7 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
-from music_fetch import state
+from music_fetch import events, state
 
 logger = logging.getLogger(__name__)
 
@@ -130,6 +130,8 @@ class Report:
     merged: list[str] = dataclasses.field(default_factory=list)
     conflicts: list[str] = dataclasses.field(default_factory=list)
     absorbed: int = 0
+    # (kind, message, key, record, data) per merge and rekey: :meth:`record_events` writes them once saved.
+    changes: list[tuple[str, str, str, Mapping, dict]] = dataclasses.field(default_factory=list)
 
     def summary(self) -> str:
         flags = ", ".join(f"{len(v)} {k}" for k, v in sorted(self.flagged.items()))
@@ -150,6 +152,14 @@ class Report:
             for line in self.rekeyed:
                 logger.info("  [REKEY] %s", line)
         logger.info("Resolve: %s", self.summary())
+
+    def record_events(self) -> None:
+        """Each merge (``album_merged``) and rekey (``spotify_id_resolved``) as an
+        event on the surviving album (homelab#2590): only for a pass that is saved."""
+        for kind, message, key, record, data in self.changes:
+            events.record(kind, message, source="resolve", spotify_album_id=state.primary_spotify(record),
+                          release_group=record.get("release_group"),
+                          data={"album": f"{record.get('artist')} — {record.get('name')}", "key": key, **data})
 
 
 def _union(*lists) -> list:
@@ -187,6 +197,7 @@ def resolve(rows: Any, cache: Mapping[str, dict], library: Mapping[str, set[str]
     overrides = overrides or {}
     report = Report()
     targets: dict[str, list[str]] = {}
+    vias: dict[str, str] = {}
     for key, record in rows.albums.items():
         if record.get("release_group"):
             continue
@@ -195,6 +206,7 @@ def resolve(rows: Any, cache: Mapping[str, dict], library: Mapping[str, set[str]
             report.conflicts.append(f"{label(key, record)}: {verdict.conflict}")
         if verdict.group:
             targets.setdefault(verdict.group, []).append(key)
+            vias[key] = verdict.via
         else:
             record["unresolved"] = verdict.unresolved
             report.flagged.setdefault(verdict.unresolved, []).append(label(key, record))
@@ -216,8 +228,11 @@ def resolve(rows: Any, cache: Mapping[str, dict], library: Mapping[str, set[str]
             merge_into(record, rows.albums[k])
             absorbed.add(k)
         if others:
-            report.merged.append(f"{label(survivor, record)} ← {', '.join(label(k, rows.albums[k]) for k in others)} "
-                                 f"as {group}")
+            line = f"{label(survivor, record)} ← {', '.join(label(k, rows.albums[k]) for k in others)} as {group}"
+            report.merged.append(line)
+            absorbed_records = [{"key": k, "album": label(k, rows.albums[k]), "status": rows.albums[k].get("status"),
+                                 "spotify_album_ids": rows.albums[k].get("spotify_album_ids") or []} for k in others]
+            report.changes.append(("album_merged", f"[MERGE] {line}", survivor, record, {"absorbed": absorbed_records}))
             report.absorbed += len(others)
             words = {overrides[i] for i in record.get("spotify_album_ids", []) if i in overrides}
             if len(words) > 1:
@@ -225,7 +240,10 @@ def resolve(rows: Any, cache: Mapping[str, dict], library: Mapping[str, set[str]
                                         " the primary Spotify ID's wins")
         if not existing:
             record["release_group"], record["unresolved"] = group, None
-            report.rekeyed.append(f"{label(survivor, record)} → {group}")
+            line = f"{label(survivor, record)} → {group}"
+            report.rekeyed.append(line)
+            report.changes.append(("spotify_id_resolved", f"[REKEY] {line}", survivor, record,
+                                   {"via": vias.get(survivor)}))
     # A merge can change a record's key (a name-only album that gained a release group).
     rename = {k: rows.key(r) for k, r in rows.albums.items() if k not in absorbed}
     if absorbed or any(k != v for k, v in rename.items()):

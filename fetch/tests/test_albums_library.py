@@ -217,3 +217,17 @@ def test_tick_feeds_the_library_after_the_wants(tmp_path: Path) -> None:
 def test_album_library_comes_from_the_environment(monkeypatch, value, expected) -> None:
     monkeypatch.setenv("ALBUM_LIBRARY", value)
     assert Settings.from_env().library == expected
+
+
+def test_a_library_record_queued_or_dropped_is_an_event(monkeypatch) -> None:
+    """homelab#2590: the library feed's records are in album_history from creation to drop."""
+    recorded = []
+    monkeypatch.setattr(albums.events, "record", lambda kind, message, **kw: recorded.append((kind, message, kw)))
+    state = State()
+    feed_library(state, view(A), ON)
+    feed_library(state, view(A), ON)  # queued once, not every tick
+    feed_library(state, view(("A", 1, 10, False, {"disc": [song(1)]})), ON)
+    assert [k for k, _, _ in recorded] == ["album_queued", "album_dropped"]
+    assert recorded[0][1].startswith("[QUEUED] A Artist — Album A") and "2 track(s) referenced" in recorded[0][1]
+    assert recorded[1][1].startswith("[DROPPED] A Artist — Album A") and recorded[1][2]["data"]["origin"] == "library"
+    assert state.albums == {}

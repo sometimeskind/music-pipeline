@@ -133,10 +133,19 @@ def test_replace_swaps_audio_in_place_and_keeps_identity(calico, clip, tmp_path,
     lib, item, path = calico
     song = _song("CALICO", "Calico Skies", 40, isrc="GBCAL9700006")
     replaced = tmp_path / "quarantine" / "replaced"
+    recorded = []
+    monkeypatch.setattr(audit.events, "record", lambda kind, message, **kw: recorded.append((kind, message, kw)))
+    old_source = item.get("comments") or None
 
     with patch("music_fetch.spotdl_ops.download_song", side_effect=_fake_download(clip, 40)):
         assert audit.replace(item, song, STUDIO, Path("cookies.txt"), replaced_dir=replaced)
 
+    # The swap is an event on the item: where the old audio went, and both sources (homelab#2590).
+    (kind, message, kw), = recorded
+    assert kind == "replaced" and message.startswith("[REPLACE] ") and kw["item_id"] == item.id
+    assert kw["data"]["old_source"] == old_source and kw["data"]["new_source"] == STUDIO
+    assert kw["data"]["old_path"] == str(path)
+    assert kw["data"]["quarantined"] == str(replaced / f"{item.id}-06 - Calico Skies.m4a")
     fresh = lib.get_item(item.id)
     assert audit.item_path(fresh) == path
     assert abs(fresh.length - 40) < 1

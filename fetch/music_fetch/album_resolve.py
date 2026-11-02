@@ -53,5 +53,6 @@ def resolve_main() -> None:
         report.log(verbose=args.verbose)
         if args.apply:
             logger.info("Saved %d row(s)", state.save_albums(conn, rows))
+            report.record_events()
         else:
             logger.info("Dry run; --apply to write")

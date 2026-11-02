@@ -187,9 +187,11 @@ def test_an_image_before_migration_13_runs_on_schema_13(pg_url, monkeypatch, cap
 @needs_pg
 def test_an_image_before_migration_14_runs_on_schema_14(pg_url, monkeypatch, caplog):
     """The rollback path for homelab#2478: migration 14 only widens the kinds."""
+    full = db.MIGRATIONS
+    monkeypatch.setattr(db, "MIGRATIONS", full[:14])
     with psycopg.connect(pg_url, autocommit=True) as conn:
         assert db.migrate(conn) == 14
-    monkeypatch.setattr(db, "MIGRATIONS", db.MIGRATIONS[:13])
+    monkeypatch.setattr(db, "MIGRATIONS", full[:13])
     with db.connect(pg_url) as conn:
         assert db.migrate(conn) == 14
         events.insert(conn, "album_dropped", "[UNWANTED] 1 A — B: record dropped", source="albums")
@@ -197,11 +199,27 @@ def test_an_image_before_migration_14_runs_on_schema_14(pg_url, monkeypatch, cap
 
 
 @needs_pg
+def test_an_image_before_migration_15_runs_on_schema_15(pg_url, monkeypatch, caplog):
+    """The rollback path for homelab#2590: migration 15 only widens the kinds."""
+    with psycopg.connect(pg_url, autocommit=True) as conn:
+        assert db.migrate(conn) == 15
+    monkeypatch.setattr(db, "MIGRATIONS", db.MIGRATIONS[:14])
+    with db.connect(pg_url) as conn:
+        assert db.migrate(conn) == 15
+        events.insert(conn, "fallback_deferred", "[DEFER] A — B", source="albums")
+    assert "music database is at schema 15, this image knows 14" in caplog.text
+
+
+NEW_KINDS = ("album_dropped", "recording_refreshed", "fallback_deferred", "reset", "requeued", "replaced",
+             "search_miss", "status_changed", "album_queued", "album_merged")
+
+
+@needs_pg
 def test_the_new_kinds_are_accepted(pg_url):
     with db.connect(pg_url) as conn:
-        for kind in ("album_dropped", "recording_refreshed", "fallback_deferred"):
+        for kind in NEW_KINDS:
             events.insert(conn, kind, f"[{kind}]", source="test")
-        assert conn.execute("SELECT count(*) FROM events").fetchone() == (3,)
+        assert conn.execute("SELECT count(*) FROM events").fetchone() == (len(NEW_KINDS),)
 
 
 @needs_pg
