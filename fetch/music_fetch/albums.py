@@ -577,7 +577,9 @@ def feed_wants(
     held), or whose playlist is no longer in *playlists* (now an album or
     nosync playlist, or removed), leaves that playlist while ``wanted``,
     ``dry-run``, ``missing`` or ``have``, and is deleted with its last
-    playlist; so is one whose total fell under the threshold.
+    playlist; so is one whose total fell under the threshold.  A record reset
+    to import again (``reimport``) is left whole: its album is in the library
+    on purpose (homelab#2544).
 
     Then the records are re-ordered, since :func:`top_up` searches them in
     order: the album playlists' first, then the wants records most wanted
@@ -625,9 +627,13 @@ def feed_wants(
             for name, songs in on.items():
                 playlists_of[name] = [track_entry(s) for s in songs]
     for key, record in list(state.albums.items()):
-        if _wants(record) and record.get("status") in WAITING:
+        # A reset to import again (reset_album --reimport) is waiting too, but its album is in the
+        # library and its tracks no longer on a want list: pruning it would drop the reimport and
+        # the record with it, silently (homelab#2544, album 611).
+        if _wants(record) and record.get("status") in WAITING and not record.get("reimport"):
             record["playlists"] = {n: t for n, t in record.get("playlists", {}).items() if key in listed_on.get(n, ())}
             if not record["playlists"]:
+                logger.info("[UNWANTED] %s %s: no want list holds it any more; record dropped", key, _label(record))
                 del state.albums[key]
     order = [k for k, r in state.albums.items() if not _fed(r)] + [k for k in ranked if k in state.albums]
     order += [k for k in state.albums if k not in set(order)]
