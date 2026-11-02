@@ -309,9 +309,12 @@ def log(pairs: list[Pair], kept: list[Kept], apply: bool) -> None:
         if dest := _freed(p):
             logger.info("  [MOVE] %s %s → %s: the path its loose copy held%s", p.album.id, _path(p.album), dest,
                         "" if apply else " (dry run)")
+    # A kept item is a decision not to act, the same at every run until someone merges it: the dry run
+    # lists it for the operator, an apply (after each import, music-canon-albums --apply) at DEBUG (homelab#2590).
+    level = logging.DEBUG if apply else logging.INFO
     for k in kept:
-        logger.info("  [KEEP] %s %s — %s %s: %s, but %s; kept",
-                    k.item.id, k.item.get("artist"), k.item.get("title"), _path(k.item), k.where, k.why)
+        logger.log(level, "  [KEEP] %s %s — %s %s: %s, but %s; kept",
+                   k.item.id, k.item.get("artist"), k.item.get("title"), _path(k.item), k.where, k.why)
 
 
 def apply_pairs(pairs: list[Pair], replaced_dir: Path | None = None) -> int:
@@ -342,6 +345,8 @@ def apply_pairs(pairs: list[Pair], replaced_dir: Path | None = None) -> int:
 def after_import(lib, release: list, tracks_count: int, tracks=()) -> int:
     """The album completion's hook: supersede what *release* replaces.  Returns the count."""
     pairs, kept = plan(release, lib.all_items(), tracks_count, tracks)
+    if kept:
+        logger.info("Supersede: %d loose item(s) on the album kept (music-canon-albums lists why)", len(kept))
     log(pairs, kept, apply=True)
     return apply_pairs(pairs)
 

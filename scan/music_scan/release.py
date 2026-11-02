@@ -554,9 +554,10 @@ def retire_held(lib, decoder=None) -> int:
                 continue
             if len(mine) != 1:
                 for item in losers:
-                    logger.info("  [LOCAL] %s %s — %s [%s]: the same audio as %d of the release's items; "
-                                "left to music-audit-dupes", item.id, item.get("artist"), item.get("title"),
-                                item.get("album"), len(mine))
+                    # DEBUG: every scan sees it again until someone merges it; the event is the report (homelab#2590).
+                    logger.debug("  [LOCAL] %s %s — %s [%s]: the same audio as %d of the release's items; "
+                                 "left to music-audit-dupes", item.id, item.get("artist"), item.get("title"),
+                                 item.get("album"), len(mine))
                     # It stands until someone merges it by hand, and every scan sees it: once a day.
                     _event("local", item, _album_of(kept[key]), _release_group(kept[key]),
                            f"[LOCAL] {item.id} {item.get('artist')} — {item.get('title')} [{item.get('album')}]: "

@@ -582,11 +582,16 @@ def test_retire_held_leaves_an_extra_two_release_items_hold_the_audio_of(quarant
     assert not extra.removed
 
 
-def test_an_extra_left_to_music_audit_dupes_is_recorded_once_a_day(quarantined, recorded) -> None:
+def test_an_extra_left_to_music_audit_dupes_is_recorded_once_a_day(quarantined, recorded, caplog) -> None:
+    import logging
+
     track, extra = _stay_positive()
     twin = _Audio(3806, "Lord, I'm Discouraged", length=231.0, album_record="SP", release="r@2",
                   isrc="USVR10800006")
-    release.retire_held(FakeLib([track, twin, extra]), decoder=lambda fp: [])
+    with caplog.at_level(logging.INFO):
+        release.retire_held(FakeLib([track, twin, extra]), decoder=lambda fp: [])
+    # Every scan sees it again: the event is the report, the line DEBUG (homelab#2590).
+    assert "[LOCAL]" not in caplog.text
     (kind, message, kw), = recorded
     assert kind == "local" and message.endswith("left to music-audit-dupes") and kw["once_hours"] == 24
     assert kw["item_id"] == extra.id and kw["data"]["left_to_dupes"] is True
