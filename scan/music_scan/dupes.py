@@ -41,7 +41,8 @@ record's release item, then one of its local-only extras, so the album keeps
 its track; then length closest to Spotify's duration for any of the group's
 Spotify IDs (from the playlist stores, no Spotify calls), then bitrate,
 then the older item.  The keeper takes the others' ``spotify_ids``, ``isrc``, ``sources`` and
-a missing ``mb_trackid``; their files move to ``quarantine/replaced/`` (never
+a missing ``mb_trackid`` when MusicBrainz titles that recording as the keeper's song
+(homelab#2600, :func:`recording_to_take`); their files move to ``quarantine/replaced/`` (never
 deleted) and their rows leave the database.  The keeper records the moved files'
 names in :data:`MERGED_FILES` (with any its losers had recorded), so the purge
 counts them superseded while it is in the library, whatever their identity tags
@@ -82,6 +83,7 @@ from __future__ import annotations
 
 import argparse
 import dataclasses
+import http.client
 import logging
 import re
 import shutil
@@ -96,13 +98,16 @@ from music_fetch import events
 from music_fetch.usenet import clean_album, normalise, words
 from music_scan.audit import LIBRARY, REPLACED, item_path, pipeline_lock
 from music_scan.identity import (
-    LENGTH_SLACK, MERGED_FILES, add_isrcs, add_merged_file, add_to_list, fingerprint, item_isrcs,
-    item_spotify_ids, lengths_agree, merged_files, spotify_id, split_list,
+    LENGTH_SLACK, MERGED_FILES, add_isrcs, add_merged_file, add_to_list, different_song, fingerprint,
+    item_isrcs, item_spotify_ids, lengths_agree, merged_files, spotify_id, split_list,
 )
 from music_scan.metrics import _gauge, _push
 from music_scan.supersede import MANAGED_VIA
 
 logger = logging.getLogger(__name__)
+
+# A MusicBrainz recording by ID (its title), None when there is none: mb_fingerprint.RecordingLookup.
+RecordingLookup = Callable[[str], "dict | None"]
 
 CERTAIN, UNCERTAIN, ALBUM = "certain", "uncertain", "album"
 # An AcoustID match or a shared MusicBrainz recording ID is certain only with
@@ -465,9 +470,66 @@ def _free(path: Path) -> Path:
     return candidate
 
 
-def merge(keeper, losers: list, replaced_dir: Path = REPLACED, why: str = "duplicate") -> list[Path]:
+def recording_lookup() -> RecordingLookup:
+    """MusicBrainz ``recording/<id>``; a seam for the tests."""
+    from music_scan.mb_fingerprint import musicbrainz_recordings  # noqa: PLC0415
+
+    return musicbrainz_recordings()
+
+
+def recording_to_take(keeper, losers: list,
+                      recordings: RecordingLookup | None = None) -> tuple[tuple[int, str] | None, dict[int, str]]:
+    """The ``mb_trackid`` *keeper* takes from *losers*, as (loser ID, recording ID), and why
+    each loser's that it looked at isn't taken (homelab#2600).
+
+    Only a keeper with no recording ID takes one, and only a recording MusicBrainz
+    titles as the keeper's song (:func:`~music_scan.identity.different_song`, version
+    notes dropped: a live or 5.1 recording of the song is still it).  A dropped item's
+    ID can be a sibling recording's, guessed by a singleton import (homelab#2544):
+    11982 *Romance in Durango* carried *It Ain't Me, Babe*'s, which 15478, the real
+    one, carries too.  Taken, it would be an identity key that pairs two songs.  A
+    lookup that fails can't tell, so it takes nothing either; no ID is safer than a
+    wrong one.  The first loser whose recording passes wins, as before."""
+    if keeper.get("mb_trackid"):
+        return None, {}
+    candidates = [loser for loser in losers if loser.get("mb_trackid")]
+    if not candidates:
+        return None, {}
+    lookup = recordings or recording_lookup()
+    refused: dict[int, str] = {}
+    for loser in candidates:
+        recording_id = loser.get("mb_trackid")
+        try:
+            recording = lookup(recording_id)
+        except (OSError, ValueError, http.client.HTTPException) as exc:  # urllib's errors, a cut or non-JSON body
+            refused[loser.id] = f"the MusicBrainz lookup failed ({exc})"
+            continue
+        if not recording:
+            refused[loser.id] = "MusicBrainz has no such recording"
+            continue
+        title = recording.get("title") or ""
+        if different_song(keeper.get("title") or "", title):
+            refused[loser.id] = f"MusicBrainz titles it {title!r}, another song than {keeper.get('title')!r}"
+            continue
+        return (loser.id, recording_id), refused
+    return None, refused
+
+
+def _recording_fields(loser, taken: tuple[int, str] | None, refused: dict[int, str]) -> dict:
+    """The ``merge`` event's account of *loser*'s recording ID: taken, or why not."""
+    if taken and taken[0] == loser.id:
+        return {"mb_trackid_taken": taken[1]}
+    if loser.id in refused:
+        return {"mb_trackid_refused": {"mb_trackid": loser.get("mb_trackid"), "why": refused[loser.id]}}
+    return {}
+
+
+def merge(keeper, losers: list, replaced_dir: Path = REPLACED, why: str = "duplicate",
+          recordings: RecordingLookup | None = None) -> list[Path]:
     """Merge *losers* onto *keeper*; their files go to *replaced_dir*.  Returns where they went.
-    *why* names the merge in its ``merge`` events (homelab#2413).
+    *why* names the merge in its ``merge`` events (homelab#2413).  A keeper with no
+    ``mb_trackid`` takes a loser's only when it is the keeper's song
+    (:func:`recording_to_take`, homelab#2600; *recordings* looks it up).
 
     The keeper records their names in :data:`MERGED_FILES`: the merge is the
     decision that it holds their recording, which their own tags may not say
@@ -483,9 +545,13 @@ def merge(keeper, losers: list, replaced_dir: Path = REPLACED, why: str = "dupli
         for source in split_list(loser.get("sources")):
             add_to_list(keeper, "sources", source)
         write |= add_isrcs(keeper, split_list(loser.get("isrc"), ";"))
-        if loser.get("mb_trackid") and not keeper.get("mb_trackid"):
-            keeper["mb_trackid"] = loser.get("mb_trackid")
-            write = True
+    taken, refused = recording_to_take(keeper, losers, recordings)
+    for loser_id, why in refused.items():
+        logger.warning("[NOTRACKID] keep %s ← %s: not taking its recording %s: %s", keeper.id, loser_id,
+                       next(i.get("mb_trackid") for i in losers if i.id == loser_id), why)
+    if taken:
+        keeper["mb_trackid"] = taken[1]
+        write = True
     keeper.store()
     if write:
         keeper.try_write()
@@ -507,7 +573,7 @@ def merge(keeper, losers: list, replaced_dir: Path = REPLACED, why: str = "dupli
                       spotify_album_id=events.spotify_album(keeper.get("spotify_album_id")),
                       release_group=keeper.get("mb_releasegroupid"), item_id=keeper.id,
                       data={**events.item_fields(keeper), "why": why, "merged": loser.id,
-                            "merged_item": events.item_fields(loser)})
+                            "merged_item": events.item_fields(loser), **_recording_fields(loser, taken, refused)})
         loser.remove(delete=False)
     if moved:
         keeper.store()
@@ -515,7 +581,8 @@ def merge(keeper, losers: list, replaced_dir: Path = REPLACED, why: str = "dupli
 
 
 def merge_chosen(items: list, ids: list[int], apply: bool, allow_manual: bool,
-                 durations: dict[str, float], replaced_dir: Path = REPLACED) -> list[Path]:
+                 durations: dict[str, float], replaced_dir: Path = REPLACED,
+                 recordings: RecordingLookup | None = None) -> list[Path]:
     """Merge the items *ids* after the first onto the first, as the operator chose; with *apply*
     only.  Raises :class:`SystemExit` on a refused choice, before anything changes."""
     keep_id, *drop_ids = ids
@@ -542,9 +609,14 @@ def merge_chosen(items: list, ids: list[int], apply: bool, allow_manual: bool,
                 "their file(s) → %s", keeper.id, ", ".join(str(d.id) for d in drops),
                 ", ".join(dict.fromkeys(gained)) or "none", replaced_dir)
     if not apply:
+        taken, refused = recording_to_take(keeper, drops, recordings)
+        if taken:
+            logger.info("    %s takes the recording ID %s of %s", keeper.id, taken[1], taken[0])
+        for drop_id, why in refused.items():
+            logger.warning("    [NOTRACKID] %s won't take the recording ID of %s: %s", keeper.id, drop_id, why)
         logger.info("Dry run — nothing merged. Re-run with --apply.")
         return []
-    return merge(keeper, drops, replaced_dir, why="chosen")
+    return merge(keeper, drops, replaced_dir, why="chosen", recordings=recordings)
 
 
 def _resolves(items: list, sid: str, isrc: str | None, unlinked: int) -> tuple[int | None, str]:
