@@ -514,3 +514,15 @@ def test_rank_takes_another_edition_when_spotifys_is_not_there() -> None:
     ranked = rank([deluxe, remastered], "The Smashing Pumpkins",
                   "Mellon Collie And The Infinite Sadness (30th Anniversary Edition)", 42, set(), seconds=12000)
     assert {r.guid for r in ranked} == {"r1", "r2"} and len(ranked) == 2
+
+
+def test_repost_name_drops_only_an_indexer_suffix() -> None:
+    """homelab#2593: the uploads its retries grabbed again."""
+    from music_fetch.usenet import repost_name
+    assert repost_name("Damien_Rice-9-CD-FLAC-2006-FiXIE-1") == repost_name("Damien_Rice-9-CD-FLAC-2006-FiXIE")
+    assert repost_name("The_Zombies-Odessey_And_Oracle-FLAC-OBZEN-FTP") == "the_zombies-odessey_and_oracle-flac-obzen"
+    assert repost_name("Artist-Album-FLAC-PERFECT.1") == "artist-album-flac-perfect"
+    # A year, a REPACK, or a second suffix is not a repost's.
+    assert repost_name("Artist-Album-WEB-FLAC-2020") == "artist-album-web-flac-2020"
+    assert repost_name("Artist-Album-REPACK-FLAC-PERFECT") != repost_name("Artist-Album-FLAC-PERFECT")
+    assert repost_name("Artist-Album-FLAC-PERFECT-1-1") == "artist-album-flac-perfect-1"

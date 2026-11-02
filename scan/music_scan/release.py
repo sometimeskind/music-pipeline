@@ -133,10 +133,19 @@ def _mb_fields(info) -> dict:
     }.items() if v}
 
 
+def _position(track) -> str | None:
+    """A MusicBrainz track's place in its release, ``<disc>-<track>``, or None
+    when beets didn't say."""
+    medium, index = getattr(track, "medium", None), getattr(track, "medium_index", None)
+    return f"{medium}-{index}" if medium and index else None
+
+
 def match_folder(paths: list[Path], tag_album=None) -> dict | None:
     """The MusicBrainz release *paths* (one release's audio files) are, or
     None when no candidate is close enough.  *tag_album* is beets'
-    ``autotag.tag_album`` (a fake in tests)."""
+    ``autotag.tag_album`` (a fake in tests).  ``lacking`` is where the
+    release's tracks without a file sit in it (homelab#2593), left out when
+    beets didn't place one of them."""
     from beets.autotag import Source  # noqa: PLC0415
     from beets.library import Item  # noqa: PLC0415
 
@@ -149,6 +158,7 @@ def match_folder(paths: list[Path], tag_album=None) -> dict | None:
     if not candidates or float(candidates[0].distance) > MATCH_MAX_DISTANCE:
         return None
     best = candidates[0]
+    lacking = [_position(t) for t in best.extra_tracks]
     return {
         "mb_albumid": best.info.album_id,
         "album": best.info.album,
@@ -158,7 +168,7 @@ def match_folder(paths: list[Path], tag_album=None) -> dict | None:
         "unmatched": len(best.extra_items),
         "distance": round(float(best.distance), 3),
         "mb": _mb_fields(best.info),
-    }
+    } | ({"lacking": lacking} if None not in lacking else {})
 
 
 def audio_files(folder: Path) -> list[Path]:
