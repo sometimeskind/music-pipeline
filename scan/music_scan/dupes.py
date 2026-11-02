@@ -546,9 +546,9 @@ def merge(keeper, losers: list, replaced_dir: Path = REPLACED, why: str = "dupli
             add_to_list(keeper, "sources", source)
         write |= add_isrcs(keeper, split_list(loser.get("isrc"), ";"))
     taken, refused = recording_to_take(keeper, losers, recordings)
-    for loser_id, why in refused.items():
+    for loser_id, refusal in refused.items():
         logger.warning("[NOTRACKID] keep %s ← %s: not taking its recording %s: %s", keeper.id, loser_id,
-                       next(i.get("mb_trackid") for i in losers if i.id == loser_id), why)
+                       next(i.get("mb_trackid") for i in losers if i.id == loser_id), refusal)
     if taken:
         keeper["mb_trackid"] = taken[1]
         write = True
@@ -612,8 +612,8 @@ def merge_chosen(items: list, ids: list[int], apply: bool, allow_manual: bool,
         taken, refused = recording_to_take(keeper, drops, recordings)
         if taken:
             logger.info("    %s takes the recording ID %s of %s", keeper.id, taken[1], taken[0])
-        for drop_id, why in refused.items():
-            logger.warning("    [NOTRACKID] %s won't take the recording ID of %s: %s", keeper.id, drop_id, why)
+        for drop_id, refusal in refused.items():
+            logger.warning("    [NOTRACKID] %s won't take the recording ID of %s: %s", keeper.id, drop_id, refusal)
         logger.info("Dry run — nothing merged. Re-run with --apply.")
         return []
     return merge(keeper, drops, replaced_dir, why="chosen", recordings=recordings)

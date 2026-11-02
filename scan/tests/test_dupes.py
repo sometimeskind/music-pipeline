@@ -301,10 +301,11 @@ def test_merge_refuses_a_recording_id_that_names_another_song(tmp_path, monkeypa
     recorded = _recorded(monkeypatch)
     keeper = _on_disk(tmp_path, FakeItem(15481, DURANGO, artist="Bob Dylan"))
     loser = _on_disk(tmp_path, FakeItem(11982, DURANGO, artist="Bob Dylan", mb_trackid="48e880bf"))
-    merge(keeper, [loser], tmp_path / "replaced", recordings={"48e880bf": {"title": BABE}}.get)
+    merge(keeper, [loser], tmp_path / "replaced", why="chosen", recordings={"48e880bf": {"title": BABE}}.get)
     assert keeper.get("mb_trackid") is None and not keeper.written
     assert loser.removed  # the merge itself goes ahead
     [data] = recorded
+    assert data["why"] == "chosen"  # the merge's reason, not the refusal's (2026-11-02's 15481 event)
     assert data["mb_trackid_refused"]["mb_trackid"] == "48e880bf"
     assert "another song" in data["mb_trackid_refused"]["why"] and "mb_trackid_taken" not in data
     assert "[NOTRACKID] keep 15481 ← 11982" in caplog.text
