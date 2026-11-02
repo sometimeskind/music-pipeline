@@ -986,6 +986,41 @@ def test_sync_nosync_fetch_failure_never_fails_the_sync(tmp_path: Path, caplog) 
     assert metrics.success is True
 
 
+def test_a_spent_budget_defers_the_requests_fallback_and_says_so(tmp_path: Path, caplog) -> None:
+    """homelab#2478: a playlist backlog spent the budget every night and the requests'
+    fallback never ran, with no line saying so."""
+    import unittest.mock as mock
+
+    from music_fetch import album_requests, albums, ingest
+    from music_fetch.metrics import IngestMetrics
+
+    caplog.set_level("INFO", logger="music_fetch.ingest")
+    spotdl_dir = tmp_path / "spotdl"
+    spotdl_dir.mkdir()
+    conf = tmp_path / "playlists.conf"
+    conf.write_text("aaaaaaah  https://open.spotify.com/playlist/A000000000000000000000\n", encoding="utf-8")
+    songs = [{"url": album_requests.recording_url(f"r{i}"), "song_id": f"r{i}", "name": f"T{i}"} for i in range(3)]
+    _seed_albums({"7": {"status": albums.FALLBACK, "origin": albums.REQUEST, "album_songs": songs,
+                        "fallback_tracks": {album_requests.SOURCE: ["r0", "r1", "r2"]}}})
+
+    def fake_sync(name, track_limit=None, **_kwargs):
+        return SyncResult(set(), track_limit, track_limit, 0, 0, {})
+
+    fallback = mock.Mock()
+    with mock.patch.object(ingest, "SPOTDL_DIR", spotdl_dir), \
+         mock.patch.object(ingest, "CONF_PATH", conf), \
+         mock.patch.object(ingest, "COOKIE_FILE", tmp_path / "cookies.txt"), \
+         mock.patch.object(album_requests, "UNVERIFIED", tmp_path / "unverified"), \
+         mock.patch.dict("os.environ", {"SYNC_TRACK_LIMIT": "10"}), \
+         mock.patch("music_fetch.ingest.sync_playlist", side_effect=fake_sync), \
+         mock.patch("music_fetch.ingest.download_fallback", fallback), \
+         mock.patch("music_fetch.ingest.time.sleep"):
+        ingest.sync_playlists(IngestMetrics(), resolves=lambda song: False, in_library=lambda pl, song: False)
+
+    fallback.assert_not_called()
+    assert "Album requests: [DEFERRED] 3 track(s) from MusicBrainz tracklists wait for the next session" in caplog.text
+
+
 def test_sync_playlists_downloads_the_requests_fallback_into_unverified_after_the_playlists(tmp_path: Path) -> None:
     """homelab#2478: an album request's MusicBrainz-built songs go to unverified/request/,
     after the playlists and within the same budget; a held one (waiting there, or rejected)
