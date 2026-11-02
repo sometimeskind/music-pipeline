@@ -216,14 +216,30 @@ def make_blueprint(jobs: mcp_jobs.JobQueue) -> Blueprint:
     def album_history():
         import psycopg  # noqa: PLC0415
 
-        from music_service.mcp_tools import resolve_album  # noqa: PLC0415
+        from music_service.mcp_tools import album_ref, resolve_album  # noqa: PLC0415
 
         query = request.args.get("query", "")
         since = _since()
         offset = _offset()
         read("album_history", query=query, since=since)
         albums = records()
-        key = resolve_album(query, lambda: albums)
+        try:
+            key = resolve_album(query, lambda: albums)
+        except NotFound:
+            # No record: a dropped one (the wants feed's album_dropped, homelab#2544) still has
+            # its events, found by the key, Spotify album ID or release group it was known by.
+            ref = album_ref(query.strip())
+            try:
+                with mcp_history.connect() as conn:
+                    found = mcp_history.album_history(conn, [ref], mcp_history.uuid_or_none(ref), since)
+            except (mcp_history.Unavailable, psycopg.Error) as exc:
+                return jsonify({"status": "unavailable", "error": unavailable(exc)}), 503
+            if not found:
+                raise
+            shown, next_offset = mcp_reads.page(found, offset)
+            return jsonify({"status": "gone", "query": query.strip(), "album": None,
+                            "since": _z(since), "total": len(found), "offset": offset, "next_offset": next_offset,
+                            "events": shown})
         record = albums[key]
         group = mcp_history.album_group(record)
         try:

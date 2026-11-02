@@ -832,10 +832,18 @@ def test_refresh_replaced_applies_under_the_lock_and_never_touches_mb_trackid(pg
     assert by_id[5970]["mb_trackid"] == "set-by-hand" and not by_id[5970].stored
     assert by_id[6930]["title"] == "Oh! Sweet Nuthin’ (5.1 mix)" and not by_id[6930].stored
     assert "[REFRESH] 3778 — Constructive Summer: trackdisambig" in caplog.text
+    # Each change is an event (homelab#2544), so album_history shows it, not just the exec's output.
+    refreshed = [e for e in _events(pg_url) if e[0] == mbf.REFRESH_KIND]
+    assert sorted(e[2] for e in refreshed) == [3778, 6994]
+    wasp = next(e for e in refreshed if e[2] == 6994)
+    assert wasp[1] == mbf.SOURCE and wasp[3].startswith("[REFRESH] 6994 — Oh! Sweet Nuthin’: title")
+    assert wasp[4]["title"] == "Oh! Sweet Nuthin’ (5.1 mix)" and wasp[4]["recording"] == STEREO
+    assert wasp[4]["refreshed"] == {"title": ["Oh! Sweet Nuthin’ (5.1 mix)", "Oh! Sweet Nuthin’"]}
 
     caplog.clear()
     again = mbf.refresh_replaced(apply=True)  # nothing new to change
     assert again["refreshed"] == 0 and again["current"] == 2
+    assert len([e for e in _events(pg_url) if e[0] == mbf.REFRESH_KIND]) == 2
 
 
 @needs_pg

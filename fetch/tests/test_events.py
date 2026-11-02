@@ -152,9 +152,11 @@ def test_an_image_before_migration_12_runs_on_schema_12(pg_url, monkeypatch, cap
     """The rollback path for homelab#2553: an image that knows 11 migrations
     connects to a database at 12, migrates nothing, and records and prunes
     events as before, ignoring long_runs and recheck_findings."""
+    full = db.MIGRATIONS
+    monkeypatch.setattr(db, "MIGRATIONS", full[:12])
     with psycopg.connect(pg_url, autocommit=True) as conn:
         assert db.migrate(conn) == 12
-    monkeypatch.setattr(db, "MIGRATIONS", db.MIGRATIONS[:11])
+    monkeypatch.setattr(db, "MIGRATIONS", full[:11])
     with db.connect(pg_url) as conn:
         assert db.migrate(conn) == 12
         events.insert(conn, "recording_replaced", "[RECHECK] 1 — T: mb_trackid a → b", source="mb-fingerprint",
@@ -164,6 +166,28 @@ def test_an_image_before_migration_12_runs_on_schema_12(pg_url, monkeypatch, cap
     with psycopg.connect(pg_url) as conn:
         assert conn.execute("SELECT count(*) FROM events").fetchone() == (1,)
         assert conn.execute("SELECT max(version) FROM schema_migrations").fetchone() == (12,)
+
+
+@needs_pg
+def test_an_image_before_migration_13_runs_on_schema_13(pg_url, monkeypatch, caplog):
+    """The rollback path for homelab#2544: migration 13 only widens the kinds,
+    so an image that knows 12 records its own kinds on a database at 13."""
+    with psycopg.connect(pg_url, autocommit=True) as conn:
+        assert db.migrate(conn) == 13
+    monkeypatch.setattr(db, "MIGRATIONS", db.MIGRATIONS[:12])
+    with db.connect(pg_url) as conn:
+        assert db.migrate(conn) == 13
+        events.insert(conn, "recording_replaced", "[RECHECK] 1 — T: mb_trackid a → b", source="mb-fingerprint",
+                      item_id=1)
+    assert "music database is at schema 13, this image knows 12" in caplog.text
+
+
+@needs_pg
+def test_the_new_kinds_are_accepted(pg_url):
+    with db.connect(pg_url) as conn:
+        for kind in ("album_dropped", "recording_refreshed"):
+            events.insert(conn, kind, f"[{kind}]", source="test")
+        assert conn.execute("SELECT count(*) FROM events").fetchone() == (2,)
 
 
 @needs_pg

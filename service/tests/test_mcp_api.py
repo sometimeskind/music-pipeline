@@ -558,6 +558,19 @@ def test_album_history_reads_an_albums_events_newest_first(env, client, event_st
 
 
 @needs_pg
+def test_album_history_of_a_dropped_album_reads_its_events(client, event_store):
+    """homelab#2544: the wants feed dropped album 611's record; its key still finds its events."""
+    event_store.record("album_dropped", "[UNWANTED] 611 Bob Dylan — Vol. 5: record dropped", source="albums",
+                       spotify_album_id="GONE1", release_group=RG, data={"key": "611", "status": "wanted"})
+    for query in ("611", "GONE1", RG):
+        body = client.get(f"/mcp-api/album_history?query={query}", headers=READ).get_json()
+        assert body["status"] == "gone" and body["album"] is None, query
+        assert [e["kind"] for e in body["events"]] == ["album_dropped"], query
+    resp = client.get("/mcp-api/album_history?query=612", headers=READ)
+    assert resp.status_code == 404 and resp.get_json()["status"] == "not_found"
+
+
+@needs_pg
 def test_digest_summary_counts_and_lists_the_windows_events(client, event_store):
     for n in range(30):
         event_store.record("retire", f"[RETIRE] {n}", source="release", item_id=n)

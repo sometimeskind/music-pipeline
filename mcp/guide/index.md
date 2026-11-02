@@ -18,8 +18,10 @@ ts-egress, Prowlarr, cookies) stays in homelab's `docs/media/` runbooks.
 
 `album_history` is one album's events, newest first: what was grabbed, imported (done, wrong,
 incomplete, lost), failed, fell back to spotdl, was reset, and which of its items were
-retired, merged or kept as local-only extras, each with the MCP caller and job that caused
-it. Read it before a reset, to see what was tried. `digest_summary` is what happened since a
+retired, merged or kept as local-only extras, and which had their title refreshed from a replaced
+recording, each with the MCP caller and job that caused it. An album whose record no longer
+exists (the wants feed drops one no playlist wants any more) answers `"status": "gone"` with
+its events, the last a dropped-record event: look it up by the key, Spotify ID or release group it had. Read it before a reset, to see what was tried. `digest_summary` is what happened since a
 time, plus the library issues standing now. History is kept 90 days, and each album's latest
 20 events longer.
 

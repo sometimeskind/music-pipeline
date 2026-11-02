@@ -124,7 +124,7 @@ When the event store can't be read (unset, or the database is down): `503 {"stat
 
 ### `GET /mcp-api/album_history?query=Q[&since=T][&offset=N]` (`album_history`)
 
-One album's events, newest first. The query resolves as for `get_album` (ambiguous, not found). Events match by the album's Spotify ID, by its release group once known, or for a local files' album by its store key. `since` (ISO 8601) is optional: without it, all kept history.
+One album's events, newest first. The query resolves as for `get_album` (ambiguous, not found). A query that matches no record but that some event names as its album key, Spotify album ID or release group (an album the wants feed dropped, `album_dropped`, homelab#2544) returns those events with `"status": "gone"` and `"album": null`. Events match by the album's Spotify ID, by its release group once known, or for a local files' album by its store key. `since` (ISO 8601) is optional: without it, all kept history.
 
 ```json
 {"status": "ok", "query": "abbey road",
