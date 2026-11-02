@@ -1209,3 +1209,21 @@ def test_check_request_downloads_verifies_then_rechecks_and_survives_a_failure(m
     assert "Request fallback check failed" in caplog.text
     monkeypatch.setattr(scan, "verify_requests", lambda *a: Counter({"acoustid-unknown": 2}))
     assert scan.check_request_downloads() == Counter({"acoustid-unknown": 2})
+
+
+def test_check_lengths_runs_the_guard_and_survives_its_failure(monkeypatch, caplog) -> None:
+    """homelab#2579: the length guard is a pre-import step; a failing guard lets the import go ahead."""
+    from collections import Counter
+
+    import music_scan.scan as scan
+
+    monkeypatch.setattr(scan, "guard_inbox", lambda inbox, rejected, exts: Counter(duration=2, silence=0))
+    assert scan.check_lengths() == Counter(duration=2)
+    assert ("guard-inbox", "check_lengths") in scan.PRE_IMPORT_STEPS
+
+    def broken(*_args):
+        raise RuntimeError("ffprobe missing")
+
+    monkeypatch.setattr(scan, "guard_inbox", broken)
+    assert scan.check_lengths() == Counter()
+    assert "Length guard failed" in caplog.text

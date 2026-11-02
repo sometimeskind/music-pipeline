@@ -6,6 +6,7 @@ import concurrent.futures
 import contextlib
 import logging
 import time
+from collections import Counter
 from collections.abc import Iterator
 
 from prefect import flow, get_run_logger, task
@@ -15,7 +16,7 @@ import music_fetch.ingest as ingest
 import music_scan.scan as scan
 from music_fetch.config import load_playlists
 from music_scan.metrics import ScanMetrics
-from music_scan.scan import MusicBrainzUnavailable
+from music_scan.scan import PRE_IMPORT_STEPS, MusicBrainzUnavailable
 
 # Prefect runs each flow run in a `python -m prefect.engine` subprocess where its own
 # logging dictConfig owns the root logger (level WARNING). music_fetch / music_scan
@@ -185,16 +186,25 @@ def spotdl_sync_task(metrics) -> None:
 # ---------------------------------------------------------------------------
 
 
-@task(name="verify-request-downloads", log_prints=True)
-def verify_requests_task(metrics: ScanMetrics) -> None:
-    """Check album requests' fallback downloads against AcoustID (homelab#2478)
-    before the import: spotdl leaves them in ``unverified/request/``, outside
-    the inbox, and only this step moves the confirmed ones in.  Until
-    homelab#2546 only ``music-scan``'s in-process path ran it, so under Prefect
-    they waited there, held, and never imported."""
+@task(name="pre-import-step", log_prints=True)
+def pre_import_task(function: str) -> dict:
+    """One of ``scan.PRE_IMPORT_STEPS``, run as its own task (named by
+    :func:`pre_import_tasks`); returns the files it rejected per reason."""
+    return dict(getattr(scan, function)())
+
+
+def pre_import_tasks(metrics: ScanMetrics) -> None:
+    """The checks before the import, from the list ``scan.run()`` runs too
+    (homelab#2579), so a check can't be wired into one path only again: the
+    request fallback's AcoustID check (homelab#2546) and the length guard
+    (#165) each ran only in ``scan.run()`` for a while, and production runs
+    this flow."""
     from music_scan.guard import REASONS  # noqa: PLC0415
 
-    metrics.rejected = {**dict.fromkeys(REASONS, 0), **scan.check_request_downloads()}
+    rejected: Counter = Counter()
+    for name, function in PRE_IMPORT_STEPS:
+        rejected.update(pre_import_task.with_options(name=name)(function))
+    metrics.rejected = {**dict.fromkeys(REASONS, 0), **rejected}
 
 
 @task(name="beet-import", log_prints=True)
@@ -392,7 +402,7 @@ def _run_scan_tasks() -> None:
     try:
         since = time.time()
         outage: MusicBrainzUnavailable | None = None
-        verify_requests_task(metrics)
+        pre_import_tasks(metrics)
         try:
             imported = beet_import_task()
         except MusicBrainzUnavailable as exc:

@@ -38,10 +38,13 @@ A full sync cycle (`music-ingest` followed by `music-scan`) runs 8 discrete step
                                          │
 ┌─ SCAN PHASE (music-scan) ─────────────▼───────────────────────────────┐
 │                                                                        │
-│  [3] Length guard (LENGTH_GUARD)                                       │
-│        Checks each spotdl download against the Spotify duration (±10%) │
-│        and for mid-track silence; moves wrong audio to                 │
-│        quarantine/rejected/ (asis pass skips it, no re-download).      │
+│  [3] Pre-import checks (scan.PRE_IMPORT_STEPS)                         │
+│        verify-request-downloads: AcoustID-checks album requests'       │
+│        fallback downloads into the inbox. guard-inbox: the length      │
+│        guard (LENGTH_GUARD) checks each spotdl download against the    │
+│        Spotify duration (±10%) and for mid-track silence; wrong audio  │
+│        goes to quarantine/rejected/ (no re-download). The Prefect      │
+│        music-scan flow and music-scan's run() both run this list.      │
 │        │                                                               │
 │        ▼                                                               │
 │  [4] Beets import                                                      │

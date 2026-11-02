@@ -675,9 +675,10 @@ def tag_album_ids(lib: MusicLibrary, source: str, tracks: list[list], since: flo
 def check_request_downloads() -> Counter:
     """Check album requests' fallback downloads (homelab#2478), and re-check
     the held ones AcoustID didn't know (homelab#2546), before the import, so
-    what AcoustID confirms imports in this scan.  Both the Prefect scan and
-    :func:`run` call it.  Returns the new rejections per reason; a failure
+    what AcoustID confirms imports in this scan.  A step of
+    :data:`PRE_IMPORT_STEPS`.  Returns the new rejections per reason; a failure
     leaves the files for the next scan."""
+    logger.info("==> Checking album requests' fallback downloads...")
     rejected: Counter = Counter()
     try:
         rejected.update(verify_requests(UNVERIFIED, SPOTDL_DIR, REJECTED, AUDIO_EXTS))
@@ -688,6 +689,32 @@ def check_request_downloads() -> Counter:
     except Exception:
         logger.error("AcoustID re-check of held downloads failed — tried again at the next scan", exc_info=True)
     return rejected
+
+
+def check_lengths() -> Counter:
+    """The length guard (#165) over the spotdl inbox: wrong-length and
+    silence-padded downloads go to ``quarantine/rejected/``, each with a
+    ``reject`` event, as ``LENGTH_GUARD`` says.  A step of
+    :data:`PRE_IMPORT_STEPS`.  Returns the rejections per reason; a failure
+    lets the import go ahead unchecked, as before."""
+    logger.info("==> Checking download lengths...")
+    try:
+        return Counter(guard_inbox(SPOTDL_DIR, REJECTED, AUDIO_EXTS))
+    except Exception:
+        logger.error("Length guard failed — continuing with import", exc_info=True)
+        return Counter()
+
+
+# The checks every scan runs on the inbox before the import, in order, as
+# (Prefect task name, function in this module).  :func:`run` and the Prefect
+# scan flow (music_service.flows) both run exactly this list, so a check can't
+# be wired into one path and not the other again: until homelab#2579 the length
+# guard ran only in run(), and production runs the flow.  Each step returns the
+# files it rejected per reason and contains its own failures.
+PRE_IMPORT_STEPS: tuple[tuple[str, str], ...] = (
+    ("verify-request-downloads", "check_request_downloads"),
+    ("guard-inbox", "check_lengths"),
+)
 
 
 def run() -> None:
@@ -701,14 +728,8 @@ def run() -> None:
         quarantined_before = _count_quarantine()
 
         rejected: Counter = Counter()
-        logger.info("==> Checking album requests' fallback downloads...")
-        rejected.update(check_request_downloads())
-
-        logger.info("==> Checking download lengths...")
-        try:
-            rejected.update(guard_inbox(SPOTDL_DIR, REJECTED, AUDIO_EXTS))
-        except Exception:
-            logger.error("Length guard failed — continuing with import", exc_info=True)
+        for _task, function in PRE_IMPORT_STEPS:
+            rejected.update(globals()[function]())
         metrics.rejected = {**dict.fromkeys(REASONS, 0), **rejected}
 
         logger.info("==> Importing from inbox...")
