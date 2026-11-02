@@ -9,6 +9,7 @@ the database is down: only its ``history`` section then holds an error.
 from __future__ import annotations
 
 import logging
+import uuid
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -78,6 +79,15 @@ def album_refs(key: str, record: dict) -> list[str]:
     homelab#2478), every Spotify album ID and local name it has, which were its
     keys before."""
     return sorted({key, *(record.get("spotify_album_ids") or ()), *(record.get("names") or ())})
+
+
+def uuid_or_none(value: str) -> str | None:
+    """*value* as a release group MBID, or None: a dropped album is looked up by the
+    key or Spotify ID it was known by, or its release group."""
+    try:
+        return str(uuid.UUID(value))
+    except ValueError:
+        return None
 
 
 def album_history(conn, refs: list[str], release_group: str | None, since: str | None) -> list[dict]:

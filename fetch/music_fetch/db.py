@@ -89,6 +89,11 @@ EVENT_KINDS = (
     # Migration 11: an item's guessed MusicBrainz recording ID replaced by the
     # one AcoustID names for its audio (music-mb-fingerprint --recheck, homelab#2543).
     "recording_replaced",
+    # Migration 13 (homelab#2544): an album record the wants feed dropped (no want
+    # list holds it any more), and an item's title or trackdisambig refreshed from
+    # its replaced recording (music-mb-fingerprint --refresh-replaced --apply).
+    "album_dropped",
+    "recording_refreshed",
 )
 
 MIGRATIONS: list[str] = [
@@ -360,6 +365,17 @@ MIGRATIONS: list[str] = [
         outcome_job    text,
         PRIMARY KEY (run_id, item_id)
     );
+    """,
+    # 13: the album_dropped and recording_refreshed kinds (homelab#2544).
+    """
+    ALTER TABLE events DROP CONSTRAINT events_kind_check;
+    ALTER TABLE events ADD CONSTRAINT events_kind_check CHECK (kind IN (
+        'import_done', 'import_wrong', 'import_incomplete', 'import_lost',
+        'retire', 'local', 'merge', 'clash', 'mixed',
+        'grab', 'autoreset', 'fallback', 'failure', 'reject', 'mcp_job',
+        'album_requested', 'later_added', 'later_removed', 'spotify_id_resolved',
+        'filled', 'wrong_version', 'moved', 'override_set', 'override_cleared',
+        'state_edited', 'recording_replaced', 'album_dropped', 'recording_refreshed'));
     """,
 ]
 

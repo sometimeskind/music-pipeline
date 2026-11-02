@@ -91,6 +91,7 @@ MAX_FAILURES_IN_A_ROW = 10
 LOOKUP_TIMEOUT = 30
 PROGRESS_EVERY = 500
 EVENT_KIND = "recording_replaced"
+REFRESH_KIND = "recording_refreshed"  # --refresh-replaced --apply (homelab#2544)
 SOURCE = "mb-fingerprint"
 # Flexible attributes that say the pipeline, not beets' guess, set mb_trackid.
 FALLBACK_RECORDING = "fallback_recording"  # music_pipeline.FALLBACK_RECORDING
@@ -672,7 +673,7 @@ def refresh_replaced(since: datetime | None = None, apply: bool = False, library
     new: a refreshed item's fields are its recording's already."""
     import beets.library  # noqa: PLC0415
 
-    from music_fetch import db  # noqa: PLC0415
+    from music_fetch import db, events  # noqa: PLC0415
     from music_scan.audit import pipeline_lock  # noqa: PLC0415
 
     if not db.configured():
@@ -724,12 +725,20 @@ def refresh_replaced(since: datetime | None = None, apply: bool = False, library
                         counts["skipped"] += 1
                         logger.warning("[SKIP] %s: changed since its lookup; left alone (run it again)", item_id)
                         continue
+                    before = events.item_fields(item)
                     for field, (_, after) in changes.items():
                         item[field] = after
                     item.store()
                     item.try_write()
                     counts["refreshed"] += 1
-                    logger.info("[REFRESH] %s: %s", _label(item), _describe(changes))
+                    message = f"[REFRESH] {_label(item)}: {_describe(changes)}"
+                    logger.info(message)
+                    # The change's record (homelab#2544): album_history shows it with the album's events.
+                    events.record(REFRESH_KIND, message, source=SOURCE,
+                                  spotify_album_id=events.spotify_album(item.get("spotify_album_id")),
+                                  release_group=item.get("mb_releasegroupid"), item_id=item.id,
+                                  data={**before, "recording": recording,
+                                        "refreshed": {k: list(v) for k, v in changes.items()}})
     finally:
         lib._close()
     logger.info("[SUMMARY] %d replaced item(s): %s, %d current already, %d skipped, %d not looked up%s, "

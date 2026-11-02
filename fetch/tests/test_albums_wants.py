@@ -180,6 +180,18 @@ def test_feed_deletes_a_waiting_record_whose_album_dropped_under_the_threshold(s
     assert "[UNWANTED] A Artist — Album A" in caplog.text  # logged, so a vanished record can be traced
 
 
+def test_a_dropped_record_leaves_an_event(monkeypatch) -> None:
+    """homelab#2544: the record goes, so its event is what album_history can still find."""
+    recorded = []
+    monkeypatch.setattr(albums.events, "record", lambda kind, message, **kw: recorded.append((kind, message, kw)))
+    state = State(albums={"A": wants_record()})
+    feed_wants(state, ["disc"], hook({}), Settings())
+    (kind, message, kw), = recorded
+    assert kind == "album_dropped" and message.startswith("[UNWANTED] A Artist — Album A")
+    assert kw["data"]["key"] == "A" and kw["data"]["playlists"] == ["disc"]
+    assert kw["data"]["status"] == albums.WANTED
+
+
 def test_feed_keeps_a_record_reset_to_import_again() -> None:
     """homelab#2544: album 611, reset with reimport, held every wanted track already, so no
     want list named it; the feed deleted the record and its reimport with it, unlogged."""

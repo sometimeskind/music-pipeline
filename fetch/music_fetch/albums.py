@@ -631,9 +631,13 @@ def feed_wants(
         # library and its tracks no longer on a want list: pruning it would drop the reimport and
         # the record with it, silently (homelab#2544, album 611).
         if _wants(record) and record.get("status") in WAITING and not record.get("reimport"):
+            was_on = sorted(record.get("playlists", {}))
             record["playlists"] = {n: t for n, t in record.get("playlists", {}).items() if key in listed_on.get(n, ())}
             if not record["playlists"]:
-                logger.info("[UNWANTED] %s %s: no want list holds it any more; record dropped", key, _label(record))
+                message = f"[UNWANTED] {key} {_label(record)}: no want list holds it any more; record dropped"
+                logger.info(message)
+                # The record goes, so its event is all album_history has left of it (homelab#2544).
+                _event("album_dropped", key, record, message, status=record.get("status"), playlists=was_on)
                 del state.albums[key]
     order = [k for k, r in state.albums.items() if not _fed(r)] + [k for k in ranked if k in state.albums]
     order += [k for k in state.albums if k not in set(order)]
