@@ -256,6 +256,10 @@ def _sync_requests(album_state: albums.State, held: frozenset[str], metrics: Ing
              if s.get("url") not in held]
     if not songs:
         return 0
+    if track_limit == 0:
+        logger.info("==> Album requests: [DEFERRED] %d track(s) from MusicBrainz tracklists wait for the next "
+                    "session: the track budget (SYNC_TRACK_LIMIT) went to the playlists", len(songs))
+        return 0
     logger.info("==> Album requests: [FALLBACK] %d track(s) from MusicBrainz tracklists", len(songs))
     output_dir = album_requests.UNVERIFIED / album_requests.SOURCE
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -448,13 +452,15 @@ def sync_playlists(
         # Brief pause between playlists — avoid hammering Spotify/YouTube APIs.
         time.sleep(5)
 
-    if remaining is None or remaining > 0:
-        if _deadline_reached(time.monotonic() - start, soft_timeout):
-            logger.info("==> Soft timeout reached — deferring the album requests' fallback to next session")
-        else:
-            attempted = _sync_requests(album_state, held, metrics, None if remaining is None else max(remaining, 0))
-            if remaining is not None:
-                remaining -= attempted
+    # The requests' fallback runs after the playlists, on what is left of the budget: a spent
+    # budget defers it, and says so (homelab#2478: a backlog of wanted playlist tracks deferred
+    # it every night, without a line).
+    if _deadline_reached(time.monotonic() - start, soft_timeout):
+        logger.info("==> Soft timeout reached — deferring the album requests' fallback to next session")
+    else:
+        attempted = _sync_requests(album_state, held, metrics, None if remaining is None else max(remaining, 0))
+        if remaining is not None:
+            remaining -= attempted
 
     _flag_expired_cookies_from_totals(metrics)
 
