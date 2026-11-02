@@ -6,6 +6,7 @@ import logging
 import os
 import sys
 import threading
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 logging.basicConfig(
@@ -34,6 +35,25 @@ def _start_file_watcher(on_audio_created):
     observer.start()
     logger.info("File watcher started on %s", inbox)
     return observer
+
+
+# How long after the runner starts the first album tick runs.  Leaves the
+# server's recent-deployments scheduler (every 5 s) time to schedule it.
+FIRST_ALBUM_TICK_SECONDS = 60
+
+
+def album_schedule(interval: int, now: datetime | None = None):
+    """The ``music-albums`` schedule: every *interval* seconds, the first a
+    minute after *now* (homelab#2596).
+
+    ``serve()`` upserts the deployment at every pod start; the server then drops
+    its pending scheduled runs, and an ``interval=`` schedule is anchored at that
+    moment, so its first run came a whole interval later: every restart stopped
+    the album tick (and the downloads and imports it starts) for 30 minutes."""
+    from prefect.schedules import Interval
+
+    now = now or datetime.now(timezone.utc)
+    return Interval(interval, anchor_date=now + timedelta(seconds=FIRST_ALBUM_TICK_SECONDS))
 
 
 def main() -> None:
@@ -87,7 +107,7 @@ def main() -> None:
     # Album mode polls Spotify snapshot ids; the flow is a no-op while ALBUM_MODE=off.
     albums_deployment = albums_flow.to_deployment(
         name="music-albums",
-        interval=int(os.environ.get("ALBUM_POLL_SECONDS", "") or 1800),
+        schedule=album_schedule(int(os.environ.get("ALBUM_POLL_SECONDS", "") or 1800)),
     )
     # Run by /trigger-album-import when SABnzbd finishes an album job.
     album_import_deployment = album_import_flow.to_deployment(name="music-album-import")

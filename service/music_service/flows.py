@@ -5,6 +5,7 @@ from __future__ import annotations
 import contextlib
 import logging
 import time
+from collections.abc import Iterator
 
 from prefect import flow, get_run_logger, task
 from prefect.concurrency.sync import concurrency
@@ -169,7 +170,7 @@ def verify_requests_task(metrics: ScanMetrics) -> None:
 def beet_import_task() -> list:
     """Import inbox audio files into the beets library."""
     logger = get_run_logger()
-    with concurrency("beet-import", occupy=1):
+    with hold("beet-import"):
         imported = scan.run_inbox_import()
     logger.info("Imported %d track(s) from inbox", len(imported))
     for title, artist in imported[:10]:
@@ -402,6 +403,26 @@ def _run_scan_tasks() -> None:
 SKIP_IF_BUSY_SECONDS = 5
 
 
+@contextlib.contextmanager
+def hold(name: str) -> Iterator[None]:
+    """Hold the *name* concurrency slot for the block, waiting as long as it takes.
+
+    A wait says so (homelab#2596): ``[WAIT]`` when another run holds the slot,
+    then how long it took.  Before, a flow waiting on a slot was silent, so a
+    stalled pipeline looked idle.  A slot whose holder died stays held until
+    its lease expires (Prefect's default lease is 300 s)."""
+    with contextlib.ExitStack() as stack:
+        try:
+            stack.enter_context(concurrency(name, occupy=1, timeout_seconds=SKIP_IF_BUSY_SECONDS))
+        except TimeoutError:
+            logger = get_run_logger()
+            logger.info("[WAIT] The %s slot is held by another run; waiting for it", name)
+            start = time.monotonic()
+            stack.enter_context(concurrency(name, occupy=1))
+            logger.info("[WAIT] Got the %s slot after %ds", name, time.monotonic() - start)
+        yield
+
+
 # Flow names are prefixed because the document-pipeline service serves its
 # own flows against the same Prefect server. Prefect keys a deployment on
 # flow name + deployment name, so a bare "scan" resolved to one shared
@@ -414,7 +435,7 @@ def fetch_and_scan_flow() -> None:
     The fetch tasks share one ``ingest_run`` with ``ingest.run()``, so the music_ingest
     push (cookie expiry included) is the same in both paths (#203).
     """
-    with concurrency("pipeline", occupy=1):
+    with hold("pipeline"):
         with ingest.ingest_run() as metrics:
             preflight_task(metrics)
             reconcile_playlists_task(metrics)
@@ -518,7 +539,7 @@ def _album_library_hooks(lib):
 
     def import_inbox() -> None:
         # Waits for a running fetch or scan: beets' SQLite has one writer.
-        with concurrency("pipeline", occupy=1):
+        with hold("pipeline"):
             try:
                 _run_scan_tasks()
             except MusicBrainzUnavailable as exc:
@@ -532,13 +553,13 @@ def _album_library_hooks(lib):
         # The files the singleton import couldn't match are the album's too (#279).
         from music_scan import release  # noqa: PLC0415
 
-        with concurrency("pipeline", occupy=1):
+        with hold("pipeline"):
             return release.import_rest(scan.QUARANTINE, scan.INBOX, playlist, job)
 
     def claim(playlist: str, since: float, key: str, guid: str, job: str) -> list[str]:
         from music_scan import release  # noqa: PLC0415
 
-        with concurrency("pipeline", occupy=1):
+        with hold("pipeline"):
             return [i.title or "" for i in release.claim(lib.all_items(), playlist, since, key, guid, job)]
 
     def retire(key: str, record: dict, keep: str | None, drop: str | None) -> int:
@@ -546,7 +567,7 @@ def _album_library_hooks(lib):
         # the .m3u files listed them, so regenerate.
         from music_scan import release  # noqa: PLC0415
 
-        with concurrency("pipeline", occupy=1):
+        with hold("pipeline"):
             n = release.retire(lib, key, record, keep, drop, scan.store_listings())
             if n:
                 scan.regen_playlists()
@@ -571,7 +592,7 @@ def _album_library_hooks(lib):
         from music_scan import release  # noqa: PLC0415
 
         try:
-            with concurrency("pipeline", occupy=1):
+            with hold("pipeline"):
                 if release.retire_held(lib):
                     scan.regen_playlists()
         except Exception:
@@ -598,7 +619,7 @@ def _album_library_hooks(lib):
         from music_scan.navidrome import trigger_scan  # noqa: PLC0415
 
         try:
-            with concurrency("pipeline", occupy=1):
+            with hold("pipeline"):
                 fresh = [i for i in lib.items_by_source(playlist)
                          if i.get("via") == "usenet" and (i.added or 0) >= since
                          and str(i.get("album_record") or "") == str(key)]
@@ -768,7 +789,7 @@ def album_import_flow(nzo_id: str, ok: bool, path: str = "", fail_message: str =
     logger = get_run_logger()
     settings = albums.Settings.from_env()
     # Waits for a tick: both read and write the album store.
-    with concurrency("albums", occupy=1):
+    with hold("albums"):
         state = albums.State.load()
         success = False
         try:

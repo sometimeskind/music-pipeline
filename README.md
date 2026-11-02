@@ -338,7 +338,7 @@ Mount `cookies.txt` at `/root/.config/spotdl/cookies.txt` read-only. Update by p
 | `LENGTH_GUARD` | Plain value | `dry-run` | `on` rejects wrong-length or silence-padded spotdl downloads before import, `dry-run` only logs `[WOULD-REJECT]`, `off` skips the check |
 | `ALBUM_MODE` | Plain value | `off` | `off`, `dry-run` (search and log picks, never grab) or `on` |
 | `ALBUM_DRY_RUN_LIMIT` | Plain value | `25` | Albums searched in total while `dry-run`; then it only polls. `on` searches every album again, so dry-run is a sample |
-| `ALBUM_POLL_SECONDS` | Plain value | `1800` | Interval of the `music-albums` flow (Spotify snapshot poll + queue top-up) |
+| `ALBUM_POLL_SECONDS` | Plain value | `1800` | Interval of the `music-albums` flow (Spotify snapshot poll + queue top-up); its first run is a minute after the service starts |
 | `ALBUM_MAX_IN_FLIGHT` | Plain value | `3` | Albums queued in SABnzbd at once; size it to the `music-data` disk |
 | `ALBUM_GRABS_PER_DAY` / `ALBUM_HITS_PER_DAY` | Plain value | `18` / `90` | Rolling-24h indexer budget (NZB grabs / API searches) |
 | `ALBUM_AUTO_REIMPORTS_PER_DAY` | Plain value | `3` | Mixed albums the album tick resets for a reimport per rolling 24h, within the grab budget (#288); `0` turns it off |
