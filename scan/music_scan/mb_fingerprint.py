@@ -44,10 +44,12 @@ swaps the audio and keeps ``mb_trackid``) is skipped too.
 The fields beets copied from the guessed recording go with it (homelab#2544):
 each replaced item's ``trackdisambig`` and ``title`` are refreshed from the new
 recording on MusicBrainz (:func:`refreshed`), in the same store, and logged
-``[REFRESH]``.  A lookup that fails leaves them as they were (``[NOREFRESH]``)
-and the replacement goes ahead: ``--refresh-replaced`` catches such items up,
-and the items replaced before this existed (``recording_replaced`` events,
-``--since`` to narrow them), as a dry run unless ``--apply``.
+``[REFRESH]``.  That lookup is also the check that the new recording is the
+item's song (homelab#2583): one whose title names another song (``[SUSPECT]``)
+or whose lookup fails (``[NOREFRESH]``) is not replaced (``[SKIP]``,
+:func:`unchecked`).  ``--refresh-replaced`` refreshes the items replaced before
+this existed (``recording_replaced`` events, ``--since`` to narrow them), as a
+dry run unless ``--apply``.
 ``mb_releasetrackid``, ISRCs and the work stay as they were (see
 :func:`refreshed`).
 
@@ -481,6 +483,21 @@ def _describe(changes: Changes) -> str:
     return "; ".join(f"{field} {before!r} → {after!r}" for field, (before, after) in changes.items())
 
 
+def unchecked(changes: Changes | None) -> str | None:
+    """Why a replacement whose refresh came back *changes* must not be stored, or
+    None when it may (homelab#2583).  The recheck matched the audio to a recording
+    by AcoustID alone; its title is the only check that the recording is the
+    item's song.  A recording naming another song (:class:`Suspect`: 9127,
+    8276, 8826 after the 2026-10-31 apply) is an AcoustID collision or a wrong
+    download, and a lookup that failed couldn't tell, so neither replaces the
+    guess: the first wants a person, the second a run again."""
+    if isinstance(changes, Suspect):
+        return "its new recording names another song; check it by hand"
+    if changes is None:
+        return "MusicBrainz couldn't be asked whether its new recording is the same song; run it again"
+    return None
+
+
 def _store(conn, item, f: Flagged, job_id: str | None = None, run_id: str | None = None,
            event: bool = True, refresh: Changes | None = None) -> str:
     """Store *f*'s replacement on *item*, and the fields *refresh* changes, with
@@ -538,6 +555,9 @@ def replace(lib, flagged: list[Flagged]) -> int:
                 logger.warning("[SKIP] %s: %s; left alone", f.item_id, why)
                 continue
             refresh = _refresh(item, f.replacement, recordings)
+            if why := unchecked(refresh):
+                logger.warning("[SKIP] %s: %s; mb_trackid %s left alone", _label(item), why, f.guess)
+                continue
             message = _store(conn, item, f, refresh=refresh)
             item.try_write()
             logger.info("%s", message)
@@ -620,6 +640,11 @@ def replace_run(run_id: str, apply: bool = False, library_db: str = LIBRARY_DB,
                                 f.replacement, f.found[0][0], " (a merge keeper)" if f.keeper else "")
                     continue
                 changes = refresh(item, f)
+                if why := unchecked(changes):
+                    counts["skipped"] += 1
+                    logger.warning("[SKIP] %s: %s; mb_trackid %s left alone", _label(item), why, f.guess)
+                    recheck_runs.record_outcome(conn, run_id, f.item_id, "skipped", why, job_id)
+                    continue
                 logger.info("%s", _store(conn, item, f, job_id, run_id, refresh=changes))
                 item.try_write()
                 _log_refresh(item.id, changes)
@@ -633,9 +658,9 @@ def replace_run(run_id: str, apply: bool = False, library_db: str = LIBRARY_DB,
                 f"{counts['replaceable'] - counts['already'] - counts['skipped']} to replace (re-run with --apply)",
                 counts["already"], counts["skipped"], counts["ambiguous"])
     if apply:
-        logger.info("[SUMMARY] run %s: title or trackdisambig refreshed on %d; %d not refreshed (their "
-                    "MusicBrainz lookup failed: catch them up with --refresh-replaced); %d [SUSPECT] (the new "
-                    "recording names another song: check each by hand)",
+        logger.info("[SUMMARY] run %s: title or trackdisambig refreshed on %d; not replaced: %d whose "
+                    "MusicBrainz lookup failed (run it again), %d [SUSPECT] (the new recording names another "
+                    "song: check each by hand)",
                     run_id, counts["refreshed"], counts["norefresh"], counts["suspect"])
     return counts
 
