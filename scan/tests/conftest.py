@@ -37,3 +37,15 @@ def clip():
     if not (shutil.which("ffmpeg") and shutil.which("ffprobe")):
         pytest.skip("ffmpeg not installed")
     return _clip
+
+
+@pytest.fixture(autouse=True)
+def _no_musicbrainz_in_merges(monkeypatch):
+    """A merge looks a dropped item's recording up before the keeper takes it
+    (homelab#2600); a test that reaches MusicBrainz must pass ``recordings``."""
+    from music_scan import dupes
+
+    def refuse():
+        raise AssertionError("a merge asked MusicBrainz; pass recordings= in the test")
+
+    monkeypatch.setattr(dupes, "recording_lookup", refuse)

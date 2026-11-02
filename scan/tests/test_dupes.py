@@ -268,9 +268,10 @@ def test_merge_moves_ids_and_playlists_and_quarantines_the_file(tmp_path, monkey
     loser = _on_disk(tmp_path, FakeItem(2, "Song", spotify_url="https://open.spotify.com/track/B",
                                         isrc="GB1;US2", mb_trackid="rec", sources="keep,later"))
     old = Path(loser.path.decode())
-    moved = merge(keeper, [loser], tmp_path / "replaced")
+    moved = merge(keeper, [loser], tmp_path / "replaced", recordings=lambda rid: {"title": "Song (Live)"})
     (kind, message, kw), = recorded
     assert kind == "merge" and message == f"[MERGE] keep 1 ← 2; old file → {moved[0]}"
+    assert kw["data"]["mb_trackid_taken"] == "rec"
     assert kw["item_id"] == 1 and kw["data"]["merged"] == 2 and kw["data"]["why"] == "duplicate"
     assert keeper.get("spotify_ids") == "A,B"
     assert keeper.get("isrc") == "GB1;US2"
@@ -279,6 +280,68 @@ def test_merge_moves_ids_and_playlists_and_quarantines_the_file(tmp_path, monkey
     assert keeper.stored and keeper.written
     assert loser.removed and not old.exists()
     assert moved == [tmp_path / "replaced" / f"2-{old.name}"] and moved[0].read_bytes() == b"audio"
+
+
+# --- the keeper's recording ID (homelab#2600) ------------------------------------
+
+DURANGO = "Romance in Durango (Live at Harvard Square Theatre, Cambridge, MA - November 1975)"
+BABE = "It Ain't Me, Babe (Live at Harvard Square Theatre, Cambridge, MA - November 1975)"
+
+
+def _recorded(monkeypatch) -> list:
+    from music_fetch import events
+
+    recorded = []
+    monkeypatch.setattr(events, "record", lambda kind, message, **kw: recorded.append(kw["data"]))
+    return recorded
+
+
+def test_merge_refuses_a_recording_id_that_names_another_song(tmp_path, monkeypatch, caplog) -> None:
+    """15481 ← 11982: 11982 carried It Ain't Me, Babe's recording, a singleton guess (homelab#2544)."""
+    recorded = _recorded(monkeypatch)
+    keeper = _on_disk(tmp_path, FakeItem(15481, DURANGO, artist="Bob Dylan"))
+    loser = _on_disk(tmp_path, FakeItem(11982, DURANGO, artist="Bob Dylan", mb_trackid="48e880bf"))
+    merge(keeper, [loser], tmp_path / "replaced", recordings={"48e880bf": {"title": BABE}}.get)
+    assert keeper.get("mb_trackid") is None and not keeper.written
+    assert loser.removed  # the merge itself goes ahead
+    [data] = recorded
+    assert data["mb_trackid_refused"]["mb_trackid"] == "48e880bf"
+    assert "another song" in data["mb_trackid_refused"]["why"] and "mb_trackid_taken" not in data
+    assert "[NOTRACKID] keep 15481 ← 11982" in caplog.text
+
+
+@pytest.mark.parametrize("lookup", [lambda rid: None, lambda rid: (_ for _ in ()).throw(OSError("timed out"))],
+                         ids=["no such recording", "lookup failed"])
+def test_merge_takes_no_recording_id_it_could_not_check(tmp_path, monkeypatch, lookup) -> None:
+    recorded = _recorded(monkeypatch)
+    keeper = _on_disk(tmp_path, FakeItem(1, "Song"))
+    loser = _on_disk(tmp_path, FakeItem(2, "Song", mb_trackid="rec"))
+    merge(keeper, [loser], tmp_path / "replaced", recordings=lookup)
+    assert keeper.get("mb_trackid") is None
+    [data] = recorded
+    assert data["mb_trackid_refused"]["mb_trackid"] == "rec"
+
+
+def test_merge_takes_the_next_losers_recording_when_the_first_is_another_song(tmp_path, monkeypatch) -> None:
+    recorded = _recorded(monkeypatch)
+    keeper = _on_disk(tmp_path, FakeItem(1, DURANGO))
+    wrong = _on_disk(tmp_path, FakeItem(2, DURANGO, mb_trackid="babe"))
+    right = _on_disk(tmp_path, FakeItem(3, DURANGO, mb_trackid="durango"))
+    merge(keeper, [wrong, right], tmp_path / "replaced",
+          recordings={"babe": {"title": BABE}, "durango": {"title": "Romance in Durango"}}.get)
+    assert keeper.get("mb_trackid") == "durango" and keeper.written
+    assert [("mb_trackid_refused" in d, d.get("mb_trackid_taken")) for d in recorded] == [(True, None),
+                                                                                         (False, "durango")]
+
+
+def test_merge_onto_a_keeper_with_a_recording_id_looks_nothing_up(tmp_path, monkeypatch) -> None:
+    recorded = _recorded(monkeypatch)
+    keeper = _on_disk(tmp_path, FakeItem(1, "Song", mb_trackid="mine"))
+    loser = _on_disk(tmp_path, FakeItem(2, "Song", mb_trackid="theirs"))
+    merge(keeper, [loser], tmp_path / "replaced")  # the conftest fixture fails any lookup
+    assert keeper.get("mb_trackid") == "mine"
+    [data] = recorded
+    assert "mb_trackid_taken" not in data and "mb_trackid_refused" not in data
 
 
 def test_merge_never_overwrites_a_replaced_file(tmp_path) -> None:
@@ -405,6 +468,23 @@ def test_merge_dry_run_changes_nothing(monkeypatch, tmp_path, caplog) -> None:
     assert events == [] and PUSHED == []
     assert "keep 2898" in caplog.text and "drop 92" in caplog.text and "Dry run" in caplog.text
     assert "new playlists: aaaaaaah" in caplog.text
+
+
+def test_merge_dry_run_says_whether_the_keeper_takes_the_recording_id(monkeypatch, tmp_path, caplog) -> None:
+    """homelab#2600: the dry run a merge_items apply is checked against shows the refusal."""
+    old, new = items = _bright_eyes(tmp_path)
+    old["mb_trackid"] = "wrong"
+    _patch_run(monkeypatch, items, tmp_path)
+    monkeypatch.setattr(dupes, "recording_lookup", lambda: {"wrong": {"title": "Lover I Don't Have to Love"}}.get)
+    caplog.set_level("INFO")
+    dupes.run(merge_ids=[2898, 92])
+    assert "[NOTRACKID] 2898 won't take the recording ID of 92: MusicBrainz titles it" in caplog.text
+    assert new.get("mb_trackid") is None and not new.stored
+
+    caplog.clear()
+    monkeypatch.setattr(dupes, "recording_lookup", lambda: {"wrong": {"title": "Old Soul Song"}}.get)
+    dupes.run(merge_ids=[2898, 92])
+    assert "2898 takes the recording ID wrong of 92" in caplog.text
 
 
 def test_merge_apply_merges_and_the_dropped_items_playlists_point_at_the_keeper(monkeypatch, tmp_path) -> None:
