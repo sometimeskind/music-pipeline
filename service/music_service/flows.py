@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import concurrent.futures
 import contextlib
 import logging
 import time
+from collections import Counter
 from collections.abc import Iterator
 
 from prefect import flow, get_run_logger, task
@@ -14,7 +16,7 @@ import music_fetch.ingest as ingest
 import music_scan.scan as scan
 from music_fetch.config import load_playlists
 from music_scan.metrics import ScanMetrics
-from music_scan.scan import MusicBrainzUnavailable
+from music_scan.scan import PRE_IMPORT_STEPS, MusicBrainzUnavailable
 
 # Prefect runs each flow run in a `python -m prefect.engine` subprocess where its own
 # logging dictConfig owns the root logger (level WARNING). music_fetch / music_scan
@@ -24,6 +26,36 @@ from music_scan.scan import MusicBrainzUnavailable
 # imported in every flow-run process, so pin those loggers to INFO here.
 for _name in ("music_fetch", "music_scan"):
     logging.getLogger(_name).setLevel(logging.INFO)
+
+
+class _QuietSlotTimeout(logging.Filter):
+    """Drop Prefect's ERROR for a slot acquisition that hit its ``timeout_seconds``.
+
+    The skip-if-busy probes (``hold``, the scan and album ticks) acquire with a
+    short timeout and expect it to fire when another run holds the slot.  Prefect's
+    acquisition service then logs ``Service 'ConcurrencySlotAcquisitionWithLeaseService'
+    failed to process item (…, <Future … raised TimeoutError>)`` at ERROR from its
+    own thread (homelab#2596), hundreds a day, although the caller gets the timeout
+    as an exception and logs what it did about it.  Only that record is dropped,
+    and only when the item's future holds a ``TimeoutError``: a timeout is always
+    handed to the caller.  Any other failure (the server down, an HTTP error) still
+    logs, and still raises in the caller.  The filter is process-wide, not scoped
+    to the probe, because the record is written on Prefect's loop thread after the
+    caller has been woken, so a filter removed on the probe's exit would race it."""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        args = record.args
+        if not (isinstance(args, tuple) and len(args) == 2
+                and args[0] == "ConcurrencySlotAcquisitionWithLeaseService"
+                and isinstance(args[1], tuple) and args[1]):
+            return True
+        future = args[1][-1]
+        if not isinstance(future, concurrent.futures.Future) or not future.done() or future.cancelled():
+            return True
+        return not isinstance(future.exception(), TimeoutError)
+
+
+logging.getLogger("prefect._internal.concurrency").addFilter(_QuietSlotTimeout())
 
 
 # ---------------------------------------------------------------------------
@@ -154,16 +186,25 @@ def spotdl_sync_task(metrics) -> None:
 # ---------------------------------------------------------------------------
 
 
-@task(name="verify-request-downloads", log_prints=True)
-def verify_requests_task(metrics: ScanMetrics) -> None:
-    """Check album requests' fallback downloads against AcoustID (homelab#2478)
-    before the import: spotdl leaves them in ``unverified/request/``, outside
-    the inbox, and only this step moves the confirmed ones in.  Until
-    homelab#2546 only ``music-scan``'s in-process path ran it, so under Prefect
-    they waited there, held, and never imported."""
+@task(name="pre-import-step", log_prints=True)
+def pre_import_task(function: str) -> dict:
+    """One of ``scan.PRE_IMPORT_STEPS``, run as its own task (named by
+    :func:`pre_import_tasks`); returns the files it rejected per reason."""
+    return dict(getattr(scan, function)())
+
+
+def pre_import_tasks(metrics: ScanMetrics) -> None:
+    """The checks before the import, from the list ``scan.run()`` runs too
+    (homelab#2579), so a check can't be wired into one path only again: the
+    request fallback's AcoustID check (homelab#2546) and the length guard
+    (#165, since dropped) each ran only in ``scan.run()`` for a while, and
+    production runs this flow."""
     from music_scan.guard import REASONS  # noqa: PLC0415
 
-    metrics.rejected = {**dict.fromkeys(REASONS, 0), **scan.check_request_downloads()}
+    rejected: Counter = Counter()
+    for name, function in PRE_IMPORT_STEPS:
+        rejected.update(pre_import_task.with_options(name=name)(function))
+    metrics.rejected = {**dict.fromkeys(REASONS, 0), **rejected}
 
 
 @task(name="beet-import", log_prints=True)
@@ -361,7 +402,7 @@ def _run_scan_tasks() -> None:
     try:
         since = time.time()
         outage: MusicBrainzUnavailable | None = None
-        verify_requests_task(metrics)
+        pre_import_tasks(metrics)
         try:
             imported = beet_import_task()
         except MusicBrainzUnavailable as exc:
@@ -471,12 +512,16 @@ def scan_flow() -> None:
 # ---------------------------------------------------------------------------
 
 
-def _album_request_recordings(lib):
+def _album_request_recordings(lib, fill=None):
     """The tick's ``recordings`` hook (homelab#2478): the MusicBrainz recordings
     of the library items stamped with an album record's key, an album
     request's fallback tracks among them, and of those on one of its Spotify
     albums (an album playlist's copies, from before the stage 3 cutover made
-    it a request's).  The library is read once a tick."""
+    it a request's).  The library is read once a tick.
+
+    With *fill* (``request_fill.Filler``, homelab#2589), those items without a
+    recording ID that AcoustID places on a track the request still lacks hold
+    it too: *fill* stores the recording on each, with its event."""
     from music_scan.music_pipeline import FALLBACK_RECORDING  # noqa: PLC0415
     from music_scan.playlists import by_album_id, by_stamp  # noqa: PLC0415
 
@@ -490,9 +535,18 @@ def _album_request_recordings(lib):
             on_album.update(by_album_id(items))
         items = [*stamped.get(key, ()), *(i for sid in record.get("spotify_album_ids") or ()
                                           for i in on_album.get(sid, ()))]
-        return {r for i in items for r in (i.get(FALLBACK_RECORDING), i.get("mb_trackid")) if r}
+        held = {r for i in items for r in (i.get(FALLBACK_RECORDING), i.get("mb_trackid")) if r}
+        return held | fill(key, record, items, held) if fill else held
 
     return recordings
+
+
+def _request_fill(lib):
+    """The AcoustID fill of a request's items without a recording ID (homelab#2589),
+    its writes under the pipeline lock (beets' SQLite has one writer)."""
+    from music_scan.request_fill import Filler  # noqa: PLC0415
+
+    return Filler(lib, lock=lambda: hold("pipeline"))
 
 
 def _album_library_hooks(lib):
@@ -645,8 +699,9 @@ def _album_library_hooks(lib):
             cover.logger.exception("Album covers: embedding failed; music-embed-covers retries it")
 
     def complete(state, completion) -> str | None:
+        # save: the import's start is in the database before beets runs (homelab#2603).
         status = albums.complete(state, completion, import_inbox, claim, add_source, tag_ids, retire,
-                                 identify=identify, import_rest=import_rest)
+                                 identify=identify, import_rest=import_rest, save=state.save)
         keys.clear()
         albums_by_id.clear()
         return status
@@ -756,7 +811,7 @@ def album_tick_task(settings) -> None:
             wants=_album_wants_hook(lib),
             library=_album_library_feed_hook(lib),
             request_songs=functools.partial(album_requests.release_songs, musicbrainz),
-            recordings=_album_request_recordings(lib),
+            recordings=_album_request_recordings(lib, _request_fill(lib)),
             later_get=musicbrainz,
             stranded_lookup=stranded.musicbrainz_lookup(musicbrainz),
         )

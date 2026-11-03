@@ -57,7 +57,9 @@ Search the album's name in the log. The import logs `[RELEASE]`/`[NOMB]`, then o
   the service moves them back to SABnzbd's complete dir, so no scan imports them loose, and
   the lost-trigger recovery finishes the import as the release. No action.
 - `[LOST]`: the completed job folder is gone. The album is searched again at the next
-  top-up, ahead of the queue, with no blocklist entry. Loose items from such an import (no
+  top-up, ahead of the queue, with no blocklist entry. A `[LOST]` right after a pod restart
+  with no `[RESUME]` was an import cut short before homelab#2603, which saves the import's
+  path before beets runs. Loose items from such an import (no
   album, no cover) are retired when the new release imports.
 
 ## 5. An album is wrong
@@ -103,6 +105,8 @@ few per run, and `audit_want_albums` shows what is still wanted, grouped by albu
 `set_search_override`. A `[MISS]` with results says which rule rejected them (`rejected: …;
 closest: "<title>" (<rule>: <detail>)`): `album words` on the closest means the release
 spells the title differently, which an override fixes; `size`, `single` or `leftover words`
-are about the release itself, which an override doesn't change. An override is words a
+are about the release itself, which an override doesn't change. `other release` (a tour, live,
+box set or remix release holding the album's name) is too, unless the album itself is one whose
+Spotify name doesn't say so: an override with that word (`live`) matches it. An override is words a
 release title holds, which also steer the edition picked. Its dry run shows the query before
 and after, and when the album is searched again (a `missing` album at the next tick).

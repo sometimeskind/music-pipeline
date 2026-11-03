@@ -27,10 +27,10 @@ STALE_FALLBACK = timedelta(days=14)
 
 # The kinds whose events digest_summary lists with their item and data: the digest
 # judges them (a merge or move between unrelated recordings or albums, an extra left by hand,
-# a recording ID AcoustID replaced, homelab#2543). An album_merged event's data.absorbed names
+# a recording ID AcoustID replaced, homelab#2543, or filled on a request's item, homelab#2589). An album_merged event's data.absorbed names
 # the records two editions merged from, whose tracks canon then moves: expected, not a
 # likely problem (homelab#2607).
-WITH_DATA = ("merge", "moved", "local", "recording_replaced", "recording_set", "album_merged")
+WITH_DATA = ("merge", "moved", "local", "recording_replaced", "recording_set", "recording_filled", "album_merged")
 
 _FIELDS = "id, at, kind, source, spotify_album_id, release_group::text, item_id, caller, job_id, message, data"
 
@@ -281,7 +281,8 @@ def empty_slots() -> dict:
 
 
 def rejects(quarantine: Path) -> dict:
-    """The length guard's rejects still in ``quarantine/rejected/`` (#165)."""
+    """The rejected downloads still in ``quarantine/rejected/``: the album
+    request fallback's (homelab#2546), and any the dropped length guard left (#165)."""
     return listed([f["path"] for f in mcp_reads.quarantine_files(quarantine, "rejected", None)])
 
 

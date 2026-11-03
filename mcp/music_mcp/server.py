@@ -229,7 +229,7 @@ def build_server(
         """What happened since `since` (event counts by kind, each kind's latest events) and
         the library issues standing now for the operator to decide on: mixed albums, stuck
         albums (failed, missing, stale grabs and fallbacks), only copies in quarantine/replaced,
-        path clashes, empty playlist slots and length-guard rejects; and the album requests
+        path clashes, empty playlist slots and rejected downloads; and the album requests
         missing, failed or in fallback, each as list_requests shows it."""
         return await call("digest_summary", lambda c: pipeline.get(c, "/digest_summary", since=since))
 

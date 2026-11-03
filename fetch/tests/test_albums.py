@@ -702,6 +702,94 @@ def test_restart_mid_import_resumes_it_instead_of_a_loose_scan(roots) -> None:
     assert not any(f in record for f in albums.IMPORT_FIELDS)
 
 
+@pytest.mark.parametrize("saved", [True, False])
+def test_restart_mid_import_resumes_from_the_saved_record(roots, caplog, saved) -> None:
+    """homelab#2603: the pod killed between the move into the inbox and the end
+    of the import, so the import flow's own save never runs.  The next start
+    reads the record from the database: saved right after the move, it names
+    the job, so park_interrupted moves it back and the lost-trigger recovery
+    imports the rest as the release.  Unsaved (before the fix), the record has
+    no import_path: nothing is moved back and the recovery logs [LOST]."""
+    complete_root, inbox, quarantine = roots
+    (complete_root / "album" / "Artist-Album-FLAC" / "02.flac").write_bytes(b"x")
+    seeded = grabbed_state()
+    seeded.albums["a0"]["grabbed_at"] = albums._iso(NOW - timedelta(hours=2))
+    seed(seeded)
+    state = State.load()  # as album_import_flow loads it
+    whole = {"missing": 0, "album": "Album", "mb_albumid": "mb1"}
+
+    def killed_after_one():
+        (inbox / "later" / "Artist-Album-FLAC" / "01.flac").unlink()  # beets imported it
+        raise Killed
+
+    with pytest.raises(Killed):
+        albums.complete(
+            state, albums.Completion("nzo1", True, "album/Artist-Album-FLAC"), killed_after_one,
+            claim=_claim_all, add_source=lambda *a: None, retire=_no_retire, tag_ids=lambda *a: None,
+            identify=lambda folder: whole, save=state.save if saved else None,
+            complete_root=complete_root, inbox_root=inbox, quarantine_root=quarantine,
+        )
+    first_start = state.find("a0")[1]["import_started"]
+
+    # The next start: the pod is new, the record is the database's.
+    state = State.load()
+    record = state.find("a0")[1]
+    sab = MagicMock()
+    sab.finished.return_value = {"nzo1": {"ok": True, "fail_message": "",
+                                          "storage": "/downloads/complete/album/Artist-Album-FLAC"}}
+    since, identified = [], []
+
+    def recover():
+        [completion] = albums.lost_completions(state, sab, now=NOW)
+        return albums.complete(
+            state, completion, lambda: None,
+            claim=_claim_all, add_source=lambda *a: None, retire=_no_retire,
+            tag_ids=lambda pl, tracks, start, count, key: since.append(start),
+            identify=lambda folder: identified.append(folder) or {"missing": 1},
+            save=state.save, complete_root=complete_root, inbox_root=inbox, quarantine_root=quarantine,
+        )
+
+    if not saved:
+        assert "import_path" not in record
+        assert albums.park_interrupted(state, complete_root, inbox) == 0
+        with caplog.at_level("WARNING", logger="music_fetch.albums"):
+            assert recover() == albums.WANTED
+        assert "[LOST]" in caplog.text and record["lost"] is True
+        return
+
+    assert record["import_path"] == "album/Artist-Album-FLAC" and record["import_started"] == first_start
+    assert record["import_identity"] == whole
+    with caplog.at_level("WARNING", logger="music_fetch.albums"):
+        assert albums.park_interrupted(state, complete_root, inbox) == 1
+        assert not list(inbox.rglob("*.flac"))
+        assert (complete_root / "album" / "Artist-Album-FLAC" / "02.flac").exists()
+        assert recover() == albums.IMPORTED
+    assert "[RESUME]" in caplog.text and "[LOST]" not in caplog.text
+    # Claimed from the first try's start, judged on the first try's files.
+    assert since == [first_start] and identified == [] and record["release_files"] == whole
+    state.save()
+    assert not any(f in State.load().find("a0")[1] for f in albums.IMPORT_FIELDS)
+
+
+def test_a_failed_mid_import_save_does_not_stop_the_import(roots, caplog) -> None:
+    """The save after the move is a best effort (homelab#2603): the database
+    down, the import goes on as before and is saved at its end."""
+    state = grabbed_state()
+
+    def down():
+        raise statedb.Unavailable("the music database is unreachable")
+
+    complete_root, inbox, quarantine = roots
+    status = albums.complete(
+        state, albums.Completion("nzo1", True, "album/Artist-Album-FLAC"), lambda: None,
+        claim=_claim_all, add_source=lambda *a: None, retire=_no_retire, tag_ids=lambda *a: None,
+        identify=lambda folder: {"missing": 0}, save=down,
+        complete_root=complete_root, inbox_root=inbox, quarantine_root=quarantine,
+    )
+    assert status == albums.IMPORTED
+    assert "saving the import's start failed" in caplog.text
+
+
 def test_park_interrupted_imports_never_stops_the_service_starting(monkeypatch, caplog) -> None:
     assert albums.park_interrupted_imports() == 0
 
@@ -1842,6 +1930,22 @@ def test_a_miss_is_an_event_with_why(recorded) -> None:
     assert kw["once_hours"] == albums.MISS_EVENT_HOURS
     assert kw["data"]["why"].startswith("rejected: 1 album words") and kw["data"]["results"] == 1
     assert kw["data"]["queries"] == ["artist album"] and kw["data"]["status"] == albums.MISSING
+
+
+def test_a_tour_release_is_a_miss_that_says_so(recorded) -> None:
+    """homelab#2604: album 375 took the live Tour 84-85 box set for the studio
+    album; now it is a miss, and the search_miss data names the rule."""
+    state = one_album("Bruce Springsteen", "Born In The U.S.A.", tracks_count=12, duration=2805,
+                      album_type="album")
+    title = "Bruce Springsteen-The Born in the U.S.A. Tour 84-85-16BIT-WEB-FLAC-2024-ENViED"
+    tour = release("r1", title)
+    tour.size = 660_643_844
+    prowlarr, sab = fakes([tour])
+    top_up(state, Settings(mode="on"), prowlarr, sab, never_have, albums.TickResult(), now=lambda: NOW)
+    sab.add_url.assert_not_called()
+    assert state.albums["a0"]["status"] == albums.MISSING
+    (kind, message, kw), = [c for c in recorded if c[0] == "search_miss"]
+    assert kw["data"]["why"] == f'rejected: 1 other release; closest: "{title}" (other release: tour)'
 
 
 def test_a_failed_grab_is_a_failure_not_given_up(recorded) -> None:

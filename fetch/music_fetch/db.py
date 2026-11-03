@@ -58,7 +58,7 @@ EVENT_KINDS = (
     "autoreset",
     "fallback",
     "failure",
-    # A download the length guard quarantined.
+    # A download a pre-import check quarantined (the album request fallback's, homelab#2546).
     "reject",
     # A Music MCP job (homelab#2412) ending: tool, mode, caller, status.
     "mcp_job",
@@ -116,6 +116,9 @@ EVENT_KINDS = (
     "retitled",
     # Migration 17 (homelab#2583): a recording set on an item by hand (music-mb-fingerprint --set-recording).
     "recording_set",
+    # Migration 18 (homelab#2589): a recording ID filled on a request album's item that had none,
+    # the request's track AcoustID names for its audio (the album tick, music_scan.request_fill).
+    "recording_filled",
 )
 
 MIGRATIONS: list[str] = [
@@ -450,6 +453,19 @@ MIGRATIONS: list[str] = [
         'state_edited', 'recording_replaced', 'album_dropped', 'recording_refreshed',
         'fallback_deferred', 'reset', 'requeued', 'replaced', 'search_miss', 'status_changed',
         'album_queued', 'album_merged', 'imported', 'retitled', 'recording_set'));
+    """,
+    # 18: the recording_filled kind (homelab#2589).
+    """
+    ALTER TABLE events DROP CONSTRAINT events_kind_check;
+    ALTER TABLE events ADD CONSTRAINT events_kind_check CHECK (kind IN (
+        'import_done', 'import_wrong', 'import_incomplete', 'import_lost',
+        'retire', 'local', 'merge', 'clash', 'mixed',
+        'grab', 'autoreset', 'fallback', 'failure', 'reject', 'mcp_job',
+        'album_requested', 'later_added', 'later_removed', 'spotify_id_resolved',
+        'filled', 'wrong_version', 'moved', 'override_set', 'override_cleared',
+        'state_edited', 'recording_replaced', 'album_dropped', 'recording_refreshed',
+        'fallback_deferred', 'reset', 'requeued', 'replaced', 'search_miss', 'status_changed',
+        'album_queued', 'album_merged', 'imported', 'retitled', 'recording_set', 'recording_filled'));
     """,
 ]
 

@@ -68,7 +68,7 @@ for one of these reasons:
 |--------|---------|
 | `fingerprint` | AcoustID named other recordings (or this one too weakly), or the file couldn't be fingerprinted: the wrong audio |
 | `acoustid-unknown` | AcoustID has no MusicBrainz recording for the audio at all. The file may well be right (a new or obscure release AcoustID hasn't linked yet), but nothing confirms it, so it isn't imported yet: the scan asks AcoustID again once a day, for 30 days |
-| `duration`, `silence` | The length guard's: the wrong length, or silence padding |
+| `duration`, `silence` | The length check against MusicBrainz's length, or silence padding |
 
 A held `acoustid-unknown` file is re-checked rather than downloaded again: once a day the scan
 looks it up on AcoustID under the same rule. When AcoustID now names the track's own recording,
@@ -87,6 +87,13 @@ the operator's call (Usenet only, a manual source); say which album it is and le
 from before homelab#2546 all read `fingerprint`. A failed AcoustID lookup is no reject: the file
 waits for the next scan.
 The tracks it has are one album, named from MusicBrainz (album, artist, release IDs).
+
+An item the library already had counts toward the album by its MusicBrainz recording, never by
+its track number (an edition numbers its tracks otherwise). One with no recording ID at all is
+looked up on AcoustID by the album tick while the request lacks a track: when AcoustID names
+one of the tracklist's recordings for its audio, the item takes that recording and holds the
+track, so it isn't downloaded again. Each is a recording_filled event: `find_events` with that
+kind, or the album's `album_history`, lists them, and `get_item` shows the item's mb_trackid.
 
 While it has gaps, the album is searched on Usenet again every 7 days; a release found then is
 the album, and replaces the spotdl copies. When the search words are wrong (the log's `[MISS]`
@@ -142,6 +149,6 @@ Usenet missed or failed on. On Later, it stays Later's: a `fallback` one goes ba
 Later, one with a release group is requested (requested_by `auto:stranded`); one never looked up
 (no items, so no MusicBrainz lookup yet) is looked up by its Spotify album's link, ISRCs and
 barcode, a few a tick, and then requested or dropped; one MusicBrainz has no release group for
-is dropped, its `album_dropped` event saying why, so `request_album` by hand is the way back.
-`find_events` with kinds `album_dropped,album_requested,status_changed` and `source` `stranded`
-lists all of these.
+is dropped, its album_dropped event saying why, so `request_album` by hand is the way back.
+`find_events` with the kinds album_dropped, album_requested and status_changed, and `source`
+`stranded`, lists all of these.
