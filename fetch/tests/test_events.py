@@ -150,7 +150,8 @@ KIND_ONLY = [n for n, sql in enumerate(db.MIGRATIONS, start=1) if n > 1 and _kin
 
 def test_the_kind_only_migrations_are_found():
     assert KIND_ONLY == [2, 3, 10, 11, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23]
-    assert _kinds_allowed(db.MIGRATIONS[:22]) == set(db.EVENT_KINDS)
+    # The last CHECK's kinds are all still registered (old rows carry them); new ones need no migration.
+    assert _kinds_allowed(db.MIGRATIONS[:22]) <= set(db.EVENT_KINDS)
 
 
 # --- against Postgres ---
