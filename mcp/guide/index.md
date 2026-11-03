@@ -32,7 +32,8 @@ give it one or more event kinds (an incomplete import is kind import_incomplete,
 matched nothing search_miss, a grab grab; a spotdl download imported is imported, a Usenet track's title
 put back from its file at import retitled, canon's tag changes on an album retagged, a superseded
 file deleted purged) and a window (`since`, default the last 7 days); `item_id`
-narrows it to one item's history. Its
+narrows it to one item's history, and `source` to one component's events (`stranded`: the rows a
+playlist that left `playlists.conf` stranded, see `requests`). Its
 counts are each kind's total over the whole window, so one call answers "how many"; its events,
 newest first and paged, name each album by key for `get_album` or `album_history`. Ask for
 data only when the message isn't enough: it makes the output large. Use it instead of
