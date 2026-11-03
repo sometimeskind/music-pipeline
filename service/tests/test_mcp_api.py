@@ -597,6 +597,12 @@ def test_digest_summary_counts_and_lists_the_windows_events(client, event_store)
     event_store.record("merge", "[SAME] x", source="import", item_id=9, data={"why": "same recording at import"})
     merged = client.get("/mcp-api/digest_summary", headers=READ).get_json()["history"]["events"]["merge"]
     assert merged[0]["item_id"] == 9 and merged[0]["data"] == {"why": "same recording at import"}
+    absorbed = {"absorbed": [{"key": "1184", "album": "A — X (Expanded)", "spotify_album_ids": ["SP2"]}],
+                "album": "A — X", "key": "1781"}
+    event_store.record("album_merged", "[MERGE] A — X (1781) ← A — X (Expanded) (1184) as RG", source="resolve",
+                       data=absorbed)
+    [album_merged] = client.get("/mcp-api/digest_summary", headers=READ).get_json()["history"]["events"]["album_merged"]
+    assert album_merged["data"] == absorbed  # homelab#2607: the digest drops the moves it explains
     later = client.get("/mcp-api/digest_summary?since=2999-01-01T00:00:00Z", headers=READ).get_json()
     assert later["history"] == {"counts": {}, "events": {}}
 
