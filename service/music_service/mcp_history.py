@@ -27,8 +27,10 @@ STALE_FALLBACK = timedelta(days=14)
 
 # The kinds whose events digest_summary lists with their item and data: the digest
 # judges them (a merge or move between unrelated recordings or albums, an extra left by hand,
-# a recording ID AcoustID replaced, homelab#2543).
-WITH_DATA = ("merge", "moved", "local", "recording_replaced", "recording_set")
+# a recording ID AcoustID replaced, homelab#2543). An album_merged event's data.absorbed names
+# the records two editions merged from, whose tracks canon then moves: expected, not a
+# likely problem (homelab#2607).
+WITH_DATA = ("merge", "moved", "local", "recording_replaced", "recording_set", "album_merged")
 
 _FIELDS = "id, at, kind, source, spotify_album_id, release_group::text, item_id, caller, job_id, message, data"
 
