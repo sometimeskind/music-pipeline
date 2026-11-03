@@ -123,6 +123,29 @@ def test_a_request_with_no_record_gets_a_new_one():
     assert len(s.albums) == 1  # idempotent
 
 
+def test_the_feed_records_what_a_request_does_to_the_album_records():
+    """homelab#2590: a new record is album_queued; taking a wants record over, and a retired
+    playlist's tracklist giving way to the request's, are album_requested on the album."""
+    recorded = []
+    s = State(albums={"sp1": _wants_record("sp1"), "sp2": _former_later(albums.FALLBACK, release_group=OTHER_RG)})
+    with patch.object(albums.events, "record", side_effect=lambda kind, message, **kw: recorded.append((kind, message,
+                                                                                                       kw))):
+        albums.feed_requests(s, [_request(), _request(OTHER_RG), _request("00000000-0000-4000-8000-000000000099")],
+                             ["discoveries-albums"])
+        got = [(k, m, kw["data"].get("what")) for k, m, kw in recorded]
+        assert got == [
+            ("album_requested", "[REQUESTS] sp1 Band — The Album (request): the request takes over its wants record, the whole "
+                                "album wanted", "took_over"),
+            ("album_requested", "[REQUESTS] Band — The Album: off later, which left playlists.conf: the request's "
+                                "tracklist stands in", "stands_in"),
+            ("album_queued", "[QUEUED] 00000000-0000-4000-8000-000000000099 Band — The Album (request): new request "
+                             "record (the request feed)", None)]
+        recorded.clear()
+        albums.feed_requests(s, [_request(), _request(OTHER_RG), _request("00000000-0000-4000-8000-000000000099")],
+                             ["discoveries-albums"])
+    assert recorded == []  # every tick runs the feed: each happens once
+
+
 def test_requests_are_searched_ahead_of_the_fed_records():
     s = State(albums={"w": {**_wants_record("w"), "release_group": OTHER_RG}})
     albums.feed_requests(s, [_request()])

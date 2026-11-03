@@ -318,8 +318,16 @@ def _local_tail(name: str, paths: list[Path], library: ItemIndex) -> list[Path]:
     if dropped:
         playlist.entries = [e for e in playlist.entries if not resolved(e)]
         store.save(playlist)
-    logger.info("  [STORE-TAIL] %s: %d local entr%s, %d resolved", name, len(playlist.locals),
-                "y" if len(playlist.locals) == 1 else "ies", len(dropped))
+    message = (f"[STORE-TAIL] {name}: {len(playlist.locals)} local entr{'y' if len(playlist.locals) == 1 else 'ies'}"
+               f", {len(dropped)} resolved")
+    if dropped:
+        logger.info("  %s", message)
+        events.record("state_edited", message, source="scan",
+                      data={"what": "store_tail", "playlist": name,
+                            "items": [e[store.LOCAL].get("id") for e in dropped], "local": len(playlist.locals)})
+    else:
+        # Every playlist, every scan, mostly "0 local entries, 0 resolved" (~3,650 a day): nothing changed.
+        logger.debug("  %s", message)
     out: list[Path] = []
     for entry in playlist.locals:
         if entry.get("id") in by_id and (p := _item_path(by_id[entry["id"]])) not in matched:

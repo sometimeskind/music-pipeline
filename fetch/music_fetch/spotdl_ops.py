@@ -516,7 +516,12 @@ def _download_batch(
         if reason.startswith("LookupError"):
             n_missed += 1
             attempts, days = _record_failure(failures, song.url, "miss", reason)
-            logger.info("[MISS] %s → no source found; backing off %d days (attempt %d)", _song_label(song), days, attempts)
+            message = f"[MISS] {_song_label(song)} → no source found; backing off {days} days (attempt {attempts})"
+            logger.info(message)
+            # The decision not to try again for *days* (homelab#2590), as a [FAIL]'s.
+            events.record("failure", message, source="spotdl", spotify_album_id=song.json.get("album_id"),
+                          data={"track": _song_label(song), "url": song.url, "reason": reason, "kind": "miss",
+                                "attempts": attempts, "days": days})
         else:
             n_failed += 1
             reason = reason or "download failed (no error reported)"

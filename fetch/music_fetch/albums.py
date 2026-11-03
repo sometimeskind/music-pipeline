@@ -568,6 +568,14 @@ def _queued(key: str, record: dict, why: str) -> None:
     _event("album_queued", key, record, message, why=why)
 
 
+def _took_over(key: str, record: dict, was: str | None, whole: bool) -> None:
+    """An album request took over a wants or library record (homelab#2590): it is the request's now."""
+    message = (f"[REQUESTS] {key} {_label(record)}: the request takes over its {was or 'album playlist'} record"
+               + (", the whole album wanted" if whole else ""))
+    logger.info(message)
+    _event("album_requested", key, record, message, what="took_over", was=was, whole=whole)
+
+
 def _dropped(key: str, record: dict, why: str, playlists: list[str]) -> None:
     """A feed dropped *record*: its event is all album_history has left of it (homelab#2544, homelab#2590)."""
     message = f"[DROPPED] {key} {_label(record)}: {why}; record dropped"
@@ -810,15 +818,20 @@ def feed_requests(state: State, requests: list[album_requests.Request],
             by_group[request.release_group] = key = state.key(record)
             state.albums[key] = record
             new += 1
+            _queued(key, record, "the request feed")
         elif _fed(record) and record.get("status") in WAITING:
             took += 1
+            was = record.get("origin")
             record.update(origin=REQUEST, playlists={album_requests.SOURCE: tracks}, **request.fields())
             record.pop("references", None)
+            _took_over(key, record, was, whole=True)
         else:
             fed = _fed(record)
             if fed:
                 took += 1
+                was = record.get("origin")
                 record["origin"] = REQUEST
+                _took_over(key, record, was, whole=False)
             on = record.setdefault("playlists", {})
             gone = [] if album_playlists is None or fed or record.get("status") in HELD else \
                 [name for name in on if name != album_requests.SOURCE and name not in album_playlists]
@@ -830,8 +843,10 @@ def feed_requests(state: State, requests: list[album_requests.Request],
                 if not any(name != album_requests.SOURCE for name in on):
                     dropped += 1
                     record.update(**request.fields())
-                    logger.info("[REQUESTS] %s — %s: off %s, which left playlists.conf: the request's "
-                                "tracklist stands in", record["artist"], record["name"], ", ".join(gone))
+                    message = (f"[REQUESTS] {record['artist']} — {record['name']}: off {', '.join(gone)}, which left "
+                               "playlists.conf: the request's tracklist stands in")
+                    logger.info(message)
+                    _event("album_requested", key, record, message, what="stands_in", playlists=gone)
             if any(name != album_requests.SOURCE for name in on):
                 on.pop(album_requests.SOURCE, None)
             else:

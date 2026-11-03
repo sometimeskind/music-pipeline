@@ -82,7 +82,8 @@ def test_the_m3u_is_the_store_view(env, caplog) -> None:
 
     assert _m3u(playlists_dir) == ["../library/tagged.m4a", "../library/elsewhere.m4a"]
     assert counts == {"pl": 2}
-    assert "[STORE-TAIL] pl: 0 local entries, 0 resolved" in caplog.text
+    # Nothing resolved: DEBUG, since every playlist logs it every scan (homelab#2590).
+    assert "[STORE-TAIL]" not in caplog.text
 
 
 def test_a_tagged_item_no_entry_lists_is_not_on_the_playlist(env) -> None:
@@ -148,8 +149,16 @@ def test_a_local_entry_the_store_now_resolves_is_dropped(env, caplog) -> None:
                        _local(2, "Words"), _local(3, "Extra")]))
     extra = lib.all_items.return_value[2]
     extra.get.side_effect = lambda k, d=None: {"spotify_ids": "X1", "sources": "pl"}.get(k, d)
-    with caplog.at_level(logging.INFO, logger="music_scan.scan"):
+    from music_scan import scan
+
+    recorded = []
+    with caplog.at_level(logging.INFO, logger="music_scan.scan"), \
+         mock.patch.object(scan.events, "record", side_effect=lambda kind, message, **kw: recorded.append(
+             (kind, message, kw))):
         regen_playlists()
+    (kind, message, kw), = recorded
+    assert (kind, message) == ("state_edited", "[STORE-TAIL] pl: 1 local entry, 1 resolved")
+    assert kw["data"] == {"what": "store_tail", "playlist": "pl", "items": [3], "local": 1}
 
     saved = store.load("pl")
     assert [e["title"] for e in saved.locals] == ["Words"]

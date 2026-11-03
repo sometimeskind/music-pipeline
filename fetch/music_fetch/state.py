@@ -366,8 +366,14 @@ def attach_overrides(conn: psycopg.Connection, changed: Iterable[int] = ()) -> N
             conn.execute("UPDATE album_overrides SET album_id = %s WHERE id = %s", (album_id, override_id))
             taken.add((album_id, kind))
             moved.append(album_id)
-            logger.info("[OVERRIDE] the %s override %d (%s) moved to album row %d", kind, override_id,
-                        ", ".join(refs), album_id)
+            message = f"[OVERRIDE] the {kind} override {override_id} ({', '.join(refs)}) moved to album row {album_id}"
+            logger.info(message)
+            from music_fetch import events  # noqa: PLC0415 — events imports this module
+
+            # In the caller's transaction, as every override write's (homelab#2590).
+            events.insert(conn, "override_set", message, source="state",
+                          data={"kind": kind, "key": str(album_id), "override": override_id, "refs": list(refs),
+                                "reattached": True})
     ids = sorted({*changed, *moved})
     if ids:
         conn.execute(f"UPDATE album_overrides o SET refs = r.refs FROM ({_ROW_REFS}) r (id, refs) "
