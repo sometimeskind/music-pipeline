@@ -26,7 +26,7 @@ def _complete_with_tag_ids(embed_covers):
          patch("music_service.flows.concurrency"):
         _, _, complete = _album_library_hooks(lib)
         assert complete(MagicMock(), MagicMock()) == "imported"
-    tag_album_ids.assert_called_once_with(lib, "later", [], 100.0, 2)
+    tag_album_ids.assert_called_once_with(lib, "later", [], 100.0, 2, "1")
     return embed, rescan, fresh
 
 
