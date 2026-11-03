@@ -21,7 +21,8 @@ PILOT = Caller("pilot", "read")
 READS = {"library_status", "find_albums", "get_album", "get_item", "list_quarantine", "get_playlist",
          "get_job", "get_guide", "audit_dupes", "audit_lengths", "audit_releases", "audit_want_albums", "audit_titles", "recheck_recordings", "search_releases",
          "album_history", "find_events", "digest_summary", "list_overrides", "list_requests", "get_later"}
-WRITES = {"reset_album", "requeue_albums", "merge_items", "replace_item", "unlink_spotify_id", "embed_covers", "canon_albums",
+WRITES = {"reset_album", "requeue_albums", "merge_items", "replace_item", "unlink_spotify_id", "set_recording",
+          "embed_covers", "canon_albums",
           "apply_recheck",
           "trigger_scan", "trigger_album_tick", "set_search_override", "clear_search_override", "hold_album",
           "release_album", "pin_track", "unpin_track", "request_album", "remove_from_later"}
@@ -32,6 +33,7 @@ WRITE_CALLS = {
     "merge_items": {"pairs": [[1, 2]]},
     "replace_item": {"id": 1, "youtube_url": "dQw4w9WgXcQ"},
     "unlink_spotify_id": {"id": 1, "track": "68ozhSrI4eLbnUgih1SlOT"},
+    "set_recording": {"id": 1, "recording": "dd51202e-05ac-4bc9-b597-e117f81c47f8"},
     "embed_covers": {},
     "canon_albums": {},
     "apply_recheck": {"run_id": "3f2a9c0d1e2b4a5c"},
@@ -131,6 +133,8 @@ async def test_reads_route_to_the_contract(pipeline, fake, tool, args, method, p
      {"id": 7, "youtube_url": "https://youtu.be/dQw4w9WgXcQ", "apply": False}),
     ("unlink_spotify_id", {"id": 9674, "track": "2o49Twc3qrNMOt8gq9W06L"}, "/mcp-api/run/unlink_spotify_id",
      {"id": 9674, "track": "2o49Twc3qrNMOt8gq9W06L", "apply": False}),
+    ("set_recording", {"id": 4230, "recording": "dd51202e-05ac-4bc9-b597-e117f81c47f8"}, "/mcp-api/run/set_recording",
+     {"id": 4230, "recording": "dd51202e-05ac-4bc9-b597-e117f81c47f8", "apply": False}),
     ("embed_covers", {"apply": True}, "/mcp-api/run/embed_covers", {"apply": True}),
     ("canon_albums", {"refresh": True, "mb_budget": 5}, "/mcp-api/run/canon_albums",
      {"refresh": True, "search_budget": None, "mb_budget": 5, "apply": False}),

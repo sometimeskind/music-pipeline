@@ -114,6 +114,8 @@ EVENT_KINDS = (
     # title or trackdisambig put back from its file at import (the [TITLE] lines).
     "imported",
     "retitled",
+    # Migration 17 (homelab#2583): a recording set on an item by hand (music-mb-fingerprint --set-recording).
+    "recording_set",
 )
 
 MIGRATIONS: list[str] = [
@@ -435,6 +437,19 @@ MIGRATIONS: list[str] = [
         'state_edited', 'recording_replaced', 'album_dropped', 'recording_refreshed',
         'fallback_deferred', 'reset', 'requeued', 'replaced', 'search_miss', 'status_changed',
         'album_queued', 'album_merged', 'imported', 'retitled'));
+    """,
+    # 17: the recording_set kind (homelab#2583).
+    """
+    ALTER TABLE events DROP CONSTRAINT events_kind_check;
+    ALTER TABLE events ADD CONSTRAINT events_kind_check CHECK (kind IN (
+        'import_done', 'import_wrong', 'import_incomplete', 'import_lost',
+        'retire', 'local', 'merge', 'clash', 'mixed',
+        'grab', 'autoreset', 'fallback', 'failure', 'reject', 'mcp_job',
+        'album_requested', 'later_added', 'later_removed', 'spotify_id_resolved',
+        'filled', 'wrong_version', 'moved', 'override_set', 'override_cleared',
+        'state_edited', 'recording_replaced', 'album_dropped', 'recording_refreshed',
+        'fallback_deferred', 'reset', 'requeued', 'replaced', 'search_miss', 'status_changed',
+        'album_queued', 'album_merged', 'imported', 'retitled', 'recording_set'));
     """,
 ]
 

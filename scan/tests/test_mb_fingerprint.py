@@ -925,3 +925,122 @@ def test_main_runs_refresh_replaced_with_its_own_flags_only(monkeypatch):
         with pytest.raises(SystemExit):
             mbf.main()
     assert len(calls) == 1
+
+
+# --- a recording set by hand (homelab#2583) ---
+
+ROUGH = "b4b4719b-2d0c-4b00-90cf-fac3772bdf3d"
+BYE = "dd51202e-05ac-4bc9-b597-e117f81c47f8"
+OLD_BYE = "0e4a1c0b-7a0d-4a4e-9a51-1f2b3c4d5e6f"
+CREDITED = {
+    BYE: {"id": BYE, "title": "Bye", "disambiguation": "", "length": 113000,
+          "artist-credit": [{"name": "Elliott Smith", "joinphrase": ""}]},
+    OLD_BYE: {"id": BYE, "title": "Bye", "disambiguation": ""},  # merged into BYE on MusicBrainz
+    STEREO: {"id": STEREO, "title": "Something Else", "disambiguation": ""},
+}
+
+
+def _bye(**data):
+    return FakeItem(4230, "Bye", mb_trackid=ROUGH, trackdisambig="rough mix 2", via="usenet",
+                    artist="Elliott Smith", length=113.26, **data)
+
+
+def test_the_set_recording_dry_run_shows_the_recording_and_changes_nothing(caplog):
+    caplog.set_level("INFO")
+    item = _bye()
+    assert mbf.set_recording_on(FakeLib([item]), 4230, BYE, _recordings(CREDITED)) is False
+    assert item["mb_trackid"] == ROUGH and not item.stored and not item.written
+    assert (f"[SETREC] 4230 — Bye (Elliott Smith, 113.3 s): mb_trackid {ROUGH} → {BYE}, 'Bye' by Elliott Smith "
+            "(113.0 s)") in caplog.text
+    assert "with it: trackdisambig 'rough mix 2' → ''" in caplog.text
+    assert "Dry run — nothing set" in caplog.text and "[SUSPECT]" not in caplog.text
+
+
+@pytest.mark.parametrize("lookup, match", [
+    (_recordings({}), "MusicBrainz has no recording"),
+    (_recordings(CREDITED, fails=(BYE,)), "lookup of .* failed .*run it again"),
+])
+def test_set_recording_refuses_an_unknown_recording_or_a_failed_lookup(lookup, match):
+    item = _bye()
+    with pytest.raises(SystemExit, match=match):
+        mbf.set_recording_on(FakeLib([item]), 4230, BYE, lookup)
+    with pytest.raises(SystemExit, match="no library item with id 1"):
+        mbf.set_recording_on(FakeLib([item]), 1, BYE, _recordings(CREDITED))
+    assert item["mb_trackid"] == ROUGH and not item.stored
+
+
+def test_set_recording_refuses_a_bad_id_and_an_apply_without_the_database(monkeypatch):
+    with pytest.raises(SystemExit, match="not a MusicBrainz recording ID"):
+        mbf.set_recording(4230, "--apply", lookup=_recordings(CREDITED))
+    monkeypatch.delenv("MUSIC_DATABASE_URL", raising=False)
+    with pytest.raises(SystemExit, match="MUSIC_DATABASE_URL is unset"):
+        mbf.set_recording(4230, BYE, apply=True, lookup=_recordings(CREDITED))
+
+
+def test_a_recording_naming_another_song_is_suspect_in_the_dry_run(caplog):
+    item = _bye()
+    mbf.set_recording_on(FakeLib([item]), 4230, STEREO, _recordings(CREDITED))
+    assert "[SUSPECT] 4230 — Bye: the recording is titled 'Something Else'" in caplog.text
+
+
+def test_the_recheck_leaves_an_item_set_by_hand_alone():
+    items = [_bye(recording_set=ROUGH), FakeItem(2, "Changed since", mb_trackid=SURROUND, recording_set=BYE)]
+    lookup = _lookup({2: [(0.97, STEREO)]})
+    counts, flagged = _recheck(items, lookup)
+    assert lookup.calls == [2] and counts["set"] == 1 and [f.item_id for f in flagged] == [2]
+    f = mbf.Flagged(4230, ROUGH, [(0.97, BYE)], keeper=False)
+    assert mbf.verdict(items[0], f) == (mbf.SKIP, "its recording was set by hand (--set-recording)")
+
+
+def test_main_takes_set_recording_with_apply_only(monkeypatch):
+    calls = []
+    monkeypatch.setattr(mbf, "set_recording", lambda *a, **k: calls.append((a, k)))
+    monkeypatch.setattr(sys, "argv", ["music-mb-fingerprint", "--set-recording", "4230", BYE, "--apply"])
+    mbf.main()
+    assert calls == [((4230, BYE), {"apply": True})]
+    for argv in (["--set-recording", "4230", BYE, "--recheck"], ["--set-recording", "x", BYE]):
+        monkeypatch.setattr(sys, "argv", ["music-mb-fingerprint", *argv])
+        with pytest.raises(SystemExit):
+            mbf.main()
+    assert len(calls) == 1
+
+
+@needs_pg
+def test_set_recording_stores_it_with_its_event_and_marks_the_item(pg_url, monkeypatch, caplog):
+    from music_fetch import db
+
+    monkeypatch.delenv("PREFECT_API_URL", raising=False)
+    caplog.set_level("INFO")
+    item = _bye()
+    lib = FakeLib([item])
+    with contextlib.closing(db.connect()) as conn:
+        # An old ID MusicBrainz merged: the recording it was merged into is set.
+        assert mbf.set_recording_on(lib, 4230, OLD_BYE, _recordings(CREDITED), conn) is True
+    assert (item["mb_trackid"], item["recording_set"], item["trackdisambig"]) == (BYE, BYE, "")
+    assert item["title"] == "Bye" and item.stored and item.written
+    assert f"[MERGED] MusicBrainz merged {OLD_BYE} into {BYE}" in caplog.text
+    [(kind, source, item_id, message, data)] = _events(pg_url)
+    assert (kind, source, item_id) == ("recording_set", "mb-fingerprint", 4230)
+    assert message == f"[SETREC] 4230 — Bye: mb_trackid {ROUGH} → {BYE}, set by hand"
+    assert data["old"] == ROUGH and data["new"] == BYE and data["refreshed"] == {"trackdisambig": ["rough mix 2", ""]}
+
+    item.stored = item.written = False
+    with contextlib.closing(db.connect()) as conn:  # again: nothing new, the tags written once more
+        assert mbf.set_recording_on(lib, 4230, BYE, _recordings(CREDITED), conn) is False
+    assert not item.stored and item.written and len(_events(pg_url)) == 1
+    assert f"[DONE] 4230 — Bye: holds {BYE}, set by hand, already" in caplog.text
+
+
+@needs_pg
+def test_a_set_recording_that_fails_to_store_leaves_no_event(pg_url, monkeypatch):
+    from music_fetch import db
+
+    item = _bye()
+
+    def fail():
+        raise OSError("disk full")
+
+    item.store = fail
+    with contextlib.closing(db.connect()) as conn, pytest.raises(OSError):
+        mbf.set_recording_on(FakeLib([item]), 4230, BYE, _recordings(CREDITED), conn)
+    assert _events(pg_url) == [] and not item.written
