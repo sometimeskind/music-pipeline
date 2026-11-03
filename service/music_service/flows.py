@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import concurrent.futures
 import contextlib
 import logging
 import time
@@ -24,6 +25,36 @@ from music_scan.scan import MusicBrainzUnavailable
 # imported in every flow-run process, so pin those loggers to INFO here.
 for _name in ("music_fetch", "music_scan"):
     logging.getLogger(_name).setLevel(logging.INFO)
+
+
+class _QuietSlotTimeout(logging.Filter):
+    """Drop Prefect's ERROR for a slot acquisition that hit its ``timeout_seconds``.
+
+    The skip-if-busy probes (``hold``, the scan and album ticks) acquire with a
+    short timeout and expect it to fire when another run holds the slot.  Prefect's
+    acquisition service then logs ``Service 'ConcurrencySlotAcquisitionWithLeaseService'
+    failed to process item (…, <Future … raised TimeoutError>)`` at ERROR from its
+    own thread (homelab#2596), hundreds a day, although the caller gets the timeout
+    as an exception and logs what it did about it.  Only that record is dropped,
+    and only when the item's future holds a ``TimeoutError``: a timeout is always
+    handed to the caller.  Any other failure (the server down, an HTTP error) still
+    logs, and still raises in the caller.  The filter is process-wide, not scoped
+    to the probe, because the record is written on Prefect's loop thread after the
+    caller has been woken, so a filter removed on the probe's exit would race it."""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        args = record.args
+        if not (isinstance(args, tuple) and len(args) == 2
+                and args[0] == "ConcurrencySlotAcquisitionWithLeaseService"
+                and isinstance(args[1], tuple) and args[1]):
+            return True
+        future = args[1][-1]
+        if not isinstance(future, concurrent.futures.Future) or not future.done() or future.cancelled():
+            return True
+        return not isinstance(future.exception(), TimeoutError)
+
+
+logging.getLogger("prefect._internal.concurrency").addFilter(_QuietSlotTimeout())
 
 
 # ---------------------------------------------------------------------------
