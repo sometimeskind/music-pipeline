@@ -612,6 +612,31 @@ def test_an_extra_left_to_music_audit_dupes_is_recorded_once_a_day(quarantined, 
     assert kind == "local" and message.endswith("left to music-audit-dupes") and kw["once_hours"] == 24
     assert kw["item_id"] == extra.id and kw["data"]["left_to_dupes"] is True
 
+
+def test_extras_one_track_with_no_release_item_are_named_to_each_other(quarantined, recorded) -> None:
+    """Nebraska (homelab#2609): the Expanded Edition's studio My Father's House (17061)
+    took the live take's (17051) recording and ISRC at import, and both stayed extras
+    of the 10-track release, which has its own copy.  Not "the same audio as 0 of the
+    release's items": each event names the other extra and the evidence."""
+    track = _Audio(9044, "My Father's House", length=307.0, album_record="NEB", release="r@1", isrc="USSM18200429",
+                   acoustid_id="aid-studio")
+    live = _Audio(17051, "My Father's House (Nebraska Live)", length=313.85, album_record="NEB", album_extra="1",
+                  isrc="USSM12503412", mb_trackid="live-rec", acoustid_id="aid-live")
+    studio = _Audio(17061, "My Father’s House", length=307.48, album_record="NEB", album_extra="1",
+                    isrc="USSM12503412", mb_trackid="live-rec", acoustid_id="aid-remaster")
+    assert release.retire_held(FakeLib([track, live, studio]), decoder=lambda fp: []) == 0
+    assert not live.removed and not studio.removed and quarantined == []
+    by_item = {kw["item_id"]: (kind, message, kw) for kind, message, kw in recorded}
+    assert set(by_item) == {17051, 17061}
+    kind, message, kw = by_item[17061]
+    assert kind == "local" and kw["once_hours"] == 24
+    assert "0 of the release's items" not in message
+    assert message.startswith("[LOCAL] 17061 ") and "one track with extra(s) 17051 by " in message
+    assert message.endswith("and with none of the release's items; left to music-audit-dupes")
+    data = kw["data"]
+    assert data["extras"] == [17051] and data["release_items"] == [] and data["left_to_dupes"] is True
+    assert "USSM12503412" in data["evidence"] and data["origin"] == "extra, extras only"
+
 def test_mixed_reasons_a_whole_import_with_a_loose_spotdl_copy_is_not_mixed() -> None:
     """Zero 7 Simple Things (#295): imported whole since #279 after a reset by
     hand, plus one spotdl copy another playlist's store also lists, which retire

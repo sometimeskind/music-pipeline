@@ -68,7 +68,7 @@ for one of these reasons:
 |--------|---------|
 | `fingerprint` | AcoustID named other recordings (or this one too weakly), or the file couldn't be fingerprinted: the wrong audio |
 | `acoustid-unknown` | AcoustID has no MusicBrainz recording for the audio at all. The file may well be right (a new or obscure release AcoustID hasn't linked yet), but nothing confirms it, so it isn't imported yet: the scan asks AcoustID again once a day, for 30 days |
-| `duration`, `silence` | The length guard's: the wrong length, or silence padding |
+| `duration`, `silence` | The length check against MusicBrainz's length, or silence padding |
 
 A held `acoustid-unknown` file is re-checked rather than downloaded again: once a day the scan
 looks it up on AcoustID under the same rule. When AcoustID now names the track's own recording,

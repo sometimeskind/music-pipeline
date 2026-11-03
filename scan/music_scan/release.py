@@ -585,7 +585,12 @@ def retire_held(lib, decoder=None) -> int:
       the next canon files it on the path the extra held.  The uncertain tier
       never merges here, nor does a group with several release items in it
       (two of the release's tracks one recording by an ID): those stay
-      ``music-audit-dupes``'s, for the operator.
+      ``music-audit-dupes``'s, for the operator.  Nor does a group of extras
+      with no release item in it (homelab#2609): each extra's ``local`` event
+      names the other extras and the evidence (``one track with extra(s) …,
+      and with none of the release's items``), since the release has nothing
+      to keep and the group is a pair for the operator to judge, often a
+      wrong recording guess one of them took.
 
     The album completion runs this after ``tag_album_ids`` and before canon,
     and every scan runs it before its canon, so IDs that arrive later count
@@ -631,6 +636,13 @@ def retire_held(lib, decoder=None) -> int:
             losers = [i for i in group.items if i.id not in release_ids]
             if not losers:
                 continue
+            if not mine:
+                # No release item in it: two of the album's extras are one track by an ID or
+                # their audio (a deluxe listing a recording twice, or a wrong recording guess
+                # one of them took, homelab#2609).  Nothing here is the release's to keep, so
+                # it isn't this pass's: music-audit-dupes lists the group [ALBUM] (#311).
+                _log_extras_group(group, key, kept[key])
+                continue
             if len(mine) != 1:
                 for item in losers:
                     # DEBUG: every scan sees it again until someone merges it; the event is the report (homelab#2590).
@@ -655,6 +667,22 @@ def retire_held(lib, decoder=None) -> int:
             merged_ids.update(i.id for i in losers)
     _flag_twins([i for i in items if i.id not in gone_ids | merged_ids])
     return len(gone) + merged
+
+
+def _log_extras_group(group, key: str, release: list) -> None:
+    """A :func:`retire_held` certain group of extras only (homelab#2609): each
+    extra's ``local`` event names the others and the evidence, once a day, as
+    long as it stands.  Nothing is merged or retired."""
+    evidence = "; ".join(f"{a}~{b} {why}" for a, b, why in group.evidence)
+    for item in group.items:
+        others = sorted(i.id for i in group.items if i.id != item.id)
+        message = (f"[LOCAL] {item.id} {item.get('artist')} — {item.get('title')} [{item.get('album')}]: one track "
+                   f"with extra(s) {', '.join(map(str, others))} by {evidence or 'the duplicate rule'}, and with none "
+                   "of the release's items; left to music-audit-dupes")
+        logger.debug("  %s", message)  # every scan sees it again; the event is the report (homelab#2590)
+        _event("local", item, _album_of(release), _release_group(release), message, once_hours=24,
+               origin="extra, extras only", left_to_dupes=True, release_items=[], extras=others,
+               evidence=evidence or None)
 
 
 def title_twins(items) -> dict[str, list[tuple]]:
