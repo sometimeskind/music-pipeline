@@ -1091,7 +1091,6 @@ def test_run_marks_a_musicbrainz_outage(tmp_path: Path) -> None:
     (inbox / "spotdl" / "keep" / "Artist - Song.m4a").touch()
     with mock.patch("music_scan.scan.MusicLibrary", return_value=_make_mock_lib()), \
          mock.patch("music_scan.scan.run_beet_import", return_value=1), \
-         mock.patch("music_scan.scan.guard_inbox", return_value={}), \
          mock.patch("music_scan.scan.UNVERIFIED", tmp_path / "unverified"), \
          mock.patch("music_scan.scan.INBOX", inbox), \
          mock.patch("music_scan.scan.SPOTDL_DIR", inbox / "spotdl"), \
@@ -1137,7 +1136,6 @@ def test_run_succeeds_when_musicbrainz_errors_left_nothing_behind(tmp_path: Path
 
     with mock.patch("music_scan.scan.MusicLibrary", return_value=lib), \
          mock.patch("music_scan.scan.run_beet_import", side_effect=import_everything), \
-         mock.patch("music_scan.scan.guard_inbox", return_value={}), \
          mock.patch("music_scan.scan.UNVERIFIED", tmp_path / "unverified"), \
          mock.patch("music_scan.scan.INBOX", inbox), \
          mock.patch("music_scan.scan.SPOTDL_DIR", inbox / "spotdl"), \
@@ -1210,20 +1208,3 @@ def test_check_request_downloads_verifies_then_rechecks_and_survives_a_failure(m
     monkeypatch.setattr(scan, "verify_requests", lambda *a: Counter({"acoustid-unknown": 2}))
     assert scan.check_request_downloads() == Counter({"acoustid-unknown": 2})
 
-
-def test_check_lengths_runs_the_guard_and_survives_its_failure(monkeypatch, caplog) -> None:
-    """homelab#2579: the length guard is a pre-import step; a failing guard lets the import go ahead."""
-    from collections import Counter
-
-    import music_scan.scan as scan
-
-    monkeypatch.setattr(scan, "guard_inbox", lambda inbox, rejected, exts: Counter(duration=2, silence=0))
-    assert scan.check_lengths() == Counter(duration=2)
-    assert ("guard-inbox", "check_lengths") in scan.PRE_IMPORT_STEPS
-
-    def broken(*_args):
-        raise RuntimeError("ffprobe missing")
-
-    monkeypatch.setattr(scan, "guard_inbox", broken)
-    assert scan.check_lengths() == Counter()
-    assert "Length guard failed" in caplog.text

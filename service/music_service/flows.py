@@ -197,8 +197,8 @@ def pre_import_tasks(metrics: ScanMetrics) -> None:
     """The checks before the import, from the list ``scan.run()`` runs too
     (homelab#2579), so a check can't be wired into one path only again: the
     request fallback's AcoustID check (homelab#2546) and the length guard
-    (#165) each ran only in ``scan.run()`` for a while, and production runs
-    this flow."""
+    (#165, since dropped) each ran only in ``scan.run()`` for a while, and
+    production runs this flow."""
     from music_scan.guard import REASONS  # noqa: PLC0415
 
     rejected: Counter = Counter()

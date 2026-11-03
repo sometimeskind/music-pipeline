@@ -211,13 +211,12 @@ def test_fetch_flow_runs_fetch_then_scan():
         mock_ingest.sync_playlists.side_effect = lambda *_, **__: call_order.append("spotdl-sync")
         mock_scan.sync_hooks.return_value = nullcontext({})
         mock_scan.check_request_downloads.side_effect = lambda: (call_order.append("verify-requests"), {})[1]
-        mock_scan.check_lengths.side_effect = lambda: (call_order.append("guard-inbox"), {})[1]
         mock_scan.run_inbox_import.side_effect = lambda: (call_order.append("beet-import"), [])[1]
 
         fetch_and_scan_flow()
 
     assert call_order[:3] == ["preflight", "reconcile-playlists", "spotdl-sync"]
-    assert call_order.index("verify-requests") < call_order.index("guard-inbox") < call_order.index("beet-import")
+    assert call_order.index("verify-requests") < call_order.index("beet-import")
     mock_scan.run_inbox_import.assert_called_once()
 
 
@@ -283,7 +282,6 @@ def test_scan_flow_runs_all_scan_steps_in_order():
         mock_concurrency.return_value.__enter__.return_value = None
         mock_concurrency.return_value.__exit__.return_value = False
         mock_scan.check_request_downloads.side_effect = lambda: (call_order.append("verify-requests"), {})[1]
-        mock_scan.check_lengths.side_effect = lambda: (call_order.append("guard-inbox"), {})[1]
         mock_scan.run_inbox_import.side_effect = lambda: (call_order.append("beet-import"), [])[1]
         mock_scan.quarantine_inbox_leftovers.side_effect = lambda: (call_order.append("quarantine"), 0)[1]
         mock_scan.import_asis_from_quarantine.side_effect = lambda: (call_order.append("asis-import"), 0)[1]
@@ -304,7 +302,6 @@ def test_scan_flow_runs_all_scan_steps_in_order():
 
     assert call_order == [
         "verify-requests",  # homelab#2546: the request fallback's confirmed downloads import in this scan
-        "guard-inbox",  # homelab#2579: the length guard runs under Prefect too
         "beet-import",
         "quarantine",
         "asis-import",
@@ -337,7 +334,6 @@ def test_scan_flow_skips_when_pipeline_busy():
 
 def _scan_mocks(mock_scan, mock_ingest):
     mock_scan.check_request_downloads.return_value = {}
-    mock_scan.check_lengths.return_value = {}
     mock_scan.run_inbox_import.return_value = [("A", "B"), ("C", "D")]
     mock_scan.quarantine_inbox_leftovers.return_value = 1
     mock_scan.import_asis_from_quarantine.return_value = 3
@@ -366,8 +362,8 @@ def test_scan_pushes_metrics_on_success():
 
 
 def test_scan_runs_the_pre_import_checks_and_pushes_their_rejects():
-    """homelab#2546, homelab#2579: the Prefect scan checks the request fallback's
-    downloads and the inbox's lengths, as music-scan's run() does."""
+    """homelab#2546, homelab#2579: the Prefect scan runs the pre-import checks (the
+    request fallback's downloads), as music-scan's run() does."""
     from music_service.flows import _run_scan_tasks
     pushed: list = []
 
@@ -379,13 +375,11 @@ def test_scan_runs_the_pre_import_checks_and_pushes_their_rejects():
          patch("music_scan.metrics.ScanMetrics.push", autospec=True, side_effect=pushed.append):
         _scan_mocks(mock_scan, mock_ingest)
         mock_scan.check_request_downloads.return_value = {"acoustid-unknown": 2, "fingerprint": 1, "duration": 1}
-        mock_scan.check_lengths.return_value = {"duration": 2, "silence": 0}
         _run_scan_tasks()
 
     mock_scan.check_request_downloads.assert_called_once_with()
-    mock_scan.check_lengths.assert_called_once_with()
     (m,) = pushed
-    assert m.rejected == {"duration": 3, "silence": 0, "fingerprint": 1, "acoustid-unknown": 2}
+    assert m.rejected == {"duration": 1, "silence": 0, "fingerprint": 1, "acoustid-unknown": 2}
 
 
 class _AtImport(Exception):
@@ -428,16 +422,16 @@ def _pre_import_calls(monkeypatch, *run_paths) -> list[list[str]]:
 
 def test_scan_flow_and_scan_run_share_their_pre_import_steps(monkeypatch):
     """homelab#2579: the length guard ran only in scan.run() while production
-    ran the flow.  Both paths run scan.PRE_IMPORT_STEPS, so they call the same
-    guard functions in the same order before the import; wiring a check into
-    one path only fails here."""
+    ran the flow, so it never ran there (and was dropped).  Both paths run
+    scan.PRE_IMPORT_STEPS, so they call the same guard functions in the same
+    order before the import; wiring a check into one path only fails here."""
     import music_scan.scan as scan
     from music_service.flows import _run_scan_tasks
 
     from_run, from_flow = _pre_import_calls(monkeypatch, scan.run, _run_scan_tasks)
 
     assert from_flow == from_run
-    assert from_run == ["verify_requests", "recheck_unknown", "guard_inbox", "import"]
+    assert from_run == ["verify_requests", "recheck_unknown", "import"]
 
 
 def test_scan_pushes_metrics_on_failure():
