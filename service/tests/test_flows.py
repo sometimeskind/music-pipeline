@@ -540,9 +540,12 @@ def test_album_completion_wires_the_release_hooks():
          patch.object(flows.scan, "regen_playlists", side_effect=lambda: events.append("m3u")), \
          patch.object(flows, "concurrency"):
         _, _, complete = flows._album_library_hooks(lib)
-        assert complete(albums.State(), albums.Completion(nzo_id="n", ok=True, path="x")) == albums.IMPORTED
+        state = albums.State()
+        assert complete(state, albums.Completion(nzo_id="n", ok=True, path="x")) == albums.IMPORTED
 
     assert events == [("claim", ["Juicy"]), "m3u", ("retire", 2), ("rest", 1), ("identify", {"missing": 0})]
+    # The import's start is saved before beets runs (homelab#2603).
+    assert kw["save"] == state.save
     assert claim.call_args.args[1:] == ("keep", 100.0, "K", "r1", "Job")
     # The stores' listings judge top-ups (homelab#1914), not ``sources``.
     assert retire.call_args.args[1:] == ("K", {}, "r1", None, listed)

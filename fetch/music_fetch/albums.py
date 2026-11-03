@@ -1675,6 +1675,7 @@ def complete(
     retire: Retire,
     identify: Identify | None = None,
     import_rest: Callable[[str, str], int] | None = None,
+    save: Callable[[], None] | None = None,
     complete_root: Path = USENET_COMPLETE,
     inbox_root: Path = USENET_INBOX,
     quarantine_root: Path = USENET_QUARANTINE,
@@ -1719,7 +1720,10 @@ def complete(
     next tick's lost-trigger recovery imports it again, judged on the first
     try's MusicBrainz match (beets has moved the files it imported out of the
     dir).  So does a restart mid-import, once :func:`park_interrupted` has
-    moved the job back (#344).  A completed job whose dir is gone is logged
+    moved the job back (#344): *save* writes the album store right after the
+    move (homelab#2603), so the record's ``import_path`` and
+    ``import_started`` are in the database before beets runs, not only at the
+    end of the import flow, which a killed pod never reaches.  A completed job whose dir is gone is logged
     ``[LOST]`` and searched again ahead of the queue, without a blocklist
     entry or an attempt.  An ``ImportDeferred`` (MusicBrainz down, #264) is
     retried the same way, under its own, longer cap.  A broken download is
@@ -1754,6 +1758,9 @@ def complete(
         started = record.setdefault("import_started", time.time())
         # Where the job came from, so a restart's leftovers go back there (#344).
         record["import_path"] = completion.path
+        # In the database before the import can be cut short (homelab#2603):
+        # park_interrupted reads the saved record at the next start.
+        _save_import(save, label)
         identity = None
         if "import_identity" in record:
             # Judged on the first try's files: those beets imported are gone from the dir.
@@ -1763,6 +1770,9 @@ def complete(
                 identity = record["import_identity"] = identify(dest)
             except Exception:
                 logger.exception("[NOMB] %s: identifying %s failed; its completeness is unknown", label, job_name)
+            else:
+                # A resumed import is judged on these files, not on the leftovers.
+                _save_import(save, label)
         gave_up = ""  # why a retried import now counts against the release
         try:
             import_inbox()
@@ -1925,6 +1935,17 @@ def complete(
         _event("failure", key, record, f"[FAIL] {label}: {reason} — blocklisted, will try the next release",
                reason=reason, attempts=record["attempts"], gave_up=False)
     return record["status"]
+
+
+def _save_import(save: Callable[[], None] | None, label: str) -> None:
+    """Write the album store mid-import (homelab#2603), as a best effort: a
+    failed write leaves the import as it was before, saved only at its end."""
+    if save is None:
+        return
+    try:
+        save()
+    except Exception:
+        logger.exception("[IMPT] %s: saving the import's start failed; a restart before it ends loses it", label)
 
 
 def lost_completions(state: State, sabnzbd, now: datetime | None = None) -> list[Completion]:

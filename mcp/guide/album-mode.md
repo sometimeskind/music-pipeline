@@ -57,7 +57,9 @@ Search the album's name in the log. The import logs `[RELEASE]`/`[NOMB]`, then o
   the service moves them back to SABnzbd's complete dir, so no scan imports them loose, and
   the lost-trigger recovery finishes the import as the release. No action.
 - `[LOST]`: the completed job folder is gone. The album is searched again at the next
-  top-up, ahead of the queue, with no blocklist entry. Loose items from such an import (no
+  top-up, ahead of the queue, with no blocklist entry. A `[LOST]` right after a pod restart
+  with no `[RESUME]` was an import cut short before homelab#2603, which saves the import's
+  path before beets runs. Loose items from such an import (no
   album, no cover) are retired when the new release imports.
 
 ## 5. An album is wrong
