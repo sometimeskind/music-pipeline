@@ -502,12 +502,16 @@ def scan_flow() -> None:
 # ---------------------------------------------------------------------------
 
 
-def _album_request_recordings(lib):
+def _album_request_recordings(lib, fill=None):
     """The tick's ``recordings`` hook (homelab#2478): the MusicBrainz recordings
     of the library items stamped with an album record's key, an album
     request's fallback tracks among them, and of those on one of its Spotify
     albums (an album playlist's copies, from before the stage 3 cutover made
-    it a request's).  The library is read once a tick."""
+    it a request's).  The library is read once a tick.
+
+    With *fill* (``request_fill.Filler``, homelab#2589), those items without a
+    recording ID that AcoustID places on a track the request still lacks hold
+    it too: *fill* stores the recording on each, with its event."""
     from music_scan.music_pipeline import FALLBACK_RECORDING  # noqa: PLC0415
     from music_scan.playlists import by_album_id, by_stamp  # noqa: PLC0415
 
@@ -521,9 +525,18 @@ def _album_request_recordings(lib):
             on_album.update(by_album_id(items))
         items = [*stamped.get(key, ()), *(i for sid in record.get("spotify_album_ids") or ()
                                           for i in on_album.get(sid, ()))]
-        return {r for i in items for r in (i.get(FALLBACK_RECORDING), i.get("mb_trackid")) if r}
+        held = {r for i in items for r in (i.get(FALLBACK_RECORDING), i.get("mb_trackid")) if r}
+        return held | fill(key, record, items, held) if fill else held
 
     return recordings
+
+
+def _request_fill(lib):
+    """The AcoustID fill of a request's items without a recording ID (homelab#2589),
+    its writes under the pipeline lock (beets' SQLite has one writer)."""
+    from music_scan.request_fill import Filler  # noqa: PLC0415
+
+    return Filler(lib, lock=lambda: hold("pipeline"))
 
 
 def _album_library_hooks(lib):
@@ -788,7 +801,7 @@ def album_tick_task(settings) -> None:
             wants=_album_wants_hook(lib),
             library=_album_library_feed_hook(lib),
             request_songs=functools.partial(album_requests.release_songs, musicbrainz),
-            recordings=_album_request_recordings(lib),
+            recordings=_album_request_recordings(lib, _request_fill(lib)),
             later_get=musicbrainz,
         )
 
