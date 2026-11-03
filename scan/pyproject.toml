@@ -22,6 +22,7 @@ music-audit-want-albums = "music_scan.want_albums:main"
 music-audit-titles = "music_scan.titles:main"
 music-album-rekey = "music_scan.restamp:main"
 music-cutover = "music_scan.cutover:main"
+music-playlist-shadow = "music_scan.playlist_shadow:main"
 
 [tool.setuptools.packages.find]
 where = ["."]

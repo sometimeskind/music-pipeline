@@ -143,3 +143,72 @@ def sweep_playlists(playlists_dir: Path, keep: set[str]) -> list[str]:
         logger.info("[NAVIDROME] deleted playlist %s: imported from %s, which is gone", name, path)
         deleted.append(name)
     return deleted
+
+
+# The read side of the playlist shadow check (homelab#2361,
+# :mod:`music_scan.playlist_shadow`): nothing below writes to Navidrome.
+
+# Navidrome's music folder (ND_MUSICFOLDER), which the pipeline sees as
+# /root/Music: a track's libraryPath + path maps to a pipeline path by it.
+DEFAULT_MUSIC_DIR = "/music"
+# Playlist tracks read per request.
+TRACKS_PAGE = 500
+
+
+def scanning(url: str, user: str, password: str) -> bool:
+    """Whether Navidrome is scanning (Subsonic ``getScanStatus``): its songs are
+    half-updated until it finishes.  Raises RuntimeError when it can't be read."""
+    params = {"u": user, "p": password, "v": "1.8.0", "c": "music-pipeline", "f": "json"}
+    try:
+        resp = requests.get(f"{url}/rest/getScanStatus.view", params=params, timeout=10)
+        resp.raise_for_status()
+        body = resp.json().get("subsonic-response", {})
+    except (requests.RequestException, ValueError) as exc:
+        raise RuntimeError(f"Could not read Navidrome's scan status: {exc}") from exc
+    if body.get("status") != "ok":
+        raise RuntimeError(f"Navidrome's scan status returned non-ok status: {body.get('error') or body}")
+    return bool(body.get("scanStatus", {}).get("scanning"))
+
+
+def list_playlists(url: str, headers: dict[str, str]) -> list[dict]:
+    """Every playlist the native API shows the logged-in user (``GET /api/playlist``).
+    Raises RuntimeError when they can't be listed."""
+    try:
+        resp = requests.get(f"{url}/api/playlist", headers=headers, timeout=30)
+        resp.raise_for_status()
+        return resp.json()
+    except (requests.RequestException, ValueError) as exc:
+        raise RuntimeError(f"Could not list Navidrome playlists: {exc}") from exc
+
+
+def playlist_tracks(url: str, headers: dict[str, str], playlist_id: str, page: int = TRACKS_PAGE) -> list[dict]:
+    """Playlist *playlist_id*'s tracks in playlist order (``GET /api/playlist/{id}/tracks``).
+
+    Each is a PlaylistTrack row: ``mediaFileId`` and the song's fields, among
+    them ``path`` (relative to ``libraryPath``, its library's root) and
+    ``missing``.  The order is ``_sort=id``, the row's position: without a
+    sort Navidrome gives no order.  Read in pages of *page* (``_start``/``_end``)
+    until ``X-Total-Count`` rows are in.  Raises RuntimeError when a page can't
+    be read, or the count changes between pages (the playlist was re-imported
+    meanwhile)."""
+    tracks: list[dict] = []
+    total: int | None = None
+    while total is None or len(tracks) < total:
+        params = {"_start": len(tracks), "_end": len(tracks) + page, "_sort": "id", "_order": "ASC"}
+        try:
+            resp = requests.get(f"{url}/api/playlist/{playlist_id}/tracks", headers=headers, params=params,
+                                timeout=30)
+            resp.raise_for_status()
+            rows = resp.json()
+            count = int(resp.headers.get("X-Total-Count", ""))
+        except (requests.RequestException, ValueError) as exc:
+            raise RuntimeError(f"Could not read Navidrome playlist {playlist_id}'s tracks: {exc}") from exc
+        if total is not None and count != total:
+            raise RuntimeError(f"Navidrome playlist {playlist_id} changed while it was read ({total} → {count} tracks)")
+        total = count
+        if not rows:
+            break
+        tracks += rows
+    if len(tracks) != total:
+        raise RuntimeError(f"Navidrome playlist {playlist_id}: read {len(tracks)} of {total} tracks")
+    return tracks
