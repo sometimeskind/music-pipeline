@@ -37,7 +37,10 @@ Responsibilities
     beets renames to ``NN - Title.m4a``), so the inbox filename no longer
     matches ``item.path`` at ``item_imported`` time.  The title-based key
     survives both.  This hook guarantees the tags land in the database on
-    clean first-time imports.
+    clean first-time imports.  It also records the events that need the
+    stored item's ID (homelab#2590): ``imported`` for a spotdl item (a Usenet
+    item's import is its album's ``[DONE]``), and ``retitled`` for a title
+    step 1b put back.
 
 2. **Multi-playlist membership** (``import_task_choice``): duplicates are the
    library items that are the same recording by identity (Spotify track ID,
@@ -87,7 +90,8 @@ Responsibilities
     sibling keeps its recording ID: the fingerprint recheck owns identity
     (homelab#2540).  A generic file title (empty, digits, ``Track NN``) keeps
     beets' title.  spotdl imports keep beets' match: their titles are
-    YouTube's, and a request fallback's recording AcoustID verified.
+    YouTube's, and a request fallback's recording AcoustID verified.  Each
+    ``[TITLE]`` change is a ``retitled`` event, written at ``item_imported``.
 
 3. **fingerprint_if_missing** (``item_imported``): ``chroma`` fingerprints at
    ``import_task_start``, which ASIS mode never sends (see the note), so asis
@@ -172,6 +176,16 @@ class FileTags(NamedTuple):
     title: str          # as the file has it
     own: str | None     # what goes back on: :func:`own_title`
     fields: dict        # RECORDING_FIELDS as the file has them
+
+
+class Retitle(NamedTuple):
+    """A Usenet item's title or trackdisambig put back at ``import_task_apply``,
+    recorded as a ``retitled`` event once ``item_imported`` gives it an ID
+    (homelab#2590).  Holds the item, like :class:`FileTags`."""
+
+    item: object
+    message: str
+    data: dict
 
 
 def own_title(title: str | None, track) -> str | None:
@@ -354,6 +368,9 @@ class MusicPipelinePlugin(BeetsPlugin):
         self._pending_job: dict[str, str] = {}
         # id(item) → a Usenet item's own tags, from import_task_created to import_task_apply.
         self._file_tags: dict[int, FileTags] = {}
+        # id(item) → its retitle, from import_task_apply to item_imported, which
+        # has the item ID the event names (homelab#2590).
+        self._retitled: dict[int, Retitle] = {}
         self.register_listener("import_task_created", self.tag_source_on_created)
         self.register_listener("import_task_apply", self.restore_file_title)
         self.register_listener("item_imported", self.tag_source_on_stored)
@@ -433,6 +450,7 @@ class MusicPipelinePlugin(BeetsPlugin):
                     "[TITLE] {}: the file's title {!r} names nothing; beets' title kept", matched, entry.title)
                 continue
             disambig = item.get("trackdisambig") or ""
+            recording = item.get("mb_trackid") or None
             dropped = different_song(title, matched)
             if title != matched and "".join(words(title)) == "".join(words(matched)):
                 # Only case, punctuation or spacing differs (In My Time of Need, In My
@@ -449,8 +467,16 @@ class MusicPipelinePlugin(BeetsPlugin):
             if title != matched or dropped:
                 self._log.warning(
                     "[TITLE] {} → {}{}", matched, title, " (recording dropped)" if dropped else "")
+                message = f"[TITLE] {matched} → {title}{' (recording dropped)' if dropped else ''}"
             elif disambig:
                 self._log.warning("[TITLE] {}: trackdisambig {!r} cleared", title, disambig)
+                message = f"[TITLE] {title}: trackdisambig {disambig!r} cleared"
+            else:
+                continue
+            self._retitled[id(item)] = Retitle(item, message, {
+                "matched": matched, "file_title": entry.title, "trackdisambig": disambig or None,
+                "recording_dropped": dropped, "dropped_mb_trackid": recording if dropped else None,
+                "usenet_job": item.get("usenet_job") or None})
 
     def _alias_pending(self, keys: tuple[str, ...], alias: str) -> None:
         """Make *alias* find what any of *keys* holds in the pending tags."""
@@ -480,6 +506,7 @@ class MusicPipelinePlugin(BeetsPlugin):
         """
         # An as-is import never reaches import_task_apply (homelab#2544).
         self._file_tags.pop(id(item), None)
+        self._record_retitle(item)
         path = item.path.decode() if isinstance(item.path, bytes) else item.path
         title = (item.title or "").lower()
         playlist = self._pending_sources.pop(Path(path).name, None)
@@ -498,8 +525,9 @@ class MusicPipelinePlugin(BeetsPlugin):
         via = self._pending_via.pop(Path(path).name, None)
         if title:
             via = self._pending_via.pop(title, None) or via
+        via = via or "spotdl"
         item["sources"] = playlist
-        item["via"] = via or "spotdl"
+        item["via"] = via
         job = self._pending_job.pop(Path(path).name, None)
         if title:
             job = self._pending_job.pop(title, None) or job
@@ -516,8 +544,37 @@ class MusicPipelinePlugin(BeetsPlugin):
             self._apply_spotdl_tags(item, tags)
         item.store()
         self._log.debug(
-            "persisted source={} via={} on stored item: {}", playlist, item["via"], item.path
+            "persisted source={} via={} on stored item: {}", playlist, via, item.path
         )
+        if via == "spotdl":
+            # A Usenet item is one of a release: its album's [DONE] is the event.
+            self._record_imported(item, playlist)
+
+    def _record_retitle(self, item) -> None:
+        """The ``retitled`` event for a title :meth:`restore_file_title` put back (homelab#2590)."""
+        retitle = self._retitled.pop(id(item), None)
+        if retitle is None or retitle.item is not item:
+            return
+        events.record("retitled", retitle.message, source="import", item_id=item.id,
+                      spotify_album_id=events.spotify_album(item.get("spotify_album_id")),
+                      release_group=item.get("mb_releasegroupid"),
+                      data={**events.item_fields(item), **retitle.data})
+
+    @staticmethod
+    def _record_imported(item, playlist: str) -> None:
+        """The ``imported`` event for a spotdl download now in the library (homelab#2590):
+        the nightly's, an as-is import's, or an album request's verified fallback."""
+        verified = item.get(FALLBACK_RECORDING) or None
+        events.record(
+            "imported", f"[IMPORTED] {playlist}: {item.get('artist')} — {item.get('title')}"
+                        f"{f' (fallback, recording {verified} verified)' if verified else ''}",
+            source="import", item_id=item.id,
+            spotify_album_id=events.spotify_album(item.get("spotify_album_id")),
+            release_group=item.get("mb_releasegroupid"),
+            data={**events.item_fields(item), "playlist": playlist,
+                  "spotify_ids": split_list(item.get("spotify_ids")) or None,
+                  "isrc": item.get("isrc") or None, "mb_trackid": item.get("mb_trackid") or None,
+                  "fallback_recording": verified})
 
     def fingerprint_if_missing(self, lib, item):
         """Fingerprint an item imported without one (asis imports, #210)."""
