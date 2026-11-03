@@ -58,6 +58,14 @@ _TAG_WORDS = {
     "us", "uk", "eu", "jp", "de",
 } | _SINGLE_WORDS
 MAX_LEFTOVER_WORDS = 2
+# Leftover words that make the title another release holding the album's name
+# (homelab#2604): "The Born in the U.S.A. Tour 84-85" is a live box set, not
+# Born in the U.S.A.  Only as leftovers: a word of the album's own name
+# ("Hysteria (Live)") or the artist's (the band Live) is the album's.  Each
+# names a recording or a collection other than the album; edition words
+# (deluxe, expanded) stay tags, so an edition of the album still matches.
+_OTHER_RELEASE_WORDS = {"tour", "live", "concert", "concerts", "unplugged", "bootleg", "bootlegs",
+                        "box", "boxset", "acoustic", "remixes", "remixed"}
 # Edition words that tell one edition of an album from another (#279), each
 # folded to one spelling.  "edition" itself names none.
 _EDITION_WORDS = {"deluxe": "deluxe", "expanded": "expanded", "anniversary": "anniversary",
@@ -183,6 +191,21 @@ def leftover(release: Release, artist: str, album: str) -> list[str]:
     return [w for w in words(title) if w not in known and (w in lead or not any(c.isdigit() for c in w))]
 
 
+def other_release(release: Release, artist: str, album: str) -> list[str]:
+    """Leftover title words that name another release (homelab#2604):
+    ``Artist-The Album Tour 84-85-…`` → ``["tour"]``.  One followed by
+    "edition" names an edition of the album ("Special Tour Edition", a
+    reissue with bonus tracks), so it doesn't count."""
+    other = set(leftover(release, artist, album)) & _OTHER_RELEASE_WORDS
+    if not other:
+        return []
+    title_words = words(_drop_group(release.title))
+    return list(dict.fromkeys(
+        w for i, w in enumerate(title_words)
+        if w in other and title_words[i + 1:i + 2] != ["edition"]
+    ))
+
+
 def edition(text: str) -> frozenset[str]:
     """The edition words of an album name or release title (#279):
     ``Ready to Die (The Remaster)`` → ``{remaster}``."""
@@ -289,10 +312,13 @@ def rejection(
         or not extra
     ):
         return Rejection(4, "self-titled", "names the album once, beside " + " ".join(extra))
+    other = [] if any_album else other_release(release, artist, album)
+    if other:
+        return Rejection(5, "other release", " ".join(other))
     is_single = album_type == "single" if album_type else 0 < tracks <= 3
     shorter = sorted(title & _SINGLE_WORDS - set(words(album)))
     if shorter and not is_single:
-        return Rejection(5, "single", f"tagged {' '.join(shorter)}, the album isn't one")
+        return Rejection(6, "single", f"tagged {' '.join(shorter)}, the album isn't one")
     if seconds > 0:
         low, high = seconds * MIN_BYTES_PER_SECOND, seconds * MAX_BYTES_PER_SECOND
     elif tracks > 0:
@@ -300,7 +326,7 @@ def rejection(
     else:
         low = high = 0
     if high and not low <= release.size <= high:
-        return Rejection(6, "size", f"{release.size / 1e6:.0f} MB, not {low / 1e6:.0f}-{high / 1e6:.0f} MB")
+        return Rejection(7, "size", f"{release.size / 1e6:.0f} MB, not {low / 1e6:.0f}-{high / 1e6:.0f} MB")
     return None
 
 
@@ -329,7 +355,7 @@ def why_none(
     for r in releases:
         why = rejection(r, artist, album, tracks, album_type=album_type, seconds=seconds, any_album=any_album)
         if why is None:
-            why = Rejection(7, "blocklisted") if r.guid in blocklist else Rejection(7, "no download link")
+            why = Rejection(8, "blocklisted") if r.guid in blocklist else Rejection(8, "no download link")
         found.append((r, why))
     if not found:
         return ""

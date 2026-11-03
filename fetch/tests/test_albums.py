@@ -1844,6 +1844,22 @@ def test_a_miss_is_an_event_with_why(recorded) -> None:
     assert kw["data"]["queries"] == ["artist album"] and kw["data"]["status"] == albums.MISSING
 
 
+def test_a_tour_release_is_a_miss_that_says_so(recorded) -> None:
+    """homelab#2604: album 375 took the live Tour 84-85 box set for the studio
+    album; now it is a miss, and the search_miss data names the rule."""
+    state = one_album("Bruce Springsteen", "Born In The U.S.A.", tracks_count=12, duration=2805,
+                      album_type="album")
+    title = "Bruce Springsteen-The Born in the U.S.A. Tour 84-85-16BIT-WEB-FLAC-2024-ENViED"
+    tour = release("r1", title)
+    tour.size = 660_643_844
+    prowlarr, sab = fakes([tour])
+    top_up(state, Settings(mode="on"), prowlarr, sab, never_have, albums.TickResult(), now=lambda: NOW)
+    sab.add_url.assert_not_called()
+    assert state.albums["a0"]["status"] == albums.MISSING
+    (kind, message, kw), = [c for c in recorded if c[0] == "search_miss"]
+    assert kw["data"]["why"] == f'rejected: 1 other release; closest: "{title}" (other release: tour)'
+
+
 def test_a_failed_grab_is_a_failure_not_given_up(recorded) -> None:
     state = wanted_state()
     prowlarr, sab = fakes()
