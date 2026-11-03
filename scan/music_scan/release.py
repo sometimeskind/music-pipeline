@@ -40,7 +40,12 @@ record is that album, imported whole.  This module holds the library side of
   ``album_extra``, and marked ``canon_wait`` so the next scan files it under
   the album's tags.  A later import that holds its recording retires it.
   Rolling a release back (*drop*) takes all of its items: they are the wrong
-  files, not copies.
+  files, not copies.  A copy that goes first hands the kept item holding its
+  recording the Spotify IDs, ISRCs and ``sources`` that item lacks
+  (:func:`_hand_over`, as a merge does, homelab#2601): a playlist entry
+  resolves by Spotify ID or ISRC, and a holder that shares only a MusicBrainz
+  recording ID with the copy (another edition's Spotify album) would leave the
+  entry resolving to nothing.  :func:`retire_held` does the same.
 - :func:`retire_held` retires an extra once the record's kept release holds
   its recording after all (#294), logged ``[RETIRE] … (extra, now held)``,
   and merges one into the release item that is a certain-tier duplicate of
@@ -56,8 +61,9 @@ record is that album, imported whole.  This module holds the library side of
 - :func:`retire_merged` does :func:`retire`'s work, every scan, for a record a
   release-group merge left holding two imported releases (homelab#2545): the
   record's own release (:func:`own_release`) stays, and the other's copies go
-  as its import would have sent them.  ``music-album-audit-releases
-  --merged`` lists them (:func:`list_merged`).
+  as its import would have sent them.  The decision is a ``merged_releases``
+  event (homelab#2601).  ``music-album-audit-releases --merged`` lists them
+  (:func:`list_merged`).
 - :func:`title_twins` finds the extras left that share a title (edition
   suffixes dropped) with a track of their record's kept release (#306): no ID
   agrees, so by homelab#1889 they are other recordings, but often another
@@ -351,24 +357,60 @@ def _event(kind: str, item, spotify_album: str | None, release_group: str | None
                   once_hours=once_hours)
 
 
+def _hand_over(item, holders) -> dict:
+    """Give the first of *holders* that holds *item*'s recording (:class:`~music_scan.identity.Recordings`)
+    the Spotify IDs, ISRCs and ``sources`` of *item* it lacks, as a merge would
+    (:func:`music_scan.dupes.take_ids`, homelab#2601): *item* is about to leave the
+    library, and a playlist entry resolves by Spotify ID or ISRC, so without them an entry
+    that resolved to *item* resolves to nothing.  A holder that shares only a MusicBrainz
+    recording ID with *item* (another edition's Spotify album, a remaster's ISRC) is the
+    case that needs it.  Returns the retire event's fields for what moved, empty when
+    nothing did."""
+    from music_scan import dupes  # noqa: PLC0415
+    from music_scan.identity import Recordings  # noqa: PLC0415
+
+    holder = next((h for h in holders if Recordings([h]).holds_item(item)), None)
+    if holder is None:
+        return {}
+    taken = {field: ids for field, ids in dupes.take_ids(holder, item).items() if ids}
+    if not taken:
+        return {}
+    holder.store()
+    if taken.get("isrc"):
+        holder.try_write()
+    return {"ids_to": holder.id, **taken}
+
+
+def _ids_note(moved: dict) -> str:
+    """The ``[RETIRE]`` line's account of :func:`_hand_over`."""
+    if not moved:
+        return ""
+    ids = [*moved.get("spotify_ids", ()), *moved.get("isrc", ())]
+    return f"; {', '.join(ids) or 'its sources'} → {moved['ids_to']}"
+
+
 def retire(lib, key: str, record: dict, keep: str | None, drop: str | None, listed) -> int:
     """Quarantine the :func:`copies` whose recording release *keep* holds to
-    ``quarantine/replaced/``, and keep the others on the album as local-only
-    extras (#287); with *drop*, quarantine that release's items.  *listed* is
-    :func:`_topup`'s.  Returns the count quarantined."""
+    ``quarantine/replaced/``, each handing its IDs to the release item that
+    holds its recording (:func:`_hand_over`), and keep the others on the album
+    as local-only extras (#287); with *drop*, quarantine that release's items.
+    *listed* is :func:`_topup`'s.  Returns the count quarantined."""
     from music_scan.canon import WAIT  # noqa: PLC0415
     from music_scan.rollback import quarantine  # noqa: PLC0415
 
     items = list(lib.all_items())
     others = copies(items, key, record, keep, drop, listed)
     gone, extras = (others, []) if drop is not None else superseded(items, key, keep, others)
-    group = _release_group(i for i in items if i.get("album_record") == key and i.get("release") == keep)
+    kept = [i for i in items if i.get("album_record") == key and i.get("release") == keep]
+    group = _release_group(kept)
     album = primary_spotify(record)
     for item in gone:
-        logger.info("  [RETIRE] %s %s — %s [%s] (%s)", item.id, item.get("artist"), item.get("title"),
-                    item.get("album"), _origin(item))
-        _event("retire", item, album, group, f"[RETIRE] {item.id} {item.get('artist')} — {item.get('title')} "
-                                             f"[{item.get('album')}] ({_origin(item)})", origin=_origin(item))
+        # A rolled-back release's files are the wrong ones: their IDs go with them.
+        moved = _hand_over(item, kept) if drop is None else {}
+        line = (f"[RETIRE] {item.id} {item.get('artist')} — {item.get('title')} [{item.get('album')}] "
+                f"({_origin(item)}){_ids_note(moved)}")
+        logger.info("  %s", line)
+        _event("retire", item, album, group, line, origin=_origin(item), **moved)
     for item in extras:
         logger.info("  [LOCAL] %s %s — %s [%s] (%s): the kept release lacks its recording; stays on the album",
                     item.id, item.get("artist"), item.get("title"), item.get("album"), _origin(item))
@@ -453,20 +495,45 @@ def retire_merged(lib, records: dict[str, dict], listed) -> int:
     (:func:`retire` with the record's own release kept, homelab#2545).  A copy
     of a recording the own release holds goes to ``quarantine/replaced/``, the
     rest stay on the album as local-only extras.  A record whose own release
-    nothing tells is logged ``[MULTI]`` and left alone.  Returns the count
-    quarantined."""
+    nothing tells is logged ``[MULTI]`` and left alone.  Either decision is a
+    ``merged_releases`` event (homelab#2601, :func:`_merged_event`), recorded
+    before the retire; a ``[MULTI]`` once a day while it stands.  Returns the
+    count quarantined."""
     n = 0
     for m in merged(lib.all_items(), records):
         label = f"{m.record.get('artist')} — {m.record.get('name')} ({m.key})"
         others = ", ".join(f"{r} ({c})" for r, c in sorted(m.releases.items()) if r != m.keep)
         if m.keep is None:
-            logger.warning("  [MULTI] %s: items of %d releases (%s), and nothing tells which is its own; "
-                           "left to music-album-audit-releases --merged", label, len(m.releases), others)
+            line = (f"[MULTI] {label}: items of {len(m.releases)} releases ({others}), and nothing tells which "
+                    "is its own; left alone (music-album-reset --reimport starts it over)")
+            logger.warning("  %s", line)
+            _merged_event(m, line, once_hours=24)
             continue
-        logger.info("  [MERGED] %s: keeps its own release %s (%d); retiring %s", label, m.keep,
-                    m.releases[m.keep], others)
+        line = f"[MERGED] {label}: keeps its own release {m.keep} ({m.releases[m.keep]}); retiring {others}"
+        logger.info("  %s", line)
+        _merged_event(m, line)
         n += retire(lib, m.key, m.record, m.keep, None, listed)
     return n
+
+
+def _own_why(m: Merged) -> str:
+    """Why :func:`own_release` chose *m*'s kept release."""
+    if m.keep is None:
+        return "nothing tells: no best_copy among them, and none started by the record's imported_at"
+    if (m.record.get("best_copy") or {}).get("release") == m.keep:
+        return "its best_copy, kept while it waits for a better copy"
+    return "the newest release whose import started by the record's imported_at"
+
+
+def _merged_event(m: Merged, message: str, once_hours: int | None = None) -> None:
+    """The record-level decision of :func:`retire_merged` (homelab#2601): which of the
+    record's releases it keeps (``kept``, None when nothing tells), why, and each
+    release's item count (``releases``).  Its items' own ``retire`` and ``local``
+    events follow."""
+    events.record("merged_releases", message, source="release", spotify_album_id=primary_spotify(m.record),
+                  release_group=m.record.get("release_group"), once_hours=once_hours,
+                  data={"key": m.key, "album": f"{m.record.get('artist')} — {m.record.get('name')}",
+                        "kept": m.keep, "why": _own_why(m), "releases": dict(sorted(m.releases.items()))})
 
 
 def list_merged(items, records: dict[str, dict], listed) -> int:
@@ -540,11 +607,13 @@ def retire_held(lib, decoder=None) -> int:
     gone = [i for i in items if i.get(EXTRA) and i.get("album_record") in held
             and held[i.get("album_record")].holds_item(i)]
     for item in gone:
-        logger.info("  [RETIRE] %s %s — %s [%s] (extra, now held)", item.id, item.get("artist"), item.get("title"),
-                    item.get("album"))
         key = item.get("album_record")
-        _event("retire", item, _album_of(kept[key]), _release_group(kept[key]), f"[RETIRE] {item.id} {item.get('artist')} — "
-               f"{item.get('title')} [{item.get('album')}] (extra, now held)", origin="extra, now held")
+        moved = _hand_over(item, kept[key])
+        line = (f"[RETIRE] {item.id} {item.get('artist')} — {item.get('title')} [{item.get('album')}] "
+                f"(extra, now held){_ids_note(moved)}")
+        logger.info("  %s", line)
+        _event("retire", item, _album_of(kept[key]), _release_group(kept[key]), line, origin="extra, now held",
+               **moved)
     quarantine(gone)
 
     gone_ids = {i.id for i in gone}
