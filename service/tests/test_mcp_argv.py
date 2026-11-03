@@ -31,6 +31,7 @@ CASES = {
     "recheck_recordings": [{"ids": [], "resume": None}, {"ids": [5672, 6994], "resume": None},
                            {"ids": [], "resume": "3f2a9c0d1e2b4a5c"}],
     "apply_recheck": [{"run_id": "3f2a9c0d1e2b4a5c"}],
+    "recording_candidates": [{"id": 13744}],
     "search_releases": [{"query": "band the album", "limit": 5}, {"query": "--apply -x", "limit": 10}],
     "reset_album": [{"album": "0ETFjACtuP2ADo6LFhL6HN", "reimport": False},
                     {"album": "0ETFjACtuP2ADo6LFhL6HN", "reimport": True},

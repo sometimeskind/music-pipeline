@@ -20,6 +20,7 @@ PILOT = Caller("pilot", "read")
 
 READS = {"library_status", "find_albums", "get_album", "get_item", "list_quarantine", "get_playlist",
          "get_job", "get_guide", "audit_dupes", "audit_lengths", "audit_releases", "audit_want_albums", "audit_titles", "recheck_recordings", "search_releases",
+         "recording_candidates",
          "album_history", "find_events", "digest_summary", "list_overrides", "list_requests", "get_later"}
 WRITES = {"reset_album", "requeue_albums", "merge_items", "replace_item", "unlink_spotify_id", "set_recording",
           "embed_covers", "canon_albums",
@@ -123,6 +124,7 @@ async def test_reads_route_to_the_contract(pipeline, fake, tool, args, method, p
      {"run_id": "3f2a9c0d1e2b4a5c", "apply": True}),
     ("search_releases", {"query": "band the album"}, "/mcp-api/run/search_releases",
      {"query": "band the album", "limit": 5}),
+    ("recording_candidates", {"id": 13744}, "/mcp-api/run/recording_candidates", {"id": 13744}),
     ("reset_album", {"query": "abbey road", "reimport": True}, "/mcp-api/run/reset_album",
      {"query": "abbey road", "reimport": True, "apply": False}),
     ("requeue_albums", {"since": "2026-10-20T00:00:00", "apply": True}, "/mcp-api/run/requeue_albums",

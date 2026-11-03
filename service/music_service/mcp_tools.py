@@ -254,6 +254,11 @@ def _unlink(body: dict, _: Albums) -> dict:
     return {"id": _id(body.get("id"), "id"), "track": track_ref(body.get("track"))}
 
 
+def _item_only(body: dict, _: Albums) -> dict:
+    _only(body, "id")
+    return {"id": _id(body.get("id"), "id")}
+
+
 def _set_recording(body: dict, _: Albums) -> dict:
     _only(body, "id", "recording")
     return {"id": _id(body.get("id"), "id"), "recording": mbid(body.get("recording"), "recording", "recording")}
@@ -505,6 +510,9 @@ TOOLS: dict[str, Tool] = {t.name: t for t in [
     # restart from its checkpoint; its findings are applied with apply_recheck.
     Tool("recheck_recordings", READ, _recheck, _recheck_argv, lane="long", resumable=True),
     # MusicBrainz only (homelab#2478): the query the caller typed, after "--".
+    # The recordings an item could be, from its release on MusicBrainz (homelab#2623).
+    Tool("recording_candidates", READ, _item_only,
+         lambda a, _: [["music-mb-fingerprint", "--candidates", str(a["id"])]]),
     Tool("search_releases", READ, _search_releases,
          lambda a, _: [["music-requests", "search", f"--limit={a['limit']}", "--", a["query"]]]),
     Tool("reset_album", WRITE, _reset_album,

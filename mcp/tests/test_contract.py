@@ -317,6 +317,10 @@ async def test_the_request_tools(pipeline_url):
         found = await finish(c, (await c.call_tool("search_releases", {"query": "band the album", "limit": 3})).data)
         assert found["status"] == "done" and found["argv"] == [
             ["music-requests", "search", "--limit=3", "--", "band the album"]], found
+        # homelab#2623: a read, so the read-only token may run it.
+        candidates = await finish(c, (await c.call_tool("recording_candidates", {"id": 13744})).data)
+        assert candidates["status"] == "done" and candidates["argv"] == [
+            ["music-mb-fingerprint", "--candidates", "13744"]], candidates
         with pytest.raises(ToolError):
             await c.call_tool("request_album", {"albums": [{"release_group": rg}]})
         with pytest.raises(ToolError):

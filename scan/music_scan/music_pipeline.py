@@ -419,6 +419,7 @@ class MusicPipelinePlugin(BeetsPlugin):
         self._retitled: dict[int, Retitle] = {}
         self.register_listener("import_task_created", self.tag_source_on_created)
         self.register_listener("import_task_apply", self.restore_file_title)
+        self.register_listener("import_task_apply", self.clear_singleton_release_track)
         self.register_listener("item_imported", self.tag_source_on_stored)
         self.register_listener("import_task_choice", self.handle_duplicates)
         self.register_listener("item_imported", self.fingerprint_if_missing)
@@ -528,6 +529,20 @@ class MusicPipelinePlugin(BeetsPlugin):
                 "recording_dropped": dropped, "dropped_mb_trackid": recording if dropped else None,
                 "dropped_why": why, "versions": versions or None,
                 "usenet_job": item.get("usenet_job") or None})
+
+    def clear_singleton_release_track(self, session, task):
+        """Clear the recording ID beets writes as a singleton's ``mb_releasetrackid`` (homelab#2623).
+
+        beets' ``TrackInfo`` maps ``release_track_id or track_id`` to
+        ``mb_releasetrackid``, and a singleton match is a bare recording with no
+        release track, so every pipeline import (``singletons: yes``) stored its
+        recording ID there: a release track ID that names no release track, and a
+        stale one once the recording is replaced (13744, 3809, 17061).  Fires
+        after :meth:`restore_file_title`, so a file's own value it put back is
+        judged the same way; a real release track ID (another value) stays."""
+        item = getattr(task, "item", None)  # an album task (not used) has real release tracks
+        if item is not None and item.get("mb_releasetrackid") and item.get("mb_releasetrackid") == item.get("mb_trackid"):
+            item["mb_releasetrackid"] = ""
 
     def _alias_pending(self, keys: tuple[str, ...], alias: str) -> None:
         """Make *alias* find what any of *keys* holds in the pending tags."""

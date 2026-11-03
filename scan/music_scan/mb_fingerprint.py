@@ -73,7 +73,14 @@ warns ``[SUSPECT]`` when its title names another song.  ``--apply`` stores it
 under the pipeline lock with a ``recording_set`` event in the same transaction,
 marks the item ``recording_set`` (so ``--recheck`` and a run's apply leave it
 alone while its ``mb_trackid`` is that recording), and writes the file's tags,
-so a later ``beet update`` reads the same ID back.
+so a later ``beet update`` reads the same ID back.  The item's ISRCs and
+``mb_releasetrackid`` go with the recording (homelab#2623, :func:`aligned_isrcs`,
+:func:`aligned_release_track`); it refuses when an ISRC that goes is the only way
+a playlist entry resolves to the item.
+
+``--candidates ITEM_ID`` (homelab#2623, :mod:`music_scan.candidates`) lists the
+recordings an item could be, from the release it sits on: read-only, for picking
+the recording ``--set-recording`` sets.
 
 Requires the ACOUSTID_APIKEY env var.
 """
@@ -800,13 +807,113 @@ def refresh_replaced(since: datetime | None = None, apply: bool = False, library
 # ---------------------------------------------------------------------------
 
 
-def musicbrainz_recording_credits() -> RecordingLookup:
-    """``recording/<id>?inc=artist-credits``: :func:`musicbrainz_recordings` with
-    the artist, which the dry run shows beside the item's."""
+def musicbrainz_recording_credits(mb=None) -> RecordingLookup:
+    """``recording/<id>?inc=artist-credits+isrcs``: :func:`musicbrainz_recordings` with
+    the artist, which the dry run shows beside the item's, and the ISRCs the item's
+    are aligned with (homelab#2623)."""
     from music_scan.mb_release import MusicBrainz  # noqa: PLC0415
 
-    mb = MusicBrainz()
-    return lambda recording_id: mb.get(f"recording/{recording_id}", inc="artist-credits")
+    mb = mb or MusicBrainz()
+    return lambda recording_id: mb.get(f"recording/{recording_id}", inc="artist-credits+isrcs")
+
+
+# ---------------------------------------------------------------------------
+# The IDs that go with a recording set by hand (homelab#2623)
+# ---------------------------------------------------------------------------
+
+# A MusicBrainz web service read: (path, **params) -> the JSON, or None for a 404.
+MusicBrainzGet = Callable[..., "dict | None"]
+
+
+class Refused(Exception):
+    """A set_recording that must not run: why, for the dry run and the apply alike."""
+
+
+def _isrc_owners(code: str, get: MusicBrainzGet) -> set[str] | None:
+    """The recordings MusicBrainz gives ISRC *code*, or None when it knows none."""
+    found = get(f"isrc/{code}")
+    owners = {r["id"] for r in (found or {}).get("recordings") or [] if r.get("id")}
+    return owners or None
+
+
+def aligned_isrcs(item, recording: dict, get: MusicBrainzGet | None) -> tuple[str, list[str]]:
+    """*item*'s ``isrc`` once its recording is *recording* (``inc=isrcs``), and why each
+    code goes or comes.  An ISRC the recording has stays; one MusicBrainz gives only to
+    other recordings goes (the guessed sibling's, or a mislabelled file's); one
+    MusicBrainz doesn't know stays (it may be Spotify's, which a playlist entry resolves
+    by).  When the item then holds none of the recording's and the recording has exactly
+    one, that one is added.  A recording looked up without its ISRCs leaves the field
+    alone."""
+    from music_scan.identity import split_list  # noqa: PLC0415
+
+    have = split_list(item.get("isrc"), ";")
+    isrcs = recording.get("isrcs")
+    if isrcs is None:
+        return ";".join(have), []
+    keep, notes = [], []
+    for code in have:
+        if code in isrcs:
+            keep.append(code)
+            continue
+        owners = _isrc_owners(code, get) if get is not None else None
+        if owners and recording.get("id") not in owners:
+            notes.append(f"{code} goes: MusicBrainz gives it to {', '.join(sorted(owners))}")
+        else:
+            keep.append(code)
+            notes.append(f"{code} stays: {'MusicBrainz knows no recording with it' if get else 'not checked'}")
+    if len(isrcs) == 1 and isrcs[0] not in keep:
+        keep.append(isrcs[0])
+        notes.append(f"{isrcs[0]} comes: the recording's only ISRC")
+    elif len(isrcs) > 1 and not set(keep) & set(isrcs):
+        notes.append(f"the recording has {len(isrcs)} ISRCs ({', '.join(isrcs)}) and none is added: which one is "
+                     "the file's isn't known")
+    return ";".join(keep), notes
+
+
+def aligned_release_track(item, recording_id: str, get: MusicBrainzGet) -> tuple[str, str]:
+    """*item*'s ``mb_releasetrackid`` once its recording is *recording_id*: the track of
+    the item's release (``mb_albumid``) that holds it, at the item's position when it
+    holds it more than once; else empty.  With why."""
+    from music_scan.candidates import _int, _tracks, position_track  # noqa: PLC0415
+
+    album = item.get("mb_albumid") or ""
+    if not album:
+        return "", "the item has no release (mb_albumid)"
+    release = get(f"release/{album}", inc="recordings")
+    if not release:
+        return "", f"MusicBrainz has no release {album}"
+    tracks = [t for _, _, t in _tracks(release) if (t.get("recording") or {}).get("id") == recording_id]
+    if len(tracks) == 1:
+        return tracks[0].get("id") or "", "its track on the item's release"
+    if not tracks:
+        return "", "the recording isn't on the item's release"
+    at = position_track(release, _int(item.get("disc")), _int(item.get("track")))
+    if at is not None and at in tracks:
+        return at.get("id") or "", f"its track at the item's position ({len(tracks)} on the release)"
+    return "", f"the recording is on {len(tracks)} tracks of the item's release, none at the item's position"
+
+
+def playlist_losses(item, items: list, songs: dict[str, list[dict]], lost: set[str]) -> list[str]:
+    """The playlist entries that resolve to *item* by an ISRC in *lost* and would resolve
+    to nothing once it lost them: an entry resolves to the lowest item ID holding its
+    Spotify ID, else its ISRC (``mcp_reads.resolver``)."""
+    from music_scan.identity import item_isrcs, item_spotify_ids, spotify_id  # noqa: PLC0415
+
+    out = []
+    for playlist, listed in sorted(songs.items()):
+        for song in listed:
+            code = song.get("isrc")
+            if code not in lost:
+                continue
+            sid = song.get("song_id") or spotify_id(song.get("url"))
+            if sid and any(sid in item_spotify_ids(i) for i in items):
+                continue  # it resolves by its Spotify ID
+            holders = sorted(i.id for i in items if code in item_isrcs(i))
+            if holders and holders[0] == item.id and len(holders) == 1:
+                artists = song.get("artists") or []
+                who = ", ".join(artists) if isinstance(artists, list) else artists
+                out.append(f"{playlist}: {song.get('name')} — {who} (ISRC {code})")
+    return out
 
 
 def _credit(recording: dict) -> str:
@@ -817,12 +924,19 @@ def _seconds(ms) -> str:
     return f"{ms / 1000:.1f} s" if isinstance(ms, (int, float)) else "no length"
 
 
-def set_recording_on(lib, item_id: int, recording_id: str, lookup: RecordingLookup, conn=None) -> bool:
+def set_recording_on(lib, item_id: int, recording_id: str, lookup: RecordingLookup, conn=None, *,
+                     get: MusicBrainzGet | None = None, songs: dict[str, list[dict]] | None = None) -> bool:
     """Set item *item_id*'s recording to *recording_id*: a dry run without *conn*
     (says what would change), with it the store, its ``recording_set`` event in
     the same transaction, and the file's tags.  The caller holds the pipeline
     lock for an apply.  Returns True when it stored anything.  Raises
-    :class:`SystemExit` on a refusal, before anything changes."""
+    :class:`SystemExit` on a refusal, before anything changes.
+
+    With *get* (MusicBrainz) the item's ``isrc`` (:func:`aligned_isrcs`) and
+    ``mb_releasetrackid`` (:func:`aligned_release_track`) go with the recording
+    (homelab#2623).  An ISRC that goes is checked against *songs* (the playlist
+    stores' song records): the set is refused when an entry resolves to this
+    item by that ISRC alone, since its slot would go empty."""
     from music_fetch import events  # noqa: PLC0415
 
     item = lib.get_item(item_id)
@@ -850,6 +964,14 @@ def set_recording_on(lib, item_id: int, recording_id: str, lookup: RecordingLook
                        "audio is that song before applying (its title becomes the recording's)", label,
                        recording.get("title"))
     changes = refreshed(item, recording)
+    if get is not None:
+        try:
+            changes.update(_aligned(lib, item, recording, new, get, songs))
+        except Refused as exc:
+            raise SystemExit(f"--set-recording: {exc}; nothing changed") from None
+        except (OSError, ValueError, http.client.HTTPException) as exc:
+            raise SystemExit(f"--set-recording: a MusicBrainz lookup failed ({exc}); nothing changed, "
+                             "run it again") from None
     if changes:
         logger.info("    with it: %s", _describe(changes))
     if before == new and set_by_hand(item) and not changes:
@@ -879,15 +1001,46 @@ def set_recording_on(lib, item_id: int, recording_id: str, lookup: RecordingLook
     return True
 
 
+def _aligned(lib, item, recording: dict, new: str, get: MusicBrainzGet,
+             songs: dict[str, list[dict]] | None) -> Changes:
+    """The ``isrc`` and ``mb_releasetrackid`` changes that go with *new*, logged with why;
+    raises :class:`Refused` when a playlist entry would lose its item."""
+    changes: Changes = {}
+    before = item.get("isrc") or ""
+    after, notes = aligned_isrcs(item, recording, get)
+    for note in notes:
+        logger.info("    [ISRC] %s", note)
+    if after != before:
+        lost = set(filter(None, before.split(";"))) - set(filter(None, after.split(";")))
+        if lost:
+            if songs is None:
+                raise Refused("the item's ISRC would change and the playlists couldn't be checked "
+                              "(no music database)")
+            losses = playlist_losses(item, list(lib.items()), songs, lost)
+            if losses:
+                raise Refused("dropping ISRC " + ", ".join(sorted(lost)) + " would empty the slot of "
+                              + "; ".join(losses) + ", which resolve to this item by that ISRC alone. Find the "
+                              "item that is that recording first (get_playlist), or replace this one's audio")
+        changes["isrc"] = (before, after)
+    rtid, why = aligned_release_track(item, new, get)
+    logger.info("    [RELEASETRACK] %s: %s", rtid or "none", why)
+    if rtid != (item.get("mb_releasetrackid") or ""):
+        changes["mb_releasetrackid"] = (item.get("mb_releasetrackid") or "", rtid)
+    return changes
+
+
 def set_recording(item_id: int, recording_id: str, apply: bool = False, library_db: str = LIBRARY_DB,
-                  library_dir: str = LIBRARY_DIR, lookup: RecordingLookup | None = None) -> bool:
+                  library_dir: str = LIBRARY_DIR, lookup: RecordingLookup | None = None,
+                  get: MusicBrainzGet | None = None) -> bool:
     """``--set-recording``: :func:`set_recording_on` against the library, the
     apply under the pipeline lock.  It refuses an ID that isn't an MBID, and an
-    apply without the music database (the change is an event or nothing)."""
+    apply without the music database (the change is an event or nothing).  The
+    playlist stores are read from the music database when it is configured."""
     import beets.library  # noqa: PLC0415
 
     from music_fetch import db  # noqa: PLC0415
     from music_scan.audit import pipeline_lock  # noqa: PLC0415
+    from music_scan.mb_release import MusicBrainz  # noqa: PLC0415
 
     recording_id = recording_id.strip().lower()
     if not MBID.match(recording_id):
@@ -895,13 +1048,52 @@ def set_recording(item_id: int, recording_id: str, apply: bool = False, library_
     if apply and not db.configured():
         raise SystemExit(f"--set-recording --apply: {db.ENV} is unset; the change is recorded as an event, "
                          "so nothing runs without it")
+    if get is None:
+        mb = MusicBrainz()
+        get = mb.get
+        lookup = lookup or musicbrainz_recording_credits(mb)
     lookup = lookup or musicbrainz_recording_credits()
     lib = beets.library.Library(library_db, directory=library_dir)
     try:
         if not apply:
-            return set_recording_on(lib, item_id, recording_id, lookup)
+            return set_recording_on(lib, item_id, recording_id, lookup, get=get, songs=_songs())
         with pipeline_lock(), contextlib.closing(db.connect()) as conn:
-            return set_recording_on(lib, item_id, recording_id, lookup, conn)
+            return set_recording_on(lib, item_id, recording_id, lookup, conn, get=get, songs=_songs())
+    finally:
+        lib._close()
+
+
+def _songs() -> dict[str, list[dict]] | None:
+    """The playlist stores' song records, or None without the music database."""
+    from music_fetch import db, store  # noqa: PLC0415
+
+    return store.songs_by_playlist() if db.configured() else None
+
+
+# ---------------------------------------------------------------------------
+# --candidates (homelab#2623)
+# ---------------------------------------------------------------------------
+
+
+def candidates(item_id: int, library_db: str = LIBRARY_DB, library_dir: str = LIBRARY_DIR,
+               get: MusicBrainzGet | None = None) -> list:
+    """``--candidates``: :func:`music_scan.candidates.recording_candidates` for one
+    library item; read-only."""
+    import beets.library  # noqa: PLC0415
+
+    from music_scan.candidates import recording_candidates  # noqa: PLC0415
+    from music_scan.mb_release import MusicBrainz  # noqa: PLC0415
+
+    get = get or MusicBrainz().get
+    lib = beets.library.Library(library_db, directory=library_dir)
+    try:
+        item = lib.get_item(item_id)
+        if item is None:
+            raise SystemExit(f"--candidates: no library item with id {item_id}")
+        try:
+            return recording_candidates(item, get)
+        except (OSError, ValueError, http.client.HTTPException) as exc:
+            raise SystemExit(f"--candidates: a MusicBrainz lookup failed ({exc}); run it again") from None
     finally:
         lib._close()
 
@@ -1033,8 +1225,17 @@ def main() -> None:
     parser.add_argument("--set-recording", nargs=2, metavar=("ITEM_ID", "RECORDING_ID"),
                         help="set one item's recording by hand, when AcoustID names the wrong one: a dry run, "
                              "or with --apply do it (homelab#2583)")
+    parser.add_argument("--candidates", type=int, metavar="ITEM_ID",
+                        help="list the recordings an item could be, from its release on MusicBrainz: the one at "
+                             "its disc and track and those of the same song (read-only, homelab#2623)")
     parser.add_argument("ids", nargs="*", type=int, help="with --recheck: only these item IDs")
     args = parser.parse_args()
+    if args.candidates is not None:
+        if (args.recheck or args.run_id or args.replace_run or args.refresh_replaced or args.since or args.ids
+                or args.apply or args.set_recording):
+            parser.error("--candidates takes nothing else: it only lists")
+        candidates(args.candidates)
+        return
     if args.set_recording:
         if args.recheck or args.run_id or args.replace_run or args.refresh_replaced or args.since or args.ids:
             parser.error("--set-recording takes only --apply")
