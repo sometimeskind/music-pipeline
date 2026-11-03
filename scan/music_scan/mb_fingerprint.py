@@ -402,18 +402,6 @@ def musicbrainz_recordings() -> RecordingLookup:
     return lambda recording_id: mb.get(f"recording/{recording_id}")
 
 
-def other_version(title: str, recording_title: str, disambiguation: str) -> bool:
-    """True when *title* names a version (:data:`music_scan.titles.VERSIONS`:
-    5.1, live, demo, alternate, mono, take, outtake) more often than the
-    recording's title and disambiguation together do: ``Oh! Sweet Nuthin' (5.1
-    mix)`` against the stereo recording, never ``Song (Live)`` against a
-    recording whose disambiguation reads "live, 1975-…"."""
-    from music_scan.titles import counts  # noqa: PLC0415
-
-    ours, theirs, notes = counts(title), counts(recording_title), counts(disambiguation)
-    return any(n > theirs[word] + notes[word] for word, n in ours.items())
-
-
 def refreshed_title(item, recording_title: str, disambiguation: str) -> str:
     """*item*'s title once its recording is the one titled *recording_title*.
 
@@ -422,10 +410,11 @@ def refreshed_title(item, recording_title: str, disambiguation: str) -> str:
     (``via=usenet``) is the exception: since music-pipeline#398 its title is its
     release file's own, on purpose, so it stays while it is the same song as the
     recording's (:func:`~music_scan.identity.different_song`, version notes
-    dropped) and names no version the recording doesn't (:func:`other_version`).
+    dropped) and names no version the recording doesn't
+    (:func:`~music_scan.identity.other_version`).
     A track imported before #398 still carries the guess's title, and the
     guess's song name or its "(5.1 mix)" gives that away."""
-    from music_scan.identity import different_song  # noqa: PLC0415
+    from music_scan.identity import different_song, other_version  # noqa: PLC0415
 
     title = item.get("title") or ""
     if not recording_title or item.get("via") != "usenet":

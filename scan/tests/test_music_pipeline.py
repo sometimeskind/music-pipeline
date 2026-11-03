@@ -1086,8 +1086,10 @@ def _warnings(plugin) -> list[str]:
             for c in plugin._log.warning.call_args_list]
 
 
-def test_a_same_song_sibling_gets_the_files_title_and_keeps_its_recording() -> None:
-    """Loaded's stereo Oh! Sweet Nuthin', matched to the 5.1 mix's recording."""
+def test_a_sibling_naming_another_version_gets_the_files_title_and_loses_the_recording() -> None:
+    """Loaded's stereo Oh! Sweet Nuthin', matched to the 5.1 mix's recording: only the
+    recording names 5.1, so its ID is refuted (homelab#2609; it used to stay for the
+    fingerprint recheck, homelab#2540, but retire and the purge trust it first)."""
     plugin = _make_plugin()
     item = _file(f"{LOADED}/10 - Oh! Sweet Nuthin'.flac", "Oh! Sweet Nuthin'", track=10)
     task = _created(plugin, item)
@@ -1098,9 +1100,9 @@ def test_a_same_song_sibling_gets_the_files_title_and_keeps_its_recording() -> N
 
     assert item.title == "Oh! Sweet Nuthin'"
     assert item.trackdisambig == ""
-    # The fingerprint recheck owns a same-song sibling's identity (homelab#2540).
-    assert (item.mb_trackid, item.mb_releasetrackid, item.isrc) == ("d0063aee", "d0063aee", "USWB10005")
-    assert _warnings(plugin) == ["[TITLE] Oh! Sweet Nuthin' (5.1 mix) → Oh! Sweet Nuthin'"]
+    assert (item.mb_trackid, item.mb_releasetrackid, item.isrc, item.work) == ("", "", "", "")
+    assert _warnings(plugin) == [
+        "[TITLE] Oh! Sweet Nuthin' (5.1 mix) → Oh! Sweet Nuthin' (recording dropped: another version, 5.1)"]
     assert plugin._file_tags == {}
 
 
@@ -1166,7 +1168,9 @@ def test_a_case_only_difference_keeps_musicbrainz_spelling() -> None:
 def test_a_punctuation_difference_keeps_musicbrainz_spelling_and_finds_the_tags() -> None:
     """Don't against Don’t: beets' title stays, and the pending tags are found by it after the rename."""
     plugin = _make_plugin()
-    item = _file(f"{LOADED}/03 - Don't Ask For The Water.flac", "Don't Ask For The Water", track=3)
+    # A live album: its bare titles don't refute a live recording (homelab#2609).
+    item = _file(f"{LOADED}/03 - Don't Ask For The Water.flac", "Don't Ask For The Water", track=3,
+                 album="Live at Max's Kansas City")
     task = _created(plugin, item)
     _match(item, title="Don’t Ask for the Water", trackdisambig="live")
     plugin.restore_file_title(session=MagicMock(), task=task)
@@ -1211,6 +1215,98 @@ def test_a_changed_word_keeps_the_files_title_and_the_recording() -> None:
 
     assert (item.title, item.mb_trackid) == (file_title, "workers-rec")
     assert "(recording dropped)" not in _warnings(plugin)[0]
+
+
+NEBRASKA = "/root/Music/inbox/usenet/keep/Bruce.Springsteen-Nebraska.82-EXPANDED.EDITION-24BIT-192KHZ-WEB-FLAC-2025-OBZEN"
+STUDIO_RTB = "c7e7f3f2-1edf-424a-a6a2-8d426001f24b"  # Reason to Believe, the 1982 studio recording
+LIVE_MFH = "4cb4128a-0e58-4b53-a04f-3551c7292f76"  # My Father's House, live at Red Bank 2025
+RED_BANK = "live, 2025‐04‐22: Hackensack Meridian Health Theatre, Red Bank, NJ, USA"
+
+
+def test_a_live_take_matched_to_the_studio_recording_loses_it() -> None:
+    """Nebraska '82 (homelab#2609): beets matched Reason To Believe (Nebraska Live), within
+    2 s of the studio track, to the studio recording.  The file names live and the
+    recording doesn't: dropped, so the release pass can't retire the live take as held."""
+    plugin = _make_plugin()
+    item = _file(f"{NEBRASKA}/3-10 - Reason To Believe (Nebraska Live).flac", "Reason To Believe (Nebraska Live)",
+                 track=10, album="Nebraska '82: Expanded Edition", isrc="USSM12503413")
+    task = _created(plugin, item)
+    _match(item, title="Reason to Believe", trackdisambig="version 1b", mb_trackid=STUDIO_RTB,
+           mb_releasetrackid=STUDIO_RTB, isrc="USSM18200430")
+
+    plugin.restore_file_title(session=MagicMock(), task=task)
+
+    assert item.title == "Reason To Believe (Nebraska Live)"
+    assert (item.mb_trackid, item.isrc) == ("", "USSM12503413")
+    assert _warnings(plugin) == ["[TITLE] Reason to Believe → Reason To Believe (Nebraska Live) "
+                                 "(recording dropped: another version, live)"]
+
+
+def test_a_studio_track_matched_to_a_live_recording_loses_it() -> None:
+    """The reverse (homelab#2609): the Expanded Edition's studio My Father's House, bare,
+    matched to the 2025 Red Bank live recording, which only its disambiguation says."""
+    plugin = _make_plugin()
+    item = _file(f"{NEBRASKA}/4-09 - My Father's House.flac", "My Father's House", track=9,
+                 album="Nebraska '82: Expanded Edition")
+    task = _created(plugin, item)
+    _match(item, title="My Father’s House", trackdisambig=RED_BANK, mb_trackid=LIVE_MFH, isrc="USSM12503412")
+
+    plugin.restore_file_title(session=MagicMock(), task=task)
+
+    assert (item.title, item.trackdisambig, item.mb_trackid, item.isrc) == ("My Father’s House", "", "", "")
+    assert _warnings(plugin) == [f"[TITLE] My Father’s House: trackdisambig {RED_BANK!r} cleared "
+                                 "(recording dropped: another version, live)"]
+
+
+def test_a_live_albums_bare_title_keeps_its_live_recording() -> None:
+    """A live album's tracks are often titled bare: its name (or its release's) covers the
+    recording's "live" disambiguation, so the recording stays."""
+    plugin = _make_plugin()
+    item = _file(f"{DYLAN}/1-05 - Romance in Durango.flac", "Romance in Durango", track=5, album="")
+    task = _created(plugin, item)  # the job's name says Live 1975
+    _match(item, title="Romance in Durango", trackdisambig="live, 1975-11-20", mb_trackid="durango-rec")
+
+    plugin.restore_file_title(session=MagicMock(), task=task)
+
+    assert item.mb_trackid == "durango-rec"
+
+
+def test_a_live_take_is_no_duplicate_of_the_studio_track_by_the_guessed_recording() -> None:
+    """The [BOTH] line (homelab#2609): the duplicate check runs before the restore, and the
+    studio recording beets chose for the live take must not make it the studio track's copy."""
+    plugin = _make_plugin()
+    item = _file(f"{NEBRASKA}/3-10 - Reason To Believe (Nebraska Live).flac", "Reason To Believe (Nebraska Live)",
+                 track=10, album="Nebraska '82: Expanded Edition", length=251.5)
+    task = _created(plugin, item)
+    task.chosen_info.return_value = {"title": "Reason to Believe", "trackdisambig": "version 1b",
+                                     "track_id": STUDIO_RTB, "isrc": "USSM18200430"}
+    studio = _lib_dup(9045, via="usenet", title="Reason to Believe", mb_trackid=STUDIO_RTB, isrc="USSM18200430",
+                      length=250.8)
+    session = _session({f"mb_trackid:{STUDIO_RTB}": [studio], "isrc:USSM18200430": [studio]})
+
+    plugin.handle_duplicates(session=session, task=task)
+
+    task.set_choice.assert_not_called()
+    assert not any("[BOTH]" in line for line in _warnings(plugin))
+
+
+def test_a_dropped_version_is_a_retitled_event_saying_why(monkeypatch) -> None:
+    recorded = _recorded(monkeypatch)
+    plugin = _make_plugin()
+    item = _file(f"{NEBRASKA}/3-10 - Reason To Believe (Nebraska Live).flac", "Reason To Believe (Nebraska Live)",
+                 track=10, album="Nebraska '82: Expanded Edition")
+    task = _created(plugin, item)
+    _match(item, title="Reason to Believe", trackdisambig="version 1b", mb_trackid=STUDIO_RTB)
+    plugin.restore_file_title(session=MagicMock(), task=task)
+
+    _stored(plugin, item, 17052, "/root/Music/library/Bruce Springsteen/Nebraska 82/10 - Reason To Believe.m4a")
+
+    (kind, message, kw), = recorded
+    assert kind == "retitled" and kw["item_id"] == 17052
+    assert message.endswith("(recording dropped: another version, live)")
+    data = kw["data"]
+    assert data["recording_dropped"] is True and data["dropped_mb_trackid"] == STUDIO_RTB
+    assert (data["dropped_why"], data["versions"]) == ("another version", ["live"])
 
 
 def test_own_title() -> None:
@@ -1298,7 +1394,8 @@ def test_beets_keeps_the_item_object_from_created_to_apply(monkeypatch, tmp_path
 
     assert seen == [("Oh! Sweet Nuthin' (5.1 mix)", None)]
     stored, = lib.items()
-    assert (stored.title, stored.trackdisambig, stored.mb_trackid) == ("Oh! Sweet Nuthin'", "", "d0063aee")
+    # Only the recording names 5.1: dropped (homelab#2609).
+    assert (stored.title, stored.trackdisambig, stored.mb_trackid) == ("Oh! Sweet Nuthin'", "", "")
 
 
 # ---------------------------------------------------------------------------
@@ -1338,6 +1435,7 @@ def test_a_title_put_back_is_a_retitled_event_on_the_stored_item(monkeypatch) ->
     data = kw["data"]
     assert (data["matched"], data["title"], data["trackdisambig"]) == (BABE, DURANGO, "live, 1975-11-20")
     assert data["recording_dropped"] is True and data["dropped_mb_trackid"] == "babe-rec"
+    assert (data["dropped_why"], data["versions"]) == ("another song", None)
     assert data["usenet_job"] == DYLAN.rsplit("/", 1)[1]
     assert plugin._retitled == {}
 
@@ -1345,7 +1443,8 @@ def test_a_title_put_back_is_a_retitled_event_on_the_stored_item(monkeypatch) ->
 def test_a_cleared_trackdisambig_alone_is_a_retitled_event(monkeypatch) -> None:
     recorded = _recorded(monkeypatch)
     plugin = _make_plugin()
-    item = _file(f"{LOADED}/03 - Don't Ask For The Water.flac", "Don't Ask For The Water", track=3)
+    item = _file(f"{LOADED}/03 - Don't Ask For The Water.flac", "Don't Ask For The Water", track=3,
+                 album="Live at Max's Kansas City")
     task = _created(plugin, item)
     _match(item, title="Don’t Ask for the Water", trackdisambig="live", mb_trackid="water-rec")
     plugin.restore_file_title(session=MagicMock(), task=task)
