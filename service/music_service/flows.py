@@ -645,8 +645,9 @@ def _album_library_hooks(lib):
             cover.logger.exception("Album covers: embedding failed; music-embed-covers retries it")
 
     def complete(state, completion) -> str | None:
+        # save: the import's start is in the database before beets runs (homelab#2603).
         status = albums.complete(state, completion, import_inbox, claim, add_source, tag_ids, retire,
-                                 identify=identify, import_rest=import_rest)
+                                 identify=identify, import_rest=import_rest, save=state.save)
         keys.clear()
         albums_by_id.clear()
         return status
