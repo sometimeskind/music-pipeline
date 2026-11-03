@@ -1723,9 +1723,9 @@ def complete(
     moved the job back (#344): *save* writes the album store right after the
     move (homelab#2603), so the record's ``import_path`` and
     ``import_started`` are in the database before beets runs, not only at the
-    end of the import flow, which a killed pod never reaches.  A completed job whose dir is gone is logged
-    ``[LOST]`` and searched again ahead of the queue, without a blocklist
-    entry or an attempt.  An ``ImportDeferred`` (MusicBrainz down, #264) is
+    end of the import flow, which a killed pod never reaches.  A completed
+    job whose dir is gone is logged ``[LOST]`` and searched again ahead of
+    the queue, without a blocklist entry or an attempt.  An ``ImportDeferred`` (MusicBrainz down, #264) is
     retried the same way, under its own, longer cap.  A broken download is
     blocklisted; after MAX_ATTEMPTS the album is ``failed``, and the next tick
     hands it to spotdl whole (#205), unless an incomplete copy is in the
