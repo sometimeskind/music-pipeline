@@ -726,6 +726,26 @@ def test_album_request_recordings_reads_the_stamped_items_once():
     lib.all_items.assert_called_once()
 
 
+def test_album_request_recordings_adds_what_the_fill_places():
+    """homelab#2589: the album's items, and what they hold already, go to the AcoustID fill."""
+    from music_service import flows
+
+    def item(**fields):
+        return MagicMock(get=lambda k, d=None: fields.get(k, d))
+
+    lib = MagicMock()
+    with_id, without = item(album_record="7", mb_trackid="r1"), item(album_record="7")
+    lib.all_items.return_value = [with_id, without]
+    calls = []
+
+    def fill(key, record, items, held):
+        calls.append((key, record, list(items), set(held)))
+        return {"r2"}
+
+    assert flows._album_request_recordings(lib, fill)("7", {"name": "A"}) == {"r1", "r2"}
+    assert calls == [("7", {"name": "A"}, [with_id, without], {"r1"})]
+
+
 def test_hold_takes_a_free_slot_without_a_wait_line():
     from music_service import flows
     with patch.object(flows, "concurrency") as mock_concurrency, \

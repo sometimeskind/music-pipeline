@@ -88,6 +88,13 @@ from before homelab#2546 all read `fingerprint`. A failed AcoustID lookup is no 
 waits for the next scan.
 The tracks it has are one album, named from MusicBrainz (album, artist, release IDs).
 
+An item the library already had counts toward the album by its MusicBrainz recording, never by
+its track number (an edition numbers its tracks otherwise). One with no recording ID at all is
+looked up on AcoustID by the album tick while the request lacks a track: when AcoustID names
+one of the tracklist's recordings for its audio, the item takes that recording and holds the
+track, so it isn't downloaded again. Each is a recording_filled event: `find_events` with that
+kind, or the album's `album_history`, lists them, and `get_item` shows the item's mb_trackid.
+
 While it has gaps, the album is searched on Usenet again every 7 days; a release found then is
 the album, and replaces the spotdl copies. When the search words are wrong (the log's `[MISS]`
 names the query), `set_search_override` on the album fixes them; `digest_summary` lists missing,
