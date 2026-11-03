@@ -188,3 +188,28 @@ def test_bad_spotify_reference_raises(tmp_path: Path, ref: str) -> None:
     conf = write_conf(tmp_path, f"pl  {ref}\n")
     with pytest.raises(ValueError, match="not a Spotify"):
         load_playlists(conf)
+
+
+def test_twoway_and_oneway_flags(tmp_path: Path) -> None:
+    """homelab#2361: two-way is opt-in, oneway locks a playlist one-way; flags in any order."""
+    conf = write_conf(
+        tmp_path,
+        """
+        aaaaaaah  https://open.spotify.com/playlist/AAA0000000000000000000  twoway
+        orbit     https://open.spotify.com/playlist/BBB0000000000000000000  oneway
+        plain     https://open.spotify.com/playlist/CCC0000000000000000000
+        frozen    https://open.spotify.com/playlist/DDD0000000000000000000  oneway nosync
+        """,
+    )
+    two, one, plain, frozen = load_playlists(conf)
+    assert two.twoway and not two.oneway
+    assert one.oneway and not one.twoway
+    assert not plain.twoway and not plain.oneway
+    assert frozen.oneway and frozen.nosync and not frozen.twoway
+
+
+@pytest.mark.parametrize("other", ["oneway", "nosync", "album"])
+def test_twoway_with_a_conflicting_flag_raises(tmp_path: Path, other: str) -> None:
+    conf = write_conf(tmp_path, f"pl  https://open.spotify.com/playlist/AAA0000000000000000000  {other} twoway\n")
+    with pytest.raises(ValueError, match=f"twoway can't be combined with {other}"):
+        load_playlists(conf)
