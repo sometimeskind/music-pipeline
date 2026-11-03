@@ -15,7 +15,7 @@ is ``MIGRATIONS[n - 1]``, and :func:`connect` applies the ones a database lacks,
 under an advisory lock and in one transaction, so processes starting together
 (the service, a CLI the MCP queue runs, the beets plugin) migrate it once.
 Never edit a shipped migration; add one.  Keep each additive (new tables,
-nullable columns, a wider CHECK), so the previous image still runs against the
+nullable columns, a wider or dropped CHECK), so the previous image still runs against the
 newer schema: that is the rollback path.
 """
 
@@ -25,6 +25,8 @@ import logging
 import os
 
 import psycopg
+
+from music_fetch import event_kinds
 
 logger = logging.getLogger(__name__)
 
@@ -36,112 +38,9 @@ CONNECT_TIMEOUT = 3
 # recorded recheck run's (music_scan.recheck_runs), in the two-key space, so they never meet.
 _MIGRATION_LOCK = 2413
 
-# The kinds of event (homelab#2413).  The events table's CHECK lists the same
-# values, spelled out in the migrations, and test_events asserts that a migrated
-# database agrees: a new kind is a new migration that widens the CHECK.
-EVENT_KINDS = (
-    # An album-mode import (the [DONE], [WRONG], [INCOMPLETE] and [LOST] lines).
-    "import_done",
-    "import_wrong",
-    "import_incomplete",
-    "import_lost",
-    # The release check and the duplicate tools: an item retired, kept as a
-    # local-only extra, or merged into another; a path clash; a mixed album.
-    "retire",
-    "local",
-    "merge",
-    "clash",
-    "mixed",
-    # The album store: a Usenet grab, an automatic reset, tracks left to the
-    # spotdl fallback, an album or download given up on.
-    "grab",
-    "autoreset",
-    "fallback",
-    "failure",
-    # A download a pre-import check quarantined (the album request fallback's, homelab#2546).
-    "reject",
-    # A Music MCP job (homelab#2412) ending: tool, mode, caller, status.
-    "mcp_job",
-    # Migration 2: a fallback album the library now completes ([FILLED]), and a
-    # playlist entry's ID taken off an item that is another version of the song
-    # (music-backfill-ids --apply's [WRONG]).
-    "filled",
-    "wrong_version",
-    # Migration 3: an item canon moved from one album to another (a changed
-    # spotify_album_id), which the digest checks for a move between unrelated albums.
-    "moved",
-    # Requests and the Later queue (homelab#2478): an album requested
-    # (music-requests, migration 7), added to or removed from Later
-    # (music-later, migration 8), and a Spotify ID resolved for a release
-    # group (the resolve pass keying a record by it, since homelab#2590).
-    "album_requested",
-    "later_added",
-    "later_removed",
-    "spotify_id_resolved",
-    # Migration 5: a search override, hold or track pin set or cleared (homelab#2484);
-    # data.kind says which.
-    "override_set",
-    "override_cleared",
-    # Migration 10: a hand edit of the state with music-state (homelab#2503):
-    # the backoff cleared, a playlist store dropped, an album playlist's
-    # snapshot cleared; data.what says which.
-    "state_edited",
-    # Migration 11: an item's guessed MusicBrainz recording ID replaced by the
-    # one AcoustID names for its audio (music-mb-fingerprint --recheck, homelab#2543).
-    "recording_replaced",
-    # Migration 13 (homelab#2544): an album record the wants feed dropped (no want
-    # list holds it any more), and an item's title or trackdisambig refreshed from
-    # its replaced recording (music-mb-fingerprint --refresh-replaced --apply).
-    "album_dropped",
-    "recording_refreshed",
-    # Migration 14 (homelab#2478): a request album's spotdl fallback deferred to the
-    # next session (the track budget spent on the playlists, or the soft timeout).
-    "fallback_deferred",
-    # Migration 15 (homelab#2590): an album reset or requeued by hand (music-album-reset,
-    # music-album-requeue, the MCP's reset_album and requeue_albums), an item's audio
-    # replaced (replace_item), a search that found nothing to grab, an album's status
-    # changed with no other event (data.from, data.to, data.why), an album record a
-    # feed created, and two records merged into one by the resolve pass.
-    "reset",
-    "requeued",
-    "replaced",
-    "search_miss",
-    "status_changed",
-    "album_queued",
-    "album_merged",
-    # Migration 16 (homelab#2590): a spotdl download imported into the library (one
-    # item, the nightly's or a request's verified fallback), and a Usenet item's
-    # title or trackdisambig put back from its file at import (the [TITLE] lines).
-    "imported",
-    "retitled",
-    # Migration 17 (homelab#2583): a recording set on an item by hand (music-mb-fingerprint --set-recording).
-    "recording_set",
-    # Migration 18 (homelab#2589): a recording ID filled on a request album's item that had none,
-    # the request's track AcoustID names for its audio (the album tick, music_scan.request_fill).
-    "recording_filled",
-    # Migration 19 (homelab#2601): which release a record a release-group merge left
-    # holding several keeps, and why (the scan's [MERGED] and [MULTI] lines).
-    "merged_releases",
-    # Migration 20 (homelab#2590): the scan's item changes after import: canon's tags
-    # (one event per album a run retagged), an album_record stamp moved to its record's
-    # row, a superseded file deleted from quarantine/replaced, an album request's fallback
-    # track stamped with its record (or left unstamped), and a release's Spotify track IDs
-    # linked to its items.
-    "retagged",
-    "restamped",
-    "purged",
-    "claimed",
-    "id_linked",
-    # Migration 21 (homelab#2590): a Navidrome playlist deleted because its .m3u is gone,
-    # and a Later entry resolved to its album's release group or now held whole.
-    "playlist_deleted",
-    "later_resolved",
-    "later_available",
-    # Migration 22 (homelab#2361): an entry that joined or left a playlist store, with
-    # data.by naming who changed it (spotify, regen, later the two-way sync).
-    "playlist_entry_added",
-    "playlist_entry_removed",
-)
+# The kinds of event: the registry's (homelab#2618).  The database no longer
+# checks them (migration 23), so a new kind needs no migration.
+EVENT_KINDS = tuple(event_kinds.KINDS)
 
 MIGRATIONS: list[str] = [
     # 1: the event store.  Album-scoped events carry both keys: the Spotify album
@@ -550,6 +449,11 @@ MIGRATIONS: list[str] = [
         'retagged', 'restamped', 'purged', 'claimed', 'id_linked',
         'playlist_deleted', 'later_resolved', 'later_available',
         'playlist_entry_added', 'playlist_entry_removed'));
+    """,
+    # 23: event kinds are validated in code, not by the database (homelab#2618): the CHECK
+    # every new kind widened goes.  Additive for an older image, which never re-adds it.
+    """
+    ALTER TABLE events DROP CONSTRAINT events_kind_check;
     """,
 ]
 

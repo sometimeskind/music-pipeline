@@ -130,9 +130,28 @@ def test_item_fields_decodes_a_bytes_path():
     assert events.item_fields(item) == {"artist": "A", "title": "T", "album": "Al", "path": "/music/A/Al/01 T.m4a"}
 
 
-def test_every_kind_is_in_a_migration():
-    allowed = set(re.findall(r"'([a-z_]+)'", "".join(db.MIGRATIONS)))
-    assert set(db.EVENT_KINDS) <= allowed
+def _kind_only(sql: str) -> bool:
+    """A migration that only widens (or drops) the events table's kind CHECK."""
+    statements = [st.strip() for st in sql.split(";") if st.strip()]
+    return bool(statements) and all(re.match(r"ALTER TABLE events (DROP|ADD) CONSTRAINT events_kind_check\b", st)
+                                      for st in statements)
+
+
+def _kinds_allowed(migrations: list[str]) -> set[str]:
+    """The kinds an image that knows *migrations* allowed: its last CHECK's."""
+    checks = re.findall(r"events_kind_check CHECK \(kind IN \((.*?)\)\)", "".join(migrations), re.S)
+    return set(re.findall(r"'([a-z_]+)'", checks[-1]))
+
+
+# The migrations that did nothing but widen the kind CHECK (14 of the first 22), and 23,
+# which drops it (homelab#2618).
+KIND_ONLY = [n for n, sql in enumerate(db.MIGRATIONS, start=1) if n > 1 and _kind_only(sql)]
+
+
+def test_the_kind_only_migrations_are_found():
+    assert KIND_ONLY == [2, 3, 10, 11, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23]
+    # The last CHECK's kinds are all still registered (old rows carry them); new ones need no migration.
+    assert _kinds_allowed(db.MIGRATIONS[:22]) <= set(db.EVENT_KINDS)
 
 
 # --- against Postgres ---
@@ -169,161 +188,35 @@ def test_an_image_before_migration_12_runs_on_schema_12(pg_url, monkeypatch, cap
 
 
 @needs_pg
-def test_an_image_before_migration_13_runs_on_schema_13(pg_url, monkeypatch, caplog):
-    """The rollback path for homelab#2544: migration 13 only widens the kinds,
-    so an image that knows 12 records its own kinds on a database at 13."""
+@pytest.mark.parametrize("n", KIND_ONLY)
+def test_an_image_before_a_kind_only_migration_runs_on_its_schema(n, pg_url, monkeypatch, caplog):
+    """The rollback path for every migration that only widened the kind CHECK, and for
+    migration 23, which drops it (homelab#2618): an image that knows n-1 migrations
+    connects to a database at n, migrates nothing, and records every kind it knows.
+    A wider CHECK, or none, takes them all; an older image never re-adds it."""
     full = db.MIGRATIONS
-    monkeypatch.setattr(db, "MIGRATIONS", full[:13])
+    monkeypatch.setattr(db, "MIGRATIONS", full[:n])
     with psycopg.connect(pg_url, autocommit=True) as conn:
-        assert db.migrate(conn) == 13
-    monkeypatch.setattr(db, "MIGRATIONS", full[:12])
+        assert db.migrate(conn) == n
+    monkeypatch.setattr(db, "MIGRATIONS", full[:n - 1])
+    known = sorted(_kinds_allowed(full[:n - 1]))
     with db.connect(pg_url) as conn:
-        assert db.migrate(conn) == 13
-        events.insert(conn, "recording_replaced", "[RECHECK] 1 — T: mb_trackid a → b", source="mb-fingerprint",
-                      item_id=1)
-    assert "music database is at schema 13, this image knows 12" in caplog.text
+        assert db.migrate(conn) == n
+        for kind in known:
+            # Raw SQL: events.insert checks today's registry, the older image checked its own kinds.
+            conn.execute("INSERT INTO events (kind, source, message) VALUES (%s, 'test', %s)", (kind, f"[{kind}]"))
+        assert events.prune(conn) == 0
+    assert f"music database is at schema {n}, this image knows {n - 1}" in caplog.text
+    with psycopg.connect(pg_url) as conn:
+        assert conn.execute("SELECT count(*) FROM events").fetchone() == (len(known),)
 
 
 @needs_pg
-def test_an_image_before_migration_14_runs_on_schema_14(pg_url, monkeypatch, caplog):
-    """The rollback path for homelab#2478: migration 14 only widens the kinds."""
-    full = db.MIGRATIONS
-    monkeypatch.setattr(db, "MIGRATIONS", full[:14])
-    with psycopg.connect(pg_url, autocommit=True) as conn:
-        assert db.migrate(conn) == 14
-    monkeypatch.setattr(db, "MIGRATIONS", full[:13])
+def test_every_registered_kind_is_accepted(pg_url):
     with db.connect(pg_url) as conn:
-        assert db.migrate(conn) == 14
-        events.insert(conn, "album_dropped", "[UNWANTED] 1 A — B: record dropped", source="albums")
-    assert "music database is at schema 14, this image knows 13" in caplog.text
-
-
-@needs_pg
-def test_an_image_before_migration_15_runs_on_schema_15(pg_url, monkeypatch, caplog):
-    """The rollback path for homelab#2590: migration 15 only widens the kinds."""
-    full = db.MIGRATIONS
-    monkeypatch.setattr(db, "MIGRATIONS", full[:15])
-    with psycopg.connect(pg_url, autocommit=True) as conn:
-        assert db.migrate(conn) == 15
-    monkeypatch.setattr(db, "MIGRATIONS", full[:14])
-    with db.connect(pg_url) as conn:
-        assert db.migrate(conn) == 15
-        events.insert(conn, "fallback_deferred", "[DEFER] A — B", source="albums")
-    assert "music database is at schema 15, this image knows 14" in caplog.text
-
-
-@needs_pg
-def test_an_image_before_migration_16_runs_on_schema_16(pg_url, monkeypatch, caplog):
-    """The rollback path for the imported and retitled kinds: migration 16 only widens the kinds."""
-    full = db.MIGRATIONS
-    monkeypatch.setattr(db, "MIGRATIONS", full[:16])
-    with psycopg.connect(pg_url, autocommit=True) as conn:
-        assert db.migrate(conn) == 16
-    monkeypatch.setattr(db, "MIGRATIONS", full[:15])
-    with db.connect(pg_url) as conn:
-        assert db.migrate(conn) == 16
-        events.insert(conn, "album_queued", "[QUEUED] 1 A — B: new wants record", source="albums")
-    assert "music database is at schema 16, this image knows 15" in caplog.text
-
-
-@needs_pg
-def test_an_image_before_migration_17_runs_on_schema_17(pg_url, monkeypatch, caplog):
-    """The rollback path for the recording_set kind: migration 17 only widens the kinds."""
-    full = db.MIGRATIONS
-    monkeypatch.setattr(db, "MIGRATIONS", full[:17])
-    with psycopg.connect(pg_url, autocommit=True) as conn:
-        assert db.migrate(conn) == 17
-    monkeypatch.setattr(db, "MIGRATIONS", full[:16])
-    with db.connect(pg_url) as conn:
-        assert db.migrate(conn) == 17
-        events.insert(conn, "retitled", "[TITLE] 1 — T", source="beets")
-    assert "music database is at schema 17, this image knows 16" in caplog.text
-
-
-@needs_pg
-def test_an_image_before_migration_18_runs_on_schema_18(pg_url, monkeypatch, caplog):
-    """The rollback path for the recording_filled kind: migration 18 only widens the kinds."""
-    full = db.MIGRATIONS
-    monkeypatch.setattr(db, "MIGRATIONS", full[:18])
-    with psycopg.connect(pg_url, autocommit=True) as conn:
-        assert db.migrate(conn) == 18
-    monkeypatch.setattr(db, "MIGRATIONS", full[:17])
-    with db.connect(pg_url) as conn:
-        assert db.migrate(conn) == 18
-        events.insert(conn, "recording_set", "[SETREC] 1 — T", source="mb-fingerprint")
-    assert "music database is at schema 18, this image knows 17" in caplog.text
-
-
-@needs_pg
-def test_an_image_before_migration_19_runs_on_schema_19(pg_url, monkeypatch, caplog):
-    """The rollback path for the merged_releases kind: migration 19 only widens the kinds."""
-    full = db.MIGRATIONS
-    monkeypatch.setattr(db, "MIGRATIONS", full[:19])
-    with psycopg.connect(pg_url, autocommit=True) as conn:
-        assert db.migrate(conn) == 19
-    monkeypatch.setattr(db, "MIGRATIONS", full[:18])
-    with db.connect(pg_url) as conn:
-        assert db.migrate(conn) == 19
-        events.insert(conn, "recording_filled", "[FILLED] 1 — T", source="request_fill")
-    assert "music database is at schema 19, this image knows 18" in caplog.text
-
-
-@needs_pg
-def test_an_image_before_migration_20_runs_on_schema_20(pg_url, monkeypatch, caplog):
-    """The rollback path for the scan's item-change kinds: migration 20 only widens the kinds."""
-    full = db.MIGRATIONS
-    monkeypatch.setattr(db, "MIGRATIONS", full[:20])
-    with psycopg.connect(pg_url, autocommit=True) as conn:
-        assert db.migrate(conn) == 20
-    monkeypatch.setattr(db, "MIGRATIONS", full[:19])
-    with db.connect(pg_url) as conn:
-        assert db.migrate(conn) == 20
-        events.insert(conn, "merged_releases", "[MERGED] 1 — A", source="scan")
-    assert "music database is at schema 20, this image knows 19" in caplog.text
-
-
-@needs_pg
-def test_an_image_before_migration_21_runs_on_schema_21(pg_url, monkeypatch, caplog):
-    """The rollback path for the ingest and Later kinds: migration 21 only widens the kinds."""
-    full = db.MIGRATIONS
-    monkeypatch.setattr(db, "MIGRATIONS", full[:21])
-    with psycopg.connect(pg_url, autocommit=True) as conn:
-        assert db.migrate(conn) == 21
-    monkeypatch.setattr(db, "MIGRATIONS", full[:20])
-    with db.connect(pg_url) as conn:
-        assert db.migrate(conn) == 21
-        events.insert(conn, "retagged", "[RETAG] A — B: 1 item(s) retagged", source="scan")
-    assert "music database is at schema 21, this image knows 20" in caplog.text
-
-
-@needs_pg
-def test_an_image_before_migration_22_runs_on_schema_22(pg_url, monkeypatch, caplog):
-    """The rollback path for the playlist entry kinds: migration 22 only widens the kinds."""
-    full = db.MIGRATIONS
-    monkeypatch.setattr(db, "MIGRATIONS", full[:22])
-    with psycopg.connect(pg_url, autocommit=True) as conn:
-        assert db.migrate(conn) == 22
-    monkeypatch.setattr(db, "MIGRATIONS", full[:21])
-    with db.connect(pg_url) as conn:
-        assert db.migrate(conn) == 22
-        events.insert(conn, "playlist_deleted", "[NAVIDROME] deleted playlist p", source="navidrome")
-    assert "music database is at schema 22, this image knows 21" in caplog.text
-
-
-NEW_KINDS = ("album_dropped", "recording_refreshed", "fallback_deferred", "reset", "requeued", "replaced",
-             "search_miss", "status_changed", "album_queued", "album_merged", "imported", "retitled",
-             "recording_set", "recording_filled", "merged_releases",
-             "retagged", "restamped", "purged", "claimed", "id_linked",
-             "playlist_deleted", "later_resolved", "later_available",
-             "playlist_entry_added", "playlist_entry_removed")
-
-
-@needs_pg
-def test_the_new_kinds_are_accepted(pg_url):
-    with db.connect(pg_url) as conn:
-        for kind in NEW_KINDS:
+        for kind in db.EVENT_KINDS:
             events.insert(conn, kind, f"[{kind}]", source="test")
-        assert conn.execute("SELECT count(*) FROM events").fetchone() == (len(NEW_KINDS),)
+        assert conn.execute("SELECT count(*) FROM events").fetchone() == (len(db.EVENT_KINDS),)
 
 
 @needs_pg
@@ -335,11 +228,16 @@ def test_a_newer_schema_is_left_alone(pg_url):
 
 
 @needs_pg
-def test_kind_check_matches_event_kinds(pg_url):
-    db.connect().close()
-    (definition,) = _rows(pg_url, "SELECT pg_get_constraintdef(oid) FROM pg_constraint "
-                                  "WHERE conname = 'events_kind_check'")[0]
-    assert set(re.findall(r"'([a-z_]+)'", definition)) == set(db.EVENT_KINDS)
+def test_kinds_are_checked_in_code_not_by_the_database(pg_url, caplog):
+    """Migration 23 dropped events_kind_check (homelab#2618): the registry is the only list,
+    which events.insert and events.record enforce."""
+    with db.connect(pg_url) as conn:
+        assert conn.execute("SELECT count(*) FROM pg_constraint WHERE conname = 'events_kind_check'").fetchone() == (0,)
+        with pytest.raises(ValueError, match="unknown event kind 'no_such_kind'"):
+            events.insert(conn, "no_such_kind", "[X]", source="test")
+    assert events.record("no_such_kind", "[X]", source="test") is False
+    assert "unknown kind 'no_such_kind'" in caplog.text
+    assert _rows(pg_url) == []
 
 
 @needs_pg
