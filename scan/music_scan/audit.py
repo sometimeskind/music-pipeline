@@ -1,6 +1,7 @@
 """music-audit-lengths: find library items whose audio is not the Spotify track (#165).
 
-The length guard only checks new downloads.  This audit reads every configured
+Nothing checks a playlist download's length at import (the length guard was
+dropped, homelab#2579).  This audit reads every configured
 playlist, ``nosync`` and ``album`` ones included, from Spotify's item pages only
 (``SpotifyPlaylists.songs``: about one call per 100 tracks, never per-track
 calls) and compares each entry's ``duration`` with its library item's length.
@@ -9,7 +10,8 @@ title+artist among the playlist's own items.  Suspects are listed with the
 YouTube video spotdl downloaded them from (the file's comment tag).
 
 ``--silence`` also scans every matched file for mid-track silence (slow: it
-decodes each one).  ``--quarantine`` runs the guard's checks over the files
+decodes each one).  ``--quarantine`` runs the length and silence checks
+(:func:`music_scan.guard.check_file`) over the files
 already in quarantine and logs what it would reject.
 
 ``--replace ITEM_ID [--youtube ID] --apply`` fixes one suspect **in place**.
@@ -17,7 +19,7 @@ A wrong-audio file carries the right Spotify ID and ISRC, so a re-download
 through the inbox would be merged into the old item by the duplicate hook and
 discarded.  Instead the entry is downloaded to a staging directory (pinned to
 ``--youtube``, which is what spotdl's ``youtube_url|spotify_url`` form does,
-with no extra Spotify call), checked by the guard, and swapped in for the old
+with no extra Spotify call), checked for length and silence, and swapped in for the old
 file, which moves to ``quarantine/replaced/``.  The beets item keeps its id,
 tags, ``sources`` and IDs, so the ``.m3u`` files are unchanged.
 
@@ -135,7 +137,7 @@ def report(suspects: list[Suspect], counts: dict) -> None:
 
 
 def audit_quarantine(quarantine: Path, songs_by_playlist: dict[str, list[dict]]) -> int:
-    """Log what the guard would reject among the quarantine's files; returns the count."""
+    """Log what the length and silence checks would reject among the quarantine's files; returns the count."""
     durations = {s["url"]: s["duration"] for songs in songs_by_playlist.values()
                  for s in songs if s.get("url") and s.get("duration")}
     count = 0
@@ -148,7 +150,7 @@ def audit_quarantine(quarantine: Path, songs_by_playlist: dict[str, list[dict]])
         if rejection:
             count += 1
             logger.warning("[WOULD-REJECT] %s — %s: %s", f.relative_to(quarantine), rejection.reason, rejection.detail)
-    logger.info("Quarantine: the guard would reject %d file(s)", count)
+    logger.info("Quarantine: the length and silence checks would reject %d file(s)", count)
     return count
 
 
@@ -221,7 +223,7 @@ def replace(item, song: dict, youtube: str | None, cookie_file: Path, force: boo
             return False
         rejection = guard.check_file(new, song.get("duration"))
         if rejection and not force:
-            logger.warning("[REPLACE] %s: the new download fails the guard too (%s: %s); --force to use it anyway",
+            logger.warning("[REPLACE] %s: the new download fails the length or silence check too (%s: %s); --force to use it anyway",
                            _label(song), rejection.reason, rejection.detail)
             return False
         old_url, old_path, old_length = item.get("comments") or None, str(item_path(item)), float(item.length or 0)
@@ -292,12 +294,12 @@ def main() -> None:
     parser.add_argument("--min-delta", type=float, default=MIN_DELTA_SECONDS,
                         help="and by at least this many seconds (default %(default)s)")
     parser.add_argument("--silence", action="store_true", help="also check every matched file for mid-track silence")
-    parser.add_argument("--quarantine", action="store_true", help="also run the guard over the quarantine's files")
+    parser.add_argument("--quarantine", action="store_true", help="also run the length and silence checks over the quarantine's files")
     parser.add_argument("--replace", type=int, metavar="ITEM_ID", help="re-download this item and swap it in")
     parser.add_argument("--youtube", metavar="ID", type=youtube_url,
                         help="with --replace: download from this YouTube video (its ID, or a youtube.com, "
                              "music.youtube.com or youtu.be URL)")
-    parser.add_argument("--force", action="store_true", help="with --replace: swap in even if the guard rejects it")
+    parser.add_argument("--force", action="store_true", help="with --replace: swap in even if the length or silence check rejects it")
     parser.add_argument("--apply", action="store_true", help="with --replace: do it (default: dry run)")
     args = parser.parse_args()
     if (args.youtube or args.force or args.apply) and args.replace is None:

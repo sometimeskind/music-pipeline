@@ -88,11 +88,11 @@ One album: ambiguous or not found as above, otherwise:
 
 ### `GET /mcp-api/quarantine?kind=K[&query=Q][&offset=N]` (`list_quarantine`)
 
-`kind` is `unmatched` (the files the scan quarantined: everything outside `rejected/` and `replaced/`), `rejected` (the length guard's) or `replaced` (superseded and merged copies). `query` filters by a case-insensitive substring of the path.
+`kind` is `unmatched` (the files the scan quarantined: everything outside `rejected/` and `replaced/`), `rejected` (the album request fallback's AcoustID check's, homelab#2546) or `replaced` (superseded and merged copies). `query` filters by a case-insensitive substring of the path.
 
 ```json
 {"status": "ok", "kind": "rejected", "query": null, "total": 3, "offset": 0, "next_offset": null,
- "files": [{"path": "rejected/chill/Artist - Title.m4a", "size": 4012345, "modified": "2026-10-20T03:40:00Z"}]}
+ "files": [{"path": "rejected/request/Artist - Title.m4a", "size": 4012345, "modified": "2026-10-20T03:40:00Z"}]}
 ```
 
 ### `GET /mcp-api/playlists/<name>[?offset=N]` (`get_playlist`)
@@ -166,7 +166,7 @@ What happened since `since` (default: 24 hours ago), and the library issues stan
 
 - `history.events` holds each kind's latest 25 in the window, oldest first; `counts` every kind's total. A `merge`, `moved`, `local`, `recording_replaced`, `recording_set` or `recording_filled` event also carries its `item_id` and `data`, which the digest judges: a merge or a move between unrelated recordings or albums, an extra left to `music-audit-dupes`, a guessed recording ID `music-mb-fingerprint --recheck` replaced (`data.old`, `data.new`, `data.score`, homelab#2543), one set by hand, or one the album tick filled on a request's item from AcoustID (`data.key`, `data.new`, `data.score`, `data.track`, homelab#2589). An `album_merged` event carries its `data` too (`data.absorbed`: each absorbed record's `key`, `album` and `spotify_album_ids`), so the digest can tell canon's moves after an edition merge from a likely problem (homelab#2607). With the event store unavailable, `history` is `{"error": "…"}` and the rest still answers.
 - `issues.stuck`: `failed` and `missing` albums (a feed's, which never fall back), grabs SABnzbd hasn't finished in 12 hours, and fallbacks spotdl hasn't filled in 14.
-- `issues.mixed` is the last album tick's; `only_copies` are the files in `quarantine/replaced/` holding a recording the library doesn't; `path_clashes` the items canon tagged in place (`canon_clash`); `empty_slots` the last scan's (the `empty-slots` document), playlists with none left out; `rejects` the length guard's files still in `quarantine/rejected/`.
+- `issues.mixed` is the last album tick's; `only_copies` are the files in `quarantine/replaced/` holding a recording the library doesn't; `path_clashes` the items canon tagged in place (`canon_clash`); `empty_slots` the last scan's (the `empty-slots` document), playlists with none left out; `rejects` the rejected downloads still in `quarantine/rejected/` (the album request fallback's; the length guard that also filed playlist downloads there was dropped, homelab#2579).
 - `requests` (homelab#2478) are the album requests whose album ended `missing` or `failed`, or is in `fallback` with tracks left, each as `list_requests` shows it (`fallback_rejected` and `acoustid_unknown_only` included). With the database down all three are empty and an `error` says so.
 
 ## Overrides (any tier, homelab#2484)
