@@ -144,7 +144,7 @@ def audit_quarantine(quarantine: Path, songs_by_playlist: dict[str, list[dict]])
     for f in sorted(quarantine.rglob("*")):
         if not f.is_file() or f.suffix.lower() not in {".m4a", ".mp3", ".opus"}:
             continue
-        if f.relative_to(quarantine).parts[0] in ("usenet", "rejected", "replaced"):
+        if f.relative_to(quarantine).parts[0] in ("usenet", "rejected", "replaced", "keep"):
             continue
         rejection = guard.check_file(f, durations.get(guard.song_url(f) or ""))
         if rejection:

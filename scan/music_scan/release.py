@@ -98,6 +98,15 @@ records (#303), but only while the file's title and artist tags agree with the
 keeper's: a wrong merge's loser is judged by its identity tags, and kept as an
 only copy when none is held (homelab#2539).  ``--replaced`` logs each such file
 ``[MISMERGED]``.  It never deletes an only copy.  The scan pushes what is left there by kind.
+
+``--keep FILE`` (homelab#2623, :func:`keep_replaced`) moves one file from
+``quarantine/replaced/`` to ``quarantine/keep/`` before the purge reaches it: a
+copy a person wants kept that the library holds the recording of only by a
+wrong ID (17052, the *Nebraska* live take).  The purge, ``--replaced``, the
+digest's only copies and the scan's asis pass never read ``keep/`` (as for
+``replaced/``, a spotdl file's URL there still counts as held, so it isn't
+downloaded again); ``list_quarantine`` shows it, and a kept file stays until a
+person deletes it.
 """
 
 from __future__ import annotations
@@ -1002,6 +1011,72 @@ def list_replaced(records: dict[str, dict], replaced_dir: Path, library) -> dict
     return {"superseded": len(held), "only_copy": len(only)}
 
 
+# ---------------------------------------------------------------------------
+# --keep: one file out of quarantine/replaced/, so the purge never deletes it
+# ---------------------------------------------------------------------------
+
+KEEP = "keep"  # quarantine/keep/, beside replaced/
+KEPT_KIND = "kept"
+
+
+def keep_target(name: str, replaced_dir: Path) -> Path:
+    """The one file in *replaced_dir* that *name* names: its path relative to
+    *replaced_dir*, or the item ID its file name starts with (``17052`` for
+    ``17052-03-10 - Reason To Believe (Nebraska Live).m4a``: every move there
+    prefixes the item ID).  Raises :class:`SystemExit` when it names none, or
+    more than one file."""
+    name = name.strip()
+    if name.startswith("replaced/"):
+        name = name[len("replaced/"):]  # as list_quarantine shows it
+    if not name:
+        raise SystemExit("--keep: name a file in quarantine/replaced/ or the item ID its name starts with")
+    files = audio_files(replaced_dir) if replaced_dir.is_dir() else []
+    if name.isdigit():
+        hits = [f for f in files if f.name.startswith(f"{name}-")]
+        what = f"a file name starting with {name}-"
+    else:
+        rel = Path(name)
+        if rel.is_absolute() or ".." in rel.parts:
+            raise SystemExit(f"--keep: {name!r} must be a path inside quarantine/replaced/")
+        hits = [f for f in files if f.relative_to(replaced_dir) == rel]
+        what = f"the path {name}"
+    if not hits:
+        raise SystemExit(f"--keep: no audio file in {replaced_dir} has {what}; nothing moved")
+    if len(hits) > 1:
+        listed = "; ".join(str(f.relative_to(replaced_dir)) for f in hits)
+        raise SystemExit(f"--keep: {len(hits)} files have {what} ({listed}); name one by its path. Nothing moved")
+    return hits[0]
+
+
+def keep_replaced(name: str, replaced_dir: Path, keep_dir: Path, conn=None) -> Path | None:
+    """Move the file *name* names (:func:`keep_target`) from *replaced_dir* to
+    *keep_dir*, at the same relative path: a dry run without *conn*, with it the
+    move and its ``kept`` event in one transaction (a failed move records
+    nothing).  Returns where it went (None on a dry run)."""
+    f = keep_target(name, replaced_dir)
+    rel = f.relative_to(replaced_dir)
+    dest = keep_dir / rel
+    if dest.exists():
+        raise SystemExit(f"--keep: {dest} exists already; nothing moved")
+    tags = _album_tags(f)
+    head, sep, _ = f.name.partition("-")
+    item_id = int(head) if sep and head.isdigit() else None
+    label = f"{tags.artist} — {tags.title}" if tags else "tags unreadable"
+    logger.info("[KEEP] replaced/%s (%s, %.1f MB) → keep/%s", rel, label, f.stat().st_size / 1e6, rel)
+    if conn is None:
+        logger.info("Dry run — nothing moved. Re-run with --apply; the purge never reads quarantine/keep/.")
+        return None
+    message = f"[KEEP] replaced/{rel} → keep/{rel}: kept by hand, out of the purge's reach"
+    with conn.transaction():
+        events.insert(conn, KEPT_KIND, message, source="release", item_id=item_id,
+                      data={"path": str(f), "dest": str(dest),
+                            **({k: getattr(tags, k) for k in ("artist", "title", "album")} if tags else {})})
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        shutil.move(str(f), dest)
+    logger.info("%s", message)
+    return dest
+
+
 def audit_main() -> None:
     import argparse  # noqa: PLC0415
 
@@ -1023,16 +1098,25 @@ def audit_main() -> None:
                         help="with --replaced: delete the files whose recording the library holds")
     parser.add_argument("--only-copies", action="store_true",
                         help="with --replaced --apply: delete the only copies too (#287)")
+    parser.add_argument("--keep", metavar="FILE",
+                        help="move one file from quarantine/replaced/ to quarantine/keep/, out of the purge's reach: "
+                             "its path relative to quarantine/replaced/, or the item ID its name starts with "
+                             "(a dry run without --apply; homelab#2623)")
     parser.add_argument("--merged", action="store_true",
                         help="list the album records holding items of several releases (a release-group merge of "
                              "two imported records) and what the next scan retires of each (read-only, "
                              "homelab#2545)")
     args = parser.parse_args()
+    if args.keep is not None and (args.merged or args.replaced is not None or args.only_copies):
+        parser.error("--keep moves one file; give it alone (with --apply)")
     if args.merged and (args.replaced is not None or args.apply or args.only_copies):
         parser.error("--merged only lists; every scan retires what it lists")
     if args.replaced == "" and (args.apply or args.only_copies):
         parser.error("--replaced without a query only lists; give it an album to delete that album's copies")
     logging.basicConfig(level=logging.INFO, format="[%(asctime)s] %(message)s", datefmt="%Y-%m-%dT%H:%M:%S%z")
+    if args.keep is not None:
+        _keep_main(args.keep, args.apply)
+        return
     records = State.load().albums
     if args.merged:
         from music_scan.scan import store_listings  # noqa: PLC0415
@@ -1095,6 +1179,24 @@ def audit_main() -> None:
                 "--apply), then clear its old copies with --replaced", n)
     twins = title_twins(items)
     list_twins(records, twins, spotify_durations() if twins else {})
+
+
+def _keep_main(name: str, apply: bool) -> None:
+    """``--keep``: the apply under the pipeline lock, and only with the music database
+    (the move is an event or nothing)."""
+    import contextlib  # noqa: PLC0415
+
+    from music_fetch import db  # noqa: PLC0415
+    from music_scan.audit import QUARANTINE, REPLACED, pipeline_lock  # noqa: PLC0415
+
+    if not apply:
+        keep_replaced(name, REPLACED, QUARANTINE / KEEP)
+        return
+    if not db.configured():
+        raise SystemExit(f"--keep --apply: {db.ENV} is unset; the move is recorded as an event, so nothing runs "
+                         "without it")
+    with pipeline_lock(), contextlib.closing(db.connect()) as conn:
+        keep_replaced(name, REPLACED, QUARANTINE / KEEP, conn)
 
 
 def list_twins(records: dict[str, dict], twins: dict[str, list[tuple]], durations: dict[str, float]) -> int:

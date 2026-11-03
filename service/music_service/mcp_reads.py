@@ -18,7 +18,9 @@ from urllib.parse import quote
 BUSY_TIMEOUT_SECONDS = 10
 PAGE_ENTRIES = 200
 PAGE_BYTES = 32 * 1024
-QUARANTINE_KINDS = ("unmatched", "rejected", "replaced")
+# keep/ holds the files a person moved out of replaced/, out of the purge's reach (homelab#2623).
+QUARANTINE_KINDS = ("unmatched", "rejected", "replaced", "keep")
+_SUBTREES = QUARANTINE_KINDS[1:]
 
 
 class LibraryBusy(Exception):
@@ -230,7 +232,7 @@ def quarantine_files(root: Path, kind: str, query: str | None) -> list[dict]:
             continue
         rel = f.relative_to(root)
         top = rel.parts[0] if len(rel.parts) > 1 else ""
-        if (kind == "unmatched" and top in ("rejected", "replaced")) or (kind != "unmatched" and top != kind):
+        if (kind == "unmatched" and top in _SUBTREES) or (kind != "unmatched" and top != kind):
             continue
         if q and q not in str(rel).lower():
             continue
@@ -246,5 +248,5 @@ def quarantine_counts(root: Path) -> dict[str, int]:
             if f.is_file():
                 rel = f.relative_to(root)
                 top = rel.parts[0] if len(rel.parts) > 1 else ""
-                counts[top if top in ("rejected", "replaced") else "unmatched"] += 1
+                counts[top if top in _SUBTREES else "unmatched"] += 1
     return counts

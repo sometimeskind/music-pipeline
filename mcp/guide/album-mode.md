@@ -71,7 +71,9 @@ Search the album's name in the log. The import logs `[RELEASE]`/`[NOMB]`, then o
 - **Old copies:** `audit_releases` with `replaced_query='<artist — album>'` lists the album's
   files in `quarantine/replaced/` as `[REPLACED]` (the library holds the recording) or
   `[ONLYCOPY]`. Superseded copies are purged automatically after 14 days. Only copies never
-  are, so the user decides on those. Deleting them is workstation-only.
+  are, so the user decides on those. Deleting them is workstation-only. A superseded copy the
+  user wants kept anyway (the library holds its recording only by a wrong ID): `keep_quarantined`
+  before the purge, which moves it to `quarantine/keep/`.
 - **Two copies on one album:** the album's older items whose recording the release lacked
   stayed as `[LOCAL]` extras. Once the release's tracks get their Spotify IDs, the next scan
   retires those a release track holds and merges those whose audio one release track holds.

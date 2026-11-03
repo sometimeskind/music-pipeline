@@ -25,7 +25,8 @@ Every write tool is a dry run unless `apply=true`:
    and ask again.
 
 Writes are recoverable: the library and pipeline state are backed up, and a merged or replaced
-file goes to `quarantine/replaced/` for 14 days. Still, apply only what the user agreed to.
+file goes to `quarantine/replaced/` for 14 days (`keep_quarantined` moves one out of the purge's
+reach, to `quarantine/keep/`). Still, apply only what the user agreed to.
 
 ## Jobs
 
