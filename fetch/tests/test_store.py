@@ -76,3 +76,85 @@ def test_from_songs_keeps_an_earlier_stores_local_entries() -> None:
     rebuilt = store.Store.from_songs("pl", [song("B")], keep=earlier)
     assert rebuilt.entries == [{"song": song("B")}, LOCAL]
     assert rebuilt.songs == [song("B")] and rebuilt.locals == [LOCAL["local"]]
+
+
+# --- membership events (homelab#2361) ---
+
+
+def _events() -> list[tuple]:
+    from music_fetch import state  # noqa: PLC0415
+
+    with state.session() as conn:
+        return conn.execute("SELECT kind, source, item_id, message, data FROM events ORDER BY id").fetchall()
+
+
+def test_changes_counts_duplicates_and_ignores_order() -> None:
+    before = [{"song": song("A")}, {"song": song("B")}, {"song": song("B")}, LOCAL]
+    after = [{"song": song("B")}, {"song": song("C")}, {"song": song("A")}, LOCAL]
+    added, removed = store.changes(before, after)
+    assert [store.entry_key(e) for e in added] == ["spotify:C"]
+    assert [store.entry_key(e) for e in removed] == ["spotify:B"]
+    assert store.changes(after, list(reversed(after))) == ([], [])
+
+
+def test_entry_key_falls_back_to_the_url_and_keys_locals_by_item() -> None:
+    assert store.entry_key({"song": {"url": URL + "X"}}) == "spotify:X"
+    assert store.entry_key({"song": {"url": "https://musicbrainz.org/recording/r"}}) == \
+        "url:https://musicbrainz.org/recording/r"
+    assert store.entry_key(LOCAL) == "local:7"
+
+
+def test_a_first_save_records_one_summary_event() -> None:
+    store.save(store.Store.from_songs("pl", [song("A"), song("B")]))
+    [(kind, source, item_id, message, data)] = _events()
+    assert (kind, source, item_id) == ("playlist_entry_added", "store", None)
+    assert message == "[STORE] pl: +2 entries (spotify, created)"
+    assert data["count"] == 2 and data["created"] is True
+    assert [e["song_id"] for e in data["entries"]] == ["A", "B"]
+
+
+def test_a_save_records_each_entry_added_and_removed() -> None:
+    store.save(store.Store.from_songs("pl", [song("A"), song("B")]))
+    store.save(store.Store.from_songs("pl", [song("B", isrc="USX1"), song("C", isrc="USX2"), song("A")]))
+    store.save(store.Store.from_songs("pl", [song("C")]))
+    rows = _events()[1:]
+    assert [(k, m) for k, _, _, m, _ in rows] == [
+        ("playlist_entry_added", "[STORE] pl: + Artist — Song C (spotify)"),
+        ("playlist_entry_removed", "[STORE] pl: - Artist — Song B (spotify)"),
+        ("playlist_entry_removed", "[STORE] pl: - Artist — Song A (spotify)"),
+    ]
+    assert rows[0][4] == {"playlist": "pl", "by": "spotify", "key": "spotify:C", "song_id": "C", "isrc": "USX2",
+                          "url": URL + "C", "artist": "Artist", "title": "Song C"}
+
+
+def test_a_reorder_or_a_richer_record_is_no_event() -> None:
+    store.save(store.Store.from_songs("pl", [song("A"), song("B")]))
+    store.save(store.Store.from_songs("pl", [song("B", album_name="Full"), song("A")]))
+    assert len(_events()) == 1
+
+
+def test_a_local_entry_dropped_by_regen_names_its_item_and_who() -> None:
+    store.save(store.Store("pl", [{"song": song("A")}, LOCAL]))
+    store.save(store.Store("pl", [{"song": song("A")}]), by="regen")
+    kind, _, item_id, message, data = _events()[-1]
+    assert (kind, item_id, message) == ("playlist_entry_removed", 7, "[STORE] pl: - Artist — Local (regen)")
+    assert data["by"] == "regen" and data["path"] == "/library/local.m4a"
+
+
+def test_a_bulk_change_records_one_event_per_kind(monkeypatch) -> None:
+    monkeypatch.setattr(store, "EVENTS_PER_ENTRY", 3)
+    store.save(store.Store.from_songs("pl", [song(c) for c in "ABCD"]))
+    store.save(store.Store.from_songs("pl", [song("E")]))
+    rows = _events()[1:]
+    assert [(k, m) for k, _, _, m, _ in rows] == [
+        ("playlist_entry_added", "[STORE] pl: +1 entries (spotify, bulk)"),
+        ("playlist_entry_removed", "[STORE] pl: -4 entries (spotify, bulk)"),
+    ]
+    assert rows[1][4]["count"] == 4 and rows[1][4]["bulk"] is True
+
+
+def test_an_unchanged_save_records_nothing() -> None:
+    s = store.Store.from_songs("pl", [song("A")])
+    store.save(s)
+    store.save(s)
+    assert len(_events()) == 1

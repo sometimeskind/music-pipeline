@@ -317,7 +317,7 @@ def _local_tail(name: str, paths: list[Path], library: ItemIndex) -> list[Path]:
     dropped = [e for e in playlist.entries if resolved(e)]
     if dropped:
         playlist.entries = [e for e in playlist.entries if not resolved(e)]
-        store.save(playlist)
+        store.save(playlist, by="regen")
     message = (f"[STORE-TAIL] {name}: {len(playlist.locals)} local entr{'y' if len(playlist.locals) == 1 else 'ies'}"
                f", {len(dropped)} resolved")
     if dropped:
