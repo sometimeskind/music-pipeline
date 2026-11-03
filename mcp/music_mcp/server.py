@@ -51,7 +51,8 @@ that outlasts the inline wait returns a job_id: poll get_job. recheck_recordings
 the run ID, and apply_recheck applies the finished run.
 
 Tiers. Read tools anyone signed in may use. Write tools (reset_album, requeue_albums,
-merge_items, replace_item, unlink_spotify_id, set_recording, embed_covers, canon_albums, apply_recheck,
+merge_items, replace_item, unlink_spotify_id, set_recording, keep_quarantined, embed_covers, canon_albums,
+apply_recheck,
 set_search_override, clear_search_override, hold_album, release_album, pin_track, unpin_track,
 request_album, remove_from_later) are a dry run unless
 apply=true, and
@@ -162,9 +163,11 @@ def build_server(
     @mcp.tool(annotations={"readOnlyHint": True})
     async def list_quarantine(
         kind: Annotated[
-            Literal["unmatched", "rejected", "replaced"],
+            Literal["unmatched", "rejected", "replaced", "keep"],
             Field(description="unmatched: the scan's low-confidence files; rejected: the length "
-                              "guard's; replaced: superseded and merged copies"),
+                              "guard's; replaced: superseded and merged copies, which the purge deletes "
+                              "14 days after the move once the library holds their recording; keep: "
+                              "files keep_quarantined moved out of replaced, which nothing deletes"),
         ],
         query: Annotated[str | None, Field(description="case-insensitive substring of the path")] = None,
         offset: Offset = 0,
@@ -431,6 +434,20 @@ def build_server(
         recording_set event, writes the file's tags, and marks the item so later rechecks leave
         it alone while it holds that recording."""
         return await run("set_recording", {"id": id, "recording": recording, "apply": apply}, write=True)
+
+    @mcp.tool(annotations={"destructiveHint": True})
+    async def keep_quarantined(
+        file: Annotated[str, Field(description="a file in quarantine/replaced: its path as list_quarantine shows "
+                                               "it, or the item ID its file name starts with", min_length=1,
+                                   max_length=500)],
+        apply: Apply = False,
+    ) -> dict:
+        """music-album-audit-releases --keep: move one file from quarantine/replaced to
+        quarantine/keep, so the purge (14 days after the move, once the library holds its
+        recording) never deletes it: a copy that is the only one of its take, though an item
+        holds its recording by a wrong ID. A name matching several files is refused. The apply
+        records a kept event. list_quarantine kind=keep shows the kept files."""
+        return await run("keep_quarantined", {"file": file, "apply": apply}, write=True)
 
     @mcp.tool(annotations={"destructiveHint": True})
     async def embed_covers(apply: Apply = False) -> dict:

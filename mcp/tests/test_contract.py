@@ -99,7 +99,7 @@ async def test_structured_reads(pipeline_url):
         status = (await c.call_tool("library_status", {})).data
         assert status["status"] == "ok"
         assert status["albums"]["by_status"] == {"imported": 1, "wanted": 1, "failed": 1}
-        assert status["quarantine"] == {"unmatched": 1, "rejected": 1, "replaced": 2}
+        assert status["quarantine"] == {"unmatched": 1, "rejected": 1, "replaced": 2, "keep": 0}
         assert "chill" in status["playlists"]
 
         found = (await c.call_tool("find_albums", {"query": "abbey"})).data

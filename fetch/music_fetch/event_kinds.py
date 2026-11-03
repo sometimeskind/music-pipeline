@@ -145,6 +145,9 @@ KINDS: dict[str, Kind] = {
                       ("album", "key", "from", "items")),
     "purged": Kind(ITEM, "[PURGE]: a superseded file deleted from quarantine/replaced.",
                    ("artist", "title", "album", "path", "key", "only_copy", "days")),
+    "kept": Kind(ITEM, "[KEEP]: a file moved by hand from quarantine/replaced to quarantine/keep, out of the "
+                       "purge's reach (keep_quarantined).",
+                 ("artist", "title", "album", "path", "dest")),
     "claimed": Kind(ITEM, "[CLAIM]/[UNCLAIMED]: a request's fallback track stamped with its record, or not.",
                     (*_ITEM, "recording", "claimed", "key", "keys")),
     "id_linked": Kind(ALBUM, "[IDS]: Spotify track IDs linked to a Usenet release's items.",
