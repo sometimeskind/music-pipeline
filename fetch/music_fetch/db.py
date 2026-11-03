@@ -119,6 +119,10 @@ EVENT_KINDS = (
     # Migration 18 (homelab#2589): a recording ID filled on a request album's item that had none,
     # the request's track AcoustID names for its audio (the album tick, music_scan.request_fill).
     "recording_filled",
+    # Migration 19 (homelab#2361): an entry that joined or left a playlist store, with
+    # data.by naming who changed it (spotify, regen, later the two-way sync).
+    "playlist_entry_added",
+    "playlist_entry_removed",
 )
 
 MIGRATIONS: list[str] = [
@@ -466,6 +470,20 @@ MIGRATIONS: list[str] = [
         'state_edited', 'recording_replaced', 'album_dropped', 'recording_refreshed',
         'fallback_deferred', 'reset', 'requeued', 'replaced', 'search_miss', 'status_changed',
         'album_queued', 'album_merged', 'imported', 'retitled', 'recording_set', 'recording_filled'));
+    """,
+    # 19: the playlist_entry_added and playlist_entry_removed kinds (homelab#2361).
+    """
+    ALTER TABLE events DROP CONSTRAINT events_kind_check;
+    ALTER TABLE events ADD CONSTRAINT events_kind_check CHECK (kind IN (
+        'import_done', 'import_wrong', 'import_incomplete', 'import_lost',
+        'retire', 'local', 'merge', 'clash', 'mixed',
+        'grab', 'autoreset', 'fallback', 'failure', 'reject', 'mcp_job',
+        'album_requested', 'later_added', 'later_removed', 'spotify_id_resolved',
+        'filled', 'wrong_version', 'moved', 'override_set', 'override_cleared',
+        'state_edited', 'recording_replaced', 'album_dropped', 'recording_refreshed',
+        'fallback_deferred', 'reset', 'requeued', 'replaced', 'search_miss', 'status_changed',
+        'album_queued', 'album_merged', 'imported', 'retitled', 'recording_set', 'recording_filled',
+        'playlist_entry_added', 'playlist_entry_removed'));
     """,
 ]
 
