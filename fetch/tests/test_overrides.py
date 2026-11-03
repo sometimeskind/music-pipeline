@@ -171,6 +171,11 @@ def test_an_override_follows_a_merge_and_an_album_that_comes_back(pg_url):
         assert _override_rows(conn)[0] == (HOLD, rows.albums["sp2"]["_id"], ["sp2"], None)
         # The detached search override takes the new row too, now that it has none.
         assert _override_rows(conn)[1] == (SEARCH, rows.albums["sp2"]["_id"], ["sp2"], "loser words")
+        # Each move is an override_set event (homelab#2590): the hold twice, the search override once.
+        moves = conn.execute("SELECT data->>'kind', data->>'key' FROM events WHERE kind = 'override_set' "
+                             "AND data->>'reattached' = 'true' ORDER BY id").fetchall()
+    assert moves == [(HOLD, str(survivor["_id"])), (HOLD, str(rows.albums["sp2"]["_id"])),
+                     (SEARCH, str(rows.albums["sp2"]["_id"]))]
 
 
 @needs_pg

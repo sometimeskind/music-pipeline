@@ -190,13 +190,21 @@ def test_sweep_deletes_by_path_and_keeps_a_hand_made_playlist_of_the_same_name(n
         _playlist("handmade", "keep", "", sync=False),
         _playlist("current", "mix", "/music/playlists/mix.m3u"),
     ])
+    from music_scan import navidrome
     from music_scan.navidrome import sweep_playlists
     import logging
-    with nd.patch(), caplog.at_level(logging.INFO, logger="music_scan.navidrome"):
+    recorded = []
+    with nd.patch(), caplog.at_level(logging.INFO, logger="music_scan.navidrome"), \
+         mock.patch.object(navidrome.events, "record",
+                           side_effect=lambda kind, message, **kw: recorded.append((kind, message, kw))):
         assert sweep_playlists(tmp_path, keep={"mix"}) == ["keep"]
     assert nd.deleted == ["imported"]
     assert all(h == {"X-ND-Authorization": "Bearer jwt"} for h in nd.headers)
     assert "deleted playlist keep: imported from /music/playlists/keep.m3u, which is gone" in caplog.text
+    # homelab#2590: the deletion is an event.
+    (kind, message, kw), = recorded
+    assert kind == "playlist_deleted" and message.endswith("imported from /music/playlists/keep.m3u, which is gone")
+    assert kw["data"]["playlist"] == "keep" and kw["data"]["navidrome_id"] == "imported"
 
 
 def test_sweep_leaves_conf_playlists_sync_off_and_files_outside_playlists(navidrome_env, tmp_path):

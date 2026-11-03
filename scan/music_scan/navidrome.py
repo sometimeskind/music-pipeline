@@ -9,6 +9,8 @@ from pathlib import Path, PurePosixPath
 
 import requests
 
+from music_fetch import events
+
 logger = logging.getLogger(__name__)
 
 # Where Navidrome sees the pipeline's playlists/ (homelab mounts the music
@@ -140,6 +142,10 @@ def sweep_playlists(playlists_dir: Path, keep: set[str]) -> list[str]:
             logger.error("[NAVIDROME] could not delete playlist %s (imported from %s): %s; the next nightly retries",
                          name, path, exc)
             continue
-        logger.info("[NAVIDROME] deleted playlist %s: imported from %s, which is gone", name, path)
+        message = f"[NAVIDROME] deleted playlist {name}: imported from {path}, which is gone"
+        logger.info(message)
+        events.record("playlist_deleted", message, source="navidrome",
+                      data={"playlist": name, "path": str(path), "navidrome_id": pls.get("id"),
+                            "songs": pls.get("songCount")})
         deleted.append(name)
     return deleted

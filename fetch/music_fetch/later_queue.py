@@ -186,7 +186,8 @@ def resolve_refs(conn: psycopg.Connection, rows: statedb.AlbumRows) -> int:
         if other is None:
             conn.execute("UPDATE later_queue SET release_group = %s WHERE id = %s", (group, entry.id))
             on[group] = entry
-            logger.info("[LATER] %s (%s): resolved to release group %s", album, entry.ref, group)
+            message = f"[LATER] {album} ({entry.ref}): resolved to release group {group}"
+            removed = None
         else:
             first, second = (entry, other) if entries.index(entry) < entries.index(other) else (other, entry)
             conn.execute("DELETE FROM later_queue WHERE id = %s", (second.id,))
@@ -196,8 +197,13 @@ def resolve_refs(conn: psycopg.Connection, rows: statedb.AlbumRows) -> int:
                 "WHERE id = %s",
                 (group, second.ref, second.added_at, second.available_at, second.available_at, first.id))
             on[group] = first
-            logger.info("[LATER] %s (%s): resolved to release group %s, on Later already; one entry kept",
-                        album, entry.ref, group)
+            message = f"[LATER] {album} ({entry.ref}): resolved to release group {group}, on Later already; one entry kept"
+            removed = second.id
+        logger.info(message)
+        # In the caller's transaction, like later_added and later_removed (homelab#2590).
+        events.insert(conn, "later_resolved", message, source="later", release_group=group,
+                      spotify_album_id=statedb.primary_spotify(found[1]),
+                      data={"album": album, "key": found[0], "ref": entry.ref, "removed_entry": removed})
         done += 1
     return done
 
@@ -207,14 +213,24 @@ def mark_available(conn: psycopg.Connection, rows: statedb.AlbumRows) -> list[in
     whole, and return their entries' ids: they join the end of the ``.m3u``.
     Logs one ``[LATER]`` line when any did."""
     index = Index(rows)
-    ready = [e.id for e in load(conn) if e.available_at is None and held((index.find(e) or (None, None))[1])]
-    if not ready:
+    pending = {e.id: e for e in load(conn) if e.available_at is None and held((index.find(e) or (None, None))[1])}
+    if not pending:
         return []
     done = [i for (i,) in conn.execute(
         "UPDATE later_queue SET available_at = now() WHERE id = ANY(%s) AND available_at IS NULL RETURNING id",
-        (ready,))]
+        (list(pending),))]
     if done:
         logger.info("[LATER] %d album(s) now held whole, at the end of %s.m3u", len(done), PLAYLIST)
+    for i in done:
+        # One event per album, in the caller's transaction (homelab#2590).
+        entry = pending[i]
+        found = index.find(entry)
+        album = label(entry.release_group, found, {}, entry.ref)
+        events.insert(conn, "later_available", f"[LATER] {album} ({entry.release_group or entry.ref}): now held "
+                                               f"whole, at the end of {PLAYLIST}.m3u",
+                      source="later", release_group=entry.release_group,
+                      spotify_album_id=statedb.primary_spotify(found[1]) if found else None,
+                      data={"album": album, "key": found[0] if found else None, "ref": entry.ref})
     return done
 
 

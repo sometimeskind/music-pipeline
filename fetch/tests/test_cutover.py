@@ -256,8 +256,12 @@ def test_a_ref_entry_and_a_later_request_for_its_album_become_one(music_db, capl
         (first,) = [e for e in later_queue.load(conn) if e.ref == "N"]
         assert later_queue.resolve_refs(conn, state.load_albums(conn)) == 1
         (kept,) = later_queue.load(conn)
+        (message, data), = conn.execute("SELECT message, data FROM events WHERE kind = 'later_resolved'").fetchall()
     assert (kept.id, kept.release_group, kept.ref) == (first.id, RG_C, "N")
     assert kept.available_at == first.available_at
+    # homelab#2590: one event names the entry dropped.
+    assert message.endswith(f"resolved to release group {RG_C}, on Later already; one entry kept")
+    assert data["ref"] == "N" and data["key"] == "N" and data["removed_entry"] is not None
 
 
 @needs_pg

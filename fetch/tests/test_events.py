@@ -268,10 +268,25 @@ def test_an_image_before_migration_19_runs_on_schema_19(pg_url, monkeypatch, cap
     assert "music database is at schema 19, this image knows 18" in caplog.text
 
 
+@needs_pg
+def test_an_image_before_migration_20_runs_on_schema_20(pg_url, monkeypatch, caplog):
+    """The rollback path for the ingest and Later kinds: migration 20 only widens the kinds."""
+    full = db.MIGRATIONS
+    monkeypatch.setattr(db, "MIGRATIONS", full[:20])
+    with psycopg.connect(pg_url, autocommit=True) as conn:
+        assert db.migrate(conn) == 20
+    monkeypatch.setattr(db, "MIGRATIONS", full[:19])
+    with db.connect(pg_url) as conn:
+        assert db.migrate(conn) == 20
+        events.insert(conn, "retagged", "[retagged]", source="test")
+    assert "music database is at schema 20, this image knows 19" in caplog.text
+
+
 NEW_KINDS = ("album_dropped", "recording_refreshed", "fallback_deferred", "reset", "requeued", "replaced",
              "search_miss", "status_changed", "album_queued", "album_merged", "imported", "retitled",
              "recording_set", "recording_filled",
-             "retagged", "restamped", "purged", "claimed", "id_linked")
+             "retagged", "restamped", "purged", "claimed", "id_linked",
+             "playlist_deleted", "later_resolved", "later_available")
 
 
 @needs_pg
