@@ -524,6 +524,24 @@ def _recording_fields(loser, taken: tuple[int, str] | None, refused: dict[int, s
     return {}
 
 
+def take_ids(keeper, loser) -> dict[str, list[str]]:
+    """Give *keeper* the ``spotify_ids``, ``sources`` and ISRCs of *loser* it lacks: a
+    playlist entry resolves by Spotify ID, then ISRC, so the item that holds a dropped
+    copy's recording must hold its IDs too.  Changes *keeper* in memory only: the caller
+    stores it, and writes its file when an ISRC was taken.  Returns what it took, by field."""
+    taken: dict[str, list[str]] = {"spotify_ids": [], "sources": [], "isrc": []}
+    for sid in sorted(item_spotify_ids(loser) - item_spotify_ids(keeper)):
+        if add_to_list(keeper, "spotify_ids", sid):
+            taken["spotify_ids"].append(sid)
+    for source in split_list(loser.get("sources")):
+        if add_to_list(keeper, "sources", source):
+            taken["sources"].append(source)
+    isrcs = [c for c in dict.fromkeys(split_list(loser.get("isrc"), ";")) if c and c not in item_isrcs(keeper)]
+    if add_isrcs(keeper, isrcs):
+        taken["isrc"] = isrcs
+    return taken
+
+
 def merge(keeper, losers: list, replaced_dir: Path = REPLACED, why: str = "duplicate",
           recordings: RecordingLookup | None = None) -> list[Path]:
     """Merge *losers* onto *keeper*; their files go to *replaced_dir*.  Returns where they went.
@@ -540,11 +558,7 @@ def merge(keeper, losers: list, replaced_dir: Path = REPLACED, why: str = "dupli
     for loser in losers:
         for name in merged_files(loser):
             add_merged_file(keeper, name)
-        for sid in sorted(item_spotify_ids(loser) - item_spotify_ids(keeper)):
-            add_to_list(keeper, "spotify_ids", sid)
-        for source in split_list(loser.get("sources")):
-            add_to_list(keeper, "sources", source)
-        write |= add_isrcs(keeper, split_list(loser.get("isrc"), ";"))
+        write |= bool(take_ids(keeper, loser)["isrc"])
     taken, refused = recording_to_take(keeper, losers, recordings)
     for loser_id, refusal in refused.items():
         logger.warning("[NOTRACKID] keep %s ← %s: not taking its recording %s: %s", keeper.id, loser_id,

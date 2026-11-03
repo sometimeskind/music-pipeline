@@ -81,8 +81,10 @@ Search the album's name in the log. The import logs `[RELEASE]`/`[NOMB]`, then o
 - **Two editions merged:** a scan's `[MERGED] … keeps its own release …` means two album
   records turned out to be one release group after both imported. The scan kept the record's
   own release and retired the other's copies as an import would (`[RETIRE]`, `[LOCAL]`). No
-  action. `[MULTI] …`: nothing told which release is the record's own, so nothing moved:
-  start the album over with `reset_album` and `reimport=true`.
+  action. `album_history` shows the decision as a merged_releases event (data.kept, data.why),
+  and a retired copy's IDs moved to the item holding its recording (data.ids_to), so its
+  playlist entries still resolve. `[MULTI] …`: nothing told which release is the record's own,
+  so nothing moved: start the album over with `reset_album` and `reimport=true`.
 - **Duplicates across albums:** `audit_dupes` reports them, and `merge_items` merges a
   confirmed pair.
 
