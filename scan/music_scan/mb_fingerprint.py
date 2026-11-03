@@ -63,6 +63,18 @@ recording each finding's outcome with its event.  An interrupted apply is
 finished by running it again: an item that holds its replacement already is
 written again and counted as done.
 
+``--set-recording ITEM_ID RECORDING_ID`` (homelab#2583) sets one item's
+recording by hand, for the case AcoustID can't settle: the audio's fingerprint
+is linked to a sibling recording (4230, *Bye* against "Bye (Rough Mix 2)"), so
+the recheck would put the wrong one back.  It looks the recording up on
+MusicBrainz (refused when there is none, or when the lookup fails), shows it
+beside the item and the fields that change with it (:func:`refreshed`), and
+warns ``[SUSPECT]`` when its title names another song.  ``--apply`` stores it
+under the pipeline lock with a ``recording_set`` event in the same transaction,
+marks the item ``recording_set`` (so ``--recheck`` and a run's apply leave it
+alone while its ``mb_trackid`` is that recording), and writes the file's tags,
+so a later ``beet update`` reads the same ID back.
+
 Requires the ACOUSTID_APIKEY env var.
 """
 
@@ -75,6 +87,7 @@ import functools
 import http.client
 import logging
 import os
+import re
 import time
 from collections import Counter
 from collections.abc import Callable, Iterable
@@ -98,6 +111,10 @@ SOURCE = "mb-fingerprint"
 # Flexible attributes that say the pipeline, not beets' guess, set mb_trackid.
 FALLBACK_RECORDING = "fallback_recording"  # music_pipeline.FALLBACK_RECORDING
 MERGED_FILES = "merged_files"  # dupes.MERGED_FILES
+# --set-recording (homelab#2583): the recording a person set; the recheck leaves the item alone while it holds it.
+RECORDING_SET = "recording_set"
+SET_KIND = "recording_set"
+MBID = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
 
 Recordings = list[tuple[float, str]]
 
@@ -222,7 +239,7 @@ def _lookup(lookup: Callable[[str], Recordings], path: str) -> Recordings:
 
 
 COUNTS = ("checked", "agree", "flagged", "replaceable", "ambiguous", "keepers", "nomatch", "errors", "gone",
-          "skipped")
+          "skipped", "set")
 # A recorded run (--run-id) stores its checkpoint every this many items: a restart repeats at most these lookups.
 CHECKPOINT_EVERY = 25
 
@@ -295,6 +312,9 @@ def _check(lib, item_id: int, lookup: Callable[[str], Recordings], counts: Count
     if item.get(FALLBACK_RECORDING):
         counts["skipped"] += 1  # AcoustID named it at its import (the request guard)
         return _UNCHECKED
+    if set_by_hand(item):
+        counts["set"] += 1  # a person chose it over AcoustID (--set-recording)
+        return _UNCHECKED
     path = _path(item)
     stat = file_stat(path)
     try:
@@ -351,9 +371,16 @@ def verdict(item, f: Flagged) -> tuple[str, str]:
         return ALREADY, f"mb_trackid is {now} already"
     if now != f.guess:
         return SKIP, f"mb_trackid is {now} now, not {f.guess}"
+    if set_by_hand(item):
+        return SKIP, "its recording was set by hand (--set-recording)"
     if file_stat(_path(item)) != tuple(f.file):
         return SKIP, "its file changed since its check; recheck it by ID"
     return REPLACE, ""
+
+
+def set_by_hand(item) -> bool:
+    """True when *item*'s ``mb_trackid`` is the recording a person set (``--set-recording``)."""
+    return bool(item.get(RECORDING_SET)) and item.get(RECORDING_SET) == item.get("mb_trackid")
 
 
 # ---------------------------------------------------------------------------
@@ -779,6 +806,117 @@ def refresh_replaced(since: datetime | None = None, apply: bool = False, library
     return counts
 
 
+# ---------------------------------------------------------------------------
+# A recording set by hand (homelab#2583)
+# ---------------------------------------------------------------------------
+
+
+def musicbrainz_recording_credits() -> RecordingLookup:
+    """``recording/<id>?inc=artist-credits``: :func:`musicbrainz_recordings` with
+    the artist, which the dry run shows beside the item's."""
+    from music_scan.mb_release import MusicBrainz  # noqa: PLC0415
+
+    mb = MusicBrainz()
+    return lambda recording_id: mb.get(f"recording/{recording_id}", inc="artist-credits")
+
+
+def _credit(recording: dict) -> str:
+    return "".join(c.get("name", "") + c.get("joinphrase", "") for c in recording.get("artist-credit") or []) or "?"
+
+
+def _seconds(ms) -> str:
+    return f"{ms / 1000:.1f} s" if isinstance(ms, (int, float)) else "no length"
+
+
+def set_recording_on(lib, item_id: int, recording_id: str, lookup: RecordingLookup, conn=None) -> bool:
+    """Set item *item_id*'s recording to *recording_id*: a dry run without *conn*
+    (says what would change), with it the store, its ``recording_set`` event in
+    the same transaction, and the file's tags.  The caller holds the pipeline
+    lock for an apply.  Returns True when it stored anything.  Raises
+    :class:`SystemExit` on a refusal, before anything changes."""
+    from music_fetch import events  # noqa: PLC0415
+
+    item = lib.get_item(item_id)
+    if item is None:
+        raise SystemExit(f"--set-recording: no library item with id {item_id}")
+    try:
+        recording = lookup(recording_id)
+    except (OSError, ValueError, http.client.HTTPException) as exc:
+        raise SystemExit(f"--set-recording: the MusicBrainz lookup of {recording_id} failed ({exc}); "
+                         "nothing changed, run it again") from None
+    if not recording:
+        raise SystemExit(f"--set-recording: MusicBrainz has no recording {recording_id}; nothing changed")
+    # MusicBrainz answers a merged recording's old ID with the recording it was merged into.
+    new = recording.get("id") or recording_id
+    if new != recording_id:
+        logger.info("[MERGED] MusicBrainz merged %s into %s; setting %s", recording_id, new, new)
+    before = item.get("mb_trackid") or ""
+    label = _label(item)
+    logger.info("[SETREC] %s (%s, %s): mb_trackid %s → %s, %r by %s (%s%s)", label, item.get("artist") or "?",
+                _seconds((item.get("length") or 0) * 1000), before or "unset", new, recording.get("title"),
+                _credit(recording), _seconds(recording.get("length")),
+                f", {recording['disambiguation']}" if recording.get("disambiguation") else "")
+    if suspect(item, recording):
+        logger.warning("[SUSPECT] %s: the recording is titled %r, another song than the item's title; check the "
+                       "audio is that song before applying (its title becomes the recording's)", label,
+                       recording.get("title"))
+    changes = refreshed(item, recording)
+    if changes:
+        logger.info("    with it: %s", _describe(changes))
+    if before == new and set_by_hand(item) and not changes:
+        logger.info("[DONE] %s: holds %s, set by hand, already", label, new)
+        if conn is not None:
+            item.try_write()  # an apply cut short before its tags were written
+        return False
+    if conn is None:
+        logger.info("    the recheck leaves the item alone afterwards while it holds %s", new)
+        logger.info("Dry run — nothing set. Re-run with --apply.")
+        return False
+    message = f"[SETREC] {label}: mb_trackid {before or 'unset'} → {new}, set by hand"
+    with conn.transaction():
+        events.insert(conn, SET_KIND, message, source=SOURCE,
+                      spotify_album_id=events.spotify_album(item.get("spotify_album_id")),
+                      release_group=item.get("mb_releasegroupid"), item_id=item.id,
+                      data={**events.item_fields(item), "old": before or None, "new": new,
+                            "recording_title": recording.get("title"),
+                            **({"refreshed": {k: list(v) for k, v in changes.items()}} if changes else {})})
+        item["mb_trackid"] = new
+        item[RECORDING_SET] = new
+        for field, (_, after) in changes.items():
+            item[field] = after
+        item.store()
+    item.try_write()
+    logger.info("%s", message)
+    return True
+
+
+def set_recording(item_id: int, recording_id: str, apply: bool = False, library_db: str = LIBRARY_DB,
+                  library_dir: str = LIBRARY_DIR, lookup: RecordingLookup | None = None) -> bool:
+    """``--set-recording``: :func:`set_recording_on` against the library, the
+    apply under the pipeline lock.  It refuses an ID that isn't an MBID, and an
+    apply without the music database (the change is an event or nothing)."""
+    import beets.library  # noqa: PLC0415
+
+    from music_fetch import db  # noqa: PLC0415
+    from music_scan.audit import pipeline_lock  # noqa: PLC0415
+
+    recording_id = recording_id.strip().lower()
+    if not MBID.match(recording_id):
+        raise SystemExit(f"--set-recording: {recording_id!r} is not a MusicBrainz recording ID")
+    if apply and not db.configured():
+        raise SystemExit(f"--set-recording --apply: {db.ENV} is unset; the change is recorded as an event, "
+                         "so nothing runs without it")
+    lookup = lookup or musicbrainz_recording_credits()
+    lib = beets.library.Library(library_db, directory=library_dir)
+    try:
+        if not apply:
+            return set_recording_on(lib, item_id, recording_id, lookup)
+        with pipeline_lock(), contextlib.closing(db.connect()) as conn:
+            return set_recording_on(lib, item_id, recording_id, lookup, conn)
+    finally:
+        lib._close()
+
+
 def utc_time(value: str) -> datetime:
     """An ISO 8601 date or time; one without an offset is UTC."""
     at = datetime.fromisoformat(value)
@@ -820,11 +958,11 @@ def run_recheck(apply: bool = False, ids: list[int] | None = None,
         lib._close()
 
     logger.info("[SUMMARY] checked %d: %d agree, %d flagged (%d replaceable, %d with several recordings, "
-                "%d merge keepers), %d no match, %d errors; %d gone during the run, %d request fallbacks skipped; "
-                "%s",
+                "%d merge keepers), %d no match, %d errors; %d gone during the run, %d request fallbacks and "
+                "%d set by hand skipped; %s",
                 counts["checked"], counts["agree"], counts["flagged"], counts["replaceable"],
                 counts["ambiguous"], counts["keepers"], counts["nomatch"], counts["errors"],
-                counts["gone"], counts["skipped"],
+                counts["gone"], counts["skipped"], counts["set"],
                 f"run {run_id} recorded, nothing replaced (preview it with --replace-run {run_id})" if run_id else
                 f"{counts['replaced']} replaced" if apply else "dry run, nothing replaced (re-run with --apply)")
     return counts
@@ -903,8 +1041,19 @@ def main() -> None:
     parser.add_argument("--since", type=utc_time, metavar="TIME",
                         help="with --refresh-replaced: only items replaced at or after TIME (ISO 8601, UTC "
                              "unless it says otherwise; default: every one)")
+    parser.add_argument("--set-recording", nargs=2, metavar=("ITEM_ID", "RECORDING_ID"),
+                        help="set one item's recording by hand, when AcoustID names the wrong one: a dry run, "
+                             "or with --apply do it (homelab#2583)")
     parser.add_argument("ids", nargs="*", type=int, help="with --recheck: only these item IDs")
     args = parser.parse_args()
+    if args.set_recording:
+        if args.recheck or args.run_id or args.replace_run or args.refresh_replaced or args.since or args.ids:
+            parser.error("--set-recording takes only --apply")
+        item_id, recording_id = args.set_recording
+        if not item_id.isdigit():
+            parser.error(f"--set-recording: {item_id!r} is not an item ID")
+        set_recording(int(item_id), recording_id, apply=args.apply)
+        return
     if args.refresh_replaced:
         if args.recheck or args.run_id or args.replace_run or args.ids:
             parser.error("--refresh-replaced takes only --since and --apply")

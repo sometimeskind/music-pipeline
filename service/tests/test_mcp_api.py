@@ -355,6 +355,18 @@ def test_unlink_spotify_id_reduces_a_track_url_to_its_id(client, env):
         assert client.post("/mcp-api/run/unlink_spotify_id", json=bad, headers=WRITE).status_code == 400, bad
 
 
+def test_set_recording_reduces_a_recording_url_to_its_mbid(client, env):
+    rec = "dd51202e-05ac-4bc9-b597-e117f81c47f8"
+    resp = client.post("/mcp-api/run/set_recording",
+                       json={"id": 4230, "recording": f"https://musicbrainz.org/recording/{rec.upper()}"}, headers=WRITE)
+    assert resp.status_code == 200, resp.json
+    assert resp.json["args"] == {"id": 4230, "recording": rec}
+    assert env["commands"].ran[-1] == ["music-mb-fingerprint", "--set-recording", "4230", rec]
+    for bad in [{"id": 4230, "recording": "--apply"}, {"id": 4230, "recording": f"https://musicbrainz.org/release/{rec}"},
+                {"id": 0, "recording": rec}, {"id": 4230}, {"id": 4230, "recording": rec, "x": 1}]:
+        assert client.post("/mcp-api/run/set_recording", json=bad, headers=WRITE).status_code == 400, bad
+
+
 def test_album_urls_resolve_like_the_cli(client):
     # An album URL with no valid ID is refused, not searched for as text.
     resp = client.post("/mcp-api/run/reset_album", json={"query": "https://open.spotify.com/album/ALB3"}, headers=WRITE)

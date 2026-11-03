@@ -254,6 +254,11 @@ def _unlink(body: dict, _: Albums) -> dict:
     return {"id": _id(body.get("id"), "id"), "track": track_ref(body.get("track"))}
 
 
+def _set_recording(body: dict, _: Albums) -> dict:
+    _only(body, "id", "recording")
+    return {"id": _id(body.get("id"), "id"), "recording": mbid(body.get("recording"), "recording", "recording")}
+
+
 # ---- search overrides, holds and pins (homelab#2484): music-overrides ----
 
 MAX_TEXT = 500
@@ -517,6 +522,10 @@ TOOLS: dict[str, Tool] = {t.name: t for t in [
     # One Spotify ID off one item (homelab#2530); the ID is base62, never a flag.
     Tool("unlink_spotify_id", WRITE, _unlink,
          lambda a, apply: [_apply(["music-audit-dupes", "--unlink", str(a["id"]), a["track"]], apply)],
+         ("pipeline",)),
+    # One item's recording by hand (homelab#2583); the MBID is hex and dashes, never a flag.
+    Tool("set_recording", WRITE, _set_recording,
+         lambda a, apply: [_apply(["music-mb-fingerprint", "--set-recording", str(a["id"]), a["recording"]], apply)],
          ("pipeline",)),
     Tool("embed_covers", WRITE, _none, lambda a, apply: [_apply(["music-embed-covers"], apply)], ("pipeline",)),
     Tool("canon_albums", WRITE, _canon_albums, _canon_argv, ("pipeline",)),

@@ -42,7 +42,8 @@ MusicBrainz release group, an MBID or musicbrainz.org URL, and taken off Later
 from what the user typed (never search MusicBrainz with a
 title read from the library). An item ID is a
 beets item (an integer: get_item, merge_items pairs, replace_item, unlink_spotify_id,
-audit_dupes fingerprint_ids);
+set_recording, audit_dupes fingerprint_ids); a recording (set_recording) is a MusicBrainz
+recording MBID or musicbrainz.org/recording URL;
 get_album also shows beets album IDs, which no tool takes. A playlist entry resolves to an item
 by Spotify track ID (song_id) or ISRC. replace_item takes a YouTube video ID or URL. A tool run
 that outlasts the inline wait returns a job_id: poll get_job. recheck_recordings is a long job
@@ -50,7 +51,7 @@ that outlasts the inline wait returns a job_id: poll get_job. recheck_recordings
 the run ID, and apply_recheck applies the finished run.
 
 Tiers. Read tools anyone signed in may use. Write tools (reset_album, requeue_albums,
-merge_items, replace_item, unlink_spotify_id, embed_covers, canon_albums, apply_recheck,
+merge_items, replace_item, unlink_spotify_id, set_recording, embed_covers, canon_albums, apply_recheck,
 set_search_override, clear_search_override, hold_album, release_album, pin_track, unpin_track,
 request_album, remove_from_later) are a dry run unless
 apply=true, and
@@ -415,6 +416,21 @@ def build_server(
         dry run shows where each entry with that ID resolves afterwards (by ISRC, or empty);
         the apply regenerates the .m3u files."""
         return await run("unlink_spotify_id", {"id": id, "track": track, "apply": apply}, write=True)
+
+    @mcp.tool(annotations={"destructiveHint": True})
+    async def set_recording(
+        id: ItemId,  # noqa: A002 (the contract's name)
+        recording: Annotated[str, Field(description="the MusicBrainz recording the item's audio is: an MBID or a "
+                                                    "musicbrainz.org/recording URL")],
+        apply: Apply = False,
+    ) -> dict:
+        """music-mb-fingerprint --set-recording: set one item's mb_trackid by hand, when its
+        AcoustID fingerprint names a sibling recording (a rough mix, a live take) so
+        recheck_recordings can't fix it. The dry run shows the recording from MusicBrainz beside
+        the item and warns [SUSPECT] when it names another song; the apply records a
+        recording_set event, writes the file's tags, and marks the item so later rechecks leave
+        it alone while it holds that recording."""
+        return await run("set_recording", {"id": id, "recording": recording, "apply": apply}, write=True)
 
     @mcp.tool(annotations={"destructiveHint": True})
     async def embed_covers(apply: Apply = False) -> dict:
