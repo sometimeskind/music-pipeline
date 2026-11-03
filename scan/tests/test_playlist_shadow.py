@@ -15,7 +15,11 @@ from music_fetch import store
 from music_scan import navidrome, playlist_shadow
 from music_scan.playlist_shadow import Track, diff, pipeline_path
 
+# The real reads, for the tests that run them under the run's fixture.
+REAL_READS = {n: getattr(navidrome, n) for n in ("scanning", "_login", "list_playlists", "playlist_tracks")}
+
 URL = "http://navidrome.example.com"
+SECRET = "hunter2-secret"
 HEADERS = {"X-ND-Authorization": "Bearer jwt"}
 
 
@@ -34,23 +38,31 @@ def _row(rel, title="T", missing=False, library="/music"):
 # --- Navidrome reads ------------------------------------------------------------------------
 
 
+@pytest.fixture
+def nd_env(monkeypatch):
+    for var, value in (("NAVIDROME_URL", URL), ("NAVIDROME_USER", "u"), ("NAVIDROME_PASSWORD", SECRET)):
+        monkeypatch.setenv(var, value)
+
+
 @pytest.mark.parametrize("scanning", [True, False])
-def test_scanning_reads_get_scan_status(scanning):
+def test_scanning_reads_get_scan_status_with_token_auth(nd_env, scanning):
     body = {"subsonic-response": {"status": "ok", "scanStatus": {"scanning": scanning, "count": 3}}}
     with mock.patch("music_scan.navidrome.requests.get", return_value=_resp(body)) as get:
-        assert navidrome.scanning(URL, "u", "pw") is scanning
-    assert get.call_args[0][0] == f"{URL}/rest/getScanStatus.view"
-    assert get.call_args[1]["params"]["f"] == "json"
+        assert navidrome.scanning() is scanning
+    assert get.call_args[0][0] == f"{URL}/rest/getScanStatus"
+    params = get.call_args[1]["params"]
+    assert "p" not in params and {"t", "s"} <= set(params)
+    assert SECRET not in str(get.call_args)
 
 
-def test_scanning_raises_when_unreadable():
+def test_scanning_raises_when_unreadable(nd_env):
     failed = {"subsonic-response": {"status": "failed", "error": {"code": 40}}}
     with mock.patch("music_scan.navidrome.requests.get", return_value=_resp(failed)):
-        with pytest.raises(RuntimeError, match="non-ok"):
-            navidrome.scanning(URL, "u", "pw")
+        with pytest.raises(RuntimeError, match="getScanStatus returned status"):
+            navidrome.scanning()
     with mock.patch("music_scan.navidrome.requests.get", side_effect=requests.ConnectionError("down")):
-        with pytest.raises(RuntimeError, match="scan status"):
-            navidrome.scanning(URL, "u", "pw")
+        with pytest.raises(RuntimeError, match="getScanStatus failed"):
+            navidrome.scanning()
 
 
 def test_list_playlists():
@@ -303,3 +315,57 @@ def test_main_exit_status(env):
     with pytest.raises(SystemExit) as exc:
         playlist_shadow.main(["pl"])
     assert exc.value.code == 0
+
+
+# --- No credential in errors or logs --------------------------------------------------------
+
+
+def _leaky(url):
+    """A requests failure whose text quotes the request URL, credentials and all."""
+    return requests.ConnectionError(f"Max retries exceeded with url: {url}?u=u&p={SECRET}&t=0123abcd&s=salt42")
+
+
+def _assert_clean(text):
+    for needle in (SECRET, "p=", "t=", "s="):
+        assert needle not in text, needle
+
+
+def test_a_failed_tracks_read_names_no_url_or_credential():
+    with mock.patch("music_scan.navidrome.requests.get", side_effect=_leaky(f"{URL}/api/playlist/p1/tracks")):
+        with pytest.raises(RuntimeError) as exc:
+            navidrome.playlist_tracks(URL, HEADERS, "p1")
+    _assert_clean(str(exc.value))
+    assert exc.value.__cause__ is None and exc.value.__suppress_context__
+    assert "ConnectionError" in str(exc.value)
+
+
+@pytest.mark.parametrize("failing", ["getScanStatus", "auth/login", "api/playlist", "tracks"])
+def test_a_failed_run_logs_no_url_or_credential(env, monkeypatch, caplog, failing):
+    """The run against the real reads, *failing* raising an error that quotes
+    its URL and credentials: the run fails, and nothing logged quotes them."""
+    for name, fn in REAL_READS.items():
+        monkeypatch.setattr(navidrome, name, fn)
+    monkeypatch.setenv("NAVIDROME_PASSWORD", SECRET)
+    idle = {"subsonic-response": {"status": "ok", "scanStatus": {"scanning": False}}}
+    playlist = [{"id": "imp", "name": "pl", "path": "/music/playlists/pl.m3u", "sync": True}]
+
+    def get(url, **kwargs):
+        if failing in url and (failing != "api/playlist" or url.endswith("api/playlist")):
+            raise _leaky(url)
+        if "getScanStatus" in url:
+            return _resp(idle)
+        if url.endswith("/tracks"):
+            return _resp([], {"X-Total-Count": "0"})
+        return _resp(playlist)
+
+    def post(url, **kwargs):
+        if failing in url:
+            raise _leaky(url)
+        return _resp({"token": "jwt", "isAdmin": True})
+
+    with mock.patch("music_scan.navidrome.requests.get", side_effect=get), \
+            mock.patch("music_scan.navidrome.requests.post", side_effect=post), \
+            caplog.at_level(logging.DEBUG):
+        assert playlist_shadow.run() == 1
+    assert "ConnectionError" in caplog.text
+    _assert_clean(caplog.text)

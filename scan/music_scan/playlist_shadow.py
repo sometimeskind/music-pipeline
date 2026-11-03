@@ -203,7 +203,7 @@ def run(names: list[str] | None = None) -> int:
     nd_music = PurePosixPath(os.environ.get("NAVIDROME_MUSIC_DIR") or navidrome.DEFAULT_MUSIC_DIR)
     music = scan.LIBRARY.parent
     try:
-        if navidrome.scanning(url, user, password):
+        if navidrome.scanning():
             logger.info("[SHADOW] Navidrome is scanning, so its songs are half-updated: skipped, run it again later")
             return 0
         headers = navidrome._login(url, user, password)
@@ -254,7 +254,7 @@ def run(names: list[str] | None = None) -> int:
             clean, differ = clean + shadow.clean, differ + (not shadow.clean)
 
     try:
-        if navidrome.scanning(url, user, password):
+        if navidrome.scanning():
             logger.warning("[SHADOW] Navidrome started scanning during the run: differences may be half-updated "
                            "songs; run it again")
     except RuntimeError as exc:

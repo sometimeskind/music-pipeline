@@ -184,19 +184,10 @@ DEFAULT_MUSIC_DIR = "/music"
 TRACKS_PAGE = 500
 
 
-def scanning(url: str, user: str, password: str) -> bool:
+def scanning() -> bool:
     """Whether Navidrome is scanning (Subsonic ``getScanStatus``): its songs are
     half-updated until it finishes.  Raises RuntimeError when it can't be read."""
-    params = {"u": user, "p": password, "v": "1.8.0", "c": "music-pipeline", "f": "json"}
-    try:
-        resp = requests.get(f"{url}/rest/getScanStatus.view", params=params, timeout=10)
-        resp.raise_for_status()
-        body = resp.json().get("subsonic-response", {})
-    except (requests.RequestException, ValueError) as exc:
-        raise RuntimeError(f"Could not read Navidrome's scan status: {exc}") from exc
-    if body.get("status") != "ok":
-        raise RuntimeError(f"Navidrome's scan status returned non-ok status: {body.get('error') or body}")
-    return bool(body.get("scanStatus", {}).get("scanning"))
+    return bool(subsonic("getScanStatus").get("scanStatus", {}).get("scanning"))
 
 
 def list_playlists(url: str, headers: dict[str, str]) -> list[dict]:
@@ -207,7 +198,7 @@ def list_playlists(url: str, headers: dict[str, str]) -> list[dict]:
         resp.raise_for_status()
         return resp.json()
     except (requests.RequestException, ValueError) as exc:
-        raise RuntimeError(f"Could not list Navidrome playlists: {exc}") from exc
+        raise RuntimeError(f"Could not list Navidrome playlists: {_failure(exc)}") from None
 
 
 def playlist_tracks(url: str, headers: dict[str, str], playlist_id: str, page: int = TRACKS_PAGE) -> list[dict]:
@@ -231,7 +222,7 @@ def playlist_tracks(url: str, headers: dict[str, str], playlist_id: str, page: i
             rows = resp.json()
             count = int(resp.headers.get("X-Total-Count", ""))
         except (requests.RequestException, ValueError) as exc:
-            raise RuntimeError(f"Could not read Navidrome playlist {playlist_id}'s tracks: {exc}") from exc
+            raise RuntimeError(f"Could not read Navidrome playlist {playlist_id}'s tracks: {_failure(exc)}") from None
         if total is not None and count != total:
             raise RuntimeError(f"Navidrome playlist {playlist_id} changed while it was read ({total} → {count} tracks)")
         total = count
