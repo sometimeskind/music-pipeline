@@ -259,6 +259,24 @@ def _set_recording(body: dict, _: Albums) -> dict:
     return {"id": _id(body.get("id"), "id"), "recording": mbid(body.get("recording"), "recording", "recording")}
 
 
+def quarantined_file(value) -> str:
+    """A file in ``quarantine/replaced/``: its path relative to it (``replaced/`` as
+    list_quarantine shows it is dropped), or the item ID its name starts with."""
+    if not isinstance(value, str) or not value.strip():
+        raise BadRequest("file must be a path in quarantine/replaced/ or the item ID its file name starts with")
+    name = value.strip()
+    name = name[len("replaced/"):] if name.startswith("replaced/") else name
+    parts = name.split("/")
+    if not name or len(name) > MAX_TEXT or name.startswith("/") or ".." in parts or "\x00" in name:
+        raise BadRequest("file must be a relative path inside quarantine/replaced/ (at most 500 characters)")
+    return name
+
+
+def _keep_quarantined(body: dict, _: Albums) -> dict:
+    _only(body, "file")
+    return {"file": quarantined_file(body.get("file"))}
+
+
 # ---- search overrides, holds and pins (homelab#2484): music-overrides ----
 
 MAX_TEXT = 500
@@ -526,6 +544,11 @@ TOOLS: dict[str, Tool] = {t.name: t for t in [
     # One item's recording by hand (homelab#2583); the MBID is hex and dashes, never a flag.
     Tool("set_recording", WRITE, _set_recording,
          lambda a, apply: [_apply(["music-mb-fingerprint", "--set-recording", str(a["id"]), a["recording"]], apply)],
+         ("pipeline",)),
+    # One file out of quarantine/replaced/, out of the purge's reach (homelab#2623);
+    # --keep=FILE, so a name starting with "-" stays the option's value.
+    Tool("keep_quarantined", WRITE, _keep_quarantined,
+         lambda a, apply: [_apply(["music-album-audit-releases", f"--keep={a['file']}"], apply)],
          ("pipeline",)),
     Tool("embed_covers", WRITE, _none, lambda a, apply: [_apply(["music-embed-covers"], apply)], ("pipeline",)),
     Tool("canon_albums", WRITE, _canon_albums, _canon_argv, ("pipeline",)),

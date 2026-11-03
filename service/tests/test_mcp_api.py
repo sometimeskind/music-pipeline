@@ -95,7 +95,7 @@ def test_library_status(client):
     body = client.get("/mcp-api/library_status", headers=MCP).json
     assert body["items"] == 3
     assert body["albums"] == {"total": 3, "by_status": {"imported": 1, "wanted": 1, "failed": 1}}
-    assert body["quarantine"] == {"unmatched": 1, "rejected": 1, "replaced": 2}
+    assert body["quarantine"] == {"unmatched": 1, "rejected": 1, "replaced": 2, "keep": 0}
     assert body["playlists"] == ["chill"]
     assert body["jobs"] == {"running": None, "queued": 0, "depth": 5, "long": None}
 
@@ -143,6 +143,36 @@ def test_list_quarantine(client):
     body = client.get("/mcp-api/quarantine?kind=unmatched", headers=MCP).json
     assert [f["path"] for f in body["files"]] == ["Artist/one.m4a"]
     assert client.get("/mcp-api/quarantine?kind=all", headers=MCP).status_code == 400
+
+
+def test_list_quarantine_keep(env, tmp_path):
+    """keep/ (homelab#2623) is its own kind, never unmatched."""
+    kept = tmp_path / "quarantine" / "keep" / "17052-live.m4a"
+    kept.parent.mkdir(parents=True)
+    kept.write_bytes(b"x")
+    client = env["client"]
+    body = client.get("/mcp-api/quarantine?kind=keep", headers=MCP).json
+    assert [f["path"] for f in body["files"]] == ["keep/17052-live.m4a"]
+    body = client.get("/mcp-api/quarantine?kind=unmatched", headers=MCP).json
+    assert [f["path"] for f in body["files"]] == ["Artist/one.m4a"]
+    assert client.get("/mcp-api/library_status", headers=MCP).json["quarantine"]["keep"] == 1
+
+
+@pytest.mark.parametrize("file, expected", [
+    ("17052", "17052"),
+    (" replaced/17052-03-10 - Live.m4a ", "17052-03-10 - Live.m4a"),
+    ("--apply", "--apply"),  # passed as --keep=--apply: never a flag
+])
+def test_keep_quarantined_normalises_the_file(client, env, file, expected):
+    resp = client.post("/mcp-api/run/keep_quarantined", json={"file": file}, headers=WRITE)
+    assert resp.status_code == 200, resp.json
+    assert resp.json["args"] == {"file": expected}
+    assert env["commands"].ran[-1] == ["music-album-audit-releases", f"--keep={expected}"]
+
+
+@pytest.mark.parametrize("file", ["", "../x.m4a", "/etc/passwd", "a/../../b", 7, None, "x" * 501])
+def test_keep_quarantined_refuses_a_path_outside_replaced(client, file):
+    assert client.post("/mcp-api/run/keep_quarantined", json={"file": file}, headers=WRITE).status_code == 400
 
 
 def test_a_locked_library_returns_busy_retry(client, env, monkeypatch):

@@ -43,6 +43,8 @@ CASES = {
     "replace_item": [{"id": 10001, "youtube_url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ"}],
     "unlink_spotify_id": [{"id": 9674, "track": "2o49Twc3qrNMOt8gq9W06L"}],
     "set_recording": [{"id": 4230, "recording": "dd51202e-05ac-4bc9-b597-e117f81c47f8"}],
+    "keep_quarantined": [{"file": "17052"}, {"file": "17052-03-10 - Reason To Believe (Nebraska Live).m4a"},
+                         {"file": "--apply"}],
     "embed_covers": [{}],
     "canon_albums": [{"refresh": False, "search_budget": None, "mb_budget": None},
                      {"refresh": True, "search_budget": 5, "mb_budget": 0}],
