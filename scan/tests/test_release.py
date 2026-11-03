@@ -14,7 +14,7 @@ from music_scan import release
 class FakeItem(dict):
     def __init__(self, id_=1, added=100.0, **fields):
         super().__init__(**fields)
-        self.id, self.added, self.stored = id_, added, 0
+        self.id, self.added, self.stored, self.written = id_, added, 0, 0
 
     def get(self, key, default=None):
         return super().get(key, default)
@@ -27,6 +27,9 @@ class FakeItem(dict):
 
     def store(self):
         self.stored += 1
+
+    def try_write(self):
+        self.written += 1
 
 
 @pytest.fixture
@@ -387,10 +390,34 @@ def test_purge_replaced_deletes_superseded_files_after_the_retention_only(tmp_pa
     assert superseded.exists()
     assert release.purge_replaced(tmp_path, library, 0, now=time.time() + 30 * 86400)["purged"] == 0
     later = time.time() + 15 * 86400
-    assert release.purge_replaced(tmp_path, library, 14, now=later) == {"superseded": 0, "only_copy": 1, "purged": 1}
+    calls: list = []
+    with pytest.MonkeyPatch.context() as m:
+        m.setattr(release.events, "record", lambda kind, message, **kw: calls.append((kind, message, kw)))
+        assert release.purge_replaced(tmp_path, library, 14, now=later) == {"superseded": 0, "only_copy": 1,
+                                                                             "purged": 1}
     assert not superseded.exists() and only.exists()
+    # homelab#2590: each deleted file is a purged event on the item it was (the file name's prefix).
+    (kind, message, kw), = calls
+    assert kind == "purged" and message == f"[PURGE] {superseded}: superseded 14+ days ago, the library holds its recording"
+    assert kw["item_id"] == 1 and kw["data"]["path"] == str(superseded) and kw["data"]["days"] == 14
     assert release.purge_replaced(tmp_path / "absent", library, 14) == {"superseded": 0, "only_copy": 0,
                                                                          "purged": 0}
+
+
+def test_a_copy_deleted_by_hand_is_purged_on_its_album(recorded) -> None:
+    """homelab#2590: --replaced --apply names the album, so album_history shows the deletion."""
+    record = {"artist": "The Hold Steady", "name": "Boys and Girls", "spotify_album_ids": ["BOYS"],
+              "release_group": "6e0a6c2a-2d38-3d3c-9d38-4f0c2b5b7a11"}
+    f = Path("/q/replaced/412-01 - Stuck.m4a")
+    release._purged_event(f, release._Tags(artist="A", title="Stuck", album="B"), "[PURGE] x", "1470", record,
+                          only_copy=True)
+    release._purged_event(Path("/q/replaced/loose.m4a"), None, "[PURGE] y")
+    (_, _, kw), (_, _, bare) = recorded
+    assert kw["item_id"] == 412 and kw["spotify_album_id"] == "BOYS" and kw["release_group"] == record["release_group"]
+    assert kw["data"] == {"path": str(f), "artist": "A", "title": "Stuck", "album": "B", "key": "1470",
+                          "only_copy": True}
+    assert bare["item_id"] is None and bare["spotify_album_id"] is None and bare["data"] == {
+        "path": "/q/replaced/loose.m4a"}
 
 
 def test_a_merge_loser_is_superseded_while_its_keeper_is_in_the_library(tmp_path, ffmpeg) -> None:
@@ -609,6 +636,31 @@ def test_an_extra_left_to_music_audit_dupes_is_recorded_once_a_day(quarantined, 
     assert kind == "local" and message.endswith("left to music-audit-dupes") and kw["once_hours"] == 24
     assert kw["item_id"] == extra.id and kw["data"]["left_to_dupes"] is True
 
+
+def test_extras_one_track_with_no_release_item_are_named_to_each_other(quarantined, recorded) -> None:
+    """Nebraska (homelab#2609): the Expanded Edition's studio My Father's House (17061)
+    took the live take's (17051) recording and ISRC at import, and both stayed extras
+    of the 10-track release, which has its own copy.  Not "the same audio as 0 of the
+    release's items": each event names the other extra and the evidence."""
+    track = _Audio(9044, "My Father's House", length=307.0, album_record="NEB", release="r@1", isrc="USSM18200429",
+                   acoustid_id="aid-studio")
+    live = _Audio(17051, "My Father's House (Nebraska Live)", length=313.85, album_record="NEB", album_extra="1",
+                  isrc="USSM12503412", mb_trackid="live-rec", acoustid_id="aid-live")
+    studio = _Audio(17061, "My Father’s House", length=307.48, album_record="NEB", album_extra="1",
+                    isrc="USSM12503412", mb_trackid="live-rec", acoustid_id="aid-remaster")
+    assert release.retire_held(FakeLib([track, live, studio]), decoder=lambda fp: []) == 0
+    assert not live.removed and not studio.removed and quarantined == []
+    by_item = {kw["item_id"]: (kind, message, kw) for kind, message, kw in recorded}
+    assert set(by_item) == {17051, 17061}
+    kind, message, kw = by_item[17061]
+    assert kind == "local" and kw["once_hours"] == 24
+    assert "0 of the release's items" not in message
+    assert message.startswith("[LOCAL] 17061 ") and "one track with extra(s) 17051 by " in message
+    assert message.endswith("and with none of the release's items; left to music-audit-dupes")
+    data = kw["data"]
+    assert data["extras"] == [17051] and data["release_items"] == [] and data["left_to_dupes"] is True
+    assert "USSM12503412" in data["evidence"] and data["origin"] == "extra, extras only"
+
 def test_mixed_reasons_a_whole_import_with_a_loose_spotdl_copy_is_not_mixed() -> None:
     """Zero 7 Simple Things (#295): imported whole since #279 after a reset by
     hand, plus one spotdl copy another playlist's store also lists, which retire
@@ -795,12 +847,30 @@ def test_claim_fallback_stamps_a_requests_verified_tracks_with_its_key() -> None
     assert not playlist.get("album_record") and not loose.get("album_record")
 
 
-def test_claim_fallback_leaves_an_ambiguous_track_for_the_next_scan(caplog) -> None:
+def test_claim_fallback_leaves_an_ambiguous_track_for_the_next_scan(caplog, recorded) -> None:
     records = {"7": {"origin": "request", "status": "fallback", "album_songs": [{"song_id": "rec-1"}]},
                "8": {"origin": "request", "status": "fallback", "album_songs": [{"song_id": "rec-1"}]}}
     item = FakeItem(1, fallback_recording="rec-1")
     assert release.claim_fallback([item], records) == []
     assert not item.get("album_record") and "[UNCLAIMED]" in caplog.text
+    # homelab#2590: the decision not to stamp is an event too, once a day while it stands.
+    (kind, message, kw), = recorded
+    assert kind == "claimed" and message == "[UNCLAIMED] 1 None: 2 album request(s) hold recording rec-1; not stamped"
+    assert kw["item_id"] == 1 and kw["once_hours"] == 24
+    assert kw["data"]["claimed"] is False and kw["data"]["keys"] == ["7", "8"]
+
+
+def test_a_claimed_fallback_track_is_a_claimed_event_on_its_request(recorded) -> None:
+    """homelab#2590: the stamp names the request's album, so album_history shows the track joining it."""
+    rg = "6e0a6c2a-2d38-3d3c-9d38-4f0c2b5b7a11"
+    records = {"7": {"origin": "request", "status": "fallback", "release_group": rg, "spotify_album_ids": [],
+                     "album_songs": [{"song_id": "rec-1"}]}}
+    item = FakeItem(1, fallback_recording="rec-1", title="One")
+    assert release.claim_fallback([item], records) == [item]
+    (kind, message, kw), = recorded
+    assert kind == "claimed" and message == "[CLAIM] 1 One: album request 7's track (recording rec-1)"
+    assert kw["item_id"] == 1 and kw["release_group"] == rg and kw["spotify_album_id"] is None
+    assert kw["data"]["key"] == "7" and kw["data"]["claimed"] is True and kw["data"]["recording"] == "rec-1"
 
 
 def test_an_album_requests_album_is_never_mixed() -> None:
@@ -919,6 +989,78 @@ def test_list_merged_lists_what_the_scan_retires_and_moves_nothing(quarantined, 
     assert "keep std@1000: 9 item(s)" in caplog.text
     assert "9 → quarantine/replaced/, 3 stay as local-only extras" in caplog.text
     assert "[LOCAL] 110 " in caplog.text and "[RETIRE] 101 " in caplog.text
+
+
+def _gold_rush():
+    """After the Gold Rush (homelab#2601): the 50th anniversary release's track and the
+    2009 remaster's copy share only beets' recording ID; the copy holds the soft
+    playlist's entry by the remaster's Spotify ID and the ISRC."""
+    kept = FakeItem(3809, via="usenet", album_record="153", release="50th@1000", title="After the Gold Rush",
+                    spotify_ids="SP50", isrc="", mb_trackid="rec-agr", length=226.9, sources="keep")
+    copy = FakeItem(16660, via="usenet", album_record="153", release="2009@2000", title="After the Gold Rush",
+                    spotify_ids="SP2009", isrc="USRE10900209", mb_trackid="rec-agr", length=227.4,
+                    sources="soft,fancy")
+    return kept, copy
+
+
+def test_retire_hands_a_copys_ids_to_the_release_item_holding_its_recording(quarantined, recorded) -> None:
+    """homelab#2601: the copy leaves the library, so the item that holds its recording takes
+    the IDs a playlist entry resolves by, as a merge would; the retire event says so."""
+    kept, copy = _gold_rush()
+    record = {"name": "After the Gold Rush", "artist": "Neil Young", "spotify_album_ids": ["GR50"]}
+    assert release.retire(FakeLib([kept, copy]), "153", record, "50th@1000", None, _listed()) == 1
+    assert quarantined == [copy]
+    assert kept["spotify_ids"] == "SP50,SP2009" and kept["isrc"] == "USRE10900209"
+    assert kept["sources"] == "keep,soft,fancy" and kept.stored == 1 and kept.written == 1
+    (kind, message, kw), = recorded
+    assert kind == "retire" and message.endswith("(release 2009@2000); SP2009, USRE10900209 → 3809")
+    assert kw["data"]["ids_to"] == 3809 and kw["data"]["spotify_ids"] == ["SP2009"]
+    assert kw["data"]["isrc"] == ["USRE10900209"]
+
+
+def test_retire_hands_nothing_the_holder_has_or_a_rolled_back_release_has(quarantined, recorded) -> None:
+    kept, copy = _gold_rush()
+    kept["spotify_ids"], kept["isrc"], kept["sources"] = "SP50,SP2009", "USRE10900209", "soft,fancy"
+    record = {"name": "After the Gold Rush", "artist": "Neil Young", "spotify_album_ids": ["GR50"]}
+    assert release.retire(FakeLib([kept, copy]), "153", record, "50th@1000", None, _listed()) == 1
+    assert kept.stored == 0 and kept.written == 0 and "ids_to" not in recorded[0][2]["data"]
+    kept, copy = _gold_rush()
+    assert release.retire(FakeLib([kept, copy]), "153", record, None, "2009@2000", _listed()) == 1
+    assert kept["spotify_ids"] == "SP50" and kept.stored == 0  # a rolled-back release's files are the wrong ones
+
+
+def test_retire_held_hands_a_now_held_extras_ids_over(quarantined, recorded) -> None:
+    kept, copy = _gold_rush()
+    copy[release.EXTRA] = "1"
+    assert release.retire_held(FakeLib([kept, copy]), decoder=lambda fp: []) == 1
+    assert quarantined == [copy] and kept["spotify_ids"] == "SP50,SP2009" and kept["isrc"] == "USRE10900209"
+    assert recorded[0][2]["data"]["ids_to"] == 3809
+
+
+def test_retire_merged_records_which_release_it_keeps_and_why(quarantined, recorded) -> None:
+    """homelab#2601: the [MERGED] decision is a merged_releases event, ahead of its retires."""
+    std, deluxe = _editions()
+    record = _purple(1100, release_group=RG)
+    assert release.retire_merged(FakeLib([*std, *deluxe]), {"1470": record}, _listed()) == 9
+    kind, message, kw = recorded[0]
+    assert kind == "merged_releases" and message.startswith("[MERGED] Prince — Purple Rain (Deluxe) (1470): keeps")
+    assert kw["spotify_album_id"] == "PR" and kw["release_group"] == RG and kw["once_hours"] is None
+    assert kw["data"] == {"key": "1470", "album": "Prince — Purple Rain (Deluxe)", "kept": "std@1000",
+                          "why": "the newest release whose import started by the record's imported_at",
+                          "releases": {"dlx@2000": 12, "std@1000": 9}}
+    assert [k for k, _, _ in recorded[1:]] == ["retire"] * 9 + ["local"] * 3
+    recorded.clear()
+    best = _purple(5000, status="wanted", best_copy={"guid": "std", "release": "std@1000", "missing": 1})
+    release.retire_merged(FakeLib([*std, *deluxe]), {"1470": best}, _listed())
+    assert recorded[0][2]["data"]["why"] == "its best_copy, kept while it waits for a better copy"
+
+
+def test_retire_merged_records_a_record_whose_own_release_nothing_tells_once_a_day(quarantined, recorded) -> None:
+    std, deluxe = _editions()
+    assert release.retire_merged(FakeLib([*std, *deluxe]), {"1470": _purple(500)}, _listed()) == 0
+    (kind, message, kw), = recorded
+    assert kind == "merged_releases" and message.startswith("[MULTI] ") and kw["once_hours"] == 24
+    assert kw["data"]["kept"] is None and kw["data"]["releases"] == {"dlx@2000": 12, "std@1000": 9}
 
 
 def test_own_release_is_the_newest_started_by_imported_at() -> None:

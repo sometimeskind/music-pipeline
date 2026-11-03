@@ -1,27 +1,23 @@
-"""Reject wrong-length and silence-padded spotdl downloads before import (#165).
+"""Check album requests' fallback downloads before import (homelab#2478).
 
 spotdl picks the YouTube source by search, so it sometimes downloads the wrong
 recording: a radio edit, an extended mix, a preview, or an upload padded with
-silence to get past Content ID.  The file still carries Spotify's tags, so beets
-(and certainly the ``--asis`` pass) imports it as the right track.
+silence to get past Content ID.  The file still carries the entry's tags, so
+beets (and certainly the ``--asis`` pass) imports it as the right track.
 
-Before ``beet import``, every spotdl inbox file is checked against its playlist
-entry:
+:func:`check_file` holds the two audio checks (#165):
 
 1. **Duration**: the ``ffprobe`` length must be within ``TOLERANCE`` of the
-   entry's ``duration`` (whole seconds, from the playlist store).
+   expected length (whole seconds).
 2. **Mid-track silence**: no ``silencedetect`` window may start more than
    ``EDGE_SECONDS`` after the beginning and end more than ``EDGE_SECONDS``
    before the end.  Leading and trailing silence (fades, hidden tracks) is fine.
 
-A file with no entry or no duration fails open, with a log line.  Rejected files
-move to ``quarantine/rejected/<playlist>/`` with a ``<file>.reason`` sidecar;
-the asis pass skips that directory, and the nightly holds their URLs back
-(:mod:`music_scan.held`), so spotdl does not download the same wrong video again.
-
-``LENGTH_GUARD``: ``on`` rejects, ``dry-run`` (default) only logs
-``[WOULD-REJECT]``, ``off`` skips the check.  Usenet albums are not checked:
-the whole-release match verifies them.
+Playlist downloads are not checked at import: the length guard that ran these
+checks over the spotdl inbox (``LENGTH_GUARD``) was dropped (homelab#2579), as
+it never ran under the Prefect scan and would have rejected about one in 320
+downloads.  ``music-audit-lengths`` (:mod:`music_scan.audit`) still runs them
+over the library, quarantine and a ``--replace`` download.
 
 An album request's fallback (homelab#2478) is built from MusicBrainz, so
 spotdl found its audio by ISRC or by artist, title and length alone.  Its
@@ -31,11 +27,14 @@ MusicBrainz recording URL): the length and silence checks above against
 MusicBrainz's length, then an AcoustID lookup of its fingerprint.  A file is
 accepted, and moved to ``inbox/spotdl/request/`` for the import, only when
 AcoustID names the track's own recording: two items are one track only when
-an ID agrees, never by title.  Any other answer rejects it, whatever
-``LENGTH_GUARD`` says, for one of two reasons (homelab#2546): AcoustID has no
-MusicBrainz recording for the audio at all (``acoustid-unknown``: a new or
-obscure release AcoustID hasn't linked yet, so the file may well be right), or
-it names other recordings, or ours only below the score (``fingerprint``).  A
+an ID agrees, never by title.  Any other answer rejects it, to
+``quarantine/rejected/request/`` with a ``<file>.reason`` sidecar, where the
+nightly holds its URL back (:mod:`music_scan.held`), so spotdl does not
+download the same wrong video again.  It rejects for one of two reasons
+(homelab#2546): AcoustID has no MusicBrainz recording for the audio at all
+(``acoustid-unknown``: a new or obscure release AcoustID hasn't linked yet, so
+the file may well be right), or it names other recordings, or ours only below
+the score (``fingerprint``).  A
 file that can't be fingerprinted is ``fingerprint`` too.  A lookup that fails
 leaves it for the next scan.  :func:`request_rejects` reads the reasons back
 for ``list_requests``.
@@ -97,11 +96,6 @@ _SILENCE_END = re.compile(r"silence_end:\s*(-?[\d.]+)")
 class Rejection:
     reason: str  # one of REASONS
     detail: str
-
-
-def guard_mode() -> str:
-    mode = os.environ.get("LENGTH_GUARD", "dry-run").strip().lower()
-    return mode if mode in ("on", "dry-run", "off") else "dry-run"
 
 
 def probe_duration(path: Path) -> float | None:
@@ -172,23 +166,6 @@ def read_comment(path: Path) -> str | None:
         return (MP4(str(path)).tags or {}).get("\xa9cmt", [None])[0]
     except Exception:
         return None
-
-
-def expected_durations() -> dict[str, dict[str, int]]:
-    """``{playlist: {spotify_url: duration}}`` from every playlist store (homelab#1914)."""
-    from music_fetch import store  # noqa: PLC0415
-
-    return {name: {s["url"]: s["duration"] for s in songs if s.get("url") and s.get("duration")}
-            for name, songs in store.songs_by_playlist().items()}
-
-
-def _expected(durations: dict[str, dict[str, int]], playlist: str, url: str | None) -> int | None:
-    """The entry's duration: its own playlist first, then any (backfill re-downloads may be missing from it)."""
-    if not url:
-        return None
-    if url in durations.get(playlist, {}):
-        return durations[playlist][url]
-    return next((d[url] for d in durations.values() if url in d), None)
 
 
 def reject(path: Path, rejection: Rejection, inbox: Path, rejected_dir: Path) -> Path:
@@ -482,38 +459,3 @@ def recheck_unknown(rejected_dir: Path, inbox: Path, songs: dict[str, dict] | No
                     "unknown, %d failed lookup(s), %d no longer re-checked (%d+ days)", outcomes["verified"],
                     outcomes["fingerprint"], outcomes[UNKNOWN], outcomes["failed"], outcomes["stopped"], days)
     return outcomes
-
-
-def guard_inbox(inbox: Path, rejected_dir: Path, audio_exts: set[str], mode: str | None = None) -> Counter:
-    """Check every spotdl inbox file; returns the count of files rejected per reason.
-
-    *inbox* is ``inbox/spotdl``: files sit at ``<playlist>/<file>``.  In ``dry-run``
-    nothing moves and the count stays 0.
-    """
-    mode = mode or guard_mode()
-    rejected: Counter = Counter({r: 0 for r in REASONS})
-    if mode == "off" or not inbox.exists():
-        return rejected
-    from music_fetch.album_requests import SOURCE  # noqa: PLC0415
-
-    durations = expected_durations()
-    for f in sorted(inbox.rglob("*")):
-        if not f.is_file() or f.suffix.lower() not in audio_exts:
-            continue
-        playlist = f.relative_to(inbox).parts[0]
-        if playlist == SOURCE:
-            continue  # an album request's fallback: verify_requests checked it
-        expected = _expected(durations, playlist, song_url(f))
-        if expected is None:
-            logger.info("  [GUARD] %s: %s has no Spotify duration; length not checked", playlist, f.name)
-        rejection = check_file(f, expected)
-        if rejection is None:
-            continue
-        if mode == "dry-run":
-            logger.warning("  [WOULD-REJECT] %s: %s — %s: %s", playlist, f.name, rejection.reason, rejection.detail)
-            continue
-        dest = reject(f, rejection, inbox, rejected_dir)
-        rejected[rejection.reason] += 1
-        logger.warning("  [REJECT] %s: %s — %s: %s → %s", playlist, f.name, rejection.reason, rejection.detail, dest)
-        _reject_event(playlist, f, rejection, dest)
-    return rejected

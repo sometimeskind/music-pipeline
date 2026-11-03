@@ -33,6 +33,7 @@ from collections.abc import Iterable, Mapping
 from datetime import datetime, timezone
 from pathlib import Path
 
+from music_fetch import events
 from music_fetch import state as statedb
 
 logger = logging.getLogger(__name__)
@@ -114,14 +115,28 @@ def report(moves: list[Move], records: Mapping[str, dict], orphans: int, verb: s
                     len(moves), len(set(by_album)), verb, orphans)
 
 
-def apply(lib, moves: list[Move]) -> None:
-    """Write *moves* to beets' database (a flexible attribute: no file is touched), in one transaction."""
+def apply(lib, moves: list[Move], records: Mapping[str, dict] | None = None) -> None:
+    """Write *moves* to beets' database (a flexible attribute: no file is touched), in one transaction,
+    then record a ``restamped`` event per album (homelab#2590): *records* names them."""
     if not moves:
         return
     with lib._lib.transaction():
         for m in moves:
             m.item[FIELD] = m.new
             m.item.store()
+    from music_fetch.albums import _release_group  # noqa: PLC0415
+
+    by_album: dict[tuple[str, str], list[int]] = {}
+    for m in moves:
+        by_album.setdefault((m.old, m.new), []).append(m.item.id)
+    for (old, new), ids in by_album.items():
+        record = (records or {}).get(new) or {}
+        events.record("restamped", f"[RESTAMP] {record.get('artist', '?')} — {record.get('name', '?')}: "
+                                   f"{len(ids)} item(s) {old} → {new}",
+                      source="restamp", spotify_album_id=statedb.primary_spotify(record) if record else None,
+                      release_group=_release_group(record),
+                      data={"album": f"{record.get('artist', '?')} — {record.get('name', '?')}", "key": new,
+                            "from": old, "items": ids})
 
 
 def scan_step(lib) -> int:
@@ -137,7 +152,7 @@ def scan_step(lib) -> int:
     records = State.load().albums
     moves, orphans = plan(lib.all_items(), records, gone)
     if moves:
-        apply(lib, moves)
+        apply(lib, moves, records)
         report(moves, records, orphans)
     return len(moves)
 
@@ -190,10 +205,10 @@ def main() -> None:
             # The switch first: a restamp cut short is finished by the next scan (scan_step).
             statedb.put(conn, statedb.ALBUM_KEYS, {"by": "row", "at": datetime.now(timezone.utc).isoformat(
                 timespec="seconds")})
-            apply(lib, moves)
+            apply(lib, moves, rows.albums)
         else:
             # The stamps first: until the switch goes, a scan would move them on to row ids again.
-            apply(lib, moves)
+            apply(lib, moves, rows.albums)
             statedb.delete(conn, statedb.ALBUM_KEYS)
         if not args.verbose:
             report(moves, rows.albums, orphans)

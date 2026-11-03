@@ -280,13 +280,20 @@ def test_outcome_miss_logged_when_no_source_found(tmp_path: Path, caplog, simple
     simple_songs.return_value = [song]
     mock_spotdl = _mock_spotdl([(song, None)], errors=[_lookup_error(song.url)])
 
+    recorded = []
     with mock.patch("music_fetch.spotdl_ops._make_spotdl", return_value=mock_spotdl), \
+         mock.patch("music_fetch.spotdl_ops.events.record",
+                    side_effect=lambda kind, message, **kw: recorded.append((kind, message, kw))), \
          caplog.at_level(logging.INFO, logger="music_fetch.spotdl_ops"):
         _sync(output_dir=output_dir, cookie_file=cookie_file)
 
     assert "[MISS]" in caplog.text
     assert "Three Drums" in caplog.text
     assert "[FAIL]" not in caplog.text
+    # homelab#2590: the backoff is a decision not to try again, recorded as a [FAIL]'s is.
+    (kind, message, kw), = recorded
+    assert kind == "failure" and message.startswith("[MISS] ") and "no source found; backing off" in message
+    assert kw["data"]["kind"] == "miss" and kw["data"]["url"] == song.url and kw["source"] == "spotdl"
 
 
 def test_outcome_fail_logged_when_download_error(tmp_path: Path, caplog, simple_songs) -> None:

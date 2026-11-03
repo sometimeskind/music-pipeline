@@ -1048,7 +1048,7 @@ def test_an_album_records_item_whose_path_is_taken_is_tagged_in_place(tmp_path, 
             canon.canonicalize_items([lib.get_item(track.id)], songs, budget=None, records=records)
         item = lib.get_item(track.id)
         assert (item.album, item.albumartist, item.mb_albumid) == (MC, PUMPKINS, "MB2025")
-        (kind, message, kw), = recorded
+        (kind, message, kw), = [r for r in recorded if r[0] == "clash"]
         assert kind == "clash" and message.startswith(f"[CLASH] {track.id} {stray} →")
         assert kw["item_id"] == track.id and kw["spotify_album_id"] == "MC30" and kw["once_hours"] == 24
         assert kw["data"]["in_place"] is True
@@ -1093,6 +1093,43 @@ def test_a_move_between_spotify_albums_is_a_moved_event(monkeypatch):
     assert kw["spotify_album_id"] == "NEW" and kw["item_id"] == 7
     assert kw["data"]["from"] == {"album": "Old", "spotify_album_id": "OLD"}
     assert kw["data"]["to"] == {"album": "New", "spotify_album_id": "NEW"}
+
+
+def test_a_canon_run_records_one_retagged_event_per_album(monkeypatch):
+    """homelab#2590: about 3,000 items a day on about 300 albums, so one event per album,
+    each item's changed fields in data; a [WAIT] changes no tag and is left out."""
+    from music_scan import canon
+
+    recorded = []
+    monkeypatch.setattr(canon.events, "record", lambda kind, message, **kw: recorded.append((kind, message, kw)))
+
+    class _Item(dict):
+        def __init__(self, id_, **f):
+            super().__init__(**f)
+            self.id = id_
+
+    rel = canon.Release("ALB", "Album", "Artist", "album", "2019-09-17", 2, 1, None, ())
+    other = canon.Release("OTH", "Other", "Artist", "album", "2020-01-01", 1, 1, None, ())
+    tagged = {"albumartist": "Artist", "album": "Album", "album_record": "1470",
+              "mb_releasegroupid": "6e0a6c2a-2d38-3d3c-9d38-4f0c2b5b7a11"}
+    one = canon.Change(_Item(1, **tagged), canon.Placement(rel, 1, 1, True),
+                       {"album": ("Album (Deluxe)", "Album"), canon.CLASH: ("1", None)}, "/l/A/01.m4a", True, True,
+                       "/l/D/01.m4a")
+    two = canon.Change(_Item(2, **tagged), canon.Placement(rel, 2, 1, True), {"mb_album_via": ("url", "files")},
+                       "/l/A/02.m4a", False, False, "/l/A/02.m4a")
+    wait = canon.Change(_Item(3), canon.Placement(other, 1, 1, True), {canon.WAIT: (None, "1")}, "/x", False, False,
+                        "/x")
+    canon._retagged_events([one, two, wait])
+    (kind, message, kw), = recorded
+    assert kind == "retagged"
+    assert message == "[RETAG] Artist — Album: 2 item(s) retagged (album, cover, mb_album_via), 1 moved"
+    assert kw["spotify_album_id"] == "ALB" and kw["release_group"] == tagged["mb_releasegroupid"]
+    assert kw["source"] == "canon" and "item_id" not in kw
+    assert kw["data"]["key"] == "1470" and kw["data"]["album_id"] == "ALB"
+    assert kw["data"]["items"] == [
+        {"id": 1, "path": "/l/A/01.m4a", "from": "/l/D/01.m4a", "changed": {"album": ["Album (Deluxe)", "Album"]},
+         "cover": True},
+        {"id": 2, "path": "/l/A/02.m4a", "changed": {"mb_album_via": ["url", "files"]}, "database_only": True}]
 
 
 def test_an_album_requests_fallback_track_is_named_from_musicbrainz(tmp_path, ffmpeg, lib):

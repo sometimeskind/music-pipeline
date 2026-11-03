@@ -135,6 +135,11 @@ def test_later_lists_albums_in_arrival_order_not_request_order(music_db):
     _held(RG)
     assert _available() == [RG3, RG2, RG]
     with state.connect() as conn:
+        # homelab#2590: one later_available event per album once it is held whole.
+        assert conn.execute("SELECT release_group::text, message FROM events WHERE kind = 'later_available' "
+                            "ORDER BY id").fetchall() == [
+            (RG2, f"[LATER] Band — Second ({RG2}): now held whole, at the end of later.m3u"),
+            (RG, f"[LATER] Band — First ({RG}): now held whole, at the end of later.m3u")]
         rows = state.load_albums(conn)
         assert [k for k, _ in later_queue.albums(conn, rows)] == [
             later_queue.by_group(rows)[g][0] for g in (RG3, RG2, RG)]

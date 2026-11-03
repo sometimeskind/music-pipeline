@@ -29,7 +29,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable, Iterator
 
-from music_fetch import album_requests, albums, later_queue, state, store
+from music_fetch import album_requests, albums, events, later_queue, state, store
 from music_fetch.config import load_playlists
 from music_fetch.metrics import IngestMetrics
 from music_fetch.spotdl_ops import _load_failures, download_fallback, fetch_songs, sync_playlist
@@ -203,6 +203,8 @@ def reconcile_playlists() -> list[str]:
     for name in removed:
         logger.info("==> Playlist removed from config: %s — deleting its store and playlist", name)
         store.remove(name)
+        events.record("state_edited", f"[STATE] store {name} dropped: the playlist left playlists.conf",
+                      source="ingest", data={"what": "store", "playlist": name, "why": "removed from config"})
         (SPOTDL_DIR / f"{name}.nosync").unlink(missing_ok=True)
         (SPOTDL_DIR / f"{name}.album").unlink(missing_ok=True)
         if name != later_queue.PLAYLIST:

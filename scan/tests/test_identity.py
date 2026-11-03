@@ -202,3 +202,28 @@ def test_different_song_reads_titles_without_their_version_notes() -> None:
     # Nothing to compare by: never two songs.
     assert not different_song("恋人", "Koibito")
     assert not different_song("", "Song")
+
+
+def test_version_clash_names_a_version_only_one_side_names() -> None:
+    """homelab#2609: Nebraska '82's live takes against the studio recordings beets chose,
+    and the reverse; a live album's bare titles are covered by its name."""
+    from music_scan.identity import version_clash
+
+    assert version_clash("Reason To Believe (Nebraska Live)", "Reason to Believe", b_notes="version 1b") == ["live"]
+    red_bank = "live, 2025‐04‐22: Hackensack Meridian Health Theatre, Red Bank, NJ, USA"
+    assert version_clash("My Father's House", "My Father’s House", b_notes=red_bank,
+                         a_album="Nebraska '82: Expanded Edition") == ["live"]
+    assert version_clash("My Father's House", "My Father's House (Nebraska Live)") == ["live"]
+    assert version_clash("Oh! Sweet Nuthin'", "Oh! Sweet Nuthin' (5.1 mix)", b_notes="5.1 mix") == ["5.1"]
+    # The same version on both sides, in a title or the notes.
+    assert version_clash("Song (Live)", "Song", b_notes="live, 1975-11-20") == []
+    assert version_clash("Song (Live)", "Song (Live)", b_notes="live, 1975-11-20") == []
+    assert version_clash("Live Forever (Live)", "Live Forever", b_notes="live") == []
+    # A song whose name holds the word, against the same name.
+    assert version_clash("Live Forever", "Live Forever") == []
+    assert version_clash("Take Five", "Take Five") == []
+    # A live album's bare title: its album name covers the recording's "live".
+    assert version_clash("Substitute", "Substitute", b_notes="live, 1970-02-14: Leeds", a_album="Live at Leeds") == []
+    assert version_clash("Substitute", "Substitute", b_notes="live, 1970-02-14: Leeds") == ["live"]
+    # Not a version word: a remaster, a "version 1b".
+    assert version_clash("Song - 2015 Remaster", "Song", b_notes="version 1b") == []

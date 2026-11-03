@@ -854,6 +854,38 @@ def _moved_event(change: Change) -> None:
                         "to": {"album": new_album, "spotify_album_id": new_sid}})
 
 
+def _retagged_events(changes: list[Change]) -> None:
+    """One ``retagged`` event per album a canon run changed items on (homelab#2590):
+    the items, each one's changed fields (old, new) and where a moved file was.
+    Per album, not per item: an import's canon retags about 3,000 items a day on
+    about 300 albums, and the album is the unit.  A ``[WAIT]`` (an ISRC search
+    still to do) changes no tag and is left out; a move between Spotify albums is
+    also a ``moved`` event on its item, which the digest judges."""
+    albums: dict[tuple[str, str], list[Change]] = {}
+    for c in changes:
+        if c.diff.get(WAIT, (None, None))[1]:
+            continue
+        key = str(c.item.get("album_record") or "")
+        albums.setdefault((key, c.placement.release.album_id), []).append(c)
+    for (key, album_id), group in albums.items():
+        first = group[0].item  # tagged: its album and album artist are the new ones
+        fields = sorted({k for c in group for k in c.diff if k not in (WAIT, CLASH)}
+                        | ({"cover"} if any(c.art for c in group) else set()))
+        moved = sum(1 for c in group if c.dest != c.source)
+        events.record(
+            "retagged", f"[RETAG] {first.get('albumartist') or '?'} — {first.get('album') or '?'}: "
+                        f"{len(group)} item(s) retagged ({', '.join(fields)})"
+                        f"{f', {moved} moved' if moved else ''}",
+            source="canon", spotify_album_id=events.spotify_album(album_id),
+            release_group=first.get("mb_releasegroupid"),
+            data={"key": key or None, "album_id": album_id,
+                  "items": [{"id": c.item.id, "path": c.dest, **({"from": c.source} if c.dest != c.source else {}),
+                             "changed": {k: [o, n] for k, (o, n) in c.diff.items() if k not in (WAIT, CLASH)},
+                             **({"cover": True} if c.art else {}),
+                             **({"database_only": True} if not c.write else {})}
+                            for c in group]})
+
+
 def apply_change(change: Change, images: dict[str, bytes | None], fetch: Callable[[str], bytes]) -> bool:
     """Write the new tags (and cover) to the file, move it, store the item.
 
@@ -932,14 +964,17 @@ def canonicalize(
     plan = plan_changes(items, placements, resolver, albums, homes, records)
     phases.lap("plan")
     images: dict[str, bytes | None] = {}
+    done: list[Change] = []
     for change in plan.changes:
         log_change(change, apply)
         if apply:
             try:
                 if apply_change(change, images, fetch):
                     _moved_event(change)
+                    done.append(change)
             except Exception as exc:
                 logger.warning("  [RETAG] %s: failed, retried next run: %s", _path(change.item), exc)
+    _retagged_events(done)
     phases.lap("write")
     if resolver is not None:
         resolver.save()

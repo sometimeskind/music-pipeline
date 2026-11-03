@@ -39,7 +39,8 @@ class ScanMetrics:
     tracks_imported: int = 0
     failure_reason: str = ""
     lossless_items: int | None = None
-    # Downloads the length guard rejected, per reason (#165; guard.REASONS, homelab#2546's acoustid-unknown).
+    # Downloads the pre-import checks rejected, per reason (guard.REASONS: the album request
+    # fallback's length, silence and AcoustID checks, homelab#2546).
     rejected: dict[str, int] = field(default_factory=lambda: {"duration": 0, "silence": 0, "fingerprint": 0,
                                                               "acoustid-unknown": 0})
     # Playlist entries with no library item, per playlist (#228).

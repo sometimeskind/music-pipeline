@@ -70,9 +70,13 @@ def test_successful_scan_logs_info(monkeypatch, caplog):
 
     mock_get.assert_called_once()
     call_kwargs = mock_get.call_args
-    assert call_kwargs[0][0] == "http://navidrome.example.com/rest/startScan.view"
-    assert call_kwargs[1]["params"]["u"] == "admin"
-    assert call_kwargs[1]["params"]["f"] == "json"
+    assert call_kwargs[0][0] == "http://navidrome.example.com/rest/startScan"
+    params = call_kwargs[1]["params"]
+    assert params["u"] == "admin" and params["f"] == "json"
+    # Token auth: no password in the URL, t = md5(password + s).
+    assert "p" not in params and "secret" not in str(params)
+    import hashlib
+    assert params["t"] == hashlib.md5(("secret" + params["s"]).encode()).hexdigest()
     assert "Navidrome library rescan triggered" in caplog.text
 
 
@@ -104,7 +108,7 @@ def test_non_ok_subsonic_status_raises(monkeypatch):
 
     with mock.patch("music_scan.navidrome.requests.get", return_value=mock_resp):
         from music_scan.navidrome import trigger_scan
-        with pytest.raises(RuntimeError, match="non-ok status"):
+        with pytest.raises(RuntimeError, match="returned status 'failed'"):
             trigger_scan()
 
 
@@ -121,6 +125,47 @@ def test_http_error_raises(monkeypatch):
         from music_scan.navidrome import trigger_scan
         with pytest.raises(RuntimeError, match="Failed to trigger Navidrome rescan"):
             trigger_scan()
+
+
+def test_each_subsonic_request_gets_a_fresh_salt(monkeypatch):
+    monkeypatch.setenv("NAVIDROME_URL", "http://navidrome.example.com")
+    monkeypatch.setenv("NAVIDROME_USER", "admin")
+    monkeypatch.setenv("NAVIDROME_PASSWORD", "secret")
+    mock_resp = mock.Mock()
+    mock_resp.json.return_value = _make_subsonic_response("ok")
+    with mock.patch("music_scan.navidrome.requests.get", return_value=mock_resp) as mock_get:
+        from music_scan.navidrome import subsonic
+        subsonic("ping")
+        subsonic("ping")
+    salts = {c[1]["params"]["s"] for c in mock_get.call_args_list}
+    assert len(salts) == 2
+
+
+SECRET_URL = "http://navidrome.example.com/rest/startScan?u=admin&p=secret&t=0123abcd&s=feed"
+
+
+@pytest.mark.parametrize("error", [
+    requests.ConnectionError(f"Max retries exceeded with url: {SECRET_URL}"),
+    requests.HTTPError(f"401 Client Error: Unauthorized for url: {SECRET_URL}",
+                       response=mock.Mock(status_code=401)),
+])
+def test_a_failed_subsonic_request_never_reveals_the_url_or_credentials(monkeypatch, caplog, error):
+    """No error text, log record or chained exception carries the password or the token (homelab#2361)."""
+    import logging
+    monkeypatch.setenv("NAVIDROME_URL", "http://navidrome.example.com")
+    monkeypatch.setenv("NAVIDROME_USER", "admin")
+    monkeypatch.setenv("NAVIDROME_PASSWORD", "secret")
+    from music_scan.navidrome import trigger_scan
+    with mock.patch("music_scan.navidrome.requests.get", side_effect=error), \
+            caplog.at_level(logging.DEBUG), pytest.raises(RuntimeError) as raised:
+        trigger_scan()
+    text = str(raised.value) + caplog.text + "".join(r.getMessage() for r in caplog.records)
+    for leak in ("secret", "p=", "t=", "s=", "http://"):
+        assert leak not in text
+    assert type(error).__name__ in str(raised.value)
+    assert raised.value.__suppress_context__ and raised.value.__cause__ is None
+    if getattr(error, "response", None) is not None:
+        assert "HTTP 401" in str(raised.value)
 
 
 # ---------------------------------------------------------------------------
@@ -190,13 +235,21 @@ def test_sweep_deletes_by_path_and_keeps_a_hand_made_playlist_of_the_same_name(n
         _playlist("handmade", "keep", "", sync=False),
         _playlist("current", "mix", "/music/playlists/mix.m3u"),
     ])
+    from music_scan import navidrome
     from music_scan.navidrome import sweep_playlists
     import logging
-    with nd.patch(), caplog.at_level(logging.INFO, logger="music_scan.navidrome"):
+    recorded = []
+    with nd.patch(), caplog.at_level(logging.INFO, logger="music_scan.navidrome"), \
+         mock.patch.object(navidrome.events, "record",
+                           side_effect=lambda kind, message, **kw: recorded.append((kind, message, kw))):
         assert sweep_playlists(tmp_path, keep={"mix"}) == ["keep"]
     assert nd.deleted == ["imported"]
     assert all(h == {"X-ND-Authorization": "Bearer jwt"} for h in nd.headers)
     assert "deleted playlist keep: imported from /music/playlists/keep.m3u, which is gone" in caplog.text
+    # homelab#2590: the deletion is an event.
+    (kind, message, kw), = recorded
+    assert kind == "playlist_deleted" and message.endswith("imported from /music/playlists/keep.m3u, which is gone")
+    assert kw["data"]["playlist"] == "keep" and kw["data"]["navidrome_id"] == "imported"
 
 
 def test_sweep_leaves_conf_playlists_sync_off_and_files_outside_playlists(navidrome_env, tmp_path):

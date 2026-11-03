@@ -20,10 +20,10 @@ from typing import Callable, Iterator
 
 import psycopg
 
-from music_fetch import later_queue, state, store
+from music_fetch import events, later_queue, state, store
 from music_fetch.album_requests import UNVERIFIED
 from music_scan import playlists
-from music_scan.guard import REASONS, guard_inbox, recheck_unknown, verify_requests
+from music_scan.guard import REASONS, recheck_unknown, verify_requests
 from music_scan.held import album_held, held_urls
 from music_scan.identity import (
     ItemIndex, PlaylistTrack, add_to_list, item_isrcs, item_spotify_ids, same_base_title, spotify_id,
@@ -40,7 +40,8 @@ logger = logging.getLogger(__name__)
 AUDIO_EXTS = {".mp3", ".flac", ".ogg", ".opus", ".m4a", ".aac", ".wav", ".wma", ".aiff", ".ape", ".mpc"}
 SPOTDL_DIR = Path("/root/Music/inbox/spotdl")
 QUARANTINE = Path("/root/Music/quarantine")
-# Files the length guard rejected (#165); never staged for the asis pass.
+# Album request fallback downloads the AcoustID check rejected (homelab#2546),
+# and any the dropped length guard left (#165); never staged for the asis pass.
 REJECTED = QUARANTINE / "rejected"
 PLAYLISTS = Path("/root/Music/playlists")
 INBOX = Path("/root/Music/inbox")
@@ -209,7 +210,7 @@ def _move_asis_eligible(quarantine: Path, staging: Path) -> int:
         # An allow-list, so a new quarantine subtree is skipped until it is
         # known to be safe.  Skipped: album-mode releases (usenet/: verified by
         # the strict match alone, a release beets can't match is blocklisted),
-        # the length guard's rejects (rejected/, #165) and the files
+        # the rejected downloads (rejected/, homelab#2546) and the files
         # music-audit-lengths --replace swapped out (replaced/, #202): both
         # carry the right tags on the wrong audio.
         parts = f.relative_to(quarantine).parts
@@ -317,8 +318,16 @@ def _local_tail(name: str, paths: list[Path], library: ItemIndex) -> list[Path]:
     if dropped:
         playlist.entries = [e for e in playlist.entries if not resolved(e)]
         store.save(playlist, by="regen")
-    logger.info("  [STORE-TAIL] %s: %d local entr%s, %d resolved", name, len(playlist.locals),
-                "y" if len(playlist.locals) == 1 else "ies", len(dropped))
+    message = (f"[STORE-TAIL] {name}: {len(playlist.locals)} local entr{'y' if len(playlist.locals) == 1 else 'ies'}"
+               f", {len(dropped)} resolved")
+    if dropped:
+        logger.info("  %s", message)
+        events.record("state_edited", message, source="scan",
+                      data={"what": "store_tail", "playlist": name,
+                            "items": [e[store.LOCAL].get("id") for e in dropped], "local": len(playlist.locals)})
+    else:
+        # Every playlist, every scan, mostly "0 local entries, 0 resolved" (~3,650 a day): nothing changed.
+        logger.debug("  %s", message)
     out: list[Path] = []
     for entry in playlist.locals:
         if entry.get("id") in by_id and (p := _item_path(by_id[entry["id"]])) not in matched:
@@ -617,7 +626,8 @@ def _release_isrc_match(track: PlaylistTrack, items: list):
     return (have[0] if have else None), False
 
 
-def tag_album_ids(lib: MusicLibrary, source: str, tracks: list[list], since: float, tracks_count: int) -> int:
+def tag_album_ids(lib: MusicLibrary, source: str, tracks: list[list], since: float, tracks_count: int,
+                  key: str | None = None) -> int:
     """Record each album-mode playlist track's Spotify ID on the *source* item it maps to.
 
     Usenet files carry no Spotify IDs (#176).  Per track, first hit wins:
@@ -637,6 +647,8 @@ def tag_album_ids(lib: MusicLibrary, source: str, tracks: list[list], since: flo
     that already holds a track's ID or ISRC would take the match, and the
     release would never get the ID that retires the extra
     (``release.retire_held``).
+    The IDs linked and the tracks left without one (``[AMBIG]``, ``[NUMBER]``)
+    are one ``id_linked`` event for the album record *key* (homelab#2590).
     Returns the count of items tagged.
     """
     from music_scan.release import EXTRA  # noqa: PLC0415
@@ -644,7 +656,8 @@ def tag_album_ids(lib: MusicLibrary, source: str, tracks: list[list], since: flo
     index = ItemIndex(i for i in lib.items_by_source(source) if not i.get(EXTRA))
     imported = [i for i in index.items if i.get("via") == "usenet" and (i.added or 0) >= since]
     fresh = [i for i in imported if tracks_count and i.tracktotal == tracks_count]
-    count = 0
+    linked: list[dict] = []
+    skipped: list[dict] = []
     for track in map(PlaylistTrack.from_entry, tracks):
         if not track.song_id or track.song_id in index.by_id:
             continue
@@ -652,32 +665,44 @@ def tag_album_ids(lib: MusicLibrary, source: str, tracks: list[list], since: flo
         if ambiguous:
             logger.warning("  [AMBIG] %s: %s — %s: several of this release's items carry ISRC %s and none is "
                            "told apart by title or disc/track; no ID", source, track.name, track.artist, track.isrc)
+            skipped.append({"song_id": track.song_id, "title": track.name, "why": "ambiguous isrc",
+                            "isrc": track.isrc})
             continue
         if match is None:
             match, _ = index.match(None, track.isrc, words=False)
+        via = "isrc" if match is not None else None
         if match is None and track.disc and track.track:
             at = next((i for i in fresh if (i.disc, i.track) == (track.disc, track.track)), None)
             if at is not None and same_base_title(track.name, at.title or ""):
-                match = at
+                match, via = at, "number"
             elif at is not None:
                 logger.info("  [NUMBER] %s: %s — %s is at %d-%d, but the item there is %r; no ID by number",
                             source, track.name, track.artist, track.disc, track.track, at.title)
+                skipped.append({"song_id": track.song_id, "title": track.name, "why": "number, other title",
+                                "item_id": at.id, "item_title": at.title, "disc": track.disc, "track": track.track})
         if match is None:
             logger.debug("  [NOID] %s: %s — %s matches no library item", source, track.name, track.artist)
             continue
         add_to_list(match, "spotify_ids", track.song_id)
         match.store()
-        count += 1
-    return count
+        linked.append({"item_id": match.id, "song_id": track.song_id, "via": via})
+    if linked or skipped:
+        message = (f"[IDS] {source}: {len(linked)} Spotify track ID(s) linked to this release's items"
+                   + (f", {len(skipped)} left without one" if skipped else ""))
+        logger.info("  %s", message)
+        events.record("id_linked", message, source="scan", item_id=linked[0]["item_id"] if len(linked) == 1 else None,
+                      data={"key": key, "playlist": source, "linked": linked, "skipped": skipped})
+    return len(linked)
 
 
 
 def check_request_downloads() -> Counter:
     """Check album requests' fallback downloads (homelab#2478), and re-check
     the held ones AcoustID didn't know (homelab#2546), before the import, so
-    what AcoustID confirms imports in this scan.  Both the Prefect scan and
-    :func:`run` call it.  Returns the new rejections per reason; a failure
+    what AcoustID confirms imports in this scan.  A step of
+    :data:`PRE_IMPORT_STEPS`.  Returns the new rejections per reason; a failure
     leaves the files for the next scan."""
+    logger.info("==> Checking album requests' fallback downloads...")
     rejected: Counter = Counter()
     try:
         rejected.update(verify_requests(UNVERIFIED, SPOTDL_DIR, REJECTED, AUDIO_EXTS))
@@ -688,6 +713,18 @@ def check_request_downloads() -> Counter:
     except Exception:
         logger.error("AcoustID re-check of held downloads failed — tried again at the next scan", exc_info=True)
     return rejected
+
+
+# The checks every scan runs on the inbox before the import, in order, as
+# (Prefect task name, function in this module).  :func:`run` and the Prefect
+# scan flow (music_service.flows) both run exactly this list, so a check can't
+# be wired into one path and not the other again: the length guard (#165) ran
+# only in run() while production runs the flow, so it never ran there and was
+# dropped (homelab#2579).  Each step returns the files it rejected per reason
+# and contains its own failures.
+PRE_IMPORT_STEPS: tuple[tuple[str, str], ...] = (
+    ("verify-request-downloads", "check_request_downloads"),
+)
 
 
 def run() -> None:
@@ -701,14 +738,8 @@ def run() -> None:
         quarantined_before = _count_quarantine()
 
         rejected: Counter = Counter()
-        logger.info("==> Checking album requests' fallback downloads...")
-        rejected.update(check_request_downloads())
-
-        logger.info("==> Checking download lengths...")
-        try:
-            rejected.update(guard_inbox(SPOTDL_DIR, REJECTED, AUDIO_EXTS))
-        except Exception:
-            logger.error("Length guard failed — continuing with import", exc_info=True)
+        for _task, function in PRE_IMPORT_STEPS:
+            rejected.update(globals()[function]())
         metrics.rejected = {**dict.fromkeys(REASONS, 0), **rejected}
 
         logger.info("==> Importing from inbox...")
