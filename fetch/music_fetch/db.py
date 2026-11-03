@@ -58,7 +58,7 @@ EVENT_KINDS = (
     "autoreset",
     "fallback",
     "failure",
-    # A download the length guard quarantined.
+    # A download a pre-import check quarantined (the album request fallback's, homelab#2546).
     "reject",
     # A Music MCP job (homelab#2412) ending: tool, mode, caller, status.
     "mcp_job",
