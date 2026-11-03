@@ -3,8 +3,10 @@ imported from ``.m3u`` files the pipeline no longer writes (native API)."""
 
 from __future__ import annotations
 
+import hashlib
 import logging
 import os
+import secrets
 from pathlib import Path, PurePosixPath
 
 import requests
@@ -32,35 +34,62 @@ def _config() -> tuple[str, str, str] | None:
     return url.rstrip("/"), user, password
 
 
-def trigger_scan() -> None:
-    """POST a startScan request to Navidrome if NAVIDROME_URL is configured.
+def _failure(exc: Exception) -> str:
+    """A request failure as its type and HTTP status only: a requests
+    exception's text quotes the request URL, and a Subsonic URL carries the
+    auth token."""
+    status = getattr(getattr(exc, "response", None), "status_code", None)
+    return type(exc).__name__ + (f" (HTTP {status})" if status else "")
 
-    Reads NAVIDROME_URL, NAVIDROME_USER, and NAVIDROME_PASSWORD from the
-    environment. If any are absent, logs a debug message and returns silently —
-    the caller does not need to guard against a missing configuration.
+
+def subsonic(method: str, **params) -> dict:
+    """GET Subsonic API *method* with token auth; return its ``subsonic-response``.
+
+    Raises RuntimeError when NAVIDROME_URL is unset or credentials are missing,
+    or when the request or Navidrome fails.  The password never goes into the
+    URL: each request carries a fresh salt ``s`` and ``t = md5(password + s)``
+    (Subsonic 1.13 token auth).  ``t`` and ``s`` still let anyone holding them
+    replay the request, so no error message, log line or chained exception
+    carries the URL, the parameters or a requests exception's text (which
+    quotes the URL): only *method*, the exception type and the HTTP status.
     """
     config = _config()
     if config is None:
-        return
+        raise RuntimeError("NAVIDROME_URL is unset")
     url, user, password = config
-
-    endpoint = f"{url}/rest/startScan.view"
-    params = {
+    salt = secrets.token_hex(8)
+    query = {
         "u": user,
-        "p": password,
-        "v": "1.8.0",
+        "t": hashlib.md5((password + salt).encode()).hexdigest(),  # noqa: S324 - Subsonic token auth
+        "s": salt,
+        "v": "1.16.1",
         "c": "music-pipeline",
         "f": "json",
+        **params,
     }
     try:
-        resp = requests.get(endpoint, params=params, timeout=10)
+        resp = requests.get(f"{url}/rest/{method}", params=query, timeout=10)
         resp.raise_for_status()
-    except requests.RequestException as exc:
-        raise RuntimeError(f"Failed to trigger Navidrome rescan: {exc}") from exc
-    data = resp.json()
-    status = data.get("subsonic-response", {}).get("status")
-    if status != "ok":
-        raise RuntimeError(f"Navidrome rescan returned non-ok status: {data}")
+        body = resp.json().get("subsonic-response", {})
+    except (requests.RequestException, ValueError) as exc:
+        raise RuntimeError(f"Navidrome {method} failed: {_failure(exc)}") from None
+    if body.get("status") != "ok":
+        error = body.get("error") or {}
+        raise RuntimeError(f"Navidrome {method} returned status {body.get('status')!r}: "
+                           f"error {error.get('code')} {error.get('message', '')}".rstrip())
+    return body
+
+
+def trigger_scan() -> None:
+    """Ask Navidrome to rescan its library (Subsonic ``startScan``) if
+    NAVIDROME_URL is configured; does nothing when it is unset.  Raises
+    RuntimeError when the credentials are missing or the request fails."""
+    if _config() is None:
+        return
+    try:
+        subsonic("startScan")
+    except RuntimeError as exc:
+        raise RuntimeError(f"Failed to trigger Navidrome rescan: {exc}") from None
     logger.info("==> Navidrome library rescan triggered")
 
 
@@ -75,7 +104,7 @@ def _login(url: str, user: str, password: str) -> dict[str, str]:
         resp.raise_for_status()
         body = resp.json()
     except (requests.RequestException, ValueError) as exc:
-        raise RuntimeError(f"Navidrome login failed: {exc}") from exc
+        raise RuntimeError(f"Navidrome login failed: {_failure(exc)}") from None
     if not body.get("token"):
         raise RuntimeError("Navidrome login returned no token")
     if not body.get("isAdmin"):
@@ -117,7 +146,7 @@ def sweep_playlists(playlists_dir: Path, keep: set[str]) -> list[str]:
         resp.raise_for_status()
         playlists = resp.json()
     except (requests.RequestException, ValueError) as exc:
-        raise RuntimeError(f"Could not list Navidrome playlists: {exc}") from exc
+        raise RuntimeError(f"Could not list Navidrome playlists: {_failure(exc)}") from None
 
     deleted = []
     for pls in playlists:
@@ -138,7 +167,7 @@ def sweep_playlists(playlists_dir: Path, keep: set[str]) -> list[str]:
             requests.delete(f"{url}/api/playlist/{pls['id']}", headers=headers, timeout=10).raise_for_status()
         except requests.RequestException as exc:
             logger.error("[NAVIDROME] could not delete playlist %s (imported from %s): %s; the next nightly retries",
-                         name, path, exc)
+                         name, path, _failure(exc))
             continue
         logger.info("[NAVIDROME] deleted playlist %s: imported from %s, which is gone", name, path)
         deleted.append(name)
