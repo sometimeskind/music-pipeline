@@ -23,7 +23,7 @@ import psycopg
 from music_fetch import events, later_queue, state, store
 from music_fetch.album_requests import UNVERIFIED
 from music_scan import playlists
-from music_scan.guard import REASONS, guard_inbox, recheck_unknown, verify_requests
+from music_scan.guard import REASONS, recheck_unknown, verify_requests
 from music_scan.held import album_held, held_urls
 from music_scan.identity import (
     ItemIndex, PlaylistTrack, add_to_list, item_isrcs, item_spotify_ids, same_base_title, spotify_id,
@@ -40,7 +40,8 @@ logger = logging.getLogger(__name__)
 AUDIO_EXTS = {".mp3", ".flac", ".ogg", ".opus", ".m4a", ".aac", ".wav", ".wma", ".aiff", ".ape", ".mpc"}
 SPOTDL_DIR = Path("/root/Music/inbox/spotdl")
 QUARANTINE = Path("/root/Music/quarantine")
-# Files the length guard rejected (#165); never staged for the asis pass.
+# Album request fallback downloads the AcoustID check rejected (homelab#2546),
+# and any the dropped length guard left (#165); never staged for the asis pass.
 REJECTED = QUARANTINE / "rejected"
 PLAYLISTS = Path("/root/Music/playlists")
 INBOX = Path("/root/Music/inbox")
@@ -209,7 +210,7 @@ def _move_asis_eligible(quarantine: Path, staging: Path) -> int:
         # An allow-list, so a new quarantine subtree is skipped until it is
         # known to be safe.  Skipped: album-mode releases (usenet/: verified by
         # the strict match alone, a release beets can't match is blocklisted),
-        # the length guard's rejects (rejected/, #165) and the files
+        # the rejected downloads (rejected/, homelab#2546) and the files
         # music-audit-lengths --replace swapped out (replaced/, #202): both
         # carry the right tags on the wrong audio.
         parts = f.relative_to(quarantine).parts
@@ -698,9 +699,10 @@ def tag_album_ids(lib: MusicLibrary, source: str, tracks: list[list], since: flo
 def check_request_downloads() -> Counter:
     """Check album requests' fallback downloads (homelab#2478), and re-check
     the held ones AcoustID didn't know (homelab#2546), before the import, so
-    what AcoustID confirms imports in this scan.  Both the Prefect scan and
-    :func:`run` call it.  Returns the new rejections per reason; a failure
+    what AcoustID confirms imports in this scan.  A step of
+    :data:`PRE_IMPORT_STEPS`.  Returns the new rejections per reason; a failure
     leaves the files for the next scan."""
+    logger.info("==> Checking album requests' fallback downloads...")
     rejected: Counter = Counter()
     try:
         rejected.update(verify_requests(UNVERIFIED, SPOTDL_DIR, REJECTED, AUDIO_EXTS))
@@ -711,6 +713,18 @@ def check_request_downloads() -> Counter:
     except Exception:
         logger.error("AcoustID re-check of held downloads failed — tried again at the next scan", exc_info=True)
     return rejected
+
+
+# The checks every scan runs on the inbox before the import, in order, as
+# (Prefect task name, function in this module).  :func:`run` and the Prefect
+# scan flow (music_service.flows) both run exactly this list, so a check can't
+# be wired into one path and not the other again: the length guard (#165) ran
+# only in run() while production runs the flow, so it never ran there and was
+# dropped (homelab#2579).  Each step returns the files it rejected per reason
+# and contains its own failures.
+PRE_IMPORT_STEPS: tuple[tuple[str, str], ...] = (
+    ("verify-request-downloads", "check_request_downloads"),
+)
 
 
 def run() -> None:
@@ -724,14 +738,8 @@ def run() -> None:
         quarantined_before = _count_quarantine()
 
         rejected: Counter = Counter()
-        logger.info("==> Checking album requests' fallback downloads...")
-        rejected.update(check_request_downloads())
-
-        logger.info("==> Checking download lengths...")
-        try:
-            rejected.update(guard_inbox(SPOTDL_DIR, REJECTED, AUDIO_EXTS))
-        except Exception:
-            logger.error("Length guard failed — continuing with import", exc_info=True)
+        for _task, function in PRE_IMPORT_STEPS:
+            rejected.update(globals()[function]())
         metrics.rejected = {**dict.fromkeys(REASONS, 0), **rejected}
 
         logger.info("==> Importing from inbox...")

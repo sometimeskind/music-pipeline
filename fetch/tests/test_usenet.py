@@ -71,6 +71,7 @@ def test_matches_the_release_of_a_plus_n_album() -> None:
         ("Artist-Great_Album-EP-WEB-FLAC-2020-GRP", 400 * MB, "Great Album", 10, "single"),
         ("Artist-Great_Album-WEB-FLAC-2020-GRP", 5 * MB, "Great Album", 10, "size"),
         ("Artist-Live_Somewhere-FLAC-2020-GRP", 400 * MB, "Artist", 10, "self-titled"),
+        ("Artist-The_Great_Album_Tour-WEB-FLAC-2020-GRP", 400 * MB, "Great Album", 10, "other release"),
     ],
 )
 def test_rejection_names_the_rule(title: str, size: int, album: str, tracks: int, rule: str) -> None:
@@ -334,7 +335,7 @@ def test_matches_sizes_by_duration_when_known() -> None:
 
 def test_rank_prefers_fewer_leftover_words_within_a_tier() -> None:
     releases = [
-        rel("Artist-Album-Live Edit-WEB-FLAC-2020-GRP", guid="extra", grabs=50),
+        rel("Artist-Album-Club Edit-WEB-FLAC-2020-GRP", guid="extra", grabs=50),
         rel("Artist-Album-WEB-FLAC-2020-GRP", guid="clean", grabs=1),
     ]
     assert [r.guid for r in rank(releases, "Artist", "Album", 10, set())] == ["clean", "extra"]
@@ -526,3 +527,81 @@ def test_repost_name_drops_only_an_indexer_suffix() -> None:
     assert repost_name("Artist-Album-WEB-FLAC-2020") == "artist-album-web-flac-2020"
     assert repost_name("Artist-Album-REPACK-FLAC-PERFECT") != repost_name("Artist-Album-FLAC-PERFECT")
     assert repost_name("Artist-Album-FLAC-PERFECT-1-1") == "artist-album-flac-perfect-1"
+
+
+# ---------------------------------------------------------------------------
+# Another release with the album's name in its title (homelab#2604)
+# ---------------------------------------------------------------------------
+
+BORN_TOUR = "Bruce Springsteen-The Born in the U.S.A. Tour 84-85-16BIT-WEB-FLAC-2024-ENViED"
+
+
+def test_rejects_the_tour_box_set_album_375_took() -> None:
+    """homelab#2604: the live Tour 84-85 box set holds every album word and one
+    leftover ("tour"; the dates and 16BIT are numbers), so it passed as the
+    studio album.  Its size fitted too: 661 MB for a 47-minute album."""
+    tour = rel(BORN_TOUR, size=660_643_844)
+    args = ("Bruce Springsteen", "Born In The U.S.A.", 12)
+    assert leftover(tour, *args[:2]) == ["tour"]
+    why = rejection(tour, *args, album_type="album", seconds=2805)
+    assert why is not None and str(why) == "other release: tour"
+    assert rank([tour], *args, set(), 1984, album_type="album", seconds=2805) == []
+    assert why_none([tour], *args, set(), album_type="album", seconds=2805) == \
+        f'rejected: 1 other release; closest: "{BORN_TOUR}" (other release: tour)'
+
+
+def test_rank_takes_the_studio_album_over_the_tour_box_set() -> None:
+    studio = rel("Bruce_Springsteen-Born_In_The_U.S.A.-CD-FLAC-1984-GRP", guid="studio", grabs=1)
+    tour = rel(BORN_TOUR, guid="tour", grabs=16)
+    ranked = rank([tour, studio], "Bruce Springsteen", "Born In The U.S.A.", 12, set(), 1984, seconds=2805)
+    assert [r.guid for r in ranked] == ["studio"]
+
+
+@pytest.mark.parametrize(
+    "artist, album, title",
+    [
+        ("Bruce Springsteen", "Born In The U.S.A.", "Bruce Springsteen-Born In The U.S.A. Live-WEB-FLAC-2024-GRP"),
+        ("Bruce Springsteen", "Born In The U.S.A.", "Bruce Springsteen-Born In The U.S.A.-Box Set-CD-FLAC-2024-GRP"),
+        ("Artist", "Great Album", "Artist-Great Album Unplugged-WEB-FLAC-2020-GRP"),
+        ("Artist", "Great Album", "Artist-Great Album Remixed-WEB-FLAC-2020-GRP"),
+        ("Artist", "Great Album", "Artist-Great Album-Acoustic-WEB-FLAC-2020-GRP"),
+        ("Artist", "Great Album", "Artist-Great Album In Concert-WEB-FLAC-2020-GRP"),
+        # A prefix of another album's name: Born, inside Born Live.
+        ("Artist", "Born", "Artist-Born Live-WEB-FLAC-2020-GRP"),
+    ],
+)
+def test_rejects_another_release_holding_the_albums_name(artist: str, album: str, title: str) -> None:
+    why = rejection(rel(title), artist, album, 12, album_type="album")
+    assert why is not None and why.rule == "other release"
+
+
+@pytest.mark.parametrize(
+    "artist, album, title",
+    [
+        # Editions of the album, with a year, a format or a remaster tag.
+        ("Bruce Springsteen", "Born In The U.S.A.", "Bruce_Springsteen-Born_In_The_U.S.A.-CD-FLAC-1984-GRP"),
+        ("Bruce Springsteen", "Born In The U.S.A.",
+         "Bruce Springsteen-Born In The U.S.A.-REMASTERED-24BIT-96KHZ-WEB-FLAC-2015-GRP"),
+        ("Bruce Springsteen", "Born In The U.S.A.",
+         "Bruce Springsteen-Born In The U.S.A. (40th Anniversary Edition)-24BIT-WEB-FLAC-2024-GRP"),
+        ("Artist", "Great Album", "Artist-Great Album-Deluxe Expanded Edition-WEB-FLAC-2020-GRP"),
+        # "Tour Edition" is a reissue of the album with bonus tracks.
+        ("Avril Lavigne", "Under My Skin", "Avril Lavigne-Under My Skin-Special Tour Edition-CD-FLAC-2004-GRP"),
+        # The word is the album's own, or the artist's.
+        ("Def Leppard", "Hysteria (Live)", "Def Leppard-Hysteria Live-WEB-FLAC-2020-GRP"),
+        ("Nirvana", "MTV Unplugged In New York", "Nirvana-MTV Unplugged In New York-CD-FLAC-1994-GRP"),
+        ("Live", "Throwing Copper", "Live-Throwing Copper-CD-FLAC-1994-GRP"),
+        ("Artist", "Live", "Artist-Live-WEB-FLAC-2020-GRP"),
+        # Self-titled, the album named again after the artist.
+        ("The Meters", "The Meters", "The_Meters-The_Meters-REMASTERED-CD-FLAC-2001-GRP"),
+    ],
+)
+def test_still_matches_the_album_itself(artist: str, album: str, title: str) -> None:
+    assert rejection(rel(title), artist, album, 12, album_type="album") is None
+
+
+def test_an_override_with_the_word_matches_a_live_album() -> None:
+    """A live album whose Spotify name doesn't say live: its override's words are the album's."""
+    title = "Johnny Cash-At Folsom Prison Live-CD-FLAC-1968-GRP"
+    assert rejection(rel(title), "Johnny Cash", "At Folsom Prison", 16).rule == "other release"
+    assert matches(rel(title), "", "johnny cash at folsom prison live", 16)

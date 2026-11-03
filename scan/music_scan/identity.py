@@ -240,6 +240,40 @@ SAME_SONG_RATIO = 0.8
 space or a changed word in a long title stays well above it (homelab#2544)."""
 
 
+def other_version(title: str, recording_title: str, disambiguation: str) -> bool:
+    """True when *title* names a version (:data:`music_scan.titles.VERSIONS`:
+    5.1, live, demo, alternate, mono, take, outtake) more often than the
+    recording's title and disambiguation together do: ``Oh! Sweet Nuthin' (5.1
+    mix)`` against the stereo recording, never ``Song (Live)`` against a
+    recording whose disambiguation reads "live, 1975-…"."""
+    from music_scan.titles import counts  # noqa: PLC0415
+
+    ours, theirs, notes = counts(title), counts(recording_title), counts(disambiguation)
+    return any(n > theirs[word] + notes[word] for word, n in ours.items())
+
+
+def version_clash(a_title: str, b_title: str, a_notes: str = "", b_notes: str = "", a_album: str = "",
+                  b_album: str = "") -> list[str]:
+    """The versions (:data:`music_scan.titles.VERSIONS`) only one of two
+    tracks names (homelab#2609), in that order: a release file's *Reason To
+    Believe (Nebraska Live)* against the studio recording *Reason to Believe*,
+    or its bare *My Father's House* against a recording whose disambiguation
+    reads "live, 2025-04-22: …".  Each side is a title, its notes (an item's
+    ``trackdisambig``, a recording's disambiguation), which name versions as
+    the title does, and an album name, which only covers one: a live album's
+    tracks are often titled bare.  The rule is
+    :func:`music_scan.titles.differing`'s, applied both ways.
+
+    Two such tracks are two recordings whatever ID they share: beets names a
+    singleton's recording by title, artist and length, so a sibling's ID (and
+    the ISRCs it brings) is a guess that the version word refutes."""
+    from music_scan.titles import VERSIONS, differing  # noqa: PLC0415
+
+    words = {*differing(a_title, a_notes, b_title, f"{b_notes} {b_album}"),
+             *differing(b_title, b_notes, a_title, f"{a_notes} {a_album}")}
+    return [w for w in VERSIONS if w in words]
+
+
 LENGTH_SLACK = 2.0
 """Seconds: two copies of one recording are at most this far apart in length.
 An AcoustID match (:func:`music_scan.dupes.audio_match`) and a shared

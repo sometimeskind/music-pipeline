@@ -91,7 +91,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Callable, Collection, Protocol
 
-from music_fetch import album_requests, events, later_requests, overrides, resolve, store
+from music_fetch import album_requests, events, later_requests, overrides, resolve, store, stranded
 from music_fetch import state as statedb
 from music_fetch.ids import spotify_key
 from music_fetch.metrics import _gauge, _push
@@ -1300,7 +1300,8 @@ def settle_imported(record: dict) -> bool:
 
 
 def fallbacks(state: State, missing: Missing, album_songs: AlbumSongs | None = None,
-              request_songs: RequestSongs | None = None, recordings: Recordings | None = None) -> None:
+              request_songs: RequestSongs | None = None, recordings: Recordings | None = None,
+              album_playlists: Collection[str] | None = None) -> None:
     """Hand missing and failed albums to spotdl, and mark fallback albums the
     library now completes as filled (``on`` only).  An album in fallback is no
     longer searched, but for a request's with gaps, weekly (:func:`_due`).
@@ -1319,7 +1320,12 @@ def fallbacks(state: State, missing: Missing, album_songs: AlbumSongs | None = N
     album and from the same ``TRACKLISTS_PER_TICK``, and its fallback tracks are
     the recordings no item stamped with its key holds (*recordings*).  It is
     ``filled`` once the stamped items hold every one.  Without both hooks it
-    stays missing or failed."""
+    stays missing or failed.
+
+    An album playlist's row that no playlist in *album_playlists* lists any
+    more (:func:`stranded.dead`) never falls back: spotdl reads only the
+    configured playlists, so its tracks would never be fetched (homelab#2602).
+    It stays missing or failed, and :mod:`music_fetch.stranded` settles it."""
     reads = 0
     for key, record in state.albums.items():
         if _request_fallback(record):
@@ -1349,6 +1355,8 @@ def fallbacks(state: State, missing: Missing, album_songs: AlbumSongs | None = N
             continue
         status = record.get("status")
         if status not in (MISSING, FAILED, FALLBACK):
+            continue
+        if album_playlists is not None and stranded.dead(record, album_playlists):
             continue
         if _mb_songs(record):
             # A request's MusicBrainz songs, from before a playlist listed the album: its
@@ -1516,6 +1524,7 @@ def tick(
     request_songs: RequestSongs | None = None,
     recordings: Recordings | None = None,
     later_get: album_requests.Get | None = None,
+    stranded_lookup: stranded.Lookup | None = None,
 ) -> TickResult:
     """One album-mode pass: refresh changed playlists, queue the requested
     albums (:func:`feed_requests`), the albums of the spotdl playlists *want_playlists* (*wants*, :func:`feed_wants`) and the
@@ -1526,7 +1535,9 @@ def tick(
     *request_songs* and *recordings*, ``on`` only).  First, Later's albums
     that aren't held whole and were never requested are requested from
     MusicBrainz by *later_get* (:mod:`music_fetch.later_requests`, ``on``
-    only; ``dry-run`` logs the count)."""
+    only; ``dry-run`` logs the count), and the rows a playlist that left
+    ``playlists.conf`` stranded are settled (:mod:`music_fetch.stranded`:
+    requested by *later_get*, looked up by *stranded_lookup*, or dropped)."""
     settings = settings or Settings.from_env()
     result = TickResult()
     if settings.mode == "off":
@@ -1538,6 +1549,9 @@ def tick(
         fixes = album_fixes(overrides_file)
         # Before the requests are read, so the ones it adds are fed this tick (homelab#2535).
         later_requests.tick(state, later_get, apply=settings.mode == "on")
+        # After Later's (which owns its stranded rows), before the requests are read (homelab#2602).
+        album_playlists = [name for name, _ in playlists]
+        stranded.tick(state, album_playlists, later_get, stranded_lookup, apply=settings.mode == "on")
         requests = album_requests.album_requests()
     except statedb.Unavailable as exc:
         # Never run without the state (homelab#2410): skip, and let
@@ -1551,7 +1565,7 @@ def tick(
     success = False
     try:
         refresh_playlists(state, playlists, spotify, result)
-        feed_requests(state, requests, [name for name, _ in playlists])
+        feed_requests(state, requests, album_playlists)
         if wants is not None:
             # ALBUM_WANT_MIN=0: no playlist is fed, and the waiting wants records go.
             feed_wants(state, (want_playlists or []) if settings.want_min > 0 else [], wants, settings)
@@ -1572,7 +1586,7 @@ def tick(
                 logger.exception("Automatic reimports failed; the next tick tries again")
         top_up(state, settings, prowlarr, sabnzbd, have, result, overrides=search)
         if settings.mode == "on" and missing is not None:
-            fallbacks(state, missing, spotify.album_songs, request_songs, recordings)
+            fallbacks(state, missing, spotify.album_songs, request_songs, recordings, album_playlists)
         success = True
     finally:
         state.save()

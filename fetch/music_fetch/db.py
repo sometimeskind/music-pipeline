@@ -58,7 +58,7 @@ EVENT_KINDS = (
     "autoreset",
     "fallback",
     "failure",
-    # A download the length guard quarantined.
+    # A download a pre-import check quarantined (the album request fallback's, homelab#2546).
     "reject",
     # A Music MCP job (homelab#2412) ending: tool, mode, caller, status.
     "mcp_job",
@@ -119,7 +119,10 @@ EVENT_KINDS = (
     # Migration 18 (homelab#2589): a recording ID filled on a request album's item that had none,
     # the request's track AcoustID names for its audio (the album tick, music_scan.request_fill).
     "recording_filled",
-    # Migration 19 (homelab#2590): the scan's item changes after import: canon's tags
+    # Migration 19 (homelab#2601): which release a record a release-group merge left
+    # holding several keeps, and why (the scan's [MERGED] and [MULTI] lines).
+    "merged_releases",
+    # Migration 20 (homelab#2590): the scan's item changes after import: canon's tags
     # (one event per album a run retagged), an album_record stamp moved to its record's
     # row, a superseded file deleted from quarantine/replaced, an album request's fallback
     # track stamped with its record (or left unstamped), and a release's Spotify track IDs
@@ -129,7 +132,7 @@ EVENT_KINDS = (
     "purged",
     "claimed",
     "id_linked",
-    # Migration 20 (homelab#2590): a Navidrome playlist deleted because its .m3u is gone,
+    # Migration 21 (homelab#2590): a Navidrome playlist deleted because its .m3u is gone,
     # and a Later entry resolved to its album's release group or now held whole.
     "playlist_deleted",
     "later_resolved",
@@ -482,7 +485,7 @@ MIGRATIONS: list[str] = [
         'fallback_deferred', 'reset', 'requeued', 'replaced', 'search_miss', 'status_changed',
         'album_queued', 'album_merged', 'imported', 'retitled', 'recording_set', 'recording_filled'));
     """,
-    # 19: the retagged, restamped, purged, claimed and id_linked kinds (homelab#2590).
+    # 19: the merged_releases kind (homelab#2601).
     """
     ALTER TABLE events DROP CONSTRAINT events_kind_check;
     ALTER TABLE events ADD CONSTRAINT events_kind_check CHECK (kind IN (
@@ -494,9 +497,24 @@ MIGRATIONS: list[str] = [
         'state_edited', 'recording_replaced', 'album_dropped', 'recording_refreshed',
         'fallback_deferred', 'reset', 'requeued', 'replaced', 'search_miss', 'status_changed',
         'album_queued', 'album_merged', 'imported', 'retitled', 'recording_set', 'recording_filled',
+        'merged_releases'));
+    """,
+    # 20: the retagged, restamped, purged, claimed and id_linked kinds (homelab#2590).
+    """
+    ALTER TABLE events DROP CONSTRAINT events_kind_check;
+    ALTER TABLE events ADD CONSTRAINT events_kind_check CHECK (kind IN (
+        'import_done', 'import_wrong', 'import_incomplete', 'import_lost',
+        'retire', 'local', 'merge', 'clash', 'mixed',
+        'grab', 'autoreset', 'fallback', 'failure', 'reject', 'mcp_job',
+        'album_requested', 'later_added', 'later_removed', 'spotify_id_resolved',
+        'filled', 'wrong_version', 'moved', 'override_set', 'override_cleared',
+        'state_edited', 'recording_replaced', 'album_dropped', 'recording_refreshed',
+        'fallback_deferred', 'reset', 'requeued', 'replaced', 'search_miss', 'status_changed',
+        'album_queued', 'album_merged', 'imported', 'retitled', 'recording_set', 'recording_filled',
+        'merged_releases',
         'retagged', 'restamped', 'purged', 'claimed', 'id_linked'));
     """,
-    # 20: the playlist_deleted, later_resolved and later_available kinds (homelab#2590).
+    # 21: the playlist_deleted, later_resolved and later_available kinds (homelab#2590).
     """
     ALTER TABLE events DROP CONSTRAINT events_kind_check;
     ALTER TABLE events ADD CONSTRAINT events_kind_check CHECK (kind IN (
@@ -508,6 +526,7 @@ MIGRATIONS: list[str] = [
         'state_edited', 'recording_replaced', 'album_dropped', 'recording_refreshed',
         'fallback_deferred', 'reset', 'requeued', 'replaced', 'search_miss', 'status_changed',
         'album_queued', 'album_merged', 'imported', 'retitled', 'recording_set', 'recording_filled',
+        'merged_releases',
         'retagged', 'restamped', 'purged', 'claimed', 'id_linked',
         'playlist_deleted', 'later_resolved', 'later_available'));
     """,

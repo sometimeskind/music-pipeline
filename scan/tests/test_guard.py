@@ -1,29 +1,18 @@
-"""Tests for music_scan.guard — the length and silence guard (#165).
+"""Tests for music_scan.guard — the length and silence checks (#165) and the
+album request fallback's AcoustID check (homelab#2546).
 
 Fixtures are generated with ffmpeg's lavfi sources (sine tone and silence).
 """
 
-import json
 from pathlib import Path
 
 import pytest
 
 from music_scan import guard
-from music_scan.guard import Rejection, check_file, guard_inbox, mid_track_silence
+from music_scan.guard import Rejection, check_file, mid_track_silence
 
 AUDIO_EXTS = {".m4a"}
 URL = "https://open.spotify.com/track/abc123"
-
-
-
-def _store(playlist: str, duration: int | None, url: str = URL) -> None:
-    """Write *playlist*'s store with one song (homelab#1914); the ``dirs`` fixture points the stores."""
-    from music_fetch import store
-
-    song = {"url": url, "name": "Song", "artists": ["Artist"]}
-    if duration is not None:
-        song["duration"] = duration
-    store.save(store.Store.from_songs(playlist, [song]))
 
 
 # ---------------------------------------------------------------------------
@@ -66,106 +55,6 @@ def test_mid_track_silence_window_rules() -> None:
     assert mid_track_silence([(50.0, None)], 60) is None  # runs to the end
     assert mid_track_silence([(50.0, 58.0)], 60) is None  # ends within the edge
     assert mid_track_silence([(20.0, 30.0)], 60) == (20.0, 30.0)
-
-
-# ---------------------------------------------------------------------------
-# guard_inbox
-# ---------------------------------------------------------------------------
-
-@pytest.fixture
-def dirs(tmp_path: Path, monkeypatch) -> tuple[Path, Path]:
-    inbox, rejected = tmp_path / "inbox" / "spotdl", tmp_path / "quarantine" / "rejected"
-    (inbox / "wedding").mkdir(parents=True)
-    return inbox, rejected
-
-
-def test_guard_rejects_into_playlist_dir_with_reason(dirs, clip, monkeypatch) -> None:
-    from music_fetch import events
-
-    inbox, rejected = dirs
-    _store("wedding", 30)
-    clip(inbox / "wedding" / "Artist - Song.m4a", ("tone", 20))
-    recorded = []
-    monkeypatch.setattr(events, "record", lambda kind, message, **kw: recorded.append((kind, message, kw)))
-
-    counts = guard_inbox(inbox, rejected, AUDIO_EXTS, mode="on")
-
-    assert counts == {"duration": 1, "silence": 0, "fingerprint": 0, "acoustid-unknown": 0}
-    (kind, message, kw), = recorded
-    assert kind == "reject" and message.startswith("[REJECT] wedding: Artist - Song.m4a — duration: ")
-    assert kw["data"]["playlist"] == "wedding" and kw["data"]["reason"] == "duration"
-    assert not (inbox / "wedding" / "Artist - Song.m4a").exists()
-    moved = rejected / "wedding" / "Artist - Song.m4a"
-    assert moved.exists()
-    assert (rejected / "wedding" / "Artist - Song.m4a.reason").read_text().startswith("duration: expected 30s")
-
-
-def test_guard_dry_run_moves_nothing(dirs, caplog, clip) -> None:
-    inbox, rejected = dirs
-    _store("wedding", 30)
-    clip(inbox / "wedding" / "Artist - Song.m4a", ("tone", 20))
-
-    counts = guard_inbox(inbox, rejected, AUDIO_EXTS, mode="dry-run")
-
-    assert sum(counts.values()) == 0
-    assert (inbox / "wedding" / "Artist - Song.m4a").exists()
-    assert "[WOULD-REJECT]" in caplog.text
-
-
-def test_guard_song_missing_from_snapshot_fails_open(dirs, caplog, clip) -> None:
-    inbox, rejected = dirs
-    _store("wedding", 30, url="https://open.spotify.com/track/other")
-    clip(inbox / "wedding" / "Artist - Song.m4a", ("tone", 20))
-
-    with caplog.at_level("INFO"):
-        counts = guard_inbox(inbox, rejected, AUDIO_EXTS, mode="on")
-
-    assert sum(counts.values()) == 0
-    assert (inbox / "wedding" / "Artist - Song.m4a").exists()
-    assert "no Spotify duration" in caplog.text
-
-
-def test_guard_song_without_duration_fails_open(dirs, clip) -> None:
-    inbox, rejected = dirs
-    _store("wedding", None)
-    clip(inbox / "wedding" / "Artist - Song.m4a", ("tone", 20))
-
-    assert sum(guard_inbox(inbox, rejected, AUDIO_EXTS, mode="on").values()) == 0
-
-
-def test_guard_finds_duration_in_another_playlist(dirs, clip) -> None:
-    """A backfill re-download may sit in a playlist whose store lacks the entry."""
-    inbox, rejected = dirs
-    _store("keep", 30)
-    clip(inbox / "wedding" / "Artist - Song.m4a", ("tone", 20))
-
-    assert guard_inbox(inbox, rejected, AUDIO_EXTS, mode="on")["duration"] == 1
-
-
-def test_expected_durations_read_every_store_never_a_spotdl_file(dirs) -> None:
-    """homelab#1914: durations by playlist from the stores; songs without a URL or a
-    duration are left out, and a ``.spotdl`` snapshot beside them is ignored."""
-    from music_fetch import store
-
-    inbox, _ = dirs
-    store.save(store.Store.from_songs("keep", [{"url": URL, "duration": 30}, {"url": "https://x/2"},
-                                    {"duration": 40}]))
-    _store("wedding", 200, url="https://x/3")
-    (inbox / "old.spotdl").write_text(json.dumps({"songs": [{"url": URL, "duration": 1}]}))
-    assert guard.expected_durations() == {"keep": {URL: 30}, "wedding": {"https://x/3": 200}}
-
-
-def test_guard_off_checks_nothing(dirs, monkeypatch, clip) -> None:
-    inbox, rejected = dirs
-    monkeypatch.setattr(guard, "check_file", lambda *a, **k: pytest.fail("checked with LENGTH_GUARD=off"))
-    clip(inbox / "wedding" / "Artist - Song.m4a", ("tone", 20))
-    guard_inbox(inbox, rejected, AUDIO_EXTS, mode="off")
-
-
-@pytest.mark.parametrize("value,mode", [("on", "on"), ("OFF", "off"), ("", "dry-run"), ("bogus", "dry-run")])
-def test_guard_mode_env(monkeypatch, value, mode) -> None:
-    monkeypatch.setenv("LENGTH_GUARD", value)
-    assert guard.guard_mode() == mode
 
 
 # ---------------------------------------------------------------------------
@@ -386,18 +275,10 @@ def test_request_rejects_reads_each_held_download_by_its_recording(tmp_path, cli
     gone.unlink()  # the operator took it away: the nightly fetches it again
     _held(rejected, clip, "e.m4a", URL, "duration")  # not a recording URL
     (rejected / "chill").mkdir()
-    other_playlist = clip(rejected / "chill" / "f.m4a", ("tone", 1), url=REC_URL)  # the length guard's, not a request's
+    other_playlist = clip(rejected / "chill" / "f.m4a", ("tone", 1), url=REC_URL)  # a playlist reject, not a request's
     other_playlist.with_name("f.m4a.reason").write_text("silence: detail\n", encoding="utf-8")
     assert guard.request_rejects(rejected) == {REC: "acoustid-unknown", OTHER: "fingerprint"}
     assert guard.request_rejects(tmp_path / "nowhere") == {}
-
-
-def test_the_length_guard_leaves_verified_request_files_alone(dirs, clip, monkeypatch) -> None:
-    inbox, rejected = dirs
-    (inbox / "request").mkdir()
-    path = clip(inbox / "request" / "Band - Song.m4a", ("tone", 15), ("silence", 10), ("tone", 15), url=REC_URL)
-    assert sum(guard_inbox(inbox, rejected, AUDIO_EXTS, mode="on").values()) == 0
-    assert path.exists()
 
 
 # ---------------------------------------------------------------------------
