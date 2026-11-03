@@ -361,8 +361,9 @@ def test_scan_pushes_metrics_on_success():
     assert m.lossless_items == 0
 
 
-def test_scan_verifies_request_downloads_and_pushes_their_rejects():
-    """homelab#2546: the Prefect scan checks the request fallback's downloads, as music-scan's run() does."""
+def test_scan_runs_the_pre_import_checks_and_pushes_their_rejects():
+    """homelab#2546, homelab#2579: the Prefect scan runs the pre-import checks (the
+    request fallback's downloads), as music-scan's run() does."""
     from music_service.flows import _run_scan_tasks
     pushed: list = []
 
@@ -373,12 +374,64 @@ def test_scan_verifies_request_downloads_and_pushes_their_rejects():
          patch("music_scan.navidrome.trigger_scan"), \
          patch("music_scan.metrics.ScanMetrics.push", autospec=True, side_effect=pushed.append):
         _scan_mocks(mock_scan, mock_ingest)
-        mock_scan.check_request_downloads.return_value = {"acoustid-unknown": 2, "fingerprint": 1}
+        mock_scan.check_request_downloads.return_value = {"acoustid-unknown": 2, "fingerprint": 1, "duration": 1}
         _run_scan_tasks()
 
     mock_scan.check_request_downloads.assert_called_once_with()
     (m,) = pushed
-    assert m.rejected == {"duration": 0, "silence": 0, "fingerprint": 1, "acoustid-unknown": 2}
+    assert m.rejected == {"duration": 1, "silence": 0, "fingerprint": 1, "acoustid-unknown": 2}
+
+
+class _AtImport(Exception):
+    """Stops a scan path at its import."""
+
+
+def _pre_import_calls(monkeypatch, *run_paths) -> list[list[str]]:
+    """For each scan path, every music_scan.guard function it calls through
+    music_scan.scan before its import, in order."""
+    import music_scan.scan as scan
+
+    calls: list[str] = []
+
+    def recorder(name):
+        def record(*_args, **_kwargs):
+            calls.append(name)
+            return {}
+        return record
+
+    for name, value in list(vars(scan).items()):
+        if callable(value) and getattr(value, "__module__", None) == "music_scan.guard":
+            monkeypatch.setattr(scan, name, recorder(name))
+
+    def at_import(*_args, **_kwargs):
+        calls.append("import")
+        raise _AtImport
+
+    monkeypatch.setattr(scan, "run_inbox_import", at_import)
+    monkeypatch.setattr(scan, "count_lossless_items", lambda: 0)
+    monkeypatch.setattr(scan, "_count_quarantine", lambda: 0)
+    monkeypatch.setattr("music_scan.metrics.ScanMetrics.push", lambda self: None)
+    seen = []
+    for run_path in run_paths:
+        calls.clear()
+        with pytest.raises(_AtImport), patch("music_service.flows.concurrency"):
+            run_path()
+        seen.append(list(calls))
+    return seen
+
+
+def test_scan_flow_and_scan_run_share_their_pre_import_steps(monkeypatch):
+    """homelab#2579: the length guard ran only in scan.run() while production
+    ran the flow, so it never ran there (and was dropped).  Both paths run
+    scan.PRE_IMPORT_STEPS, so they call the same guard functions in the same
+    order before the import; wiring a check into one path only fails here."""
+    import music_scan.scan as scan
+    from music_service.flows import _run_scan_tasks
+
+    from_run, from_flow = _pre_import_calls(monkeypatch, scan.run, _run_scan_tasks)
+
+    assert from_flow == from_run
+    assert from_run == ["verify_requests", "recheck_unknown", "import"]
 
 
 def test_scan_pushes_metrics_on_failure():

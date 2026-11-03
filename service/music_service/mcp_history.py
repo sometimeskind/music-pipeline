@@ -281,7 +281,8 @@ def empty_slots() -> dict:
 
 
 def rejects(quarantine: Path) -> dict:
-    """The length guard's rejects still in ``quarantine/rejected/`` (#165)."""
+    """The rejected downloads still in ``quarantine/rejected/``: the album
+    request fallback's (homelab#2546), and any the dropped length guard left (#165)."""
     return listed([f["path"] for f in mcp_reads.quarantine_files(quarantine, "rejected", None)])
 
 

@@ -1,9 +1,9 @@
 """Downloads the nightly must not fetch again (homelab#1914).
 
 A spotdl download carries its Spotify URL in the ``----:spotdl:WOAS`` tag.
-One sitting in quarantine was rejected (the length guard, a weak
-MusicBrainz match) and is never retried: spotdl would likely pick the same
-wrong video and loop (#165).  One still in a playlist's inbox waits for an
+One sitting in quarantine was rejected (an album request fallback's
+AcoustID check, homelab#2546; a weak MusicBrainz match) and is never retried:
+spotdl would likely pick the same wrong video and loop (#165).  One still in a playlist's inbox waits for an
 import (a MusicBrainz outage, #264).  Either way no library item holds it
 yet, so the playlist store wants it: these URLs are held back.
 

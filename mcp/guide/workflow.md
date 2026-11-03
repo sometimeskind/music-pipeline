@@ -76,8 +76,8 @@ and let the operator run it. In the CLAUDE.md admin form, it is:
 | `music-album-audit-releases --replaced '<artist — album>' --apply --only-copies` | Deletes only copies for good |
 | `music-audit-dupes --apply` | Merges every certain group at once. It can't skip one, and a group can merge two takes that share an ISRC. Prefer `merge_items` for chosen pairs |
 | `music-audit-dupes --merge … --allow-manual --apply` | Drops a manually imported item too |
-| `music-audit-lengths --replace <id> --youtube <url> --force --apply` | Swaps the file in even though the length guard rejects it |
-| `music-audit-lengths --quarantine` | Also runs the length guard over quarantine's files |
+| `music-audit-lengths --replace <id> --youtube <url> --force --apply` | Swaps the file in even though the length or silence check rejects it |
+| `music-audit-lengths --quarantine` | Also runs the length and silence checks over quarantine's files |
 | `music-mb-fingerprint --refresh-replaced [--since <time>] --apply` | Refreshes `title` and `trackdisambig` from the new recording on items the recheck replaced before its apply did that, or whose lookup failed then (homelab#2544). A dry run without `--apply`; never changes `mb_trackid` |
 | `music-rollback-releases --apply` | The legacy cleanup: moves pre-#279 Usenet items that match no playlist entry to `quarantine/replaced/` |
 
