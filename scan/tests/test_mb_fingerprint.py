@@ -65,6 +65,9 @@ class FakeLib:
     def get_item(self, item_id):
         return self.by_id.get(item_id)
 
+    def items(self):
+        return list(self.by_id.values())
+
 
 # MusicBrainz's recordings (homelab#2544): what the apply refreshes title and trackdisambig from.
 RECORDINGS = {
@@ -1044,3 +1047,120 @@ def test_a_set_recording_that_fails_to_store_leaves_no_event(pg_url, monkeypatch
     with contextlib.closing(db.connect()) as conn, pytest.raises(OSError):
         mbf.set_recording_on(FakeLib([item]), 4230, BYE, _recordings(CREDITED), conn)
     assert _events(pg_url) == [] and not item.written
+
+
+# ---------------------------------------------------------------------------
+# --set-recording aligns the ISRC and mb_releasetrackid (homelab#2623)
+# ---------------------------------------------------------------------------
+
+MB_RESPONSES = Path(__file__).resolve().parent / "mb_responses"
+LIVE_TAKE = "4cb4128a-0e58-4b53-a04f-3551c7292f76"  # My Father's House, live 2025-04-22
+STUDIO_2B = "ab727990-c905-4b2d-bcfd-f2f991c2d7ef"
+GOLD_RUSH_STUDIO = "a1d14a11-b6ec-4dd9-a8f8-c58deb43a41f"
+
+
+def _recorded_get(calls=None):
+    """MusicBrainz over the responses recorded for homelab#2623; None (a 404) for any other."""
+    import json
+
+    def get(path, **params):
+        if calls is not None:
+            calls.append(path)
+        kind, key = path.split("/")
+        f = MB_RESPONSES / f"{kind}-{key if kind == 'isrc' else key[:8]}.json"
+        return json.loads(f.read_text()) if f.exists() else None
+    return get
+
+
+def _fathers_house(**data):
+    """Item 17061: the live take's recording and ISRC on the studio file, mb_releasetrackid the recording ID."""
+    return FakeItem(17061, "My Father’s House", **{
+        "mb_trackid": LIVE_TAKE, "mb_releasetrackid": LIVE_TAKE, "isrc": "USSM12503412",
+        "mb_albumid": "ee7b8cb1-a1c6-41a8-8f5c-3bc9dd9b8d21", "disc": 4, "track": 9, "via": "usenet",
+        "artist": "Bruce Springsteen", "length": 307.48, **data})
+
+
+def _studio_lookup():
+    import json
+
+    recording = json.loads((MB_RESPONSES / "recording-ab727990.json").read_text())
+    return lambda recording_id: recording if recording_id == STUDIO_2B else None
+
+
+def _song(name, isrc, song_id="0000000000000000000000"):
+    return {"name": name, "artists": ["Bruce Springsteen"], "isrc": isrc, "song_id": song_id}
+
+
+def test_set_recording_drops_another_recordings_isrc_and_the_stale_release_track(caplog):
+    """17061: the file's ISRC is the live take's on MusicBrainz, the studio take has none, and
+    the recording isn't on the item's (Japanese) release: both fields are cleared."""
+    caplog.set_level("INFO")
+    item = _fathers_house()
+    calls = []
+    assert mbf.set_recording_on(FakeLib([item]), 17061, STUDIO_2B, _studio_lookup(), get=_recorded_get(calls),
+                                songs={"soft": [_song("Reason To Believe", "USSM18200430")]}) is False
+    assert calls == ["isrc/USSM12503412", "release/ee7b8cb1-a1c6-41a8-8f5c-3bc9dd9b8d21"]
+    assert f"[ISRC] USSM12503412 goes: MusicBrainz gives it to {LIVE_TAKE}" in caplog.text
+    assert "[RELEASETRACK] none: the recording isn't on the item's release" in caplog.text
+    assert f"isrc 'USSM12503412' → ''; mb_releasetrackid '{LIVE_TAKE}' → ''" in caplog.text
+    assert item["isrc"] == "USSM12503412" and not item.stored  # a dry run
+
+
+def test_set_recording_refuses_to_empty_a_playlist_slot_held_by_that_isrc():
+    item = _fathers_house()
+    songs = {"soft": [_song("My Father’s House", "USSM12503412")]}
+    with pytest.raises(SystemExit, match=r"would empty the slot of soft: My Father’s House — Bruce Springsteen "
+                                         r"\(ISRC USSM12503412\)"):
+        mbf.set_recording_on(FakeLib([item]), 17061, STUDIO_2B, _studio_lookup(), get=_recorded_get(), songs=songs)
+    # Another item holds the ISRC too, or the entry resolves by its Spotify ID: no slot empties.
+    other = FakeItem(17000, "My Father’s House (live)", isrc="USSM12503412")
+    mbf.set_recording_on(FakeLib([item, other]), 17061, STUDIO_2B, _studio_lookup(), get=_recorded_get(),
+                         songs=songs)
+    held = FakeItem(17001, "Other", spotify_ids="5pKCCKE2ajJHZ9KAiaK11H")
+    mbf.set_recording_on(FakeLib([item, held]), 17061, STUDIO_2B, _studio_lookup(), get=_recorded_get(),
+                         songs={"soft": [_song("My Father’s House", "USSM12503412", "5pKCCKE2ajJHZ9KAiaK11H")]})
+    # Without the playlist stores nothing tells: refused.
+    with pytest.raises(SystemExit, match="playlists couldn't be checked"):
+        mbf.set_recording_on(FakeLib([item]), 17061, STUDIO_2B, _studio_lookup(), get=_recorded_get(), songs=None)
+
+
+def test_set_recording_takes_the_release_track_and_keeps_an_isrc_the_recording_has(caplog):
+    """3809: the studio recording is at disc 1 #2 of the item's release; its ISRC there is kept,
+    and one MusicBrainz doesn't know stays (it may be Spotify's)."""
+    caplog.set_level("INFO")
+    item = FakeItem(3809, "After the Gold Rush", mb_trackid="0ef25c6b-c082-4750-8b02-e27fe7c121a3",
+                    mb_releasetrackid="0ef25c6b-c082-4750-8b02-e27fe7c121a3", isrc="USRE10900209;XX0000000001",
+                    mb_albumid="67101825-7368-4d64-a081-f35e294bde5b", disc=1, track=2, artist="Neil Young",
+                    length=226.89)
+    recording = {"id": GOLD_RUSH_STUDIO, "title": "After the Gold Rush", "disambiguation": "original studio mix",
+                 "isrcs": ["USRE10900209", "USRE10900619", "USRE11700210", "USRE19900251"]}
+    mbf.set_recording_on(FakeLib([item]), 3809, GOLD_RUSH_STUDIO, lambda _: recording, get=_recorded_get(),
+                         songs={})
+    assert "[ISRC] XX0000000001 stays: MusicBrainz knows no recording with it" in caplog.text
+    assert "isrc '" not in caplog.text  # unchanged
+    assert ("mb_releasetrackid '0ef25c6b-c082-4750-8b02-e27fe7c121a3' → "
+            "'d9edc8b8-") in caplog.text
+
+
+def test_set_recording_sets_the_recordings_only_isrc():
+    item = _fathers_house(isrc="")
+    recording = {"id": STUDIO_2B, "title": "My Father’s House", "disambiguation": "", "isrcs": ["USSM18200429"]}
+    changes = mbf._aligned(FakeLib([item]), item, recording, STUDIO_2B, _recorded_get(), {})
+    assert changes["isrc"] == ("", "USSM18200429")
+
+
+@needs_pg
+def test_set_recording_stores_the_aligned_fields_with_its_event(pg_url, monkeypatch):
+    from music_fetch import db
+
+    monkeypatch.delenv("PREFECT_API_URL", raising=False)
+    item = _fathers_house()
+    with contextlib.closing(db.connect()) as conn:
+        assert mbf.set_recording_on(FakeLib([item]), 17061, STUDIO_2B, _studio_lookup(), conn,
+                                    get=_recorded_get(), songs={}) is True
+    assert (item["mb_trackid"], item["isrc"], item["mb_releasetrackid"]) == (STUDIO_2B, "", "")
+    assert item["trackdisambig"] == "version 2b" and item.stored and item.written
+    [(kind, _, _, _, data)] = _events(pg_url)
+    assert kind == "recording_set" and (data["old"], data["new"]) == (LIVE_TAKE, STUDIO_2B)
+    assert data["refreshed"] == {"trackdisambig": ["", "version 2b"], "isrc": ["USSM12503412", ""],
+                                 "mb_releasetrackid": [LIVE_TAKE, ""]}

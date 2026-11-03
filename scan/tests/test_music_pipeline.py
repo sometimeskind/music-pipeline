@@ -1053,6 +1053,46 @@ def test_a_second_fallback_copy_of_a_recording_is_a_duplicate() -> None:
 
 
 # ---------------------------------------------------------------------------
+# clear_singleton_release_track — no recording ID as a release track ID (homelab#2623)
+# ---------------------------------------------------------------------------
+
+
+def test_beets_writes_a_singletons_recording_id_as_its_release_track_id() -> None:
+    """The root cause: a singleton match is a bare recording, and beets' TrackInfo maps
+    ``release_track_id or track_id`` to mb_releasetrackid (13744, 3809, 17061)."""
+    from beets.autotag.hooks import TrackInfo
+
+    item = _file("/x/01 - Song.flac", "Song")
+    item.update(TrackInfo(track_id="rec-1", title="Song").item_data)
+    assert item.mb_trackid == item.mb_releasetrackid == "rec-1"
+    _make_plugin().clear_singleton_release_track(session=MagicMock(), task=_task(item=item))
+    assert (item.mb_trackid, item.mb_releasetrackid) == ("rec-1", "")
+
+
+def test_a_real_release_track_id_and_an_album_task_are_left_alone() -> None:
+    plugin = _make_plugin()
+    item = _file("/x/01 - Song.flac", "Song", mb_trackid="rec-1", mb_releasetrackid="track-1")
+    plugin.clear_singleton_release_track(session=MagicMock(), task=_task(item=item))
+    assert item.mb_releasetrackid == "track-1"
+    other = _file("/x/02 - Other.flac", "Other", mb_trackid="rec-2", mb_releasetrackid="rec-2")
+    plugin.clear_singleton_release_track(session=MagicMock(), task=_task(items=[other]))
+    assert other.mb_releasetrackid == "rec-2"
+
+
+def test_the_release_track_is_cleared_after_the_file_title_is_restored() -> None:
+    """Both run at import_task_apply, in this order: a file's own value restore_file_title
+    puts back is judged too."""
+    from beets.plugins import BeetsPlugin
+
+    calls = []
+    with patch.object(BeetsPlugin, "register_listener", lambda self, event, fn: calls.append((event, fn.__name__))):
+        with patch.object(BeetsPlugin, "__init__", lambda self, name: None):
+            MusicPipelinePlugin()
+    applied = [name for event, name in calls if event == "import_task_apply"]
+    assert applied == ["restore_file_title", "clear_singleton_release_track"]
+
+
+# ---------------------------------------------------------------------------
 # restore_file_title — a Usenet album track keeps its file's title (homelab#2544)
 # ---------------------------------------------------------------------------
 

@@ -42,8 +42,9 @@ MusicBrainz release group, an MBID or musicbrainz.org URL, and taken off Later
 from what the user typed (never search MusicBrainz with a
 title read from the library). An item ID is a
 beets item (an integer: get_item, merge_items pairs, replace_item, unlink_spotify_id,
-set_recording, audit_dupes fingerprint_ids); a recording (set_recording) is a MusicBrainz
-recording MBID or musicbrainz.org/recording URL;
+set_recording, recording_candidates, audit_dupes fingerprint_ids); a recording (set_recording)
+is a MusicBrainz recording MBID or musicbrainz.org/recording URL, which recording_candidates
+lists from the item's release;
 get_album also shows beets album IDs, which no tool takes. A playlist entry resolves to an item
 by Spotify track ID (song_id) or ISRC. replace_item takes a YouTube video ID or URL. A tool run
 that outlasts the inline wait returns a job_id: poll get_job. recheck_recordings is a long job
@@ -298,6 +299,17 @@ def build_server(
         compilation release groups and releases, and bootlegs. Sends the query to MusicBrainz as given."""
         return await run("search_releases", {"query": query, "limit": limit})
 
+    @mcp.tool(annotations={"readOnlyHint": True, "openWorldHint": True})
+    async def recording_candidates(id: ItemId) -> dict:  # noqa: A002 (the contract's name)
+        """music-mb-fingerprint --candidates: the recordings an item could be, read from the release
+        it sits on (its mb_albumid) on MusicBrainz: the one at its disc and track and every other
+        of the same song (version notes dropped), each with MBID, title, disambiguation, length
+        against the file's, ISRCs and positions, the current one marked. When the item's disc
+        layout doesn't fit its release ([VARIANT]), the release group's fitting releases are read
+        too. For a wrong recording AcoustID agrees with (a 5.1 mix, a live take). It never
+        decides: pick one with the user, then set_recording."""
+        return await run("recording_candidates", {"id": id})
+
     @mcp.tool(annotations={"readOnlyHint": True})
     async def audit_dupes(
         fingerprint_ids: Annotated[
@@ -429,10 +441,12 @@ def build_server(
     ) -> dict:
         """music-mb-fingerprint --set-recording: set one item's mb_trackid by hand, when its
         AcoustID fingerprint names a sibling recording (a rough mix, a live take) so
-        recheck_recordings can't fix it. The dry run shows the recording from MusicBrainz beside
-        the item and warns [SUSPECT] when it names another song; the apply records a
-        recording_set event, writes the file's tags, and marks the item so later rechecks leave
-        it alone while it holds that recording."""
+        recheck_recordings can't fix it; recording_candidates lists the recordings to pick from.
+        The dry run shows the recording from MusicBrainz beside the item, warns [SUSPECT] when it
+        names another song, and shows the item's isrc and mb_releasetrackid aligned with the
+        recording; it refuses when dropping an ISRC would empty a playlist slot that resolves to
+        the item by it. The apply records a recording_set event, writes the file's tags, and marks
+        the item so later rechecks leave it alone while it holds that recording."""
         return await run("set_recording", {"id": id, "recording": recording, "apply": apply}, write=True)
 
     @mcp.tool(annotations={"destructiveHint": True})
