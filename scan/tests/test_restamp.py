@@ -108,3 +108,19 @@ def test_apply_writes_beets_database_and_backup_copies_it(tmp_path):
     assert copy.name.startswith("library.db.pre-rekey-")
     with MusicLibrary(copy, tmp_path / "library") as lib:
         assert [i.get("album_record") for i in lib.all_items()] == ["17"]  # taken after the write here
+
+
+def test_a_restamp_is_one_restamped_event_per_album(monkeypatch):
+    """homelab#2590: which items an album's stamps moved, old key to new, on the album it moved to."""
+    recorded = []
+    monkeypatch.setattr(restamp.events, "record", lambda kind, message, **kw: recorded.append((kind, message, kw)))
+    items = [FakeItem(1, album_record="9"), FakeItem(2, album_record="9"), FakeItem(3, album_record="5")]
+    records = _records(by_row=True)
+    moves, _ = restamp.plan(items, records, {"9": ["sp2"], "5": ["local/files"]})
+    restamp.apply(FakeLib(items), moves, records)
+    assert [(k, m) for k, m, _ in recorded] == [("restamped", "[RESTAMP] Artist — Album: 2 item(s) 9 → 17"),
+                                                ("restamped", "[RESTAMP] local — files: 1 item(s) 5 → 18")]
+    kw = recorded[0][2]
+    assert kw["spotify_album_id"] == "sp1" and kw["release_group"] == RG and kw["source"] == "restamp"
+    assert kw["data"] == {"album": "Artist — Album", "key": "17", "from": "9", "items": [1, 2]}
+    assert recorded[1][2]["spotify_album_id"] is None and recorded[1][2]["release_group"] is None

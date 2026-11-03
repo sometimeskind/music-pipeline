@@ -716,6 +716,38 @@ def test_tag_album_ids_a_number_alone_is_not_identity(caplog) -> None:
     assert "[NUMBER]" in caplog.text
 
 
+def test_tag_album_ids_records_one_id_linked_event_per_album(monkeypatch) -> None:
+    """homelab#2590: the IDs linked, by which rung, and the tracks left without one, on the album record."""
+    from music_scan import scan
+
+    recorded = []
+    monkeypatch.setattr(scan.events, "record", lambda kind, message, **kw: recorded.append((kind, message, kw)))
+    a = _lib_item("Uno", isrc="GBUM71029604", track=2)
+    a.id = 11
+    b = _lib_item("Two [Remastered]", track=2)
+    b.id = 12
+    c = _lib_item("Tres", track=3)
+    c.id = 13
+    lib = mock.MagicMock()
+    lib.items_by_source.return_value = [a, b, c]
+    tracks = [["One", "Artist", "sid1", "GBUM71029604", 1, 1], ["Two", "Artist", "sid2", None, 1, 2],
+              ["Three", "Artist", "sid3", None, 1, 3]]
+    a.track = 9  # not at sid1's slot: the ISRC links it
+    assert scan.tag_album_ids(lib, "later", tracks, 50.0, 2, key="1470") == 2
+    (kind, message, kw), = recorded
+    assert kind == "id_linked"
+    assert message == "[IDS] later: 2 Spotify track ID(s) linked to this release's items, 1 left without one"
+    assert kw["item_id"] is None and kw["data"]["key"] == "1470"
+    assert kw["data"]["linked"] == [{"item_id": 11, "song_id": "sid1", "via": "isrc"},
+                                    {"item_id": 12, "song_id": "sid2", "via": "number"}]
+    assert [(s["song_id"], s["why"], s["item_id"]) for s in kw["data"]["skipped"]] == [
+        ("sid3", "number, other title", 13)]
+    # Nothing left to link and nothing skipped: no event.
+    recorded.clear()
+    assert scan.tag_album_ids(lib, "later", tracks[:2], 50.0, 2, key="1470") == 0
+    assert recorded == []
+
+
 def test_tag_album_ids_track_number_needs_same_edition_and_this_import() -> None:
     deluxe = _lib_item("Uno", track=1, tracktotal=18)
     older = _lib_item("Dos", track=1, added=10.0)

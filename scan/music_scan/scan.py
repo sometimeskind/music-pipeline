@@ -20,7 +20,7 @@ from typing import Callable, Iterator
 
 import psycopg
 
-from music_fetch import later_queue, state, store
+from music_fetch import events, later_queue, state, store
 from music_fetch.album_requests import UNVERIFIED
 from music_scan import playlists
 from music_scan.guard import REASONS, guard_inbox, recheck_unknown, verify_requests
@@ -617,7 +617,8 @@ def _release_isrc_match(track: PlaylistTrack, items: list):
     return (have[0] if have else None), False
 
 
-def tag_album_ids(lib: MusicLibrary, source: str, tracks: list[list], since: float, tracks_count: int) -> int:
+def tag_album_ids(lib: MusicLibrary, source: str, tracks: list[list], since: float, tracks_count: int,
+                  key: str | None = None) -> int:
     """Record each album-mode playlist track's Spotify ID on the *source* item it maps to.
 
     Usenet files carry no Spotify IDs (#176).  Per track, first hit wins:
@@ -637,6 +638,8 @@ def tag_album_ids(lib: MusicLibrary, source: str, tracks: list[list], since: flo
     that already holds a track's ID or ISRC would take the match, and the
     release would never get the ID that retires the extra
     (``release.retire_held``).
+    The IDs linked and the tracks left without one (``[AMBIG]``, ``[NUMBER]``)
+    are one ``id_linked`` event for the album record *key* (homelab#2590).
     Returns the count of items tagged.
     """
     from music_scan.release import EXTRA  # noqa: PLC0415
@@ -644,7 +647,8 @@ def tag_album_ids(lib: MusicLibrary, source: str, tracks: list[list], since: flo
     index = ItemIndex(i for i in lib.items_by_source(source) if not i.get(EXTRA))
     imported = [i for i in index.items if i.get("via") == "usenet" and (i.added or 0) >= since]
     fresh = [i for i in imported if tracks_count and i.tracktotal == tracks_count]
-    count = 0
+    linked: list[dict] = []
+    skipped: list[dict] = []
     for track in map(PlaylistTrack.from_entry, tracks):
         if not track.song_id or track.song_id in index.by_id:
             continue
@@ -652,23 +656,34 @@ def tag_album_ids(lib: MusicLibrary, source: str, tracks: list[list], since: flo
         if ambiguous:
             logger.warning("  [AMBIG] %s: %s — %s: several of this release's items carry ISRC %s and none is "
                            "told apart by title or disc/track; no ID", source, track.name, track.artist, track.isrc)
+            skipped.append({"song_id": track.song_id, "title": track.name, "why": "ambiguous isrc",
+                            "isrc": track.isrc})
             continue
         if match is None:
             match, _ = index.match(None, track.isrc, words=False)
+        via = "isrc" if match is not None else None
         if match is None and track.disc and track.track:
             at = next((i for i in fresh if (i.disc, i.track) == (track.disc, track.track)), None)
             if at is not None and same_base_title(track.name, at.title or ""):
-                match = at
+                match, via = at, "number"
             elif at is not None:
                 logger.info("  [NUMBER] %s: %s — %s is at %d-%d, but the item there is %r; no ID by number",
                             source, track.name, track.artist, track.disc, track.track, at.title)
+                skipped.append({"song_id": track.song_id, "title": track.name, "why": "number, other title",
+                                "item_id": at.id, "item_title": at.title, "disc": track.disc, "track": track.track})
         if match is None:
             logger.debug("  [NOID] %s: %s — %s matches no library item", source, track.name, track.artist)
             continue
         add_to_list(match, "spotify_ids", track.song_id)
         match.store()
-        count += 1
-    return count
+        linked.append({"item_id": match.id, "song_id": track.song_id, "via": via})
+    if linked or skipped:
+        message = (f"[IDS] {source}: {len(linked)} Spotify track ID(s) linked to this release's items"
+                   + (f", {len(skipped)} left without one" if skipped else ""))
+        logger.info("  %s", message)
+        events.record("id_linked", message, source="scan", item_id=linked[0]["item_id"] if len(linked) == 1 else None,
+                      data={"key": key, "playlist": source, "linked": linked, "skipped": skipped})
+    return len(linked)
 
 
 

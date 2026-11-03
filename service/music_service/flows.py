@@ -623,7 +623,7 @@ def _album_library_hooks(lib):
         return release.identify(folder)
 
     def tag_ids(playlist: str, tracks: list[list], since: float, tracks_count: int, key: str) -> None:
-        scan.tag_album_ids(lib, playlist, tracks, since, tracks_count)
+        scan.tag_album_ids(lib, playlist, tracks, since, tracks_count, key)
         retire_held()
         canon_albums(playlist, since)
         supersede(playlist, since, tracks_count, tracks, key)

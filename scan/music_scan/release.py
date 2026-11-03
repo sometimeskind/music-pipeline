@@ -248,6 +248,7 @@ def claim_fallback(items, records: dict[str, dict]) -> list:
     tick's ``recordings`` hook counts it.  Returns the stamped items; one no
     record or several claim is logged and left for the next scan."""
     from music_fetch.albums import FALLBACK, REQUEST  # noqa: PLC0415
+    from music_fetch.albums import _release_group as record_group  # noqa: PLC0415
 
     from music_scan.music_pipeline import FALLBACK_RECORDING  # noqa: PLC0415
 
@@ -267,14 +268,23 @@ def claim_fallback(items, records: dict[str, dict]) -> list:
         if len(keys) > 1:
             keys = [k for k in keys if records[k].get("status") == FALLBACK]
         if len(keys) != 1:
-            logger.warning("  [UNCLAIMED] %s %s: %s album request(s) hold recording %s; not stamped",
-                           item.id, item.get("title"), len(keys) or "no", recording)
+            message = (f"[UNCLAIMED] {item.id} {item.get('title')}: {len(keys) or 'no'} album request(s) hold "
+                       f"recording {recording}; not stamped")
+            logger.warning("  %s", message)
+            # Every scan tries it again while it stands: once a day (homelab#2590).
+            events.record("claimed", message, source="release", item_id=item.id,
+                          data={**events.item_fields(item), "recording": recording, "claimed": False,
+                                "keys": keys}, once_hours=24)
             continue
         item["album_record"] = keys[0]
         item.store()
         stamped.append(item)
-        logger.info("  [CLAIM] %s %s: album request %s's track (recording %s)",
-                    item.id, item.get("title"), keys[0], recording)
+        message = f"[CLAIM] {item.id} {item.get('title')}: album request {keys[0]}'s track (recording {recording})"
+        logger.info("  %s", message)
+        record = records[keys[0]]
+        events.record("claimed", message, source="release", item_id=item.id,
+                      spotify_album_id=primary_spotify(record), release_group=record_group(record),
+                      data={**events.item_fields(item), "recording": recording, "claimed": True, "key": keys[0]})
     return stamped
 
 
@@ -821,6 +831,21 @@ def retention_days() -> int:
         return 14
 
 
+def _purged_event(f: Path, tags: _Tags | None, message: str, key: str | None = None,
+                  record: dict | None = None, **data) -> None:
+    """A ``purged`` event for a file deleted from ``quarantine/replaced/`` (homelab#2590), on
+    the item it was (every move there prefixes the item ID) and, from ``--replaced``, its album."""
+    from music_fetch.albums import _release_group as record_group  # noqa: PLC0415
+
+    head, sep, _ = f.name.partition("-")
+    record = record or {}
+    events.record("purged", message, source="release", item_id=int(head) if sep and head.isdigit() else None,
+                  spotify_album_id=primary_spotify(record) if record else None,
+                  release_group=record_group(record) if record else None,
+                  data={"path": str(f), **({k: tags.get(k) for k in ("artist", "title", "album")} if tags else {}),
+                        **({"key": key} if key else {}), **data})
+
+
 def purge_replaced(replaced_dir: Path, library, days: int, now: float | None = None) -> dict[str, int]:
     """Delete the files in *replaced_dir* whose recording *library* (a
     :class:`music_scan.identity.Recordings`) holds and that moved there more
@@ -831,16 +856,20 @@ def purge_replaced(replaced_dir: Path, library, days: int, now: float | None = N
     held, only = split_replaced(audio_files(replaced_dir) if replaced_dir.is_dir() else [], library)
     purged = 0
     for f in held:
+        tags = None
         try:
             due = days > 0 and now - _moved_at(f) > days * 86400
             if due:
+                tags = _album_tags(f)
                 f.unlink()
         except OSError as exc:
             logger.warning("  [PURGE] %s: %s", f, exc)
             continue
         if due:
             purged += 1
-            logger.info("  [PURGE] %s: superseded %d+ days ago, the library holds its recording", f, days)
+            message = f"[PURGE] {f}: superseded {days}+ days ago, the library holds its recording"
+            logger.info("  %s", message)
+            _purged_event(f, tags, message, days=days)
     if purged or only:
         logger.info("quarantine/replaced: deleted %d superseded file(s); %d left, %d only copies kept", purged,
                     len(held) - purged, len(only))
@@ -939,8 +968,13 @@ def audit_main() -> None:
                         "ones (with --only-copies, the only copies too)", len(held) + len(only), REPLACED,
                         len(held), len(only))
             return
+        key, record = hits[0]
         for f in doomed:
+            tags = _album_tags(f)
             f.unlink(missing_ok=True)
+            only_copy = f in only
+            _purged_event(f, tags, f"[PURGE] {f}: {'an only copy' if only_copy else 'superseded'}, deleted by hand "
+                                   f"(music-album-audit-releases --replaced)", key, record, only_copy=only_copy)
         logger.info("Deleted %d file(s)%s", len(doomed),
                     f"; kept {len(only)} only copies (--only-copies deletes them)" if only and not args.only_copies
                     else "")

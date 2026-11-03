@@ -30,7 +30,8 @@ time, plus the library issues standing now. History is kept 90 days, and each al
 `find_events` answers "how often does X happen" and "which albums had Y" across the library:
 give it one or more event kinds (an incomplete import is kind import_incomplete, a search that
 matched nothing search_miss, a grab grab; a spotdl download imported is imported, a Usenet track's title
-put back from its file at import retitled) and a window (`since`, default the last 7 days); `item_id`
+put back from its file at import retitled, canon's tag changes on an album retagged, a superseded
+file deleted purged) and a window (`since`, default the last 7 days); `item_id`
 narrows it to one item's history. Its
 counts are each kind's total over the whole window, so one call answers "how many"; its events,
 newest first and paged, name each album by key for `get_album` or `album_history`. Ask for

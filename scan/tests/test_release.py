@@ -387,10 +387,34 @@ def test_purge_replaced_deletes_superseded_files_after_the_retention_only(tmp_pa
     assert superseded.exists()
     assert release.purge_replaced(tmp_path, library, 0, now=time.time() + 30 * 86400)["purged"] == 0
     later = time.time() + 15 * 86400
-    assert release.purge_replaced(tmp_path, library, 14, now=later) == {"superseded": 0, "only_copy": 1, "purged": 1}
+    calls: list = []
+    with pytest.MonkeyPatch.context() as m:
+        m.setattr(release.events, "record", lambda kind, message, **kw: calls.append((kind, message, kw)))
+        assert release.purge_replaced(tmp_path, library, 14, now=later) == {"superseded": 0, "only_copy": 1,
+                                                                             "purged": 1}
     assert not superseded.exists() and only.exists()
+    # homelab#2590: each deleted file is a purged event on the item it was (the file name's prefix).
+    (kind, message, kw), = calls
+    assert kind == "purged" and message == f"[PURGE] {superseded}: superseded 14+ days ago, the library holds its recording"
+    assert kw["item_id"] == 1 and kw["data"]["path"] == str(superseded) and kw["data"]["days"] == 14
     assert release.purge_replaced(tmp_path / "absent", library, 14) == {"superseded": 0, "only_copy": 0,
                                                                          "purged": 0}
+
+
+def test_a_copy_deleted_by_hand_is_purged_on_its_album(recorded) -> None:
+    """homelab#2590: --replaced --apply names the album, so album_history shows the deletion."""
+    record = {"artist": "The Hold Steady", "name": "Boys and Girls", "spotify_album_ids": ["BOYS"],
+              "release_group": "6e0a6c2a-2d38-3d3c-9d38-4f0c2b5b7a11"}
+    f = Path("/q/replaced/412-01 - Stuck.m4a")
+    release._purged_event(f, release._Tags(artist="A", title="Stuck", album="B"), "[PURGE] x", "1470", record,
+                          only_copy=True)
+    release._purged_event(Path("/q/replaced/loose.m4a"), None, "[PURGE] y")
+    (_, _, kw), (_, _, bare) = recorded
+    assert kw["item_id"] == 412 and kw["spotify_album_id"] == "BOYS" and kw["release_group"] == record["release_group"]
+    assert kw["data"] == {"path": str(f), "artist": "A", "title": "Stuck", "album": "B", "key": "1470",
+                          "only_copy": True}
+    assert bare["item_id"] is None and bare["spotify_album_id"] is None and bare["data"] == {
+        "path": "/q/replaced/loose.m4a"}
 
 
 def test_a_merge_loser_is_superseded_while_its_keeper_is_in_the_library(tmp_path, ffmpeg) -> None:
@@ -795,12 +819,30 @@ def test_claim_fallback_stamps_a_requests_verified_tracks_with_its_key() -> None
     assert not playlist.get("album_record") and not loose.get("album_record")
 
 
-def test_claim_fallback_leaves_an_ambiguous_track_for_the_next_scan(caplog) -> None:
+def test_claim_fallback_leaves_an_ambiguous_track_for_the_next_scan(caplog, recorded) -> None:
     records = {"7": {"origin": "request", "status": "fallback", "album_songs": [{"song_id": "rec-1"}]},
                "8": {"origin": "request", "status": "fallback", "album_songs": [{"song_id": "rec-1"}]}}
     item = FakeItem(1, fallback_recording="rec-1")
     assert release.claim_fallback([item], records) == []
     assert not item.get("album_record") and "[UNCLAIMED]" in caplog.text
+    # homelab#2590: the decision not to stamp is an event too, once a day while it stands.
+    (kind, message, kw), = recorded
+    assert kind == "claimed" and message == "[UNCLAIMED] 1 None: 2 album request(s) hold recording rec-1; not stamped"
+    assert kw["item_id"] == 1 and kw["once_hours"] == 24
+    assert kw["data"]["claimed"] is False and kw["data"]["keys"] == ["7", "8"]
+
+
+def test_a_claimed_fallback_track_is_a_claimed_event_on_its_request(recorded) -> None:
+    """homelab#2590: the stamp names the request's album, so album_history shows the track joining it."""
+    rg = "6e0a6c2a-2d38-3d3c-9d38-4f0c2b5b7a11"
+    records = {"7": {"origin": "request", "status": "fallback", "release_group": rg, "spotify_album_ids": [],
+                     "album_songs": [{"song_id": "rec-1"}]}}
+    item = FakeItem(1, fallback_recording="rec-1", title="One")
+    assert release.claim_fallback([item], records) == [item]
+    (kind, message, kw), = recorded
+    assert kind == "claimed" and message == "[CLAIM] 1 One: album request 7's track (recording rec-1)"
+    assert kw["item_id"] == 1 and kw["release_group"] == rg and kw["spotify_album_id"] is None
+    assert kw["data"]["key"] == "7" and kw["data"]["claimed"] is True and kw["data"]["recording"] == "rec-1"
 
 
 def test_an_album_requests_album_is_never_mixed() -> None:
