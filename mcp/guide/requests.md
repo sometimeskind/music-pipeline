@@ -133,3 +133,15 @@ that has no request yet, at most 5 a tick: `list_requests` shows it with request
 with a ref and no release group is requested once it gets one. An album MusicBrainz gives no
 tracklist for is retried after 7 days (a `failure` event, `[FAIL] Later: …`). Taking an album
 off Later doesn't withdraw its request.
+
+**Rows the cutover stranded** (homelab#2602). An album playlist's record that no playlist in
+`playlists.conf` lists any more (the former `keep` and `later` rows) and that has no request
+gets no spotdl fallback: nothing reads that playlist's tracks. Each album tick settles one
+Usenet missed or failed on. On Later, it stays Later's: a `fallback` one goes back to `missing`
+(searched on Usenet weekly), and it is requested as above once it has a release group. Off
+Later, one with a release group is requested (requested_by `auto:stranded`); one never looked up
+(no items, so no MusicBrainz lookup yet) is looked up by its Spotify album's link, ISRCs and
+barcode, a few a tick, and then requested or dropped; one MusicBrainz has no release group for
+is dropped, its `album_dropped` event saying why, so `request_album` by hand is the way back.
+`find_events` with kinds `album_dropped,album_requested,status_changed` and `source` `stranded`
+lists all of these.

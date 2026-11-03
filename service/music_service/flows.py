@@ -723,7 +723,7 @@ def album_tick_task(settings) -> None:
     import functools  # noqa: PLC0415
 
     import music_fetch.albums as albums  # noqa: PLC0415
-    from music_fetch import album_requests  # noqa: PLC0415
+    from music_fetch import album_requests, stranded  # noqa: PLC0415
     from music_fetch.spotdl_ops import SpotifyPlaylists  # noqa: PLC0415
     from music_fetch.usenet import Prowlarr, Sabnzbd  # noqa: PLC0415
     from music_scan.library import MusicLibrary  # noqa: PLC0415
@@ -758,6 +758,7 @@ def album_tick_task(settings) -> None:
             request_songs=functools.partial(album_requests.release_songs, musicbrainz),
             recordings=_album_request_recordings(lib),
             later_get=musicbrainz,
+            stranded_lookup=stranded.musicbrainz_lookup(musicbrainz),
         )
 
 
