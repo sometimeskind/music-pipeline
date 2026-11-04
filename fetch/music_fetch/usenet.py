@@ -466,6 +466,11 @@ class Sabnzbd:
             raise RuntimeError(f"SABnzbd refused {name}: {data.get('error', data)}")
         return ids[0]
 
+    def delete_failed(self, nzo_id: str) -> None:
+        """Delete a failed job from history, with its files: SABnzbd keeps a
+        failed job's download in its incomplete dir until then (homelab#2631)."""
+        self._api(mode="history", name="delete", value=nzo_id, del_files=1, archive=0)
+
     def finished(self, nzo_ids: list[str]) -> dict[str, dict]:
         """History entries for *nzo_ids* that SABnzbd has finished, by nzo_id.
 

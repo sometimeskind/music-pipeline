@@ -825,6 +825,43 @@ def test_tick_recovers_lost_triggers_only_when_on(tmp_path: Path) -> None:
     assert calls == [("on", "nzo1")]
 
 
+def test_tick_deletes_a_lost_failed_job_once_saved(tmp_path: Path) -> None:
+    """Deleted first, a crash before the save would leave the record grabbed with no
+    history entry to recover it from (homelab#2631)."""
+    state = grabbed_state()
+    state.albums["a0"]["grabbed_at"] = albums._iso(datetime.now(timezone.utc) - timedelta(hours=2))
+    seed(state)
+    prowlarr, sab = fakes()
+    sab.finished.return_value = {"nzo1": {"ok": False, "storage": "", "fail_message": "x"}}
+    calls = []
+    sab.delete_failed.side_effect = lambda nzo_id: calls.append(("delete", nzo_id))
+    save = albums.State.save
+    with patch.object(albums.State, "save", autospec=True,
+                      side_effect=lambda st: (calls.append(("save", None)), save(st))[1]):
+        tick([], FakeSpotify("s", []), prowlarr, sab, never_have, Settings(mode="on"),
+             on_completion=lambda st, c: None)
+    assert calls[-2:] == [("save", None), ("delete", "nzo1")]
+
+
+def test_tick_leaves_a_lost_completed_job_in_sabnzbd(tmp_path: Path) -> None:
+    state = grabbed_state()
+    state.albums["a0"]["grabbed_at"] = albums._iso(datetime.now(timezone.utc) - timedelta(hours=2))
+    seed(state)
+    prowlarr, sab = fakes()
+    sab.finished.return_value = {"nzo1": {"ok": True, "storage": "/downloads/complete/album/A", "fail_message": ""}}
+    tick([], FakeSpotify("s", []), prowlarr, sab, never_have, Settings(mode="on"),
+         on_completion=lambda st, c: None)
+    sab.delete_failed.assert_not_called()
+
+
+def test_forget_failed_outlives_a_sabnzbd_error() -> None:
+    """Only disk space rides on it: the next job is still tried, and nothing is raised."""
+    sab = MagicMock()
+    sab.delete_failed.side_effect = [RuntimeError("down"), None]
+    albums.forget_failed(sab, ["nzo1", "nzo2"])
+    assert [c.args[0] for c in sab.delete_failed.call_args_list] == ["nzo1", "nzo2"]
+
+
 def test_complete_tags_ids_for_every_playlist(roots) -> None:
     tracks = [["One", "Artist", "sid1", None, 1, 1]]
     state = grabbed_state(playlists={"later": tracks, "keep": tracks})

@@ -1542,6 +1542,7 @@ def tick(
     result = TickResult()
     if settings.mode == "off":
         return result
+    failed_jobs: list[str] = []
     try:
         state = State.load()
         # Read with the state: a tick never runs without its overrides and holds (homelab#2484),
@@ -1578,6 +1579,8 @@ def tick(
             for completion in lost_completions(state, sabnzbd):
                 logger.info("Recovering lost import trigger for %s", completion.nzo_id)
                 on_completion(state, completion)
+                if not completion.ok:
+                    failed_jobs.append(completion.nzo_id)
         if mixed is not None:
             try:
                 auto_reimport(state, settings, mixed, holds, result)
@@ -1591,6 +1594,7 @@ def tick(
     finally:
         state.save()
         push_metrics(state, success)
+        forget_failed(sabnzbd, failed_jobs)
     counts = status_counts(state)
     logger.info(
         "Album tick (%s) in %.0fs: %d searched, %d grabbed, %d reset for a reimport; albums %s; "
@@ -1975,6 +1979,18 @@ def _save_import(save: Callable[[], None] | None, label: str) -> None:
         save()
     except Exception:
         logger.exception("[IMPT] %s: saving the import's start failed; a restart before it ends loses it", label)
+
+
+def forget_failed(sabnzbd, nzo_ids: list[str]) -> None:
+    """Delete failed jobs and their files from SABnzbd (homelab#2631).  Call it
+    once their outcome is saved: lost_completions recovers a job from its
+    history entry.  Only disk space rides on it, so an error is logged, never
+    raised, and that job's files stay until the operator clears them."""
+    for nzo_id in nzo_ids:
+        try:
+            sabnzbd.delete_failed(nzo_id)
+        except Exception:
+            logger.exception("Deleting failed job %s from SABnzbd failed; its files stay in incomplete/", nzo_id)
 
 
 def lost_completions(state: State, sabnzbd, now: datetime | None = None) -> list[Completion]:

@@ -231,6 +231,18 @@ def test_sabnzbd_finished_keeps_completed_and_failed() -> None:
     assert get.call_args.kwargs["params"]["nzo_ids"] == "a,b,c"
 
 
+def test_sabnzbd_delete_failed_takes_the_job_and_its_files() -> None:
+    """SABnzbd keeps a failed job's download until the job goes with del_files (homelab#2631)."""
+    resp = MagicMock()
+    resp.json.return_value = {"status": True}
+    with patch("music_fetch.usenet.requests.get", return_value=resp) as get:
+        Sabnzbd(url="http://s", api_key="k").delete_failed("a")
+    params = get.call_args.kwargs["params"]
+    assert {k: params[k] for k in ("mode", "name", "value", "del_files", "archive")} == {
+        "mode": "history", "name": "delete", "value": "a", "del_files": 1, "archive": 0,
+    }
+
+
 def test_sabnzbd_finished_empty_makes_no_call() -> None:
     with patch("music_fetch.usenet.requests.get") as get:
         assert Sabnzbd(url="http://s", api_key="k").finished([]) == {}
