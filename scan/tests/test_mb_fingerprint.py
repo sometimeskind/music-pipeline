@@ -1158,7 +1158,7 @@ def test_set_recording_stores_the_aligned_fields_with_its_event(pg_url, monkeypa
     from music_fetch import db
 
     monkeypatch.delenv("PREFECT_API_URL", raising=False)
-    item = _fathers_house()
+    item = _fathers_house(mb_artistids=[BOSS])
     with contextlib.closing(db.connect()) as conn:
         assert mbf.set_recording_on(FakeLib([item]), 17061, STUDIO_2B, _studio_lookup(), conn,
                                     get=_recorded_get(), songs={}) is True
