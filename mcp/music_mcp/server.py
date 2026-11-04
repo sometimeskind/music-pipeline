@@ -366,6 +366,14 @@ def build_server(
         return await run("audit_artists", {})
 
     @mcp.tool(annotations={"readOnlyHint": True})
+    async def audit_grabs() -> dict:
+        """music-audit-grabs: albums held from a release whose title the album-name check refuses (the
+        album's words found only in the artist's name), each with its fix, and the count. Records with
+        no stored title or matched on an override are counted, not listed. A listed album may be right:
+        check its tracks. The fix is the album's: reset_album with reimport=true."""
+        return await run("audit_grabs", {})
+
+    @mcp.tool(annotations={"readOnlyHint": True})
     async def recheck_recordings(
         ids: Annotated[list[ItemId] | None, Field(description="only these item IDs (default: every item with "
                                                               "an mb_trackid)")] = None,

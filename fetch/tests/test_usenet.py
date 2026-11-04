@@ -632,3 +632,90 @@ def test_an_override_with_the_word_matches_a_live_album() -> None:
     title = "Johnny Cash-At Folsom Prison Live-CD-FLAC-1968-GRP"
     assert rejection(rel(title), "Johnny Cash", "At Folsom Prison", 16).rule == "other release"
     assert matches(rel(title), "", "johnny cash at folsom prison live", 16)
+
+
+# ---------------------------------------------------------------------------
+# Album words that are only the artist's name (homelab#2656)
+# ---------------------------------------------------------------------------
+
+CURTIS = ("Curtis Mayfield", "Curtis Live! (US Release)")
+GETZ = ("Stan Getz", "Getz/Gilberto (Expanded Edition)")
+CURTIS_EUROPE = "Curtis Mayfield-Live In Europe-CD-FLAC-1988-CALiFLAC"
+STARPORTRAIT = "Stan Getz Astrud Gilberto-Starportrait-(2622002)-2LP-FLAC-1978-BITOCUL"
+
+
+@pytest.mark.parametrize(
+    "album, title, size, seconds, detail",
+    [
+        (CURTIS, CURTIS_EUROPE, 446957643, 5274, "curtis, beside in europe"),
+        (GETZ, STARPORTRAIT, 1568021378, 3807, "getz, beside astrud starportrait"),
+        (GETZ, "Stan.Getz.Astrud.Gilberto-Starportrait-2622002-2LP-FLAC-1978-BITOCUL", 1573610976, 3807,
+         "getz, beside astrud starportrait"),
+    ],
+)
+def test_rejects_the_releases_albums_670_and_1583_took(album, title, size, seconds, detail) -> None:
+    """homelab#2656: the title holds every album word only because the artist's
+    name is one of them, so another album by the artist passed."""
+    why = rejection(rel(title, size=size), *album, 18, album_type="album", seconds=seconds)
+    assert why is not None and why.rule == "artist words" and why.detail == detail
+    assert rank([rel(title, size=size)], *album, 18, set(), album_type="album", seconds=seconds) == []
+
+
+@pytest.mark.parametrize(
+    "artist, album, title, detail",
+    [
+        # Replayed from real grabs: each is another album by the artist.
+        ("Harry Nilsson", "Nilsson Schmilsson", "Harry Nilsson - Son of Schmilsson - NMR", "nilsson, beside son nmr"),
+        ("Faust", "Faust IV", "Faust-Momentaufnahme IV-WEB-2024-ENRiCH", "faust, beside momentaufnahme"),
+        ("Aretha Franklin", "The Very Best of Aretha Franklin - The 70's",
+         "Aretha Franklin - Respect (The Very Best Of) (2CD)", "aretha franklin, beside respect"),
+    ],
+)
+def test_rejects_another_album_by_the_artist(artist: str, album: str, title: str, detail: str) -> None:
+    why = rejection(rel(title), artist, album, 12, album_type="album")
+    assert why is not None and why.rule == "artist words" and why.detail == detail
+
+
+def test_why_none_names_the_artist_words_rule() -> None:
+    assert why_none([rel(CURTIS_EUROPE, size=446957643)], *CURTIS, 18, set(), album_type="album", seconds=5274) == \
+        f'rejected: 1 artist words; closest: "{CURTIS_EUROPE}" (artist words: curtis, beside in europe)'
+
+
+@pytest.mark.parametrize(
+    "artist, album, title",
+    [
+        # Real releases of the two albums; the artist part may name more people than Spotify's artist.
+        (*CURTIS, "Curtis Mayfield-Curtis Live-CD-FLAC-1971-GRP"),
+        (*CURTIS, "Curtis_Mayfield-Curtis_Live_(US_Release)-WEB-FLAC-1971-GRP"),
+        (*GETZ, "Stan Getz and Joao Gilberto-Getz Gilberto-CD-FLAC-1964-GRP"),
+        (*GETZ, "Stan Getz & Joao Gilberto-Getz/Gilberto-Expanded Edition-WEB-FLAC-2014-GRP"),
+        (*GETZ, "Stan Getz - Getz Gilberto (1964) [FLAC]"),
+        # The artist's name left out of the album's, nothing else beside it.
+        ("TOTO", "Toto IV", "Toto-IV-CD-FLAC-1982-GRP"),
+        ("Canned Heat", "The Best Of Canned Heat", "Canned Heat-1972-The Best Of"),
+        ("Blondie", "Greatest Hits: Blondie", "Blondie  Greatest Hits 2002"),
+        ("Nina Simone", "Nina Simone: The Montreux Years (Live)",
+         "Nina Simone-The Montreux Years-24BIT-96KHZ-WEB-FLAC-2021-TiMES"),
+        # A compilation's release calling itself a collection: album 1593, 30 of 30 tracks.
+        ("Sister Sledge", "Definitive Groove: Sister Sledge", "Sister Sledge - 2006 - The Definitive Groove Collection"),
+        ("Led Zeppelin", "Led Zeppelin IV", "Led_Zeppelin-IV-REMASTERED-CD-FLAC-2014-GRP"),
+        ("Nina Simone", "Nina Simone Sings the Blues", "Nina Simone-Sings The Blues-WEB-FLAC-1967-GRP"),
+        # Self-titled (#401's rule), and a name that holds the artist's after it.
+        ("The Meters", "The Meters", "The_Meters-The_Meters-REMASTERED-CD-FLAC-2001-GRP"),
+        ("Sylvie", "Sylvie", "Sylvie-Self Titled-WEB-2023-GRP"),
+        ("Menahan Street Band", "The Exciting Sounds of Menahan Street Band",
+         "Menahan Street Band-The Exciting Sounds Of Menahan Street Band-DAP063-24BIT-WEB-FLAC-2021-BABAS"),
+        # No unspaced hyphens, spaced ones, the artist turned round (album 375's correct release).
+        ("Bruce Springsteen", "Born In The U.S.A.", "Springsteen Bruce - 1984 Born In The U.S.A no scans"),
+        ("Carly Simon", "No Secrets", "Carly Simon - No Secrets-FLAC"),
+        ("Curtis Mayfield", "Curtis Live", "Curtis Mayfield Curtis Live 1971 FLAC"),
+        ("Curtis Mayfield", "Curtis Live", "Curtis.Mayfield.-.Curtis.Live.1971.FLAC"),
+    ],
+)
+def test_keeps_matching_the_album_itself(artist: str, album: str, title: str) -> None:
+    assert rejection(rel(title), artist, album, 12, album_type="album") is None
+
+
+def test_any_album_and_an_override_have_no_artist_part_to_check() -> None:
+    assert matches(rel(CURTIS_EUROPE), "Curtis Mayfield", "★★★", 18, album_type="album", any_album=True)
+    assert matches(rel(CURTIS_EUROPE), "", "curtis mayfield live", 18, album_type="album")

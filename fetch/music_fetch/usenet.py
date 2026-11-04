@@ -66,6 +66,10 @@ MAX_LEFTOVER_WORDS = 2
 # (deluxe, expanded) stay tags, so an edition of the album still matches.
 _OTHER_RELEASE_WORDS = {"tour", "live", "concert", "concerts", "unplugged", "bootleg", "bootlegs",
                         "box", "boxset", "acoustic", "remixes", "remixed"}
+# What a compilation's release may add to its name without being another album
+# (homelab#2656): "The Definitive Groove Collection" is Definitive Groove: Sister
+# Sledge.  Only for :func:`named_by_artist`; elsewhere it stays a leftover.
+_COLLECTION_WORDS = {"collection"}
 # Edition words that tell one edition of an album from another (#279), each
 # folded to one spelling.  "edition" itself names none.
 _EDITION_WORDS = {"deluxe": "deluxe", "expanded": "expanded", "anniversary": "anniversary",
@@ -260,6 +264,31 @@ def _album_follows_artist(title_words: list[str], artist: str, album: str) -> bo
     return bool(names) and lead[:len(names)] == names and lead[len(names):len(names) + len(name)] == name
 
 
+def named_by_artist(release: Release, artist: str, album: str) -> str:
+    """What the title adds to an album name it holds only through the artist's
+    (homelab#2656), as "<album words>, beside <leftover words>"; empty when it
+    doesn't.  ``Curtis Mayfield-Live In Europe-…`` holds *Curtis Live!* only
+    because the artist is called Curtis: past the artist's name in the title
+    there is no "curtis", and "in europe" says it is another album.
+
+    The name is often left out of the album's (``Toto-IV-…``, ``Canned Heat-The
+    Best Of-…``), so a word lacking there alone says nothing: as for a
+    self-titled album, the title must then carry nothing else.  The artist's
+    name is Spotify's, read off the title's start, so more people named there
+    (``Stan Getz and Joao Gilberto-Getz Gilberto-…``) and titles with no hyphen
+    work alike.  A self-titled album has its own rule, and an override no artist.
+    """
+    names = [w for w in words(artist) if w not in _ARTICLES]
+    album_words = [w for w in words(search_title(album)) if w not in _ARTICLES]
+    lead = [w for w in words(release.title) if w not in _ARTICLES]
+    if not names or set(album_words) <= set(names) or set(lead[:len(names)]) != set(names):
+        return ""
+    rest = lead[len(names):]
+    only = [w for w in dict.fromkeys(album_words) if w in names and w not in rest]
+    extra = [w for w in leftover(release, artist, album) if w not in _COLLECTION_WORDS]
+    return f"{' '.join(only)}, beside {' '.join(extra)}" if only and extra else ""
+
+
 @dataclasses.dataclass(frozen=True)
 class Rejection:
     """Why a release is not the album (homelab#2568).  *stage* counts the rules
@@ -318,13 +347,16 @@ def rejection(
         or not extra
     ):
         return Rejection(4, "self-titled", "names the album once, beside " + " ".join(extra))
+    borrowed = "" if any_album else named_by_artist(release, artist, album)
+    if borrowed:
+        return Rejection(5, "artist words", borrowed)
     other = [] if any_album else other_release(release, artist, album)
     if other:
-        return Rejection(5, "other release", " ".join(other))
+        return Rejection(6, "other release", " ".join(other))
     is_single = album_type == "single" if album_type else 0 < tracks <= 3
     shorter = sorted(title & _SINGLE_WORDS - set(words(album)))
     if shorter and not is_single:
-        return Rejection(6, "single", f"tagged {' '.join(shorter)}, the album isn't one")
+        return Rejection(7, "single", f"tagged {' '.join(shorter)}, the album isn't one")
     if seconds > 0:
         low, high = seconds * MIN_BYTES_PER_SECOND, seconds * MAX_BYTES_PER_SECOND
     elif tracks > 0:
@@ -332,7 +364,7 @@ def rejection(
     else:
         low = high = 0
     if high and not low <= release.size <= high:
-        return Rejection(7, "size", f"{release.size / 1e6:.0f} MB, not {low / 1e6:.0f}-{high / 1e6:.0f} MB")
+        return Rejection(8, "size", f"{release.size / 1e6:.0f} MB, not {low / 1e6:.0f}-{high / 1e6:.0f} MB")
     return None
 
 
@@ -361,7 +393,7 @@ def why_none(
     for r in releases:
         why = rejection(r, artist, album, tracks, album_type=album_type, seconds=seconds, any_album=any_album)
         if why is None:
-            why = Rejection(8, "blocklisted") if r.guid in blocklist else Rejection(8, "no download link")
+            why = Rejection(9, "blocklisted") if r.guid in blocklist else Rejection(9, "no download link")
         found.append((r, why))
     if not found:
         return ""

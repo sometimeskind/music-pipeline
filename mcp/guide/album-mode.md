@@ -124,7 +124,10 @@ few per run, and `audit_want_albums` shows what is still wanted, grouped by albu
 `set_search_override`. A `[MISS]` with results says which rule rejected them (`rejected: …;
 closest: "<title>" (<rule>: <detail>)`): `album words` on the closest means the release
 spells the title differently, which an override fixes; `size`, `single` or `leftover words`
-are about the release itself, which an override doesn't change. `other release` (a tour, live,
+are about the release itself, which an override doesn't change. `artist words` (the title holds
+an album word only as the artist's name, beside words of its own: `Curtis Mayfield-Live In Europe`
+for *Curtis Live!*) is another album by the artist, unless those words are only how the album's
+release spells it, which an override fixes. `other release` (a tour, live,
 box set or remix release holding the album's name) is too, unless the album itself is one whose
 Spotify name doesn't say so: an override with that word (`live`) matches it. An override is words a
 release title holds, which also steer the edition picked. Its dry run shows the query before
