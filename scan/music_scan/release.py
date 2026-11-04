@@ -1061,7 +1061,7 @@ def keep_replaced(name: str, replaced_dir: Path, keep_dir: Path, conn=None) -> P
     tags = _album_tags(f)
     head, sep, _ = f.name.partition("-")
     item_id = int(head) if sep and head.isdigit() else None
-    label = f"{tags.artist} — {tags.title}" if tags else "tags unreadable"
+    label = f"{tags.get('artist')} — {tags.get('title')}" if tags else "tags unreadable"
     logger.info("[KEEP] replaced/%s (%s, %.1f MB) → keep/%s", rel, label, f.stat().st_size / 1e6, rel)
     if conn is None:
         logger.info("Dry run — nothing moved. Re-run with --apply; the purge never reads quarantine/keep/.")
@@ -1070,7 +1070,7 @@ def keep_replaced(name: str, replaced_dir: Path, keep_dir: Path, conn=None) -> P
     with conn.transaction():
         events.insert(conn, KEPT_KIND, message, source="release", item_id=item_id,
                       data={"path": str(f), "dest": str(dest),
-                            **({k: getattr(tags, k) for k in ("artist", "title", "album")} if tags else {})})
+                            **({k: tags.get(k) for k in ("artist", "title", "album")} if tags else {})})
         dest.parent.mkdir(parents=True, exist_ok=True)
         shutil.move(str(f), dest)
     logger.info("%s", message)

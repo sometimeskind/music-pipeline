@@ -65,6 +65,18 @@ def test_a_dry_run_moves_nothing(quarantine, caplog):
     assert "Dry run — nothing moved" in caplog.text
 
 
+TAGS = release._Tags(album="Nebraska '82", albumartist="Bruce Springsteen", artist="Bruce Springsteen",
+                     title="Reason To Believe")
+
+
+def test_a_dry_run_labels_the_file_by_its_tags(quarantine, caplog, monkeypatch):
+    """homelab#2623: _album_tags returns a dict, read as attributes it crashed every readable file."""
+    monkeypatch.setattr(release, "_album_tags", lambda f: TAGS)
+    caplog.set_level("INFO")
+    assert release.keep_replaced("17052", quarantine / "replaced", quarantine / "keep") is None
+    assert f"[KEEP] replaced/{LIVE} (Bruce Springsteen — Reason To Believe, 0.0 MB) → keep/{LIVE}" in caplog.text
+
+
 def test_keep_refuses_a_file_kept_already(quarantine):
     (quarantine / "keep").mkdir()
     (quarantine / "keep" / LIVE).write_bytes(b"older")
@@ -90,6 +102,18 @@ def test_keep_moves_the_file_with_its_event(quarantine, pg_url, caplog):
     assert (kind, source, item_id) == ("kept", "release", 17052)
     assert message == f"[KEEP] replaced/{LIVE} → keep/{LIVE}: kept by hand, out of the purge's reach"
     assert data == {"path": str(replaced / LIVE), "dest": str(keep / LIVE)}
+
+
+@needs_pg
+def test_the_kept_event_carries_the_files_tags(quarantine, pg_url, monkeypatch):
+    from music_fetch import db
+
+    monkeypatch.setattr(release, "_album_tags", lambda f: TAGS)
+    with contextlib.closing(db.connect()) as conn:
+        release.keep_replaced("17052", quarantine / "replaced", quarantine / "keep", conn)
+    [(_, _, _, _, data)] = _events(pg_url)
+    assert {k: data[k] for k in ("artist", "title", "album")} == {
+        "artist": "Bruce Springsteen", "title": "Reason To Believe", "album": "Nebraska '82"}
 
 
 @needs_pg
