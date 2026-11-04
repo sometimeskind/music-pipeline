@@ -790,6 +790,100 @@ def test_a_failed_mid_import_save_does_not_stop_the_import(roots, caplog) -> Non
     assert "saving the import's start failed" in caplog.text
 
 
+def _job_files(folder: Path) -> list[str]:
+    return sorted(p.relative_to(folder).as_posix() for p in folder.rglob("*") if p.is_file())
+
+
+def complete_seen(state, roots, import_inbox=None):
+    """Run complete() on the roots' job; returns its status and the job's files
+    as identify and as the import saw them."""
+    complete_root, inbox, quarantine = roots
+    identified, imported = [], []
+
+    def identify(folder):
+        identified.extend(_job_files(folder))
+        return {"missing": 0, "album": "Album", "mb_albumid": "mb1"}
+
+    def default_import():
+        imported.extend(_job_files(inbox / "later" / "Artist-Album-FLAC"))
+
+    status = albums.complete(
+        state, albums.Completion("nzo1", True, "album/Artist-Album-FLAC"), import_inbox or default_import,
+        claim=_claim_all, add_source=lambda *a: None, retire=_no_retire, tag_ids=lambda *a: None,
+        identify=identify, complete_root=complete_root, inbox_root=inbox, quarantine_root=quarantine,
+    )
+    return status, identified, imported
+
+
+def test_complete_drops_a_byte_identical_copy_before_identify_and_import(roots, caplog) -> None:
+    """homelab#2636: a release posting each file loose and in a RAR set; the
+    unpack named each colliding file <stem>.1.<ext>.  The copy goes before
+    identify (whose completeness check counts files) and before beets."""
+    complete_root, _, _ = roots
+    job = complete_root / "album" / "Artist-Album-FLAC"
+    (job / "01.1.flac").write_bytes(b"x")
+    (job / "CD2").mkdir()
+    (job / "CD2" / "02-artist-two.mp3").write_bytes(b"two")
+    (job / "CD2" / "02-artist-two.1.mp3").write_bytes(b"two")
+    state = grabbed_state()
+    with caplog.at_level("INFO", logger="music_fetch.albums"):
+        status, identified, imported = complete_seen(state, roots)
+    assert status == albums.IMPORTED
+    assert identified == imported == ["01.flac", "CD2/02-artist-two.mp3"]
+    assert "[DUPFILE] Artist — Album: 01.1.flac is a byte-identical copy of 01.flac; skipped" in caplog.text
+    assert "CD2/02-artist-two.1.mp3 is a byte-identical copy of 02-artist-two.mp3" in caplog.text
+
+
+def test_complete_keeps_a_copy_whose_content_differs(roots, caplog) -> None:
+    """A same-named file with other audio may be another disc or version."""
+    complete_root, _, _ = roots
+    job = complete_root / "album" / "Artist-Album-FLAC"
+    (job / "02.mp3").write_bytes(b"take one")
+    (job / "02.1.mp3").write_bytes(b"take two")
+    (job / "03.mp3").write_bytes(b"short")
+    (job / "03.1.mp3").write_bytes(b"longer!")
+    with caplog.at_level("INFO", logger="music_fetch.albums"):
+        _, identified, imported = complete_seen(grabbed_state(), roots)
+    assert identified == imported == ["01.flac", "02.1.mp3", "02.mp3", "03.1.mp3", "03.mp3"]
+    assert "[DUPFILE]" not in caplog.text
+
+
+def test_complete_leaves_unrelated_files_alone(roots) -> None:
+    """Only an audio <stem>.<N>.<ext> beside its identical <stem>.<ext> goes."""
+    complete_root, _, _ = roots
+    job = complete_root / "album" / "Artist-Album-FLAC"
+    for name, data in {"cover.jpg": b"img", "cover.1.jpg": b"img",   # not audio
+                       "04.1.mp3": b"four",                          # no 04.mp3 beside it
+                       "05.mp3": b"five", "05.a.mp3": b"five",       # not a number
+                       "06.mp3": b"six", "06.1.flac": b"six"}.items():  # another extension
+        (job / name).write_bytes(data)
+    _, identified, _ = complete_seen(grabbed_state(), roots)
+    assert identified == ["01.flac", "04.1.mp3", "05.a.mp3", "05.mp3", "06.1.flac", "06.mp3",
+                          "cover.1.jpg", "cover.jpg"]
+
+
+def test_complete_retry_after_dropping_a_copy_imports_the_rest(roots) -> None:
+    """A retried import (#261) is judged on the first try's match: the copy
+    went before that match, and the job moved back holds no copy either."""
+    complete_root, inbox, _ = roots
+    job = complete_root / "album" / "Artist-Album-FLAC"
+    (job / "01.1.flac").write_bytes(b"x")
+    state = grabbed_state()
+    record = state.albums["a0"]
+
+    def crash():
+        raise ValueError("No closing quotation")
+
+    status, identified, _ = complete_seen(state, roots, import_inbox=crash)
+    assert status == albums.GRABBED and identified == ["01.flac"]
+    assert _job_files(job) == ["01.flac"] and record["import_identity"]["missing"] == 0
+
+    status, identified, imported = complete_seen(state, roots)
+    assert status == albums.IMPORTED
+    assert identified == [] and imported == ["01.flac"]
+    assert record["release_files"] == {"missing": 0, "album": "Album", "mb_albumid": "mb1"}
+
+
 def test_park_interrupted_imports_never_stops_the_service_starting(monkeypatch, caplog) -> None:
     assert albums.park_interrupted_imports() == 0
 
