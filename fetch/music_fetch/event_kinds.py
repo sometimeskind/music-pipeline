@@ -155,6 +155,11 @@ KINDS: dict[str, Kind] = {
     # --- Playlists ---
     "reject": Kind(PLAYLIST, "[REJECT]: a download a pre-import check quarantined.",
                    ("playlist", "file", "reason", "detail", "dest")),
+    "accepted": Kind(PLAYLIST, "[VERIFIED]: a request's fallback download AcoustID names as its own recording, moved "
+                               "to the inbox (data.recheck: on a re-check of a held file).",
+                     ("playlist", "file", "recording", "dest", "recheck")),
+    "held": Kind(PLAYLIST, "[UNKNOWN]: a held download AcoustID still doesn't know, no longer re-checked: it stays "
+                           "for the operator.", ("playlist", "file", "path", "days")),
     "playlist_deleted": Kind(PLAYLIST, "[NAVIDROME]: a Navidrome playlist deleted because its .m3u is gone.",
                              ("playlist", "path", "navidrome_id", "songs")),
     "playlist_entry_added": Kind(PLAYLIST, "[STORE]: an entry joined a playlist store (data.by: who); a store's "

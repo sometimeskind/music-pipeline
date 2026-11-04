@@ -443,3 +443,59 @@ def test_no_file_is_rechecked_while_the_album_state_cant_be_read(requests_dirs, 
     _, inbox, _ = requests_dirs
     assert guard.recheck_unknown(rejected, inbox, None, _never, now=NOW) == _outcomes()
     assert guard.read_sidecar(path.with_name(path.name + ".reason"))[1] == {"held": NOW - 3 * DAY}
+
+
+# --- events (homelab#2590) ---
+
+
+@pytest.fixture
+def recorded(requests_dirs, monkeypatch) -> list:
+    out: list = []
+    monkeypatch.setattr(guard.events, "record", lambda kind, message, **kw: out.append((kind, message, kw)))
+    return out
+
+
+def test_a_verified_download_is_an_accepted_event(requests_dirs, recorded, clip) -> None:
+    unverified, inbox, _ = requests_dirs
+    clip(unverified / "request" / "Band - Song.m4a", ("tone", 30), url=REC_URL)
+    _verify(requests_dirs, {REC: 0.91})
+    [(kind, message, kw)] = recorded
+    assert kind == "accepted" and kw["source"] == "guard"
+    assert message == f"[VERIFIED] request: Band - Song.m4a — AcoustID names recording {REC}"
+    assert kw["data"] == {"playlist": "request", "file": "Band - Song.m4a", "recording": REC,
+                          "dest": str(inbox / "request" / "Band - Song.m4a"), "recheck": False}
+
+
+def test_a_rejected_download_is_no_accepted_event(requests_dirs, recorded, clip) -> None:
+    unverified, _, _ = requests_dirs
+    clip(unverified / "request" / "Band - Song.m4a", ("tone", 30), url=REC_URL)
+    _verify(requests_dirs, {OTHER: 0.97})
+    assert [kind for kind, _, _ in recorded] == ["reject"]
+
+
+def test_a_held_file_a_recheck_confirms_is_an_accepted_event(requests_dirs, recorded, clip) -> None:
+    _, _, rejected = requests_dirs
+    _held_unknown(rejected, clip, checked=NOW - DAY)
+    _recheck(requests_dirs, {REC: 0.9})
+    [(kind, message, kw)] = recorded
+    assert kind == "accepted" and message.endswith(f"AcoustID names recording {REC} on re-check")
+    assert kw["data"]["recheck"] is True
+
+
+def test_a_held_file_past_the_recheck_days_is_one_held_event(requests_dirs, recorded, clip) -> None:
+    _, _, rejected = requests_dirs
+    path = _held_unknown(rejected, clip, held=NOW - 30 * DAY, checked=NOW - DAY)
+    _recheck(requests_dirs, AssertionError("not looked up"))
+    _recheck(requests_dirs, AssertionError("not looked up"), now=NOW + 2 * DAY)
+    [(kind, message, kw)] = recorded
+    assert kind == "held" and kw["source"] == "guard"
+    assert message == ("[UNKNOWN] request: Band - Song.m4a — held 30+ days as unknown to AcoustID; no longer "
+                       "re-checked, the operator decides")
+    assert kw["data"] == {"playlist": "request", "file": "Band - Song.m4a", "path": str(path), "days": 30}
+
+
+def test_a_file_still_unknown_on_a_recheck_records_nothing(requests_dirs, recorded, clip) -> None:
+    _, _, rejected = requests_dirs
+    _held_unknown(rejected, clip, checked=NOW - DAY)
+    _recheck(requests_dirs, {})
+    assert recorded == []
