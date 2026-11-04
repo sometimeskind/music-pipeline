@@ -1648,3 +1648,168 @@ def test_an_import_that_never_lands_records_nothing_beside(monkeypatch) -> None:
     plugin._record_beside(_item("/root/Music/inbox/spotdl/playlist-b/Other.m4a", title="Other"))
 
     assert recorded == [] and list(plugin._beside) == [id(item)]
+
+
+# ---------------------------------------------------------------------------
+# restore_file_title — a match by another artist is refuted (homelab#2649)
+# ---------------------------------------------------------------------------
+
+BORN = "/root/Music/inbox/usenet/cool/Springsteen Bruce - 1984 Born In The U.S.A no scans"
+VOLTS = {"artist": "5000 Volts", "artist_sort": "5000 Volts", "artist_credit": "5000 Volts", "artists": ["5000 Volts"],
+         "artists_sort": ["5000 Volts"], "artists_credit": ["5000 Volts"], "mb_artistid": "16dcd746",
+         "mb_artistids": ["16dcd746"], "mb_trackid": "113bb21e", "mb_releasetrackid": "113bb21e",
+         "isrc": "GBF087500013", "arrangers": ["Tony Eyers"], "title": "I'm on Fire"}
+
+
+def _on_fire(plugin, **tags):
+    tags.setdefault("artist", "Bruce Springsteen")
+    item = _file(f"{BORN}/06 - I'm on Fire.m4a", "I'm on Fire", track=6, **tags)
+    return item, _created(plugin, item)
+
+
+def test_another_artists_song_of_the_title_loses_the_recording_and_the_file_keeps_its_artist() -> None:
+    """18518: Springsteen's I'm on Fire took a 5000 Volts recording, with their artist tags."""
+    plugin = _make_plugin()
+    item, task = _on_fire(plugin, albumartist="Bruce Springsteen")
+    _match(item, **VOLTS)
+
+    plugin.restore_file_title(session=MagicMock(), task=task)
+
+    assert (item.mb_trackid, item.mb_releasetrackid, item.isrc, item.arrangers) == ("", "", "", [])
+    assert item.artist == "Bruce Springsteen"
+    assert (item.artist_sort, item.artist_credit, item.mb_artistid) == ("", "", "")
+    assert (item.artists, item.artists_sort, item.artists_credit, item.mb_artistids) == ([], [], [], [])
+    assert item.albumartist == "Bruce Springsteen"
+    assert _warnings(plugin) == ["[TITLE] I'm on Fire (recording dropped: another artist, 5000 Volts)"]
+
+
+def test_a_refuted_artist_is_a_retitled_event(monkeypatch) -> None:
+    recorded = []
+    monkeypatch.setattr("music_scan.music_pipeline.events.record", lambda *a, **k: recorded.append((a, k)))
+    plugin = _make_plugin()
+    item, task = _on_fire(plugin)
+    _match(item, **VOLTS)
+    plugin.restore_file_title(session=MagicMock(), task=task)
+
+    plugin._record_retitle(item)
+
+    (kind, message), kwargs = recorded[0]
+    assert kind == "retitled" and "another artist, 5000 Volts" in message
+    data = kwargs["data"]
+    assert data["recording_dropped"] and data["dropped_why"] == "another artist"
+    assert data["dropped_mb_trackid"] == "113bb21e"
+    assert (data["file_artist"], data["matched_artist"]) == ("Bruce Springsteen", "5000 Volts")
+    assert data["artist"] == "Bruce Springsteen"
+
+
+def test_another_song_by_another_artist_puts_the_artist_back_too() -> None:
+    plugin = _make_plugin()
+    item = _file(f"{DYLAN}/1-05 - Romance in Durango.flac", DURANGO, track=5, artist="Bob Dylan")
+    task = _created(plugin, item)
+    _match(item, title=BABE, artist="Joan Baez", mb_trackid="babe-rec")
+
+    plugin.restore_file_title(session=MagicMock(), task=task)
+
+    assert (item.artist, item.mb_trackid) == ("Bob Dylan", "")
+    assert _warnings(plugin) == [f"[TITLE] {BABE} → {DURANGO} (recording dropped)"]
+
+
+def _kept(plugin, item, task, artist: str, **match) -> None:
+    _match(item, artist=artist, mb_trackid="rec", title="I'm on Fire", **match)
+    plugin.restore_file_title(session=MagicMock(), task=task)
+    assert (item.artist, item.mb_trackid) == (artist, "rec")
+    assert _warnings(plugin) == []
+
+
+def test_a_band_credit_keeps_the_match() -> None:
+    """18513 and its like: the file says Bruce Springsteen, the recording adds the band."""
+    plugin = _make_plugin()
+    item, task = _on_fire(plugin)
+    _kept(plugin, item, task, "Bruce Springsteen & The E Street Band")
+
+
+def test_a_featured_artist_keeps_the_match() -> None:
+    plugin = _make_plugin()
+    item, task = _on_fire(plugin, artist="Bruce Springsteen feat. Clarence Clemons")
+    _kept(plugin, item, task, "Bruce Springsteen")
+
+
+def test_a_guest_on_the_album_artists_album_keeps_the_match() -> None:
+    plugin = _make_plugin()
+    item, task = _on_fire(plugin, artist="Clarence Clemons", albumartist="Bruce Springsteen")
+    _kept(plugin, item, task, "Bruce Springsteen")
+
+
+def test_a_compilations_file_keeps_the_match() -> None:
+    for tags in ({"comp": True}, {"albumartist": "Various Artists"}, {"albumtypes": ["compilation"]},
+                 {"artist": "Various Artists"}):
+        plugin = _make_plugin()
+        item, task = _on_fire(plugin, **tags)
+        _kept(plugin, item, task, "5000 Volts")
+
+
+def test_a_file_with_no_artist_tag_keeps_the_match() -> None:
+    plugin = _make_plugin()
+    item, task = _on_fire(plugin, artist="", albumartist="Bruce Springsteen")
+    _kept(plugin, item, task, "5000 Volts")
+
+
+def test_another_script_keeps_the_match() -> None:
+    plugin = _make_plugin()
+    item, task = _on_fire(plugin, artist="坂本龍一")
+    _kept(plugin, item, task, "Ryuichi Sakamoto")
+
+
+def test_a_credited_name_keeps_the_match() -> None:
+    """MusicBrainz's artist is the canonical name, its credit what the release printed."""
+    plugin = _make_plugin()
+    item, task = _on_fire(plugin, artist="The Artist")
+    _kept(plugin, item, task, "Prince", artist_credit="The Artist")
+
+
+def test_the_same_musicbrainz_artist_keeps_the_match() -> None:
+    plugin = _make_plugin()
+    item, task = _on_fire(plugin, artist="Yusuf", mb_artistid="same")
+    _kept(plugin, item, task, "Cat Stevens", mb_artistids=["same"])
+
+
+def test_a_generic_file_title_keeps_the_match_whatever_its_artist() -> None:
+    """The title rule's scope: a file title naming nothing leaves beets' match alone."""
+    plugin = _make_plugin()
+    item = _file(f"{BORN}/track06.m4a", "Track 06", track=6, artist="Bruce Springsteen")
+    task = _created(plugin, item)
+    _match(item, artist="5000 Volts", mb_trackid="rec", title="I'm on Fire")
+
+    plugin.restore_file_title(session=MagicMock(), task=task)
+
+    assert (item.artist, item.mb_trackid, item.title) == ("5000 Volts", "rec", "I'm on Fire")
+
+
+def test_a_spotdl_import_keeps_a_match_by_another_artist() -> None:
+    """Only Usenet files are captured: spotdl imports keep beets' match (homelab#2544)."""
+    plugin = _make_plugin()
+    item = _file("/root/Music/inbox/spotdl/keep/Bruce Springsteen - I'm on Fire.m4a", "I'm on Fire",
+                 artist="Bruce Springsteen")
+    task = _created(plugin, item)
+    _match(item, **VOLTS)
+
+    plugin.restore_file_title(session=MagicMock(), task=task)
+
+    assert (item.artist, item.mb_trackid) == ("5000 Volts", "113bb21e")
+    assert _warnings(plugin) == []
+
+
+def test_another_artists_recording_is_no_duplicate() -> None:
+    """The duplicate check runs before the restore, on the match's info: 5000 Volts' own
+    copy in the library must not take the file in or skip it."""
+    plugin = _make_plugin()
+    item, task = _on_fire(plugin)
+    task.chosen_info.return_value = {"title": "I'm on Fire", "artist": "5000 Volts", "artist_credit": "5000 Volts",
+                                     "artists": ["5000 Volts"], "artist_id": "16dcd746", "track_id": "113bb21e",
+                                     "isrc": "GBF087500013"}
+    manual = _lib_dup(42, via="", mb_trackid="113bb21e", isrc="GBF087500013")
+    session = _session({"mb_trackid:113bb21e": [manual], "isrc:GBF087500013": [manual]})
+
+    plugin.handle_duplicates(session=session, task=task)
+
+    task.set_choice.assert_not_called()

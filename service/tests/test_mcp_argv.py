@@ -28,6 +28,7 @@ CASES = {
                        {"replaced_query": "--apply"}],
     "audit_want_albums": [{}],
     "audit_titles": [{}],
+    "audit_artists": [{}],
     "recheck_recordings": [{"ids": [], "resume": None}, {"ids": [5672, 6994], "resume": None},
                            {"ids": [], "resume": "3f2a9c0d1e2b4a5c"}],
     "apply_recheck": [{"run_id": "3f2a9c0d1e2b4a5c"}],

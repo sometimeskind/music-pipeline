@@ -141,6 +141,12 @@ def readable(text: str) -> bool:
     return kept > 0 and kept * 2 >= len(chars)
 
 
+def latin(text: str) -> bool:
+    """True when :func:`words` keeps every letter of *text*.  One it drops is
+    another script (Кино, 坂本龍一): the words left can't speak for the name."""
+    return not any(c.isalpha() and not c.isascii() for c in _prepare(text))
+
+
 def clean_album(name: str) -> str:
     """Drop Spotify's edition suffixes, which release names rarely carry.
 
