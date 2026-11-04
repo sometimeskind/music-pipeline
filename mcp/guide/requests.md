@@ -75,7 +75,9 @@ looks it up on AcoustID under the same rule. When AcoustID now names the track's
 the file is imported as a verified download (`[VERIFIED] … on re-check`); when it names other
 recordings, the reason becomes `fingerprint` (`[REJECT] … on re-check`) and it is never asked
 about again; otherwise it stays held. After 30 days it is no longer re-checked (logged once,
-`[UNKNOWN] … no longer re-checked`) and stays held for the operator. Nothing deletes it.
+`[UNKNOWN] … no longer re-checked`) and stays held for the operator. Nothing deletes it. Each
+verdict is an event, so `find_events` lists them across albums: reject, accepted (`[VERIFIED]`)
+and held (`[UNKNOWN]`).
 
 So a track AcoustID doesn't know stays a gap until a re-check confirms it: `list_requests` shows
 how many the album still lacks (its fallback_left), and the album is not `filled` (nor on Later's

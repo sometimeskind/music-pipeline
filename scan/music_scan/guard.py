@@ -44,6 +44,10 @@ An ``acoustid-unknown`` reject is re-checked rather than downloaded again
 new releases over time, and a lookup costs a second.  Each scan asks AcoustID
 again about the held files last checked a day or more ago, under the same
 rule, and stops after :data:`RECHECK_DAYS`, leaving the file to the operator.
+
+Each verdict is an event (homelab#2590): ``reject``, ``accepted`` for a file
+moved to the inbox (``[VERIFIED]``, ``data.recheck`` on a re-check), and
+``held`` for one no longer re-checked (``[UNKNOWN]``).
 """
 
 from __future__ import annotations
@@ -181,6 +185,14 @@ def _reject_event(playlist: str, f: Path, rejection: Rejection, dest: Path) -> N
     events.record("reject", f"[REJECT] {playlist}: {f.name} — {rejection.reason}: {rejection.detail} → {dest}",
                   source="guard", data={"playlist": playlist, "file": f.name, "reason": rejection.reason,
                                         "detail": rejection.detail, "dest": str(dest)})
+
+
+def _accepted_event(playlist: str, f: Path, recording: str, dest: Path, *, recheck: bool = False) -> str:
+    """Record that AcoustID named *f*'s own recording; returns the line, to log."""
+    line = f"[VERIFIED] {playlist}: {f.name} — AcoustID names recording {recording}{' on re-check' if recheck else ''}"
+    events.record("accepted", line, source="guard", data={"playlist": playlist, "file": f.name, "recording": recording,
+                                                          "dest": str(dest), "recheck": recheck})
+    return line
 
 
 class LookupFailed(RuntimeError):
@@ -325,7 +337,7 @@ def verify_requests(unverified: Path, inbox: Path, rejected_dir: Path, audio_ext
         dest = inbox / f.relative_to(unverified)
         dest.parent.mkdir(parents=True, exist_ok=True)
         shutil.move(str(f), dest)
-        logger.info("  [VERIFIED] %s: %s — AcoustID names recording %s", source, f.name, recording)
+        logger.info("  %s", _accepted_event(source, f, recording, dest))
     return rejected
 
 
@@ -404,8 +416,11 @@ def recheck_unknown(rejected_dir: Path, inbox: Path, songs: dict[str, dict] | No
         if now - stamps["held"] >= days * 86400:
             write_sidecar(sidecar, first, {**stamps, "stopped": now})
             outcomes["stopped"] += 1
-            logger.warning("  [UNKNOWN] %s: %s — held %d+ days as unknown to AcoustID; no longer re-checked, "
-                           "the operator decides", SOURCE, audio.name, days)
+            line = (f"[UNKNOWN] {SOURCE}: {audio.name} — held {days}+ days as unknown to AcoustID; no longer "
+                    "re-checked, the operator decides")
+            logger.warning("  %s", line)
+            events.record("held", line, source="guard", data={"playlist": SOURCE, "file": audio.name,
+                                                              "path": str(audio), "days": days})
             continue
         if now - stamps.get("checked", stamps["held"]) < RECHECK_SECONDS:
             continue
@@ -440,8 +455,7 @@ def recheck_unknown(rejected_dir: Path, inbox: Path, songs: dict[str, dict] | No
             shutil.move(str(audio), dest)
             sidecar.unlink(missing_ok=True)
             outcomes["verified"] += 1
-            logger.info("  [VERIFIED] %s: %s — AcoustID names recording %s on re-check", SOURCE, audio.name,
-                        recording)
+            logger.info("  %s", _accepted_event(SOURCE, audio, recording, dest, recheck=True))
             continue
         stamps["checked"] = now
         if rejection.reason == UNKNOWN:
