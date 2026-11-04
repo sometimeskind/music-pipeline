@@ -82,9 +82,11 @@ through :meth:`State.refs`, and an override or hold names the record's row
 from __future__ import annotations
 
 import dataclasses
+import filecmp
 import json
 import logging
 import os
+import re
 import shutil
 import time
 from datetime import datetime, timedelta, timezone
@@ -156,6 +158,9 @@ USENET_COMPLETE = Path("/root/Music/usenet/complete")
 USENET_INBOX = Path("/root/Music/inbox/usenet")
 USENET_QUARANTINE = Path("/root/Music/quarantine/usenet")
 AUDIO_EXTS = {".mp3", ".flac", ".ogg", ".opus", ".m4a", ".aac", ".wav", ".wma", ".aiff", ".ape", ".mpc"}
+# SABnzbd's name for an unpacked file that collides with one already in the
+# job dir: ``<stem>.<N>.<ext>`` (homelab#2636).
+COPY_STEM = re.compile(r"(.+)\.\d+")
 WINDOW = timedelta(hours=24)
 # Spotify album tracklists read per tick for spotdl fallbacks (#268): two calls each.
 TRACKLISTS_PER_TICK = 10
@@ -1651,6 +1656,33 @@ def _inside(root: Path, rel: str) -> Path | None:
     return target
 
 
+def drop_copies(job: Path, label: str) -> int:
+    """Remove the byte-identical copies SABnzbd made in *job* (homelab#2636).
+    Some releases post each audio file loose and again in a RAR set; the
+    unpack renames each colliding file ``<stem>.<N>.<ext>``, and beets would
+    import both, each track twice.  A copy whose content differs is kept: it
+    may be another disc or version.  Returns how many were removed."""
+    n = 0
+    for copy in sorted(job.rglob("*")):
+        m = COPY_STEM.fullmatch(copy.stem)
+        if not m or copy.suffix.lower() not in AUDIO_EXTS or not copy.is_file():
+            continue
+        base = copy.with_name(m[1] + copy.suffix)
+        try:
+            # filecmp compares the sizes first, and reads the files only when they agree.
+            if not base.is_file() or not filecmp.cmp(base, copy, shallow=False):
+                continue
+            copy.unlink()
+        except OSError as exc:
+            logger.warning("[DUPFILE] %s: comparing %s with %s failed: %s; kept",
+                           label, copy.relative_to(job), base.name, exc)
+            continue
+        logger.info("[DUPFILE] %s: %s is a byte-identical copy of %s; skipped",
+                    label, copy.relative_to(job), base.name)
+        n += 1
+    return n
+
+
 class ImportDeferred(Exception):
     """*import_inbox* could not judge the release: a service it needs, such as
     MusicBrainz, was unavailable (#264).  Retried without blame, up to
@@ -1731,8 +1763,9 @@ def complete(
     when the job isn't one of ours (a manual SABnzbd add).
 
     The album is the unit (#279): the whole release is the album, whatever its
-    tracklist.  The job dir moves to ``inbox/usenet/<playlist>/``; *identify*
-    matches it as a whole to a MusicBrainz release first (the files' own
+    tracklist.  The job dir moves to ``inbox/usenet/<playlist>/``, without
+    the byte-identical copies its unpack made (:func:`drop_copies`,
+    homelab#2636); *identify* matches it as a whole to a MusicBrainz release first (the files' own
     edition, and how many of that release's tracks have no file).
     *import_inbox* runs the beets import, and *import_rest* imports, as they
     are, the files beets couldn't match (a file present is never missing).
@@ -1808,6 +1841,9 @@ def complete(
         # In the database before the import can be cut short (homelab#2603):
         # park_interrupted reads the saved record at the next start.
         _save_import(save, label)
+        # Before identify, so the completeness check counts each track once
+        # too; a retry finds them gone already.
+        drop_copies(dest, label)
         identity = None
         if "import_identity" in record:
             # Judged on the first try's files: those beets imported are gone from the dir.
