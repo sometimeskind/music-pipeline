@@ -532,6 +532,8 @@ TOOLS: dict[str, Tool] = {t.name: t for t in [
     Tool("audit_want_albums", READ, _none, lambda a, _: [["music-audit-want-albums"]]),
     # Version-named titles Spotify's slot doesn't name (homelab#2544): no arguments.
     Tool("audit_titles", READ, _none, lambda a, _: [["music-audit-titles"]]),
+    # Items credited to an artist their album's shares nothing with (homelab#2649): no arguments.
+    Tool("audit_artists", READ, _none, lambda a, _: [["music-audit-artists"]]),
     # homelab#2553: an hour-long AcoustID run in the long lane, resumed after a
     # restart from its checkpoint; its findings are applied with apply_recheck.
     Tool("recheck_recordings", READ, _recheck, _recheck_argv, lane="long", resumable=True),

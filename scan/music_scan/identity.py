@@ -25,10 +25,13 @@ import re
 from collections import Counter
 from typing import NamedTuple
 
-from music_fetch.usenet import clean_album
+from music_fetch.usenet import clean_album, latin
 from music_fetch.usenet import words as release_words
 
 _STOP_WORDS = frozenset({"the", "and", "for", "feat", "ft", "vs", "with", "a", "an", "of", "in", "on"})
+# Words that join a credit and name nobody: "the" alone would link The Who to The Band,
+# and "&" reads "and" (homelab#2649).
+_CREDIT_WORDS = _STOP_WORDS | {"featuring", "versus"}
 
 # Ladder rungs, as ItemIndex.match reports them.
 BY_ID, BY_ISRC, BY_WORDS = "id", "isrc", "words"
@@ -334,8 +337,84 @@ def merge_agrees(file_title: str, file_artist: str, keeper_title: str, keeper_ar
     Only a check on the merge's decision, never identity by itself."""
     if not same_base_title(file_title or "", keeper_title or ""):
         return False
-    a, b = set(release_words(file_artist or "")), set(release_words(keeper_artist or ""))
+    a, b = artist_words(file_artist), artist_words(keeper_artist)
     return not (a and b) or not a.isdisjoint(b)
+
+
+def artist_words(name: str | None) -> frozenset[str]:
+    """The words of an artist credit that name someone, folded like release
+    names: ``The Who`` is ``who``, and ``The The`` is nothing (homelab#2649)."""
+    return frozenset(release_words(name or "")) - _CREDIT_WORDS
+
+
+NO_ARTIST = frozenset({"various artists", "various", "va", "v a", "unknown", "unknown artist", "no artist",
+                       "anonymous", "traditional"})
+"""Credits that name nobody, as :func:`~music_fetch.usenet.words` spells them:
+beets' ``VA_ARTISTS`` and MusicBrainz's special-purpose artists."""
+
+
+class Credit(NamedTuple):
+    """Who a track or an album credits, every spelling of it (homelab#2649)."""
+
+    names: tuple[str, ...] = ()
+    ids: frozenset[str] = frozenset()
+
+    def __or__(self, other: "Credit") -> "Credit":
+        return Credit((*self.names, *other.names), self.ids | other.ids)
+
+
+def artist_credit(source, album: bool = False) -> Credit:
+    """The :class:`Credit` of *source*, a beets item or a match's info (which
+    spells its IDs ``artist_id`` and ``artists_ids``); with *album*, its album
+    artist's."""
+    a = "album" if album else ""
+    names = (source.get(f"{a}artist"), source.get(f"{a}artist_credit"),
+             *(source.get(f"{a}artists") or ()), *(source.get(f"{a}artists_credit") or ()))
+    ids = (source.get(f"mb_{a}artistid"), *(source.get(f"mb_{a}artistids") or ()),
+           source.get(f"{a}artist_id"), *(source.get(f"{a}artists_ids") or ()))
+    return Credit(tuple(dict.fromkeys(n for n in names if n)), frozenset(i for i in ids if i))
+
+
+def compilation(item) -> bool:
+    """True when *item*'s own tags call its album a compilation: the flag, a
+    Various Artists album artist, or a MusicBrainz album type."""
+    return (bool(item.get("comp")) or " ".join(release_words(item.get("albumartist") or "")) in NO_ARTIST
+            or "compilation" in f"{item.get('albumtype')} {item.get('albumtypes')}".lower())
+
+
+def _names_someone(name: str) -> bool:
+    """True when words can speak for the credit *name*: another script can't
+    (:func:`~music_fetch.usenet.latin`), nor a name of only joining words, nor
+    Various Artists."""
+    return latin(name) and bool(artist_words(name)) and " ".join(release_words(name)) not in NO_ARTIST
+
+
+def comparable_artists(a: Credit, b: Credit) -> bool:
+    """True when words can tell whether *a* and *b* are one artist: both name
+    someone, in every spelling.  Otherwise nothing says they differ."""
+    return bool(a.names and b.names) and all(map(_names_someone, (*a.names, *b.names)))
+
+
+def _alike(a: str, b: str) -> bool:
+    """True when credits *a* and *b* can be one artist: a word in common
+    (``Bruce Springsteen & The E Street Band``, ``Springsteen, Bruce``), one
+    inside the other with the spaces gone (``AC/DC``, ``ACDC``), or a word
+    spelled two ways (``Rachmaninoff``, ``Rachmaninov``: :data:`SAME_SONG_RATIO`)."""
+    x, y = artist_words(a), artist_words(b)
+    jx, jy = "".join(release_words(a)), "".join(release_words(b))
+    return (not x.isdisjoint(y) or jx in jy or jy in jx
+            or any(difflib.SequenceMatcher(None, p, q).ratio() >= SAME_SONG_RATIO for p in x for q in y))
+
+
+def different_artist(a: Credit, b: Credit) -> bool:
+    """True when credits *a* and *b* share nothing (homelab#2649): no
+    MusicBrainz artist, and no name of one alike any name of the other.  What
+    the words can't read (:func:`comparable_artists`) never differs: a wrong
+    "different" drops a good recording, a wrong "same" leaves things as they
+    were.  The one comparison the import and ``music-audit-artists`` both use."""
+    if not a.ids.isdisjoint(b.ids) or not comparable_artists(a, b):
+        return False
+    return not any(_alike(x, y) for x in a.names for y in b.names)
 
 
 class Recordings:

@@ -100,10 +100,17 @@ Responsibilities
     and the release pass retired it as held.  A sibling with no version word
     either side still keeps its ID, for the recheck.
     The duplicate check, which runs before, leaves out a match refused either
-    way.  A generic file title (empty, digits, ``Track NN``) keeps
-    beets' title.  spotdl imports keep beets' match: their titles are
-    YouTube's, and a request fallback's recording AcoustID verified.  Each
-    ``[TITLE]`` change is a ``retitled`` event, written at ``item_imported``.
+    way.  A match is refused too when its artist shares nothing with the
+    file's (homelab#2649, :func:`~music_scan.identity.different_artist`):
+    Springsteen's *I'm on Fire* matched to 5000 Volts' song of that title,
+    ``[TITLE] … (recording dropped: another artist, 5000 Volts)``, and the
+    file's artist goes back on too.  Any band credit, featured artist or
+    spelling that shares a word passes, and a file with no artist tag, a
+    compilation's, or a name words can't read keeps the match.  A generic
+    file title (empty, digits, ``Track NN``) keeps beets' title and its match.
+    spotdl imports keep beets' match: their titles are YouTube's, and a
+    request fallback's recording AcoustID verified.  Each ``[TITLE]`` change
+    is a ``retitled`` event, written at ``item_imported``.
 
 3. **fingerprint_if_missing** (``item_imported``): ``chroma`` fingerprints at
    ``import_task_start``, which ASIS mode never sends (see the note), so asis
@@ -143,8 +150,8 @@ from music_fetch.album_requests import url_recording
 from music_fetch.usenet import words
 
 from music_scan.identity import (
-    add_isrcs, add_to_list, different_song, fingerprint, item_isrcs, item_spotify_ids, same_mb_recording, split_list,
-    spotify_id, version_clash,
+    Credit, add_isrcs, add_to_list, artist_credit, compilation, different_artist, different_song, fingerprint,
+    item_isrcs, item_spotify_ids, same_mb_recording, split_list, spotify_id, version_clash,
 )
 
 # The two locations where spotdl downloads land at beet-import time.
@@ -169,12 +176,17 @@ FALLBACK_RECORDING = "fallback_recording"
 
 # What a MusicBrainz match for another song wrongly says about a file: the recording's IDs
 # and ISRCs, and its work and the credits beets reads from it (homelab#2544).  The artist
-# stays: beets weighs it in the match, and a wrong song by the right artist is the case seen.
+# stays unless it is another one (ARTIST_FIELDS): beets weighs it in the match, and a wrong
+# song by the right artist is the case seen.
 RECORDING_FIELDS = (
     "mb_trackid", "mb_releasetrackid", "isrc", "mb_workid", "work", "work_disambig",
     "composers", "composers_ids", "composer_sort", "lyricists", "lyricists_ids",
     "arrangers", "arrangers_ids", "remixers", "remixers_ids",
 )
+# What a singleton match writes about its artist (beets' TrackInfo; never the album artist):
+# they go back to the file's when the artist is another one (homelab#2649).
+ARTIST_FIELDS = ("artist", "artists", "artist_sort", "artists_sort", "artist_credit", "artists_credit",
+                 "mb_artistid", "mb_artistids")
 # A file title that names nothing: beets' is better (homelab#2544).
 _GENERIC_TITLE = re.compile(r"(?:track\s*)?\d*", re.IGNORECASE)
 
@@ -188,8 +200,19 @@ class FileTags(NamedTuple):
     title: str          # as the file has it
     own: str | None     # what goes back on: :func:`own_title`
     fields: dict        # RECORDING_FIELDS as the file has them
+    artist_fields: dict  # ARTIST_FIELDS as the file has them
+    # The file's artist and album artist, and whether it says it is on a compilation (homelab#2649).
+    credit: Credit
+    compilation: bool
     # The file's album name and its Usenet job's: a live album's covers a bare title (homelab#2609).
     album: str = ""
+
+    def another_artist(self, matched) -> bool:
+        """True when *matched* (the item after beets' match, or the match's info)
+        credits an artist the file's own tags share nothing with (homelab#2649).
+        A file with no artist tag, or on a compilation, says nothing against it."""
+        return (bool(self.artist_fields["artist"]) and not self.compilation
+                and different_artist(self.credit, artist_credit(matched)))
 
 
 class Retitle(NamedTuple):
@@ -214,10 +237,11 @@ class Beside(NamedTuple):
     data: dict
 
 
-ANOTHER_SONG, ANOTHER_VERSION = "another song", "another version"
+ANOTHER_SONG, ANOTHER_VERSION, ANOTHER_ARTIST = "another song", "another version", "another artist"
 
 
-def wrong_recording(title: str, album: str, matched: str, disambiguation: str) -> tuple[str | None, list[str]]:
+def wrong_recording(title: str, album: str, matched: str, disambiguation: str,
+                    other_artist: bool = False) -> tuple[str | None, list[str]]:
     """Why beets' match for a Usenet file can't be the file's recording, as
     ``(why, versions)``: :data:`ANOTHER_SONG` when the file's own *title* and
     the match's are two songs (:func:`~music_scan.identity.different_song`,
@@ -225,7 +249,9 @@ def wrong_recording(title: str, album: str, matched: str, disambiguation: str) -
     of them names a version (:func:`~music_scan.identity.version_clash`:
     the file's title and *album* (its album name, and its release's job name
     too, so a live album titled bare doesn't refuse its live recordings), the
-    recording's title *matched* and its *disambiguation*; homelab#2609), else
+    recording's title *matched* and its *disambiguation*; homelab#2609),
+    :data:`ANOTHER_ARTIST` when neither does but *other_artist* says the match
+    is another artist's (:meth:`FileTags.another_artist`, homelab#2649), else
     ``(None, [])``.
 
     A version word refutes the match: *Reason To Believe (Nebraska Live)*
@@ -237,13 +263,17 @@ def wrong_recording(title: str, album: str, matched: str, disambiguation: str) -
     if different_song(title, matched):
         return ANOTHER_SONG, []
     versions = version_clash(title, matched, a_album=album, b_notes=disambiguation)
-    return (ANOTHER_VERSION, versions) if versions else (None, [])
+    if versions:
+        return ANOTHER_VERSION, versions
+    return (ANOTHER_ARTIST, []) if other_artist else (None, [])
 
 
-def _dropped_note(why: str | None, versions: list[str]) -> str:
-    """The ``[TITLE]`` line's note on a dropped recording."""
+def _dropped_note(why: str | None, versions: list[str], artist: str = "") -> str:
+    """The ``[TITLE]`` line's note on a dropped recording; *artist* is the match's."""
     if why == ANOTHER_VERSION:
         return f" (recording dropped: another version, {', '.join(versions)})"
+    if why == ANOTHER_ARTIST:
+        return f" (recording dropped: another artist, {artist})"
     return " (recording dropped)" if why else ""
 
 
@@ -473,7 +503,8 @@ class MusicPipelinePlugin(BeetsPlugin):
                 own = own_title(item.title, getattr(item, "track", None))
                 self._file_tags[id(item)] = FileTags(
                     item, item.title or "", own, {f: item.get(f) for f in RECORDING_FIELDS},
-                    " ".join(filter(None, (item.get("album"), job))))
+                    {f: item.get(f) for f in ARTIST_FIELDS}, artist_credit(item) | artist_credit(item, album=True),
+                    compilation(item), " ".join(filter(None, (item.get("album"), job))))
                 keys.add((own or "").lower())
             for key in keys - {""}:
                 self._pending_sources[key] = playlist
@@ -514,7 +545,9 @@ class MusicPipelinePlugin(BeetsPlugin):
                 continue
             disambig = item.get("trackdisambig") or ""
             recording = item.get("mb_trackid") or None
-            why, versions = wrong_recording(title, entry.album, matched, disambig)
+            other_artist = entry.another_artist(item)
+            matched_artist = item.get("artist") or ""
+            why, versions = wrong_recording(title, entry.album, matched, disambig, other_artist)
             dropped = why is not None
             if title != matched and "".join(words(title)) == "".join(words(matched)):
                 # Only case, punctuation or spacing differs (In My Time of Need, In My
@@ -528,7 +561,10 @@ class MusicPipelinePlugin(BeetsPlugin):
             if dropped:
                 for field, value in entry.fields.items():
                     item[field] = value
-            note = _dropped_note(why, versions)
+            if other_artist:
+                for field, value in entry.artist_fields.items():
+                    item[field] = value
+            note = _dropped_note(why, versions, matched_artist)
             if title != matched:
                 message = f"[TITLE] {matched} → {title}{note}"
             elif dropped:
@@ -543,6 +579,8 @@ class MusicPipelinePlugin(BeetsPlugin):
                 "matched": matched, "file_title": entry.title, "trackdisambig": disambig or None,
                 "recording_dropped": dropped, "dropped_mb_trackid": recording if dropped else None,
                 "dropped_why": why, "versions": versions or None,
+                "file_artist": entry.artist_fields["artist"] if other_artist else None,
+                "matched_artist": matched_artist if other_artist else None,
                 "usenet_job": item.get("usenet_job") or None})
 
     def clear_singleton_release_track(self, session, task):
@@ -569,12 +607,14 @@ class MusicPipelinePlugin(BeetsPlugin):
 
     def _wrong_recording(self, item, info) -> bool:
         """True when a Usenet item's own title and its match's are two songs
-        (homelab#2544) or two versions (homelab#2609), so the match's recording
-        isn't the file's: :func:`wrong_recording`."""
+        (homelab#2544) or two versions (homelab#2609), or its artist and the
+        match's are two artists (homelab#2649), so the match's recording isn't
+        the file's: :func:`wrong_recording`."""
         entry = self._file_tags.get(id(item))
         if entry is None or entry.item is not item or entry.own is None:
             return False
-        why, _ = wrong_recording(entry.own, entry.album, info.get("title") or "", info.get("trackdisambig") or "")
+        why, _ = wrong_recording(entry.own, entry.album, info.get("title") or "", info.get("trackdisambig") or "",
+                                 entry.another_artist(info))
         return why is not None
 
     def tag_source_on_stored(self, lib, item):
@@ -713,9 +753,9 @@ class MusicPipelinePlugin(BeetsPlugin):
         except Exception:
             info = {}
         if self._wrong_recording(item, info):
-            # The match is another song (homelab#2544) or another version of it
-            # (homelab#2609): its recording and ISRCs aren't the file's, and
-            # import_task_apply drops them.
+            # The match is another song (homelab#2544), another version of it
+            # (homelab#2609) or another artist's (homelab#2649): its recording and
+            # ISRCs aren't the file's, and import_task_apply drops them.
             info = {}
         isrcs = {*split_list(tags.isrc, ";"), *split_list(info.get("isrc"), ";"), *item_isrcs(item)}
         mb_trackid = (info.get("track_id") or info.get("mb_trackid") or item.get("mb_trackid")

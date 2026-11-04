@@ -358,6 +358,14 @@ def build_server(
         return await run("audit_titles", {})
 
     @mcp.tool(annotations={"readOnlyHint": True})
+    async def audit_artists() -> dict:
+        """music-audit-artists: items whose artist shares nothing with their album's artist, by album,
+        each with its fix, and the count. Compilations are left out, and names words can't compare
+        (another script, no tag) are counted, not listed. The fix is the item's: recording_candidates,
+        then set_recording."""
+        return await run("audit_artists", {})
+
+    @mcp.tool(annotations={"readOnlyHint": True})
     async def recheck_recordings(
         ids: Annotated[list[ItemId] | None, Field(description="only these item IDs (default: every item with "
                                                               "an mb_trackid)")] = None,

@@ -138,9 +138,10 @@ KINDS: dict[str, Kind] = {
     # --- Imports and the scan's later item changes ---
     "imported": Kind(ITEM, "[IMPORTED]: a spotdl download imported into the library.",
                      (*_ITEM, "playlist", "spotify_ids", "isrc", "mb_trackid", "fallback_recording")),
-    "retitled": Kind(ITEM, "[TITLE]: a Usenet item's title or trackdisambig put back from its file at import.",
+    "retitled": Kind(ITEM, "[TITLE]: a Usenet item's title or trackdisambig put back from its file at import, its "
+                           "recording dropped if refuted (data.dropped_why), and its artist if another's.",
                      (*_ITEM, "matched", "file_title", "trackdisambig", "recording_dropped", "dropped_mb_trackid",
-                      "dropped_why", "versions", "usenet_job")),
+                      "dropped_why", "versions", "file_artist", "matched_artist", "usenet_job")),
     "import_alongside": Kind(ITEM, "[BOTH]/[ALBUM]: an item imported beside a library item of the same recording "
                                    "(data.duplicate), with why.", (*_ITEM, "why", "duplicate")),
     "kept_apart": Kind(ITEM, "[SPLIT]/[APART]: an item imported beside one with its artist and title that no ID "

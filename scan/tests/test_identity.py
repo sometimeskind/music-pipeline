@@ -227,3 +227,85 @@ def test_version_clash_names_a_version_only_one_side_names() -> None:
     assert version_clash("Substitute", "Substitute", b_notes="live, 1970-02-14: Leeds") == ["live"]
     # Not a version word: a remaster, a "version 1b".
     assert version_clash("Song - 2015 Remaster", "Song", b_notes="version 1b") == []
+
+
+def _artists(*names: str, ids=()):
+    from music_scan.identity import Credit
+
+    return Credit(names, frozenset(ids))
+
+
+def test_different_artist_refutes_two_names_that_share_nothing() -> None:
+    """homelab#2649: 18518, Springsteen's I'm on Fire matched to 5000 Volts' song."""
+    from music_scan.identity import different_artist
+
+    assert different_artist(_artists("Bruce Springsteen"), _artists("5000 Volts"))
+    assert different_artist(_artists("The Who"), _artists("The Band"))  # "the" alone is no shared word
+    assert different_artist(_artists("Simon & Garfunkel"), _artists("Sonny & Cher"))  # nor "&", which reads "and"
+    assert different_artist(_artists("A Tribe Called Quest feat. Busta"), _artists("Of Montreal with Friends"))
+
+
+def test_different_artist_passes_credits_of_one_artist() -> None:
+    from music_scan.identity import different_artist
+
+    for a, b in [("Bruce Springsteen & The E Street Band", "Bruce Springsteen"),  # 18513, a band credit
+                 ("Bruce Springsteen", "Springsteen, Bruce"), ("Springsteen Bruce", "BRUCE SPRINGSTEEN"),
+                 ("CFCF feat. nuum & Seren Forever", "CFCF"), ("Beatles", "The Beatles"), ("Björk", "Bjork"),
+                 ("AC/DC", "ACDC"), ("R.E.M.", "REM"), ("Ke$ha", "Kesha"), ("Sergei Rachmaninoff", "Sergey Rachmaninov"),
+                 ("Tchaikovsky", "Chaikovsky"), ("BruceSpringsteen & E Street Band", "Bruce Springsteen")]:
+        assert not different_artist(_artists(a), _artists(b)), (a, b)
+
+
+def test_different_artist_keeps_what_words_cant_read() -> None:
+    from music_scan.identity import different_artist
+
+    for a, b in [("", "5000 Volts"), ("Bruce Springsteen", ""), ("Various Artists", "5000 Volts"), ("VA", "5000 Volts"),
+                 ("V.A.", "5000 Volts"), ("5000 Volts", "Various"), ("[unknown]", "5000 Volts"),
+                 ("Ryuichi Sakamoto", "坂本龍一"), ("Kino", "Кино"), ("БИ-2", "Bi2"), ("Cui Jian 崔健", "Tsui Chien"),
+                 ("The The", "The Cure"), ("!!!", "The Cure")]:
+        assert not different_artist(_artists(a), _artists(b)), (a, b)
+    assert not different_artist(_artists(), _artists("5000 Volts"))
+
+
+def test_different_artist_one_alike_name_or_id_is_enough() -> None:
+    from music_scan.identity import different_artist
+
+    assert not different_artist(_artists("Clarence Clemons", "Bruce Springsteen"), _artists("Bruce Springsteen"))
+    assert not different_artist(_artists("Yusuf", ids=["a"]), _artists("Cat Stevens", ids=["a", "b"]))
+    assert different_artist(_artists("Yusuf", ids=["a"]), _artists("Cat Stevens", ids=["b"]))
+
+
+def test_artist_credit_reads_an_item_and_a_matchs_info() -> None:
+    from beets.library import Item
+
+    from music_scan.identity import artist_credit
+
+    item = Item(artist="Bruce Springsteen & The E Street Band", artists=["Bruce Springsteen", "The E Street Band"],
+                mb_artistid="a", mb_artistids=["a", "b"], albumartist="Bruce Springsteen", mb_albumartistid="a")
+    assert artist_credit(item).names == ("Bruce Springsteen & The E Street Band", "Bruce Springsteen", "The E Street Band")
+    assert artist_credit(item).ids == {"a", "b"}
+    assert artist_credit(item, album=True).names == ("Bruce Springsteen",)
+    info = {"artist": "5000 Volts", "artist_credit": "5000 Volts", "artists": ["5000 Volts"], "artist_id": "v",
+            "artists_ids": ["v"]}
+    assert artist_credit(info).names == ("5000 Volts",) and artist_credit(info).ids == {"v"}
+
+
+def test_compilation_reads_the_flag_the_type_and_the_album_artist() -> None:
+    from beets.library import Item
+
+    from music_scan.identity import compilation
+
+    assert compilation(Item(comp=True))
+    assert compilation(Item(albumartist="Various Artists"))
+    assert compilation(Item(albumartist="V.A."))
+    assert compilation(Item(albumtypes=["album", "compilation"]))
+    assert not compilation(Item(albumartist="Bruce Springsteen", albumtypes=["album"]))
+    assert not compilation(Item())
+
+
+def test_merge_agrees_takes_no_shared_word_from_the() -> None:
+    """The word rule is artist_words' (homelab#2649): "the" links no two artists."""
+    from music_scan.identity import merge_agrees
+
+    assert not merge_agrees("Heaven", "The Cure", "Heaven", "The Smiths")
+    assert merge_agrees("Heaven", "The Cure", "Heaven", "Cure")
