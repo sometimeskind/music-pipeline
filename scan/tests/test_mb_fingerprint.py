@@ -1230,10 +1230,18 @@ def test_a_set_to_a_recording_by_the_same_artist_changes_no_artist_field():
     assert mbf.aligned_artists(item, SPRINGSTEEN) == {}
 
 
-def test_an_item_with_no_artist_ids_or_a_recording_looked_up_without_them_is_left_alone():
-    bare = FakeItem(1, "x", artist="Someone")
-    assert mbf.aligned_artists(bare, SPRINGSTEEN) == {}
-    assert mbf.aligned_artists(_on_fire(), {"id": FIRE_BOSS, "artist-credit": [{"name": "Bruce Springsteen"}]}) == {}
+def test_an_item_with_no_artist_ids_takes_the_recording_chosen_for_it():
+    bare = FakeItem(1, "x", artist="Various Interprets")
+    changes = mbf.aligned_artists(bare, SPRINGSTEEN)
+    assert changes["artist"] == ("Various Interprets", "Bruce Springsteen")
+    assert changes["mb_artistids"] == ([], [BOSS])
+    assert changes["mb_artistid"][1] == BOSS
+
+
+def test_a_recording_looked_up_without_artist_ids_is_left_alone():
+    for bare_credit in ({"id": FIRE_BOSS, "artist-credit": [{"name": "Bruce Springsteen"}]}, {"id": FIRE_BOSS}):
+        assert mbf.aligned_artists(_on_fire(), bare_credit) == {}
+        assert mbf.aligned_artists(FakeItem(1, "x", artist="Someone"), bare_credit) == {}
 
 
 def test_arrangers_follow_the_recording_only_when_the_item_has_them():
