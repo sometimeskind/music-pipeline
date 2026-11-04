@@ -1840,6 +1840,49 @@ def test_tick_resets_mixed_albums_before_the_top_up_and_pushes_the_counts(tmp_pa
     assert State.load().mixed == ["K0"]
 
 
+def _tick_pushes(push) -> list[str]:
+    return [c.args[0] for c in push.call_args_list if c.args[1] == "music_albums_tick"]
+
+
+def test_a_tick_pushes_its_own_group_that_imports_never_overwrite(tmp_path: Path) -> None:
+    """homelab#2626: an import pushes job music_albums too, so the tick's own
+    group is what shows a tick ran (and how), however many imports ran since."""
+    prowlarr, sab = fakes([])
+    with patch.object(albums, "_push") as push, patch.object(albums, "refresh_playlists"), \
+            patch.object(albums, "lost_completions", return_value=[]), patch.object(albums, "top_up"):
+        tick([], FakeSpotify("s", []), prowlarr, sab, never_have, Settings(mode="on"))
+    [body] = _tick_pushes(push)
+    assert "music_albums_tick_success 1" in body
+    assert "music_albums_tick_timestamp_seconds " in body
+    assert push.call_args.args[1] == "music_albums"  # the counts stay the last push
+
+    with patch.object(albums, "_push") as push:
+        albums.push_metrics(State(), True)
+    assert not _tick_pushes(push)
+
+
+def test_a_failed_tick_pushes_its_failure_to_its_own_group(tmp_path: Path) -> None:
+    prowlarr, sab = fakes([])
+    with patch.object(albums, "_push") as push, \
+            patch.object(albums, "refresh_playlists", side_effect=RuntimeError("Spotify down")), \
+            pytest.raises(RuntimeError):
+        tick([], FakeSpotify("s", []), prowlarr, sab, never_have, Settings(mode="on"))
+    [body] = _tick_pushes(push)
+    assert "music_albums_tick_success 0" in body
+
+
+def test_a_tick_skipped_for_a_database_outage_pushes_a_failed_tick(tmp_path: Path) -> None:
+    prowlarr, sab = fakes([])
+
+    def down():
+        raise statedb.Unavailable("the music database is unreachable")
+
+    with patch.object(albums, "_push") as push, patch.object(albums.State, "load", side_effect=down):
+        tick([], FakeSpotify("s", []), prowlarr, sab, never_have, Settings(mode="on"))
+    [body] = _tick_pushes(push)
+    assert "music_albums_tick_success 0" in body
+
+
 def test_tick_grabs_even_when_the_mixed_hook_fails(tmp_path: Path) -> None:
     prowlarr, sab = fakes([])
 

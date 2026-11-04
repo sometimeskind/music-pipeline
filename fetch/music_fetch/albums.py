@@ -1483,6 +1483,18 @@ def push_metrics(state: State, success: bool) -> None:
     _push("\n".join(lines), "music_albums")
 
 
+def push_tick(success: bool) -> None:
+    """The tick's own group, job ``music_albums_tick`` (homelab#2626).
+
+    Every import pushes job ``music_albums`` too (:func:`push_metrics`), so its
+    push time and ``music_albums_last_tick_success`` say an album run ended,
+    not that a tick did: imports back to back hid a tick that never ran, and a
+    good import cleared a failing tick's 0.  Only :func:`tick` pushes this."""
+    _push("\n".join([_gauge("music_albums_tick_success", int(success)),
+                     _gauge("music_albums_tick_timestamp_seconds", int(_now().timestamp()))]),
+          "music_albums_tick")
+
+
 def _search_overrides(state: State, fixes: list[overrides.AlbumOverride] | None = None) -> dict[str, str]:
     return overrides.keyed(album_fixes() if fixes is None else fixes, state)[0]
 
@@ -1558,6 +1570,7 @@ def tick(
         # Never run without the state (homelab#2410): skip, and let
         # MusicAlbumTickFailing say so once the outage outlasts 2h.
         logger.warning("[DB-DOWN] Album tick skipped — the music database is down: %s", exc)
+        push_tick(False)
         _push("\n".join([_gauge("music_albums_last_tick_success", 0),
                          _gauge("music_albums_last_tick_timestamp_seconds", int(_now().timestamp()))]),
               "music_albums")
@@ -1593,6 +1606,7 @@ def tick(
         success = True
     finally:
         state.save()
+        push_tick(success)
         push_metrics(state, success)
         forget_failed(sabnzbd, failed_jobs)
     counts = status_counts(state)

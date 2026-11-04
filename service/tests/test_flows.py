@@ -858,6 +858,62 @@ def test_hold_says_it_waits_for_a_held_slot():
     assert lines[1].startswith("[WAIT] Got the albums slot after ")
 
 
+def test_a_bounded_hold_gives_up_as_busy():
+    from music_service import flows
+    busy, still_busy = MagicMock(), MagicMock()
+    busy.__enter__.side_effect = TimeoutError
+    still_busy.__enter__.side_effect = TimeoutError
+    with patch.object(flows, "concurrency", side_effect=[busy, still_busy]) as mock_concurrency, \
+         patch.object(flows, "get_run_logger"):
+        with pytest.raises(flows.Busy):
+            with flows.hold("albums", wait=600):
+                pytest.fail("the block ran without the slot")
+    assert mock_concurrency.call_args_list[1] == (("albums",), {"occupy": 1, "timeout_seconds": 600})
+
+
+def _albums_flow(tick=None):
+    """Run albums_flow's body with *tick* as the album tick; returns the task mock and the info lines."""
+    import music_fetch.albums as albums
+    from music_service import flows
+    with patch.object(albums.Settings, "from_env", return_value=albums.Settings(mode="on")), \
+         patch.object(flows, "album_tick_task", side_effect=tick) as task, \
+         patch.object(flows, "get_run_logger") as mock_logger:
+        flows.albums_flow.fn()
+    return task, [c.args[0] % c.args[1:] for c in mock_logger.return_value.info.call_args_list]
+
+
+def test_the_album_tick_waits_for_an_import_instead_of_skipping():
+    """homelab#2626: imports run back to back and each waits for the slot, so a
+    tick that skipped when busy almost never ran."""
+    from music_service import flows
+    with patch.object(flows, "hold") as mock_hold:
+        task, _ = _albums_flow()
+    mock_hold.assert_called_once_with("albums", wait=flows.ALBUM_TICK_WAIT_SECONDS)
+    task.assert_called_once()
+
+
+def test_the_album_tick_skips_only_after_its_wait():
+    from music_service import flows
+    with patch.object(flows, "hold", side_effect=flows.Busy("albums")):
+        task, lines = _albums_flow()
+    task.assert_not_called()
+    assert lines == [f"Album tick skipped — another album run held the lock for "
+                     f"{flows.ALBUM_TICK_WAIT_SECONDS // 60} min"]
+
+
+def test_a_timeout_inside_the_album_tick_is_not_a_skip():
+    """A socket timeout in the tick is a TimeoutError too: it fails the run, never reads as busy."""
+    from music_service import flows
+    with patch.object(flows, "concurrency"), pytest.raises(TimeoutError):
+        _albums_flow(TimeoutError("Prowlarr read timed out"))
+
+
+def test_the_album_tick_wait_ends_before_the_next_tick():
+    """Two ticks never wait at once: the wait ends before the next one is scheduled."""
+    from music_service import flows
+    assert flows.SKIP_IF_BUSY_SECONDS < flows.ALBUM_TICK_WAIT_SECONDS < 1800
+
+
 def test_hold_does_not_retry_a_timeout_from_its_block():
     from music_service import flows
     with patch.object(flows, "concurrency") as mock_concurrency, \
