@@ -104,9 +104,14 @@ KINDS: dict[str, Kind] = {
     "later_resolved": Kind(ALBUM, "A Later entry resolved to its album's release group.",
                            ("album", "key", "ref", "removed_entry")),
     "later_available": Kind(ALBUM, "A Later entry whose album the library now holds whole.", ("album", "key", "ref")),
-    "spotify_id_resolved": Kind(ALBUM, "[REKEY]: the resolve pass keyed a record by its release group.",
-                                ("album", "key", "via")),
-    "album_merged": Kind(ALBUM, "[MERGE]: the resolve pass merged records into one.", ("album", "key", "absorbed")),
+    "spotify_id_resolved": Kind(ALBUM, "[REKEY]: the resolve pass keyed a record by its release group; "
+                                       "data.conflict is evidence the import outranked.",
+                                ("album", "key", "via", "conflict")),
+    "album_merged": Kind(ALBUM, "[MERGE]: the resolve pass merged records into one; data.conflict is what the "
+                                "merge settled (an absorbed record's evidence, differing search overrides).",
+                         ("album", "key", "absorbed", "conflict")),
+    "conflict": Kind(ALBUM, "[CONFLICT]: evidence naming two release groups leaves a record unkeyed "
+                            "(once a day while it stands).", ("album", "key", "conflict")),
     "merged_releases": Kind(ALBUM, "[MERGED]/[MULTI]: which releases a record a release-group merge left "
                                    "holding several keeps, and why.",
                             ("album", "key", "kept", "why", "releases")),

@@ -37,6 +37,11 @@ retires the other's copies as an import would (homelab#2545).
 
 The pass is idempotent: run it again after the cache or the library learns
 more, and it resolves and merges what it now can (``music-album-resolve``).
+
+Its decisions are events (homelab#2590): a rekey (``spotify_id_resolved``) and a
+merge (``album_merged``) carry any conflict they settled in ``data.conflict``,
+and a record a conflict leaves unkeyed is a ``conflict`` event, once a day while
+it stands (the ``[CONFLICT]`` log line is debug detail).
 """
 
 from __future__ import annotations
@@ -62,6 +67,8 @@ ORIGIN_RANK = {state.ALBUM: 0, "request": 1, "wants": 2, "library": 3}
 LIBRARY_DB = Path("/root/.config/beets/library.db")
 # A grabbed record's import in progress (albums.IMPORT_FIELDS, not imported here: albums imports state).
 _IMPORT_FIELDS = ("import_started", "import_errors", "import_deferrals", "import_path", "import_identity")
+# Every pass sees a standing conflict again: one event a day, like search_miss.
+CONFLICT_ONCE_HOURS = 24
 
 
 def library_groups(db_path: Path) -> dict[str, set[str]]:
@@ -130,7 +137,8 @@ class Report:
     merged: list[str] = dataclasses.field(default_factory=list)
     conflicts: list[str] = dataclasses.field(default_factory=list)
     absorbed: int = 0
-    # (kind, message, key, record, data) per merge and rekey: :meth:`record_events` writes them once saved.
+    # (kind, message, key, record, data) per merge, rekey and standing conflict:
+    # :meth:`record_events` writes them once saved.
     changes: list[tuple[str, str, str, Mapping, dict]] = dataclasses.field(default_factory=list)
 
     def summary(self) -> str:
@@ -142,8 +150,8 @@ class Report:
     def log(self, verbose: bool = False) -> None:
         for line in self.merged:
             logger.info("  [MERGE] %s", line)
-        for line in self.conflicts:
-            logger.info("  [CONFLICT] %s", line)
+        for line in self.conflicts:  # their events hold them; only --verbose lists them
+            logger.log(logging.INFO if verbose else logging.DEBUG, "  [CONFLICT] %s", line)
         for reason, labels in sorted(self.flagged.items()):
             if verbose or reason in (state.CONFLICT, state.IN_FLIGHT):
                 for item in labels:
@@ -155,11 +163,13 @@ class Report:
 
     def record_events(self) -> None:
         """Each merge (``album_merged``) and rekey (``spotify_id_resolved``) as an
-        event on the surviving album (homelab#2590): only for a pass that is saved."""
+        event on the surviving album, and each record left unkeyed by a conflict
+        (``conflict``, daily) on that record (homelab#2590): only for a pass that is saved."""
         for kind, message, key, record, data in self.changes:
             events.record(kind, message, source="resolve", spotify_album_id=state.primary_spotify(record),
                           release_group=record.get("release_group"),
-                          data={"album": f"{record.get('artist')} — {record.get('name')}", "key": key, **data})
+                          data={"album": f"{record.get('artist')} — {record.get('name')}", "key": key, **data},
+                          once_hours=CONFLICT_ONCE_HOURS if kind == "conflict" else None)
 
 
 def _union(*lists) -> list:
@@ -198,18 +208,24 @@ def resolve(rows: Any, cache: Mapping[str, dict], library: Mapping[str, set[str]
     report = Report()
     targets: dict[str, list[str]] = {}
     vias: dict[str, str] = {}
+    settled: dict[str, str] = {}  # key → the conflict its release group settled, for the rekey or merge event
     for key, record in rows.albums.items():
         if record.get("release_group"):
             continue
         verdict = judge(record, cache, library)
+        line = f"{label(key, record)}: {verdict.conflict}"
         if verdict.conflict:
-            report.conflicts.append(f"{label(key, record)}: {verdict.conflict}")
+            report.conflicts.append(line)
         if verdict.group:
             targets.setdefault(verdict.group, []).append(key)
             vias[key] = verdict.via
+            if verdict.conflict:
+                settled[key] = verdict.conflict
         else:
             record["unresolved"] = verdict.unresolved
             report.flagged.setdefault(verdict.unresolved, []).append(label(key, record))
+            if verdict.conflict:
+                report.changes.append(("conflict", f"[CONFLICT] {line}", key, record, {"conflict": verdict.conflict}))
     keyed = {r["release_group"]: k for k, r in rows.albums.items() if r.get("release_group")}
     absorbed: set[str] = set()
     for group, keys in targets.items():
@@ -232,18 +248,23 @@ def resolve(rows: Any, cache: Mapping[str, dict], library: Mapping[str, set[str]
             report.merged.append(line)
             absorbed_records = [{"key": k, "album": label(k, rows.albums[k]), "status": rows.albums[k].get("status"),
                                  "spotify_album_ids": rows.albums[k].get("spotify_album_ids") or []} for k in others]
-            report.changes.append(("album_merged", f"[MERGE] {line}", survivor, record, {"absorbed": absorbed_records}))
+            # An absorbed record has no rekey of its own, so its conflict goes on the merge.
+            notes = [f"{label(k, rows.albums[k])}: {settled[k]}" for k in others if k in settled]
             report.absorbed += len(others)
             words = {overrides[i] for i in record.get("spotify_album_ids", []) if i in overrides}
             if len(words) > 1:
-                report.conflicts.append(f"{label(survivor, record)}: search overrides differ ({' | '.join(sorted(words))});"
-                                        " the primary Spotify ID's wins")
+                differ = f"search overrides differ ({' | '.join(sorted(words))}); the primary Spotify ID's wins"
+                report.conflicts.append(f"{label(survivor, record)}: {differ}")
+                notes.append(differ)
+            report.changes.append(("album_merged", f"[MERGE] {line}", survivor, record,
+                                   {"absorbed": absorbed_records, **({"conflict": "; ".join(notes)} if notes else {})}))
         if not existing:
             record["release_group"], record["unresolved"] = group, None
             line = f"{label(survivor, record)} → {group}"
             report.rekeyed.append(line)
             report.changes.append(("spotify_id_resolved", f"[REKEY] {line}", survivor, record,
-                                   {"via": vias.get(survivor)}))
+                                   {"via": vias.get(survivor),
+                                    **({"conflict": settled[survivor]} if survivor in settled else {})}))
     # A merge can change a record's key (a name-only album that gained a release group).
     rename = {k: rows.key(r) for k, r in rows.albums.items() if k not in absorbed}
     if absorbed or any(k != v for k, v in rename.items()):

@@ -35,7 +35,7 @@ PACKAGES = ("music_fetch", "music_scan", "music_service")
 # must also appear as a string literal in the same module.
 OPAQUE = {
     # resolve.Pass.record_events replays the (kind, …) tuples a pass collected.
-    ("music_fetch.resolve", "record_events"): {"album_merged", "spotify_id_resolved"},
+    ("music_fetch.resolve", "record_events"): {"album_merged", "spotify_id_resolved", "conflict"},
 }
 
 ITEM_FIELDS = ("artist", "title", "album", "path")  # events.item_fields

@@ -160,3 +160,85 @@ def test_a_merge_and_a_rekey_are_events_once_recorded(monkeypatch):
     assert merged["data"]["absorbed"][0]["spotify_album_ids"] == ["sp1"]
     assert rekeyed["data"]["key"] == "sp2" and rekeyed["data"]["via"] == "cache:upc"
     assert other["release_group"] == RG2 and other["data"]["via"] == "cache:url"
+
+
+def _recorded(monkeypatch) -> list:
+    recorded = []
+    monkeypatch.setattr(resolve.events, "record", lambda kind, message, **kw: recorded.append((kind, message, kw)))
+    return recorded
+
+
+def test_a_rekey_carries_the_conflict_it_settled_with_no_row_of_its_own(monkeypatch):
+    recorded = _recorded(monkeypatch)
+    rows = state.AlbumRows(albums={"sp1": _rec("sp1", **_imported(RG))}, mixed=[])
+    resolve.resolve(rows, {"sp1": _cached(RG2)}, {}).record_events()
+    [(kind, message, kw)] = recorded
+    assert (kind, kw["once_hours"]) == ("spotify_id_resolved", None)
+    assert kw["data"]["conflict"] == f"the import's {RG} beats {RG2}" and RG2 not in message
+
+
+def test_a_rekey_with_nothing_to_settle_has_no_conflict(monkeypatch):
+    recorded = _recorded(monkeypatch)
+    rows = state.AlbumRows(albums={"sp1": _rec("sp1")}, mixed=[])
+    resolve.resolve(rows, {"sp1": _cached(RG)}, {}).record_events()
+    assert "conflict" not in recorded[0][2]["data"]
+
+
+def test_an_unresolved_conflict_is_a_daily_event_on_the_record(monkeypatch):
+    recorded = _recorded(monkeypatch)
+    rows = state.AlbumRows(albums={"sp1": _rec("sp1")}, mixed=[])
+    resolve.resolve(rows, {"sp1": _cached(RG)}, {"sp1": {RG2}}).record_events()
+    [(kind, message, kw)] = recorded
+    assert (kind, kw["once_hours"], kw["spotify_album_id"], kw["release_group"]) == ("conflict", 24, "sp1", None)
+    assert message.startswith("[CONFLICT] Artist — Album (sp1): ")
+    assert kw["data"]["key"] == "sp1" and RG in kw["data"]["conflict"] and RG2 in kw["data"]["conflict"]
+    assert rows.albums["sp1"]["unresolved"] == state.CONFLICT
+
+
+def test_a_standing_conflict_repeats_its_message_so_once_hours_can_match_it(monkeypatch):
+    recorded = _recorded(monkeypatch)
+    rows = state.AlbumRows(albums={"sp1": _rec("sp1")}, mixed=[])
+    for _ in range(2):
+        resolve.resolve(rows, {"sp1": _cached(RG)}, {"sp1": {RG2}}).record_events()
+    assert recorded[0][1] == recorded[1][1]
+
+
+def test_an_absorbed_records_conflict_goes_on_the_merge(monkeypatch):
+    recorded = _recorded(monkeypatch)
+    rows = state.AlbumRows(albums={"sp1": _rec("sp1", release_group=RG, status="imported"),
+                                   "sp2": _rec("sp2", **_imported(RG))}, mixed=[])
+    resolve.resolve(rows, {"sp2": _cached(RG2)}, {}).record_events()
+    [(kind, _, kw)] = recorded
+    assert kind == "album_merged"
+    assert kw["data"]["conflict"] == f"Artist — Album (sp2): the import's {RG} beats {RG2}"
+
+
+def test_differing_overrides_go_on_the_merge_and_a_clean_merge_has_no_conflict(monkeypatch):
+    recorded = _recorded(monkeypatch)
+    cache = {"sp1": _cached(RG), "sp2": _cached(RG)}
+    rows = state.AlbumRows(albums={"sp1": _rec("sp1"), "sp2": _rec("sp2")}, mixed=[])
+    resolve.resolve(rows, cache, {}, {"sp1": "a b", "sp2": "c d"}).record_events()
+    assert "search overrides differ (a b | c d)" in recorded[0][2]["data"]["conflict"]
+    recorded.clear()
+    rows = state.AlbumRows(albums={"sp1": _rec("sp1"), "sp2": _rec("sp2")}, mixed=[])
+    resolve.resolve(rows, cache, {}).record_events()
+    assert "conflict" not in recorded[0][2]["data"]
+
+
+def test_a_conflict_waiting_on_an_import_records_nothing_until_it_lands(monkeypatch):
+    recorded = _recorded(monkeypatch)
+    rows = state.AlbumRows(albums={"sp1": _rec("sp1", release_group=RG, status="grabbed"),
+                                   "sp2": _rec("sp2", **_imported(RG))}, mixed=[])
+    report = resolve.resolve(rows, {"sp2": _cached(RG2)}, {})
+    report.record_events()
+    assert recorded == [] and rows.albums["sp2"]["unresolved"] == state.IN_FLIGHT and report.conflicts
+
+
+def test_the_conflict_line_is_debug_unless_verbose(caplog):
+    rows = state.AlbumRows(albums={"sp1": _rec("sp1", **_imported(RG))}, mixed=[])
+    report = resolve.resolve(rows, {"sp1": _cached(RG2)}, {})
+    with caplog.at_level("INFO", logger=resolve.logger.name):
+        report.log()
+        assert "[CONFLICT]" not in caplog.text
+        report.log(verbose=True)
+    assert "[CONFLICT]" in caplog.text
