@@ -858,4 +858,6 @@ def album_import_flow(nzo_id: str, ok: bool, path: str = "", fail_message: str =
         finally:
             state.save()
             albums.push_metrics(state, success)
+    if status is not None and not ok:
+        albums.forget_failed(Sabnzbd(), [nzo_id])
     logger.info("Album import for %s: %s", nzo_id, status or "not an album-mode job")

@@ -450,13 +450,17 @@ class Sabnzbd:
         self.timeout = timeout
 
     def _api(self, **params) -> dict:
-        resp = requests.get(
-            f"{self.url}/api",
-            params={**params, "apikey": self.api_key, "output": "json"},
-            timeout=self.timeout,
-        )
-        resp.raise_for_status()
-        return resp.json()
+        try:
+            resp = requests.get(
+                f"{self.url}/api",
+                params={**params, "apikey": self.api_key, "output": "json"},
+                timeout=self.timeout,
+            )
+            resp.raise_for_status()
+            return resp.json()
+        except requests.RequestException as exc:
+            # requests names the URL, API key and all; the caller logs this (homelab#2631).
+            raise RuntimeError(redact_text(f"SABnzbd {params.get('mode')}: {exc}")) from None
 
     def add_url(self, nzb_url: str, name: str) -> str:
         """Queue an NZB by URL in the album category.  Returns the nzo_id."""
@@ -465,6 +469,11 @@ class Sabnzbd:
         if not data.get("status") or not ids:
             raise RuntimeError(f"SABnzbd refused {name}: {data.get('error', data)}")
         return ids[0]
+
+    def delete_failed(self, nzo_id: str) -> None:
+        """Delete a failed job from history, with its files: SABnzbd keeps a
+        failed job's download in its incomplete dir until then (homelab#2631)."""
+        self._api(mode="history", name="delete", value=nzo_id, del_files=1, archive=0)
 
     def finished(self, nzo_ids: list[str]) -> dict[str, dict]:
         """History entries for *nzo_ids* that SABnzbd has finished, by nzo_id.

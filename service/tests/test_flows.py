@@ -563,6 +563,36 @@ def test_album_import_flow_grab_next_uses_search_overrides(tmp_path):
     assert prowlarr.search.call_args_list[0].args == ("webdings four tet",)
 
 
+@pytest.mark.parametrize(("ok", "status", "deleted"), [
+    (False, "wanted", True),
+    (True, "done", False),
+    (False, None, False),  # not an album-mode job: a manual add is the operator's
+])
+def test_album_import_flow_deletes_only_a_handled_failure(ok, status, deleted):
+    """A failed job's download leaves SABnzbd once the outcome is saved (homelab#2631)."""
+    import music_fetch.albums as albums
+    from music_service import flows
+
+    calls = []
+    sab = MagicMock()
+    sab.delete_failed.side_effect = lambda nzo_id: calls.append("delete")
+
+    with patch.object(albums.State, "load", return_value=albums.State()), \
+         patch.object(albums.State, "save", side_effect=lambda: calls.append("save")), \
+         patch.object(albums, "push_metrics"), \
+         patch.object(albums, "top_up"), \
+         patch.object(albums.Settings, "from_env", return_value=albums.Settings(mode="on")), \
+         patch("music_fetch.usenet.Prowlarr"), \
+         patch("music_fetch.usenet.Sabnzbd", return_value=sab), \
+         patch("music_scan.library.MusicLibrary"), \
+         patch.object(flows, "_album_library_hooks",
+                      return_value=(lambda playlist, tracks: False, None, MagicMock(return_value=status))), \
+         patch.object(flows, "concurrency"):
+        flows.album_import_flow("SABnzbd_nzo_1", ok, "/downloads/x")
+
+    assert calls == (["save", "delete"] if deleted else ["save"])
+
+
 def test_album_completion_wires_the_release_hooks():
     """#279: complete() gets the release's identification, the import of the files beets
     couldn't match, the claim and the retirement of other copies (playlists regenerated)."""
