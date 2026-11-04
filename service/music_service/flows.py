@@ -443,10 +443,24 @@ def _run_scan_tasks() -> None:
 # answers, even on a free limit (#174).
 SKIP_IF_BUSY_SECONDS = 5
 
+# How long the album tick waits for the albums slot (homelab#2626).  Each import
+# grabs the next album, so imports run back to back with ~40 s between them, and
+# a tick that skipped when busy almost never ran.  Prefect's server has a waiter
+# retry within 30 s, so a waiting tick takes one of those gaps.  Under the
+# 30-min tick interval, so two ticks never wait at once.
+ALBUM_TICK_WAIT_SECONDS = 20 * 60
+
+
+class Busy(Exception):
+    """:func:`hold` waited its bound and another run still holds the slot.
+
+    Not a TimeoutError, which a timeout inside the held block raises too."""
+
 
 @contextlib.contextmanager
-def hold(name: str) -> Iterator[None]:
-    """Hold the *name* concurrency slot for the block, waiting as long as it takes.
+def hold(name: str, wait: float | None = None) -> Iterator[None]:
+    """Hold the *name* concurrency slot for the block, waiting as long as it
+    takes, or up to *wait* seconds and then raising :class:`Busy`.
 
     A wait says so (homelab#2596): ``[WAIT]`` when another run holds the slot,
     then how long it took.  Before, a flow waiting on a slot was silent, so a
@@ -459,7 +473,11 @@ def hold(name: str) -> Iterator[None]:
             logger = get_run_logger()
             logger.info("[WAIT] The %s slot is held by another run; waiting for it", name)
             start = time.monotonic()
-            stack.enter_context(concurrency(name, occupy=1))
+            bound = {} if wait is None else {"timeout_seconds": wait}
+            try:
+                stack.enter_context(concurrency(name, occupy=1, **bound))
+            except TimeoutError:
+                raise Busy(name) from None
             logger.info("[WAIT] Got the %s slot after %ds", name, time.monotonic() - start)
         yield
 
@@ -827,11 +845,13 @@ def albums_flow() -> None:
     if settings.mode == "off":
         logger.info("Album mode is off (ALBUM_MODE)")
         return
+    # Waits for an import rather than skip (homelab#2626): the lost-trigger recovery,
+    # a [RETRY]'s only retry, and the feeds run nowhere else.
     try:
-        with concurrency("albums", occupy=1, timeout_seconds=SKIP_IF_BUSY_SECONDS):
+        with hold("albums", wait=ALBUM_TICK_WAIT_SECONDS):
             album_tick_task(settings)
-    except TimeoutError:
-        logger.info("Album tick skipped — another album run holds the lock")
+    except Busy:
+        logger.info("Album tick skipped — another album run held the lock for %d min", ALBUM_TICK_WAIT_SECONDS // 60)
 
 
 @flow(name="music-album-import", log_prints=True)
