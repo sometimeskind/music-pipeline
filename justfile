@@ -71,11 +71,6 @@ clear-failures:
 clear-failures-k8s:
     kubectl -n music exec deploy/music-pipeline -c music-pipeline -- music-state clear-backoff --apply
 
-# Fingerprint all beets items lacking mb_trackid via AcoustID. Requires ACOUSTID_APIKEY env var.
-# Safe to re-run: skips items that already have mb_trackid.
-mb-fingerprint:
-    op run --env-file .env.tpl -- docker compose run --rm service music-mb-fingerprint
-
 # One-time migration (issue #117): copy source= → sources= for all beets items.
 # IMPORTANT: deploy new code first, then run this. Safe to re-run.
 migrate-sources:
