@@ -764,6 +764,23 @@ def test_merge_by_hand_of_an_extra_into_its_release_item_does_not_warn(monkeypat
     assert "[ALBUM]" not in caplog.text
 
 
+def test_merge_by_hand_of_two_release_items_of_one_record_does_not_warn(monkeypatch, tmp_path, caplog) -> None:
+    items = _album_items(tmp_path, {1: {"album_record": "A", "release": "r1", "album": "Made Up"},
+                                   2: {"album_record": "A", "release": "r1", "album": "Made Up"}})
+    _patch_run(monkeypatch, items, tmp_path)
+    caplog.set_level("INFO")
+    dupes.run(merge_ids=[2, 1])
+    assert "[ALBUM]" not in caplog.text
+
+
+def test_merge_by_hand_of_a_release_item_into_a_loose_item_warns(monkeypatch, tmp_path, caplog) -> None:
+    items = _album_items(tmp_path, {1: {"album_record": "A", "release": "r1", "album": "Made Up"}, 2: {}})
+    _patch_run(monkeypatch, items, tmp_path)
+    caplog.set_level("INFO")
+    dupes.run(merge_ids=[2, 1])
+    assert "[ALBUM] 1 is a release item of album record A [Made Up]: its album loses the track" in caplog.text
+
+
 def test_an_uncertain_pair_two_rules_found_prints_its_merge_command_once(monkeypatch, tmp_path, caplog) -> None:
     """An AcoustID match too far apart, and the same title and artist: one pair, one command."""
     a = FakeItem(10, "Made Up Song", artist="Some Band", length=200.0, acoustid_id="aid")
