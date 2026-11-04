@@ -288,6 +288,7 @@ A write tool's **apply** takes Prefect's `pipeline` lock (and first `albums`, fo
 | `audit_want_albums` | `{}` | `music-audit-want-albums` |
 | `audit_titles` | `{}` | `music-audit-titles` |
 | `audit_artists` | `{}` | `music-audit-artists` |
+| `audit_grabs` | `{}` | `music-audit-grabs` |
 | `recheck_recordings` | `{"ids": [6994, 5672]}` (optional; none = every item with an `mb_trackid`) or `{"resume": "<run ID>"}` | `music-mb-fingerprint --recheck --run-id=<job_id> [-- ID…]` / `… --run-id=<run ID>` (long lane) |
 | `search_releases` | `{"query": "…", "limit": 5}` | `music-requests search --limit=N -- QUERY` |
 | `recording_candidates` | `{"id": 13744}` | `music-mb-fingerprint --candidates <id>` |
