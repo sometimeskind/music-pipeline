@@ -56,8 +56,8 @@ uncertain pair, onto KEEP through the same merge as ``--apply``; the audit print
 the command for each uncertain pair, keeper by the rule above.  It is a dry run
 without ``--apply`` and refuses unknown IDs, KEEP among the drops, and a manually
 imported drop (any ``via`` but spotdl/usenet, as supersede's ``[MANUAL]``) unless
-``--allow-manual``.  A drop that is a track of an album record (other than an
-extra merged into its own record's release item) is merged too, with an
+``--allow-manual``.  A drop that is a track of an album record (other than one merged
+into a release item of its own record) is merged too, with an
 ``[ALBUM]`` warning that its album loses the track (:func:`album_loss`).
 
 ``--unlink ITEM_ID SPOTIFY_ID`` takes one Spotify track ID off one item's
@@ -370,12 +370,12 @@ def hold_albums(certain: list[Group]) -> tuple[list[Group], list[Group]]:
 
 def album_loss(keeper, drop) -> str:
     """Why dropping *drop* onto *keeper* takes a track off an album, or ``""``: *drop*
-    is a track of an album record, unless it is an extra merged into its own
-    record's release item."""
+    is a track of an album record, unless the keeper is a release item of that same
+    record (an extra or another release item): the album keeps the track through it."""
     key = drop.get("album_record")
     if not key:
         return ""
-    if _is_extra(drop) and keeper.get("album_record") == key and not _is_extra(keeper):
+    if keeper.get("album_record") == key and not _is_extra(keeper):
         return ""
     kind = "local-only extra" if _is_extra(drop) else "release item"
     return f"{drop.id} is a {kind} of album record {key} [{drop.get('album') or '?'}]: its album loses the track"
