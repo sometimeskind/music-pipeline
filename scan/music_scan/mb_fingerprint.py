@@ -350,7 +350,7 @@ def set_by_hand(item) -> bool:
 
 # A MusicBrainz recording by ID (``recording/<id>``: its title and disambiguation), None when there is none.
 RecordingLookup = Callable[[str], "dict | None"]
-Changes = dict[str, tuple[str, str]]  # field: (before, after)
+Changes = dict[str, tuple]  # field: (before, after): strings, or lists for a multi-valued field
 
 
 def musicbrainz_recordings() -> RecordingLookup:
@@ -762,13 +762,14 @@ def refresh_replaced(since: datetime | None = None, apply: bool = False, library
 
 
 def musicbrainz_recording_credits(mb=None) -> RecordingLookup:
-    """``recording/<id>?inc=artist-credits+isrcs``: :func:`musicbrainz_recordings` with
-    the artist, which the dry run shows beside the item's, and the ISRCs the item's
-    are aligned with (homelab#2623)."""
+    """``recording/<id>?inc=artist-credits+isrcs+artist-rels``: :func:`musicbrainz_recordings`
+    with the artist credit (shown beside the item's, and what :func:`aligned_artists`
+    aligns its artist fields with), the ISRCs the item's are aligned with (homelab#2623)
+    and the arranger and remixer relations."""
     from music_scan.mb_release import MusicBrainz  # noqa: PLC0415
 
     mb = mb or MusicBrainz()
-    return lambda recording_id: mb.get(f"recording/{recording_id}", inc="artist-credits+isrcs")
+    return lambda recording_id: mb.get(f"recording/{recording_id}", inc="artist-credits+isrcs+artist-rels")
 
 
 # ---------------------------------------------------------------------------
@@ -822,6 +823,77 @@ def aligned_isrcs(item, recording: dict, get: MusicBrainzGet | None) -> tuple[st
         notes.append(f"the recording has {len(isrcs)} ISRCs ({', '.join(isrcs)}) and none is added: which one is "
                      "the file's isn't known")
     return ";".join(keep), notes
+
+
+# The artist fields beets copies from a recording's artist credit, and the credits from its
+# artist relations (the plugin's ``_parse_artist_credits`` and ``_parse_artist_relations``).
+_CREDIT_STRINGS = ("artist", "artist_sort", "artist_credit")
+_CREDIT_LISTS = ("artists", "artists_sort", "artists_credit", "mb_artistids")
+_RELATION_CREDITS = {"arranger": ("arrangers", "arrangers_ids"), "remixer": ("remixers", "remixers_ids")}
+
+
+def _as_list(value) -> list[str]:
+    """A multi-valued beets field as a list: beets 2.x holds a list, a bare string is one value."""
+    if not value:
+        return []
+    return list(value) if isinstance(value, (list, tuple)) else [str(value)]
+
+
+def aligned_artists(item, recording: dict) -> dict[str, tuple]:
+    """The artist fields of *item* that change once its recording is *recording*
+    (``inc=artist-credits+artist-rels``), as {field: (before, after)}; empty when they
+    already agree (homelab#2647).
+
+    beets copied the guessed recording's artist credit onto the item: ``artist``,
+    ``artist_sort`` and ``artist_credit`` (strings, the credited names joined by their
+    join phrases), ``artists``, ``artists_sort``, ``artists_credit`` and ``mb_artistids``
+    (lists, one entry per credited artist, all kept), ``mb_artistid`` (the first).  They
+    follow the recording when the item's ``mb_artistids`` are not the recording's artist
+    IDs.  The same artists leave them alone, so the spelling beets chose (an alias, the
+    credited name) survives.  An item with no ``mb_artistids``, or a recording whose
+    credit carries no artist IDs (not looked up with its artists), is left alone too:
+    nothing shows the item's are wrong.
+
+    ``arrangers`` and ``remixers`` (with their ``_ids``) come from the recording's artist
+    relations, but only the pairs the item already holds: beets filled them from the
+    guessed recording, and without one they are the file's own.  They become the new
+    recording's, which may have none (emptied).
+
+    Not touched, as :func:`refreshed` explains: the work and its composer and lyricist
+    credits (beets' singleton match has no work relations, so they are the file's own)."""
+    credit = recording.get("artist-credit") or []
+    ids = [(c.get("artist") or {}).get("id") for c in credit]
+    have = _as_list(item.get("mb_artistids"))
+    after: dict[str, object] = {}
+    if all(ids) and have and have != ids:
+        artists = [c["artist"] for c in credit]
+        names = [a.get("name") or "" for a in artists]
+        sorts = [a.get("sort-name") or a.get("name") or "" for a in artists]
+        credited = [c.get("name") or a.get("name") or "" for c, a in zip(credit, artists)]
+        joins = [c.get("joinphrase") or "" for c in credit]
+        for field, parts in zip(_CREDIT_STRINGS, (names, sorts, credited)):
+            after[field] = "".join(p + j for p, j in zip(parts, joins))
+        after.update(artists=names, artists_sort=sorts, artists_credit=credited, mb_artistids=ids,
+                     mb_artistid=ids[0])
+    relations = [r for r in recording.get("relations") or [] if r.get("artist")] \
+        if "relations" in recording else None
+    if relations is not None:
+        for kind, (name_field, id_field) in _RELATION_CREDITS.items():
+            if not (_as_list(item.get(name_field)) or _as_list(item.get(id_field))):
+                continue
+            artists = [r["artist"] for r in relations if r.get("type") == kind]
+            after[name_field] = [a.get("name") or "" for a in artists]
+            after[id_field] = [a.get("id") or "" for a in artists]
+    out = {}
+    for field, new in after.items():
+        old = item.get(field)
+        if isinstance(new, list):
+            old = _as_list(old)
+        else:
+            old = old or ""
+        if old != new:
+            out[field] = (old, new)
+    return out
 
 
 def aligned_release_track(item, recording_id: str, get: MusicBrainzGet) -> tuple[str, str]:
@@ -886,7 +958,8 @@ def set_recording_on(lib, item_id: int, recording_id: str, lookup: RecordingLook
     lock for an apply.  Returns True when it stored anything.  Raises
     :class:`SystemExit` on a refusal, before anything changes.
 
-    With *get* (MusicBrainz) the item's ``isrc`` (:func:`aligned_isrcs`) and
+    The artist fields (:func:`aligned_artists`) go with the recording
+    (homelab#2647).  With *get* (MusicBrainz) the item's ``isrc`` (:func:`aligned_isrcs`) and
     ``mb_releasetrackid`` (:func:`aligned_release_track`) go with the recording
     (homelab#2623).  An ISRC that goes is checked against *songs* (the playlist
     stores' song records): the set is refused when an entry resolves to this
@@ -917,7 +990,8 @@ def set_recording_on(lib, item_id: int, recording_id: str, lookup: RecordingLook
         logger.warning("[SUSPECT] %s: the recording is titled %r, another song than the item's title; check the "
                        "audio is that song before applying (its title becomes the recording's)", label,
                        recording.get("title"))
-    changes = refreshed(item, recording)
+    changes: Changes = refreshed(item, recording)
+    changes.update(aligned_artists(item, recording))
     if get is not None:
         try:
             changes.update(_aligned(lib, item, recording, new, get, songs))
@@ -948,7 +1022,7 @@ def set_recording_on(lib, item_id: int, recording_id: str, lookup: RecordingLook
         item["mb_trackid"] = new
         item[RECORDING_SET] = new
         for field, (_, after) in changes.items():
-            item[field] = after
+            item[field] = list(after) if isinstance(after, list) else after
         item.store()
     item.try_write()
     logger.info("%s", message)

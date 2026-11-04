@@ -1168,3 +1168,156 @@ def test_set_recording_stores_the_aligned_fields_with_its_event(pg_url, monkeypa
     assert kind == "recording_set" and (data["old"], data["new"]) == (LIVE_TAKE, STUDIO_2B)
     assert data["refreshed"] == {"trackdisambig": ["", "version 2b"], "isrc": ["USSM12503412", ""],
                                  "mb_releasetrackid": [LIVE_TAKE, ""]}
+
+
+# --- the artist fields go with the recording (homelab#2647) ---
+
+FIRE_5000, FIRE_BOSS = "113bb21e-0000-4000-8000-000000000001", "457e1032-0000-4000-8000-000000000002"
+V5000, BOSS, TONY = "id-5000-volts", "70248960-cb53-4ea4-943a-edb18f7d336f", "id-tony-eyers"
+BAND, KID = "id-band", "id-kid"
+
+
+def _credited(*credit, relations=None, rec=FIRE_BOSS):
+    """A recording looked up with ``inc=artist-credits+artist-rels``; *credit* is (credited name, name, sort, id, join)."""
+    out = {"id": rec, "title": "I'm on Fire", "disambiguation": "",
+           "artist-credit": [{"name": c, "joinphrase": j, "artist": {"id": i, "name": n, "sort-name": s}}
+                             for c, n, s, i, j in credit]}
+    if relations is not None:
+        out["relations"] = relations
+    return out
+
+
+def _on_fire(**data):
+    return FakeItem(18518, "I'm on Fire", mb_trackid=FIRE_5000, artist="5000 Volts", artist_sort="5000 Volts",
+                    artist_credit="5000 Volts", artists=["5000 Volts"], artists_sort=["5000 Volts"],
+                    artists_credit=["5000 Volts"], mb_artistid=V5000, mb_artistids=[V5000], **data)
+
+
+BOSS_CREDIT = ("Bruce Springsteen", "Bruce Springsteen", "Springsteen, Bruce", BOSS, "")
+SPRINGSTEEN = _credited(BOSS_CREDIT)
+
+
+def test_set_recording_shows_the_artist_fields_changing_in_the_dry_run(caplog):
+    caplog.set_level("INFO")
+    item = _on_fire()
+    assert mbf.set_recording_on(FakeLib([item]), 18518, FIRE_BOSS, lambda _: SPRINGSTEEN) is False
+    for shown in ("artist '5000 Volts' → 'Bruce Springsteen'", "artist_sort '5000 Volts' → 'Springsteen, Bruce'",
+                  "artist_credit '5000 Volts' → 'Bruce Springsteen'", "artists ['5000 Volts'] → ['Bruce Springsteen']",
+                  f"mb_artistids ['{V5000}'] → ['{BOSS}']", f"mb_artistid '{V5000}' → '{BOSS}'"):
+        assert shown in caplog.text
+    assert item["artist"] == "5000 Volts" and not item.stored
+
+
+def test_a_recording_with_several_credited_artists_keeps_them_all():
+    item = _on_fire()
+    recording = _credited(("Bruce", "Bruce Springsteen", "Springsteen, Bruce", BOSS, " & "),
+                          ("The Band", "The Band", "Band, The", BAND, " feat. "),
+                          ("Kid", "The Kid", "Kid, The", KID, ""))
+    changes = mbf.aligned_artists(item, recording)
+    assert changes["artist"][1] == "Bruce Springsteen & The Band feat. The Kid"
+    assert changes["artist_credit"][1] == "Bruce & The Band feat. Kid"
+    assert changes["artist_sort"][1] == "Springsteen, Bruce & Band, The feat. Kid, The"
+    assert changes["artists"][1] == ["Bruce Springsteen", "The Band", "The Kid"]
+    assert changes["artists_credit"][1] == ["Bruce", "The Band", "Kid"]
+    assert changes["artists_sort"][1] == ["Springsteen, Bruce", "Band, The", "Kid, The"]
+    assert changes["mb_artistids"][1] == [BOSS, BAND, KID] and changes["mb_artistid"][1] == BOSS
+
+
+def test_a_set_to_a_recording_by_the_same_artist_changes_no_artist_field():
+    item = _on_fire()
+    item["mb_artistids"] = [BOSS]
+    item["artist"] = "Springsteen"  # beets' spelling stays while the artist is the same
+    assert mbf.aligned_artists(item, SPRINGSTEEN) == {}
+
+
+def test_an_item_with_no_artist_ids_or_a_recording_looked_up_without_them_is_left_alone():
+    bare = FakeItem(1, "x", artist="Someone")
+    assert mbf.aligned_artists(bare, SPRINGSTEEN) == {}
+    assert mbf.aligned_artists(_on_fire(), {"id": FIRE_BOSS, "artist-credit": [{"name": "Bruce Springsteen"}]}) == {}
+
+
+def test_arrangers_follow_the_recording_only_when_the_item_has_them():
+    rel = [{"type": "arranger", "artist": {"id": TONY, "name": "Tony Eyers"}},
+           {"type": "producer", "artist": {"id": "p", "name": "Producer"}}]
+    guessed = _on_fire(arrangers=["Tony Eyers"], arrangers_ids=[TONY])
+    assert mbf.aligned_artists(guessed, _credited(BOSS_CREDIT, relations=[]))["arrangers"] == (["Tony Eyers"], [])
+    assert mbf.aligned_artists(guessed, _credited(BOSS_CREDIT, relations=[]))["arrangers_ids"] == ([TONY], [])
+    assert "arrangers" not in mbf.aligned_artists(_on_fire(), _credited(BOSS_CREDIT, relations=rel))
+    assert "remixers" not in mbf.aligned_artists(guessed, _credited(BOSS_CREDIT, relations=rel))
+    same = _on_fire(arrangers=["Tony Eyers"], arrangers_ids=[TONY])
+    assert "arrangers" not in mbf.aligned_artists(same, _credited(BOSS_CREDIT, relations=rel))
+
+
+def test_the_lookup_asks_for_the_artist_credit_and_relations():
+    seen = []
+
+    class MB:
+        def get(self, path, **params):
+            seen.append((path, params))
+
+    mbf.musicbrainz_recording_credits(MB())("rec")
+    assert seen == [("recording/rec", {"inc": "artist-credits+isrcs+artist-rels"})]
+
+
+@needs_pg
+def test_set_recording_stores_the_artist_fields_with_its_event(pg_url, monkeypatch):
+    from music_fetch import db
+
+    monkeypatch.delenv("PREFECT_API_URL", raising=False)
+    item = _on_fire(arrangers=["Tony Eyers"], arrangers_ids=[TONY])
+    with contextlib.closing(db.connect()) as conn:
+        assert mbf.set_recording_on(FakeLib([item]), 18518, FIRE_BOSS, lambda _: _credited(BOSS_CREDIT, relations=[]),
+                                    conn) is True
+    assert item["artist"] == "Bruce Springsteen" and item["artists"] == ["Bruce Springsteen"]
+    assert item["mb_artistids"] == [BOSS] and item["mb_artistid"] == BOSS and item["arrangers"] == []
+    assert item.stored and item.written
+    [(kind, _, _, _, data)] = _events(pg_url)
+    assert kind == "recording_set"
+    assert data["refreshed"]["artist"] == ["5000 Volts", "Bruce Springsteen"]
+    assert data["refreshed"]["mb_artistids"] == [[V5000], [BOSS]]
+    assert data["refreshed"]["arrangers"] == [["Tony Eyers"], []]
+
+
+def test_the_artist_tags_reach_the_file(tmp_path, clip):
+    """A real beets item: the lists a set stores are written as the file's tags."""
+    import beets.library
+    from mediafile import MediaFile
+
+    path = clip(tmp_path / "fire.m4a", ("tone", 1.0), url=None)
+    lib = beets.library.Library(str(tmp_path / "lib.db"), directory=str(tmp_path))
+    try:
+        item = beets.library.Item.from_path(str(path))
+        item.update({"title": "I'm on Fire", "artist": "5000 Volts", "artists": ["5000 Volts"],
+                     "mb_artistids": [V5000], "mb_artistid": V5000})
+        lib.add(item)
+        for field, (_, after) in mbf.aligned_artists(item, _credited(
+                BOSS_CREDIT, ("Clarence", "Clarence Clemons", "Clemons, Clarence", "id-c", ""))).items():
+            item[field] = list(after) if isinstance(after, list) else after
+        item.store()
+        assert item.try_write()
+        tags = MediaFile(str(path))
+        assert tags.artist == "Bruce SpringsteenClarence Clemons"
+        assert tags.artists == ["Bruce Springsteen", "Clarence Clemons"]
+        assert tags.mb_artistids == [BOSS, "id-c"]
+        assert tags.mb_artistid == BOSS
+    finally:
+        lib._close()
+
+
+def test_setting_the_recording_an_item_already_holds_still_aligns_the_artist_fields(caplog):
+    """18518 after the first set_recording: the recording is right and set by hand, the artist and
+    arranger are still the wrong match's, so the same call is a real run, not 'already'."""
+    caplog.set_level("INFO")
+    item = _on_fire(arrangers=["Tony Eyers"], arrangers_ids=[TONY])
+    item["mb_trackid"] = item["recording_set"] = FIRE_BOSS
+    recording = _credited(BOSS_CREDIT, relations=[])
+    assert mbf.set_recording_on(FakeLib([item]), 18518, FIRE_BOSS, lambda _: recording) is False
+    assert "already" not in caplog.text and "artist '5000 Volts' → 'Bruce Springsteen'" in caplog.text
+    assert "Dry run" in caplog.text
+    changes = mbf.aligned_artists(item, recording)
+    assert changes["arrangers"] == (["Tony Eyers"], []) and changes["arrangers_ids"] == ([TONY], [])
+    for field, (_, after) in changes.items():
+        item[field] = after
+    caplog.clear()
+    assert mbf.set_recording_on(FakeLib([item]), 18518, FIRE_BOSS, lambda _: recording) is False
+    assert f"holds {FIRE_BOSS}, set by hand, already" in caplog.text  # once aligned, nothing to do
