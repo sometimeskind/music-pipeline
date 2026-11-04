@@ -39,8 +39,9 @@ Responsibilities
     survives both.  This hook guarantees the tags land in the database on
     clean first-time imports.  It also records the events that need the
     stored item's ID (homelab#2590): ``imported`` for a spotdl item (a Usenet
-    item's import is its album's ``[DONE]``), and ``retitled`` for a title
-    step 1b put back.
+    item's import is its album's ``[DONE]``), ``retitled`` for a title
+    step 1b put back, and ``import_alongside`` or ``kept_apart`` for each
+    duplicate step 2 imported it beside.
 
 2. **Multi-playlist membership** (``import_task_choice``): duplicates are the
    library items that are the same recording by identity (Spotify track ID,
@@ -197,6 +198,18 @@ class Retitle(NamedTuple):
     (homelab#2590).  Holds the item, like :class:`FileTags`."""
 
     item: object
+    message: str
+    data: dict
+
+
+class Beside(NamedTuple):
+    """The duplicate check's decision to import an item beside a library item
+    (``[BOTH]``, ``[ALBUM]``, ``[SPLIT]``, ``[APART]``), recorded as an
+    ``import_alongside`` or ``kept_apart`` event once ``item_imported`` gives
+    the item an ID (homelab#2590).  Holds the item, like :class:`FileTags`."""
+
+    item: object
+    kind: str
     message: str
     data: dict
 
@@ -417,6 +430,8 @@ class MusicPipelinePlugin(BeetsPlugin):
         # id(item) → its retitle, from import_task_apply to item_imported, which
         # has the item ID the event names (homelab#2590).
         self._retitled: dict[int, Retitle] = {}
+        # id(item) → what it was imported beside, from import_task_choice to item_imported.
+        self._beside: dict[int, list[Beside]] = {}
         self.register_listener("import_task_created", self.tag_source_on_created)
         self.register_listener("import_task_apply", self.restore_file_title)
         self.register_listener("import_task_apply", self.clear_singleton_release_track)
@@ -575,6 +590,7 @@ class MusicPipelinePlugin(BeetsPlugin):
         # An as-is import never reaches import_task_apply (homelab#2544).
         self._file_tags.pop(id(item), None)
         self._record_retitle(item)
+        self._record_beside(item)
         path = item.path.decode() if isinstance(item.path, bytes) else item.path
         title = (item.title or "").lower()
         playlist = self._pending_sources.pop(Path(path).name, None)
@@ -627,6 +643,23 @@ class MusicPipelinePlugin(BeetsPlugin):
                       spotify_album_id=events.spotify_album(item.get("spotify_album_id")),
                       release_group=item.get("mb_releasegroupid"),
                       data={**events.item_fields(item), **retitle.data})
+
+    def _note_beside(self, item, dup, kind: str, why: str, line: str, *args, **data) -> None:
+        """Log one duplicate *item* is imported beside; its event waits for the item's ID."""
+        self._log.warning(line, item.artist, item.title, dup, *args)
+        self._beside.setdefault(id(item), []).append(Beside(item, kind, line.format(item.artist, item.title, dup, *args), {
+            "why": why, "duplicate": {"item_id": dup.id, **events.item_fields(dup), "via": dup.get("via"),
+                                      "isrc": dup.get("isrc") or None}, **data}))
+
+    def _record_beside(self, item) -> None:
+        """The ``import_alongside`` and ``kept_apart`` events for what
+        :meth:`handle_duplicates` imported *item* beside (homelab#2590)."""
+        for beside in self._beside.pop(id(item), ()):
+            if beside.item is item:
+                events.record(beside.kind, beside.message, source="import", item_id=item.id,
+                              spotify_album_id=events.spotify_album(item.get("spotify_album_id")),
+                              release_group=item.get("mb_releasegroupid"),
+                              data={**events.item_fields(item), **beside.data})
 
     @staticmethod
     def _record_imported(item, playlist: str) -> None:
@@ -744,9 +777,9 @@ class MusicPipelinePlugin(BeetsPlugin):
             # release does (#279), stamped with its key after the import.  A second fallback copy
             # of the recording is a duplicate like any other.
             for dup in same:
-                self._log.warning(
+                self._note_beside(
+                    items[0], dup, "import_alongside", "the album request's copy",
                     "[BOTH] {} — {}: same recording as {}; importing the album request's copy alongside",
-                    items[0].artist, items[0].title, dup,
                 )
             task.find_duplicates = task.duplicate_items = lambda lib: []
             return
@@ -758,14 +791,14 @@ class MusicPipelinePlugin(BeetsPlugin):
             # supersedes the loose copies with it, playlists and all.
             for dup in same:
                 if any(dup is a for a in apart):
-                    self._log.warning(
+                    self._note_beside(
+                        items[0], dup, "import_alongside", "another release's copy",
                         "[BOTH] {} — {}: same recording as {}, another release's copy; importing it alongside",
-                        items[0].artist, items[0].title, dup,
                     )
                 else:
-                    self._log.warning(
+                    self._note_beside(
+                        items[0], dup, "import_alongside", "the album copy supersedes it",
                         "[ALBUM] {} — {}: same recording as {}; importing the album copy, which supersedes it",
-                        items[0].artist, items[0].title, dup,
                     )
             task.find_duplicates = task.duplicate_items = lambda lib: []
             return
@@ -775,14 +808,15 @@ class MusicPipelinePlugin(BeetsPlugin):
             # No identifier agrees: never merge by artist+title (#255).
             for dup in dup_items:
                 if _different_recording(incoming, dup):
-                    self._log.warning(
+                    self._note_beside(
+                        items[0], dup, "kept_apart", "ISRCs differ",
                         "[SPLIT] {} — {}: a different recording from {} (ISRCs {} vs {}); importing it separately",
-                        items[0].artist, items[0].title, dup, ",".join(sorted(incoming.isrcs)), dup.get("isrc"),
+                        ",".join(sorted(incoming.isrcs)), dup.get("isrc"), isrcs=sorted(incoming.isrcs),
                     )
                 else:
-                    self._log.warning(
+                    self._note_beside(
+                        items[0], dup, "kept_apart", "no shared ID",
                         "[APART] {} — {}: shares no Spotify ID, ISRC or recording ID with {}; importing it separately",
-                        items[0].artist, items[0].title, dup,
                     )
             # Hide them from beets' own check, or duplicate_action: remove deletes them.
             task.find_duplicates = task.duplicate_items = lambda lib: []

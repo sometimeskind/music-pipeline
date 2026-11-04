@@ -33,6 +33,7 @@ def _make_plugin() -> MusicPipelinePlugin:
     plugin._pending_job = {}
     plugin._file_tags = {}
     plugin._retitled = {}
+    plugin._beside = {}
     return plugin
 
 
@@ -1551,3 +1552,99 @@ def test_an_item_from_no_playlist_records_nothing(monkeypatch) -> None:
     plugin.tag_source_on_stored(lib=MagicMock(), item=item)
 
     assert recorded == []
+
+
+# ---------------------------------------------------------------------------
+# import_alongside and kept_apart events (homelab#2590)
+# ---------------------------------------------------------------------------
+
+
+def _imported(plugin, item) -> None:
+    """item_imported, for a mock item: beets stored it and moved its file."""
+    item.id = 88
+    item.path = b"/root/Music/library/Song.m4a"
+    item["path"] = item.path
+    plugin.tag_source_on_stored(lib=MagicMock(), item=item)
+
+
+def test_a_split_is_a_kept_apart_event_on_the_stored_item(monkeypatch) -> None:
+    recorded = _recorded(monkeypatch)
+    plugin, item, task = _incoming(SpotdlTags(URL_X, "GBLIVE"))
+    studio = _lib_dup(7, isrc="GBSTUDIO")
+    task.find_duplicates.return_value = [studio]
+
+    plugin.handle_duplicates(session=_session({}), task=task)
+    assert recorded == []  # no item ID yet: the event waits for item_imported
+
+    _imported(plugin, item)
+
+    [(kind, message, kw)] = [r for r in recorded if r[0] != "imported"]
+    assert kind == "kept_apart" and kw["item_id"] == 88 and kw["source"] == "import"
+    assert message.startswith("[SPLIT] ") and "(ISRCs GBLIVE vs GBSTUDIO)" in message
+    data = kw["data"]
+    assert (data["why"], data["isrcs"]) == ("ISRCs differ", ["GBLIVE"])
+    assert (data["duplicate"]["item_id"], data["duplicate"]["isrc"]) == (7, "GBSTUDIO")
+    assert data["path"] == "/root/Music/library/Song.m4a"
+    assert plugin._beside == {}
+
+
+def test_no_shared_id_is_a_kept_apart_event(monkeypatch) -> None:
+    recorded = _recorded(monkeypatch)
+    plugin, item, task = _incoming(SpotdlTags(URL_X), title="Girlfriend Is Better")
+    task.find_duplicates.return_value = [_lib_dup(2530, isrc="USWB19900873")]
+
+    plugin.handle_duplicates(session=_session({}), task=task)
+    _imported(plugin, item)
+
+    [(kind, message, kw)] = [r for r in recorded if r[0] != "imported"]
+    assert kind == "kept_apart" and message.startswith("[APART] ") and kw["data"]["why"] == "no shared ID"
+    assert "isrcs" not in kw["data"]
+
+
+def _usenet_incoming() -> tuple:
+    plugin = _make_plugin()
+    item = _item("/root/Music/inbox/usenet/album/a/Song.m4a", title="Song")
+    plugin._pending_sources["song"] = "album"
+    plugin._pending_spotdl["song"] = SpotdlTags()
+    task = _task(item=item)
+    task.chosen_info.return_value = {"track_id": "mb-rec-1", "isrc": None}
+    return plugin, item, task
+
+
+def test_each_duplicate_of_a_usenet_track_is_its_own_import_alongside_event(monkeypatch) -> None:
+    recorded = _recorded(monkeypatch)
+    plugin, item, task = _usenet_incoming()
+    released = _lib_dup(7, via="usenet", mb_trackid="mb-rec-1", isrc="GBA")
+    loose = _lib_dup(8, via="spotdl", mb_trackid="mb-rec-1")
+
+    plugin.handle_duplicates(session=_session({"mb_trackid:mb-rec-1": [released, loose]}), task=task)
+    _imported(plugin, item)
+
+    alongside = [(m, kw) for kind, m, kw in recorded if kind == "import_alongside"]
+    assert [(m.split(" ")[0], kw["data"]["why"], kw["data"]["duplicate"]["item_id"], kw["item_id"])
+            for m, kw in alongside] == [("[BOTH]", "another release's copy", 7, 88),
+                                        ("[ALBUM]", "the album copy supersedes it", 8, 88)]
+    assert alongside[0][1]["data"]["duplicate"]["via"] == "usenet"
+
+
+def test_an_album_requests_copy_is_an_import_alongside_event(monkeypatch) -> None:
+    recorded = _recorded(monkeypatch)
+    plugin, item, task = _incoming(SpotdlTags(REC_URL))
+    task.find_duplicates.return_value = [_lib_dup(7, sources="chill")]
+
+    _handle_same(plugin, MagicMock(), task)
+    _imported(plugin, item)
+
+    [(message, kw)] = [(m, kw) for kind, m, kw in recorded if kind == "import_alongside"]
+    assert message.startswith("[BOTH] ") and kw["data"]["why"] == "the album request's copy"
+
+
+def test_an_import_that_never_lands_records_nothing_beside(monkeypatch) -> None:
+    recorded = _recorded(monkeypatch)
+    plugin, item, task = _incoming(SpotdlTags(URL_X, "GBLIVE"))
+    task.find_duplicates.return_value = [_lib_dup(7, isrc="GBSTUDIO")]
+
+    plugin.handle_duplicates(session=_session({}), task=task)
+    plugin._record_beside(_item("/root/Music/inbox/spotdl/playlist-b/Other.m4a", title="Other"))
+
+    assert recorded == [] and list(plugin._beside) == [id(item)]
