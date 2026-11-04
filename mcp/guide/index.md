@@ -27,6 +27,10 @@ its events, the last a dropped-record event: look it up by the key, Spotify ID o
 time, plus the library issues standing now. History is kept 90 days, and each album's latest
 20 events longer.
 
+`album_history` matches an event by the album's key, any of its Spotify album IDs or local names,
+or its release group, so a rekey loses nothing. The event store began on 2026-10-29: an album
+imported before then has no earlier events, and the logs are all that holds them.
+
 `find_events` answers "how often does X happen" and "which albums had Y" across the library:
 give it one or more event kinds (an incomplete import is kind import_incomplete, a search that
 matched nothing search_miss, a grab grab; a spotdl download imported is imported, a Usenet track's title

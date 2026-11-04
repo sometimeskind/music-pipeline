@@ -198,7 +198,9 @@ def build_server(
     ) -> dict:
         """One album's events, newest first: grabs, imports (done, wrong, incomplete, lost),
         failures, fallbacks, automatic resets, and its items retired, merged or kept as
-        local-only extras. History is kept 90 days, and each album's latest 20 events longer."""
+        local-only extras. Matches the album's key, Spotify album IDs, local names and release
+        group. History starts on 2026-10-29, when the event store began; it is kept 90 days, and
+        each album's latest 20 events longer."""
         return await call("album_history",
                           lambda c: pipeline.get(c, "/album_history", query=query, since=since, offset=offset))
 
