@@ -3,6 +3,7 @@
 from unittest.mock import MagicMock, patch
 
 import pytest
+import requests
 
 from music_fetch.usenet import (
     Prowlarr, Release, Sabnzbd, clean_album, leftover, matches, normalise, rank, readable, rejection, search_title,
@@ -241,6 +242,20 @@ def test_sabnzbd_delete_failed_takes_the_job_and_its_files() -> None:
     assert {k: params[k] for k in ("mode", "name", "value", "del_files", "archive")} == {
         "mode": "history", "name": "delete", "value": "a", "del_files": 1, "archive": 0,
     }
+
+
+@pytest.mark.parametrize("call", [
+    lambda sab: sab.delete_failed("a"),
+    lambda sab: sab.finished(["a"]),
+    lambda sab: sab.add_url("http://nzb", "a"),
+])
+def test_sabnzbd_errors_never_carry_the_api_key(call) -> None:
+    """requests names the URL, and the key is in its query; callers log the exception (homelab#2631)."""
+    leak = requests.ConnectionError("Max retries exceeded with url: /api?mode=history&apikey=s3cret&output=json")
+    with patch("music_fetch.usenet.requests.get", side_effect=leak), pytest.raises(RuntimeError) as caught:
+        call(Sabnzbd(url="http://s", api_key="s3cret"))
+    assert "s3cret" not in str(caught.value)
+    assert caught.value.__suppress_context__  # the traceback must not print the original either
 
 
 def test_sabnzbd_finished_empty_makes_no_call() -> None:

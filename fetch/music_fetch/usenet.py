@@ -450,13 +450,17 @@ class Sabnzbd:
         self.timeout = timeout
 
     def _api(self, **params) -> dict:
-        resp = requests.get(
-            f"{self.url}/api",
-            params={**params, "apikey": self.api_key, "output": "json"},
-            timeout=self.timeout,
-        )
-        resp.raise_for_status()
-        return resp.json()
+        try:
+            resp = requests.get(
+                f"{self.url}/api",
+                params={**params, "apikey": self.api_key, "output": "json"},
+                timeout=self.timeout,
+            )
+            resp.raise_for_status()
+            return resp.json()
+        except requests.RequestException as exc:
+            # requests names the URL, API key and all; the caller logs this (homelab#2631).
+            raise RuntimeError(redact_text(f"SABnzbd {params.get('mode')}: {exc}")) from None
 
     def add_url(self, nzb_url: str, name: str) -> str:
         """Queue an NZB by URL in the album category.  Returns the nzo_id."""
