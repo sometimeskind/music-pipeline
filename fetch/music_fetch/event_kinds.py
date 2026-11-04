@@ -135,6 +135,10 @@ KINDS: dict[str, Kind] = {
     "retitled": Kind(ITEM, "[TITLE]: a Usenet item's title or trackdisambig put back from its file at import.",
                      (*_ITEM, "matched", "file_title", "trackdisambig", "recording_dropped", "dropped_mb_trackid",
                       "dropped_why", "versions", "usenet_job")),
+    "import_alongside": Kind(ITEM, "[BOTH]/[ALBUM]: an item imported beside a library item of the same recording "
+                                   "(data.duplicate), with why.", (*_ITEM, "why", "duplicate")),
+    "kept_apart": Kind(ITEM, "[SPLIT]/[APART]: an item imported beside one with its artist and title that no ID "
+                             "links (data.duplicate), with why.", (*_ITEM, "why", "duplicate", "isrcs")),
     "replaced": Kind(ITEM, "[REPLACE]: an item's audio replaced (replace_item).",
                      (*_ITEM, "old_source", "new_source", "old_path", "old_length", "quarantined", "forced")),
     "wrong_version": Kind(ITEM, "[WRONG]: a playlist entry's ID taken off an item that is another version.",
