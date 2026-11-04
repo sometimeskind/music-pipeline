@@ -1,8 +1,9 @@
 """music-mb-fingerprint: MusicBrainz recording IDs from AcoustID.
 
-Without flags it fingerprints each item that has no ``mb_trackid`` and writes
-the recording AcoustID names with a score of at least :data:`MIN_SCORE`.  No
-other metadata is changed.  Safe to re-run: it skips items that have one.
+Run with no mode flag it writes nothing: it prints a usage hint (homelab#2640).
+The old fill mode took AcoustID's first result as the recording, unchecked and
+with no event; the checked fill (``recording_filled``, homelab#2589) replaced
+it.  No other metadata is changed by this command.
 
 ``--recheck`` (homelab#2543) checks the items that have one.  beets imports
 every file as a singleton and names its recording by a guess from title,
@@ -105,7 +106,6 @@ logger = logging.getLogger(__name__)
 LIBRARY_DB = "/root/.config/beets/library.db"
 LIBRARY_DIR = "/root/Music/library"
 MIN_SCORE = 0.85
-REQUEST_DELAY = 0.35
 # --recheck: a lookup that fails is tried once more after this long; this many
 # failed lookups in a row (AcoustID down, a bad key, rate-limited) end the run.
 RETRY_SECONDS = 5.0
@@ -124,52 +124,6 @@ SET_KIND = "recording_set"
 MBID = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
 
 Recordings = list[tuple[float, str]]
-
-
-def run(library_db: str = LIBRARY_DB, library_dir: str = LIBRARY_DIR) -> None:
-    import acoustid
-    import beets.library
-
-    api_key = os.environ.get("ACOUSTID_APIKEY")
-    if not api_key:
-        raise RuntimeError("ACOUSTID_APIKEY env var is not set")
-
-    # directory must be passed explicitly — without it Library defaults to ~/Music
-    lib = beets.library.Library(library_db, directory=library_dir)
-    try:
-        items = [i for i in lib.items() if not i.mb_trackid]
-        total = len(items)
-        logger.info("Fingerprinting %d item(s) without mb_trackid", total)
-
-        tagged = no_match = errors = 0
-        for n, item in enumerate(items, 1):
-            path = item.path.decode() if isinstance(item.path, bytes) else item.path
-            label = f"{item.artist or item.albumartist or '?'} – {item.title or '?'}"
-            try:
-                results = list(acoustid.match(api_key, path))
-                if results:
-                    score, rec_id, *_ = results[0]
-                    if score >= MIN_SCORE and rec_id:
-                        item.mb_trackid = rec_id
-                        item.store()
-                        logger.info("[%d/%d] %s -> %s (%.2f)", n, total, label, rec_id, score)
-                        tagged += 1
-                        continue
-                    logger.info("[%d/%d] %s: low confidence (%.2f)", n, total, label, score)
-                else:
-                    logger.info("[%d/%d] %s: no results", n, total, label)
-                no_match += 1
-            except Exception as exc:
-                logger.warning("[%d/%d] %s: %s", n, total, label, exc)
-                errors += 1
-            time.sleep(REQUEST_DELAY)
-    finally:
-        lib._close()
-
-    logger.info(
-        "Done: %d tagged, %d no confident match, %d errors",
-        tagged, no_match, errors,
-    )
 
 
 # ---------------------------------------------------------------------------
@@ -1259,8 +1213,6 @@ def main() -> None:
     if args.run_id and args.apply:
         parser.error("a recorded run (--run-id) is a dry run: apply it with --replace-run ID --apply")
     if not args.recheck:
-        if args.apply or args.ids or args.run_id:
-            parser.error("--apply, --run-id and item IDs go with --recheck")
-        run()
-        return
+        parser.error("pick a mode: --recheck (check guessed recordings), --replace-run, --refresh-replaced, "
+                     "--set-recording or --candidates; the unchecked fill mode is retired (homelab#2640)")
     run_recheck(apply=args.apply, ids=args.ids, run_id=args.run_id)

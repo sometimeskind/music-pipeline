@@ -280,11 +280,17 @@ def test_apply_refuses_without_the_database(monkeypatch):
         mbf.run_recheck(apply=True, lookup=_lookup())
 
 
-def test_main_keeps_apply_to_recheck(monkeypatch):
-    monkeypatch.setattr(sys, "argv", ["music-mb-fingerprint", "--apply"])
-    monkeypatch.setattr(mbf, "run", lambda: pytest.fail("the fill mode has no --apply"))
-    with pytest.raises(SystemExit):
+@pytest.mark.parametrize("argv", [[], ["--apply"], ["--run-id", "r1"], ["12"]])
+def test_bare_command_writes_nothing(monkeypatch, capsys, argv):
+    """No mode flag (homelab#2640): usage and exit 2, no library opened, no lookup."""
+    monkeypatch.setattr(sys, "argv", ["music-mb-fingerprint", *argv])
+    monkeypatch.setattr(mbf, "run_recheck", lambda **_: pytest.fail("not --recheck"))
+    monkeypatch.setattr(mbf, "acoustid_recordings", lambda *_: pytest.fail("no AcoustID lookup"))
+    assert not hasattr(mbf, "run")
+    with pytest.raises(SystemExit) as exc:
         mbf.main()
+    assert exc.value.code == 2
+    assert "--recheck" in capsys.readouterr().err
 
 
 # --- replacing, against Postgres ---
@@ -400,7 +406,6 @@ def test_main_keeps_a_recorded_run_a_dry_run(monkeypatch):
     for argv in (["--recheck", "--run-id", "r1", "--apply"], ["--replace-run", "r1", "--recheck"],
                  ["--run-id", "r1"]):
         monkeypatch.setattr(sys, "argv", ["music-mb-fingerprint", *argv])
-        monkeypatch.setattr(mbf, "run", lambda: pytest.fail("not the fill mode"))
         monkeypatch.setattr(mbf, "run_recheck", lambda **_: pytest.fail("refused by argparse"))
         with pytest.raises(SystemExit):
             mbf.main()
@@ -917,7 +922,6 @@ def test_refresh_replaced_refuses_without_the_database(monkeypatch):
 def test_main_runs_refresh_replaced_with_its_own_flags_only(monkeypatch):
     calls = []
     monkeypatch.setattr(mbf, "refresh_replaced", lambda **kw: calls.append(kw))
-    monkeypatch.setattr(mbf, "run", lambda: pytest.fail("not the fill mode"))
     monkeypatch.setattr(sys, "argv", ["music-mb-fingerprint", "--refresh-replaced", "--since", "2026-10-31T20:00",
                                       "--apply"])
     mbf.main()
