@@ -61,8 +61,9 @@ KINDS: dict[str, Kind] = {
     "import_lost": Kind(ALBUM, "[LOST]: a completed job whose directory is gone.", (*_RECORD, "path")),
     # --- The release check and the duplicate tools (music_scan.release, dupes, canon) ---
     "retire": Kind(ITEM, "[RETIRE]: an item of a release the album no longer keeps, retired; the IDs it "
-                         "handed over in ids_to and the taken fields.",
-                   (*_ITEM, "origin", "ids_to", "spotify_ids", "sources", "isrc")),
+                         "handed over in ids_to and the taken fields.  origin chosen: a person retired it "
+                         "(retire_item), with data.reason.",
+                   (*_ITEM, "origin", "ids_to", "spotify_ids", "sources", "isrc", "reason")),
     "local": Kind(ITEM, "[LOCAL]: an item kept as a local-only extra, or left to music-audit-dupes.",
                   (*_ITEM, "origin", "evidence", "extras", "left_to_dupes", "release_items")),
     "merge": Kind(ITEM, "An item merged into another (music-audit-dupes, or a same-recording duplicate at "

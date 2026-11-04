@@ -42,7 +42,7 @@ MusicBrainz release group, an MBID or musicbrainz.org URL, and taken off Later
 from what the user typed (never search MusicBrainz with a
 title read from the library). An item ID is a
 beets item (an integer: get_item, merge_items pairs, replace_item, unlink_spotify_id,
-set_recording, recording_candidates, audit_dupes fingerprint_ids); a recording (set_recording)
+set_recording, retire_item, recording_candidates, audit_dupes fingerprint_ids); a recording (set_recording)
 is a MusicBrainz recording MBID or musicbrainz.org/recording URL, which recording_candidates
 lists from the item's release;
 get_album also shows beets album IDs, which no tool takes. A playlist entry resolves to an item
@@ -52,7 +52,8 @@ that outlasts the inline wait returns a job_id: poll get_job. recheck_recordings
 the run ID, and apply_recheck applies the finished run.
 
 Tiers. Read tools anyone signed in may use. Write tools (reset_album, requeue_albums,
-merge_items, replace_item, unlink_spotify_id, set_recording, keep_quarantined, embed_covers, canon_albums,
+merge_items, replace_item, unlink_spotify_id, set_recording, keep_quarantined, retire_item, embed_covers,
+canon_albums,
 apply_recheck,
 set_search_override, clear_search_override, hold_album, release_album, pin_track, unpin_track,
 request_album, remove_from_later) are a dry run unless
@@ -168,7 +169,8 @@ def build_server(
             Field(description="unmatched: the scan's low-confidence files; rejected: the length "
                               "guard's; replaced: superseded and merged copies, which the purge deletes "
                               "14 days after the move once the library holds their recording; keep: "
-                              "files keep_quarantined moved out of replaced, which nothing deletes"),
+                              "files keep_quarantined moved out of replaced, which nothing deletes; "
+                              "replaced/retired holds what retire_item took off an album, purged the same way"),
         ],
         query: Annotated[str | None, Field(description="case-insensitive substring of the path")] = None,
         offset: Offset = 0,
@@ -464,6 +466,25 @@ def build_server(
         holds its recording by a wrong ID. A name matching several files is refused. The apply
         records a kept event. list_quarantine kind=keep shows the kept files."""
         return await run("keep_quarantined", {"file": file, "apply": apply}, write=True)
+
+    @mcp.tool(annotations={"destructiveHint": True})
+    async def retire_item(
+        ids: Annotated[list[ItemId], Field(description="the local-only extras to take off their album", min_length=1)],
+        reason: Annotated[str, Field(description="why, kept in each item's retire event", min_length=1,
+                                     max_length=500)],
+        apply: Apply = False,
+    ) -> dict:
+        """music-album-audit-releases --retire: take wrong local-only extras (get_item's album_extra)
+        off their album, when they are another recording than the release's, so merge_items is
+        wrong for them. THIS ENDS IN DELETION: the files go to quarantine/replaced/retired, count as
+        superseded rather than only copies, and the purge deletes them 14 days after the move;
+        keep_quarantined rescues one before that. The call is refused whole, nothing moved, when
+        an item is unknown, is a release's own track or anything else but a settled album's extra,
+        or is the last item a playlist entry resolves to: the dry run says which and why, and each
+        entry's slot afterwards. The apply records a retire event with the caller and the reason,
+        and regenerates the .m3u files. A release item waiting for an extra's path moves there at
+        the next scan."""
+        return await run("retire_item", {"ids": ids, "reason": reason, "apply": apply}, write=True)
 
     @mcp.tool(annotations={"destructiveHint": True})
     async def embed_covers(apply: Apply = False) -> dict:

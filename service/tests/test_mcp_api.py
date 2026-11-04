@@ -175,6 +175,30 @@ def test_keep_quarantined_refuses_a_path_outside_replaced(client, file):
     assert client.post("/mcp-api/run/keep_quarantined", json={"file": file}, headers=WRITE).status_code == 400
 
 
+def test_retire_item_normalises_its_ids_and_reason(client, env):
+    resp = client.post("/mcp-api/run/retire_item", json={"ids": [8283, 534, 8283], "reason": "  wrong\n box  set "},
+                       headers=WRITE)
+    assert resp.status_code == 200, resp.json
+    assert resp.json["args"] == {"ids": [534, 8283], "reason": "wrong box set"}
+    assert env["commands"].ran[-1] == ["music-album-audit-releases", "--reason=wrong box set", "--retire", "534",
+                                       "8283"]
+
+
+def test_retire_item_keeps_a_flag_like_reason_an_option_value(client, env):
+    resp = client.post("/mcp-api/run/retire_item", json={"ids": [8283], "reason": "--apply"}, headers=WRITE)
+    assert resp.status_code == 200, resp.json
+    assert env["commands"].ran[-1] == ["music-album-audit-releases", "--reason=--apply", "--retire", "8283"]
+
+
+@pytest.mark.parametrize("body", [
+    {"reason": "why"}, {"ids": [], "reason": "why"}, {"ids": [0], "reason": "why"}, {"ids": ["8283"], "reason": "why"},
+    {"ids": 8283, "reason": "why"}, {"ids": [8283]}, {"ids": [8283], "reason": "  "}, {"ids": [8283], "reason": 7},
+    {"ids": [8283], "reason": "x" * 501}, {"ids": [8283], "reason": "why", "force": True},
+])
+def test_retire_item_refuses_bad_arguments(client, body):
+    assert client.post("/mcp-api/run/retire_item", json=body, headers=WRITE).status_code == 400, body
+
+
 def test_a_locked_library_returns_busy_retry(client, env, monkeypatch):
     monkeypatch.setattr(mcp_reads, "BUSY_TIMEOUT_SECONDS", 0.1)
     locker = sqlite3.connect(env["db"])

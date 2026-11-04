@@ -46,6 +46,7 @@ CASES = {
     "set_recording": [{"id": 4230, "recording": "dd51202e-05ac-4bc9-b597-e117f81c47f8"}],
     "keep_quarantined": [{"file": "17052"}, {"file": "17052-03-10 - Reason To Believe (Nebraska Live).m4a"},
                          {"file": "--apply"}],
+    "retire_item": [{"ids": [8283], "reason": "the wrong box set"}, {"ids": [534, 8283], "reason": "--apply -x"}],
     "embed_covers": [{}],
     "canon_albums": [{"refresh": False, "search_budget": None, "mb_budget": None},
                      {"refresh": True, "search_budget": 5, "mb_budget": 0}],
