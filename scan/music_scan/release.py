@@ -107,6 +107,20 @@ digest's only copies and the scan's asis pass never read ``keep/`` (as for
 ``replaced/``, a spotdl file's URL there still counts as held, so it isn't
 downloaded again); ``list_quarantine`` shows it, and a kept file stays until a
 person deletes it.
+
+``--retire ITEM_ID... --reason R`` (homelab#2648, :func:`retire_chosen`) takes
+local-only extras a person chose off their album: a wrong release's tracks a
+reimport left behind, each another recording than the release's, so no merge
+fits.  Their files go to ``quarantine/replaced/retired/``, their rows leave the
+library, and each is a ``retire`` event with the reason.  Only an extra goes:
+the album is the unit, so a release's own track is never retired alone.  It
+refuses the whole call when any item is unknown, not an extra, or the last item
+a playlist entry resolves to.  A file under ``retired/`` was dropped on purpose,
+not superseded by anything the library holds, so :func:`split_replaced` counts
+it superseded whatever its tags say and the purge deletes it after
+``REPLACED_RETENTION_DAYS``, never as an only copy; ``--keep`` rescues it first.
+A release item the extra kept off its path (``canon_clash``) moves there at the
+next scan's canon, which tries again every scan until the path is free.
 """
 
 from __future__ import annotations
@@ -307,6 +321,8 @@ def claim_fallback(items, records: dict[str, dict]) -> list:
 EXTRA = "album_extra"
 # The IDs of the kept release's items an extra shares a title with (#306).
 TWIN = "album_extra_twin"
+# Under quarantine/replaced/: the files a person retired by hand (homelab#2648).
+RETIRED = "retired"
 
 
 def copies(items, key: str, record: dict, keep: str | None, drop: str | None, listed) -> list:
@@ -876,6 +892,11 @@ def _file_origin(f: Path) -> str:
     return "; ".join(parts)
 
 
+def retired(f: Path) -> bool:
+    """True for a file :func:`retire_chosen` moved to ``quarantine/replaced/retired/``."""
+    return f.parent.name == RETIRED
+
+
 def split_replaced(files: list[Path], library) -> tuple[list[Path], list[Path]]:
     """``(superseded, only_copies)``: which replaced *files* hold a recording
     *library* (a :class:`music_scan.identity.Recordings` of the library's
@@ -888,14 +909,16 @@ def split_replaced(files: list[Path], library) -> tuple[list[Path], list[Path]]:
     is not an ID, and a wrong merge leaves one behind (homelab#2539).  A
     merged file that disagrees is judged by its identity tags like any other.
     An unreadable file, or one with no identity tags the library holds, is an
-    only copy: nothing says the library has it."""
+    only copy: nothing says the library has it.  A file a person retired
+    (:func:`retired`, homelab#2648) is superseded whatever its tags say: nothing
+    holds its recording, but someone chose to drop it, so it ages out."""
     from music_scan.playlists import _file_tags  # noqa: PLC0415
 
     held, only = [], []
     for f in files:
-        rf = _file_tags(f)
-        superseded = rf is not None and (library.holds_merged(f.name, rf.title, rf.artist)
-                                         or library.holds(rf.recording_ids, rf.length))
+        rf = None if retired(f) else _file_tags(f)
+        superseded = retired(f) or (rf is not None and (library.holds_merged(f.name, rf.title, rf.artist)
+                                                        or library.holds(rf.recording_ids, rf.length)))
         (held if superseded else only).append(f)
     return held, only
 
@@ -954,8 +977,9 @@ def _purged_event(f: Path, tags: _Tags | None, message: str, key: str | None = N
 
 def purge_replaced(replaced_dir: Path, library, days: int, now: float | None = None) -> dict[str, int]:
     """Delete the files in *replaced_dir* whose recording *library* (a
-    :class:`music_scan.identity.Recordings`) holds and that moved there more
-    than *days* days ago (#288).  An only copy is never deleted.  *days* 0
+    :class:`music_scan.identity.Recordings`) holds, or that a person retired
+    (:func:`retired`), and that moved there more than *days* days ago (#288).
+    An only copy is never deleted.  *days* 0
     deletes nothing.  Returns the files left by kind (``superseded``,
     ``only_copy``) and the count ``purged``."""
     now = time.time() if now is None else now
@@ -973,7 +997,8 @@ def purge_replaced(replaced_dir: Path, library, days: int, now: float | None = N
             continue
         if due:
             purged += 1
-            message = f"[PURGE] {f}: superseded {days}+ days ago, the library holds its recording"
+            message = (f"[PURGE] {f}: retired by hand {days}+ days ago" if retired(f) else
+                       f"[PURGE] {f}: superseded {days}+ days ago, the library holds its recording")
             logger.info("  %s", message)
             _purged_event(f, tags, message, days=days)
     if purged or only:
@@ -1077,6 +1102,186 @@ def keep_replaced(name: str, replaced_dir: Path, keep_dir: Path, conn=None) -> P
     return dest
 
 
+# ---------------------------------------------------------------------------
+# --retire: local-only extras a person chose off their album (homelab#2648)
+# ---------------------------------------------------------------------------
+
+
+def _label(item) -> str:
+    return f"{item.id} {item.get('artist')} — {item.get('title')} [{item.get('album')}]"
+
+
+def _not_retirable(item, records: dict[str, dict], kept: dict[str, list]) -> str | None:
+    """Why *item* can't be retired, whatever lists it; None when it can.  The file ends
+    in deletion, so anything but a settled album's plain extra is refused."""
+    from music_fetch.resolve import in_flight  # noqa: PLC0415
+    from music_scan.audit import item_path  # noqa: PLC0415
+    from music_scan.supersede import MANAGED_VIA  # noqa: PLC0415
+
+    key = item.get("album_record")
+    if key and not item.get(EXTRA):
+        return (f"a release item of album {key}: the album is the unit, so start it over with reset_album "
+                "reimport=true")
+    if not key or not item.get(EXTRA):
+        return "not a local-only extra (no album_extra on an album record): it is on no album to take it off"
+    if (item.get("via") or "") not in MANAGED_VIA:
+        return f"imported by hand (via={item.get('via') or '-'})"
+    record = records.get(str(key))
+    if record is None:
+        return f"its album record {key} doesn't exist"
+    if in_flight(record):
+        return f"album {key} is mid-import, and its import weighs its extras itself"
+    if not kept.get(key):
+        return f"album {key} has no release items, so this extra is all it holds"
+    if not item_path(item).exists():
+        return f"its file {item_path(item)} is gone"
+    return None
+
+
+def _slots(chosen: list, others: list, songs: dict[str, list[dict]]) -> dict[int, list[tuple[str, bool]]]:
+    """Item ID → each playlist entry of *songs* (the stores' song records, by playlist)
+    that one of *chosen* holds by Spotify ID or ISRC, as ``(line, lost)``: where the
+    entry resolves among *others*, the items that stay, and whether it goes empty."""
+    from music_scan.dupes import _resolves  # noqa: PLC0415
+    from music_scan.identity import item_isrcs, item_spotify_ids, spotify_id  # noqa: PLC0415
+
+    held = [(i.id, item_spotify_ids(i), item_isrcs(i)) for i in chosen]
+    out: dict[int, list[tuple[str, bool]]] = {}
+    for playlist, listed in sorted(songs.items()):
+        for song in listed:
+            sid, isrc = song.get("song_id") or spotify_id(song.get("url")), song.get("isrc")
+            mine = [i for i, sids, isrcs in held if sid in sids or isrc in isrcs]
+            if not mine:
+                continue
+            to, by = _resolves(others, sid, isrc, 0)
+            artists = song.get("artists") or []
+            label = f"{song.get('name')} — {', '.join(artists) if isinstance(artists, list) else artists}"
+            where = f"{to} by {by}" if to is not None else "no item: the slot would go empty"
+            for item_id in mine:
+                out.setdefault(item_id, []).append(
+                    (f"{playlist}: {label} (Spotify ID {sid or 'none'}, ISRC {isrc or 'none'}) → {where}", to is None))
+    return out
+
+
+def _freed(chosen: list, items: list) -> list[str]:
+    """What the next canon does with the paths *chosen* leave free: a release item it
+    tagged in place (``canon_clash``) because one of them held its path moves there."""
+    from music_scan.audit import item_path  # noqa: PLC0415
+    from music_scan.canon import CLASH  # noqa: PLC0415
+
+    paths = {str(item_path(i)): i for i in chosen}
+    gone = {i.id for i in chosen}
+    lines = []
+    for item in items:
+        if item.get(CLASH) and item.id not in gone:
+            holder = paths.get(os.fsdecode(item.destination()))
+            if holder is not None:
+                lines.append(f"[FREED] {item.id} {item.get('title')} waits for the path {holder.id} holds; the next "
+                             "scan's canon moves it there")
+    return lines
+
+
+def retire_chosen(items: list, ids: list[int], reason: str, records: dict[str, dict],
+                  songs: dict[str, list[dict]], local: dict[int, list[str]], replaced_dir: Path,
+                  conn=None) -> list[Path]:
+    """Retire the local-only extras *ids*: a dry run without *conn*, with it each file to
+    ``retired/`` under *replaced_dir* and its row out of the library, the move and its
+    ``retire`` event in one transaction.  *songs* are the stores' song records by
+    playlist, *local* the playlists whose local entries name an item.  Every item is
+    weighed first, and :class:`SystemExit` refuses them all, before anything changes,
+    when one is unknown, is no extra (:func:`_not_retirable`), or is the last item a
+    playlist entry resolves to: nothing else takes that slot, and no ID agrees with any
+    other item, so it isn't this tool's to give away.  Returns where the files went."""
+    from music_scan.rollback import quarantine  # noqa: PLC0415
+
+    by_id = {i.id: i for i in items}
+    if missing := [i for i in ids if i not in by_id]:
+        raise SystemExit(f"--retire: no library item with id {', '.join(map(str, missing))}; nothing moved")
+    kept: dict[str, list] = {}
+    for item in items:
+        if item.get("album_record") and not item.get(EXTRA):
+            kept.setdefault(item.get("album_record"), []).append(item)
+    chosen = [by_id[i] for i in ids]
+    slots = _slots(chosen, [i for i in items if i.id not in set(ids)], songs)
+    refused = 0
+    for item in chosen:
+        why = _not_retirable(item, records, kept)
+        entries = slots.get(item.id, [])
+        if why is None and local.get(item.id):
+            why = f"a local entry of {', '.join(sorted(local[item.id]))} names it, and nothing else can take that"
+        if why is None and any(lost for _, lost in entries):
+            why = ("a playlist entry resolves to it and no other item would take the slot: unlink_spotify_id when "
+                   "it holds the entry's ID wrongly (the slot goes empty), merge_items when the user confirms a "
+                   "release item is that track")
+        refused += why is not None
+        logger.info("[%s] %s (%.0fs): %s", "REFUSED" if why else "RETIRE", _label(item), item.get("length") or 0,
+                    why or f"→ {replaced_dir / RETIRED}, deleted {retention_days()} days later unless kept")
+        for line, _ in entries:
+            logger.info("    %s", line)
+    if refused:
+        raise SystemExit(f"--retire: {refused} of {len(chosen)} item(s) refused; nothing moved")
+    for line in _freed(chosen, items):
+        logger.info("%s", line)
+    logger.info("Reason: %s", reason)
+    if conn is None:
+        logger.info("Dry run — nothing retired. Re-run with --apply; keep_quarantined rescues a file before the "
+                    "purge.")
+        return []
+    moved = []
+    for item in chosen:
+        key = item.get("album_record")
+        message = f"[RETIRE] {_label(item)} (chosen): {reason}"
+        with conn.transaction():
+            events.insert(conn, "retire", message, source="release", item_id=item.id,
+                          spotify_album_id=primary_spotify(records[str(key)]),
+                          release_group=_release_group(kept[key]),
+                          data={**events.item_fields(item), "origin": "chosen", "reason": reason})
+            moved += quarantine([item], replaced_dir / RETIRED)
+        logger.info("  %s", message)
+    return moved
+
+
+def _local_entries() -> dict[int, list[str]]:
+    """Item ID → the playlists whose store holds it as a local entry (``store_listings``' rule)."""
+    from music_fetch import store  # noqa: PLC0415
+
+    local: dict[int, list[str]] = {}
+    for name in store.names():
+        if (playlist := store.load(name)) is not None:
+            for entry in playlist.locals:
+                local.setdefault(entry.get("id"), []).append(name)
+    return local
+
+
+def _retire_main(ids: list[int], reason: str, apply: bool) -> None:
+    """``--retire``: the apply under the pipeline lock, and only with the music database
+    (the retire is an event or nothing), then the ``.m3u`` files and Navidrome."""
+    import contextlib  # noqa: PLC0415
+
+    from music_fetch import db, store  # noqa: PLC0415
+    from music_fetch.albums import State  # noqa: PLC0415
+    from music_scan.audit import REPLACED, pipeline_lock  # noqa: PLC0415
+    from music_scan.library import LIBRARY_DB, MusicLibrary  # noqa: PLC0415
+    from music_scan.navidrome import trigger_scan  # noqa: PLC0415
+    from music_scan.scan import regen_playlists  # noqa: PLC0415
+
+    ids = sorted(set(ids))
+    if not apply:
+        with MusicLibrary(LIBRARY_DB) as lib:
+            retire_chosen(list(lib.all_items()), ids, reason, State.load().albums, store.songs_by_playlist(),
+                          _local_entries(), REPLACED)
+        return
+    if not db.configured():
+        raise SystemExit(f"--retire --apply: {db.ENV} is unset; a retire is recorded as an event, so nothing runs "
+                         "without it")
+    with pipeline_lock(), contextlib.closing(db.connect()) as conn, MusicLibrary(LIBRARY_DB) as lib:
+        retire_chosen(list(lib.all_items()), ids, reason, State.load().albums, store.songs_by_playlist(),
+                      _local_entries(), REPLACED, conn)
+        counts = regen_playlists()
+    logger.info("Retired; playlists regenerated: %s", ", ".join(f"{k} {v}" for k, v in sorted(counts.items())))
+    trigger_scan()
+
+
 def audit_main() -> None:
     import argparse  # noqa: PLC0415
 
@@ -1090,7 +1295,8 @@ def audit_main() -> None:
         description="List imported albums mixed from several releases before #279, each with its reset command; "
                     "with --merged, the records a release-group merge left holding several releases; "
                     "with --replaced, list (and with --apply delete) one album's copies in quarantine/replaced/; "
-                    "with --replaced and no query, list every only copy there by album")
+                    "with --replaced and no query, list every only copy there by album; "
+                    "with --retire, take local-only extras off their album")
     parser.add_argument("--replaced", metavar="QUERY", nargs="?", const="",
                         help="the album's Spotify ID, its 'artist — album', or a part of it that matches one album; "
                              "without one, list every only copy in quarantine/replaced/ (read-only)")
@@ -1102,11 +1308,21 @@ def audit_main() -> None:
                         help="move one file from quarantine/replaced/ to quarantine/keep/, out of the purge's reach: "
                              "its path relative to quarantine/replaced/, or the item ID its name starts with "
                              "(a dry run without --apply; homelab#2623)")
+    parser.add_argument("--retire", metavar="ITEM_ID", nargs="+", type=int,
+                        help="take these local-only extras off their album: their files go to "
+                             "quarantine/replaced/retired/, which the purge deletes after REPLACED_RETENTION_DAYS "
+                             "(a dry run without --apply; homelab#2648)")
+    parser.add_argument("--reason", help="with --retire: why, kept in each item's retire event")
     parser.add_argument("--merged", action="store_true",
                         help="list the album records holding items of several releases (a release-group merge of "
                              "two imported records) and what the next scan retires of each (read-only, "
                              "homelab#2545)")
     args = parser.parse_args()
+    if (args.retire is None) != (args.reason is None) or args.reason == "":
+        parser.error("--retire and --reason go together, and the reason says why")
+    if args.retire is not None and (args.keep is not None or args.merged or args.replaced is not None
+                                    or args.only_copies):
+        parser.error("--retire takes items off an album; give it alone (with --reason and --apply)")
     if args.keep is not None and (args.merged or args.replaced is not None or args.only_copies):
         parser.error("--keep moves one file; give it alone (with --apply)")
     if args.merged and (args.replaced is not None or args.apply or args.only_copies):
@@ -1116,6 +1332,9 @@ def audit_main() -> None:
     logging.basicConfig(level=logging.INFO, format="[%(asctime)s] %(message)s", datefmt="%Y-%m-%dT%H:%M:%S%z")
     if args.keep is not None:
         _keep_main(args.keep, args.apply)
+        return
+    if args.retire is not None:
+        _retire_main(args.retire, args.reason, args.apply)
         return
     records = State.load().albums
     if args.merged:

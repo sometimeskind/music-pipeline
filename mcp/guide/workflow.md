@@ -5,7 +5,7 @@
 | Tier | Who | Tools |
 |------|-----|-------|
 | Read | anyone signed in to the connector, and Claude Code's static token | the structured reads, the audits, `recheck_recordings`, `recording_candidates`, `get_job`, `get_guide` |
-| Recoverable write | the claude.ai connector (a Pocket ID user in the `music` group) | `reset_album`, `requeue_albums`, `merge_items`, `replace_item`, `unlink_spotify_id`, `set_recording`, `embed_covers`, `canon_albums`, `apply_recheck`, `set_search_override`, `clear_search_override`, `hold_album`, `release_album`, `pin_track`, `unpin_track`, `trigger_scan`, `trigger_album_tick` |
+| Recoverable write | the claude.ai connector (a Pocket ID user in the `music` group) | `reset_album`, `requeue_albums`, `merge_items`, `replace_item`, `unlink_spotify_id`, `set_recording`, `keep_quarantined`, `retire_item`, `embed_covers`, `canon_albums`, `apply_recheck`, `set_search_override`, `clear_search_override`, `hold_album`, `release_album`, `pin_track`, `unpin_track`, `trigger_scan`, `trigger_album_tick` |
 | Irreversible | not exposed | the workstation commands below |
 
 The tier belongs to the token, not to the client: the static token is read-only, and an OAuth
@@ -26,7 +26,9 @@ Every write tool is a dry run unless `apply=true`:
 
 Writes are recoverable: the library and pipeline state are backed up, and a merged or replaced
 file goes to `quarantine/replaced/` for 14 days (`keep_quarantined` moves one out of the purge's
-reach, to `quarantine/keep/`). Still, apply only what the user agreed to.
+reach, to `quarantine/keep/`). A file `retire_item` took off an album goes the same way, and
+nothing in the library holds its recording, so `keep_quarantined` is the only way back. Still,
+apply only what the user agreed to.
 
 ## Jobs
 

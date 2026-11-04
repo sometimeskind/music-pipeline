@@ -282,6 +282,14 @@ def _keep_quarantined(body: dict, _: Albums) -> dict:
     return {"file": quarantined_file(body.get("file"))}
 
 
+def _retire_item(body: dict, _: Albums) -> dict:
+    _only(body, "ids", "reason")
+    ids = _ids(body.get("ids"), "ids")
+    if not ids:
+        raise BadRequest("ids must name at least one item")
+    return {"ids": ids, "reason": _text(body, "reason", required=True)}
+
+
 # ---- search overrides, holds and pins (homelab#2484): music-overrides ----
 
 MAX_TEXT = 500
@@ -557,6 +565,12 @@ TOOLS: dict[str, Tool] = {t.name: t for t in [
     # --keep=FILE, so a name starting with "-" stays the option's value.
     Tool("keep_quarantined", WRITE, _keep_quarantined,
          lambda a, apply: [_apply(["music-album-audit-releases", f"--keep={a['file']}"], apply)],
+         ("pipeline",)),
+    # Local-only extras off their album (homelab#2648); --reason=R, so a reason starting
+    # with "-" stays the option's value, and the IDs are integers, never flags.
+    Tool("retire_item", WRITE, _retire_item,
+         lambda a, apply: [_apply(["music-album-audit-releases", f"--reason={a['reason']}", "--retire",
+                                   *map(str, a["ids"])], apply)],
          ("pipeline",)),
     Tool("embed_covers", WRITE, _none, lambda a, apply: [_apply(["music-embed-covers"], apply)], ("pipeline",)),
     Tool("canon_albums", WRITE, _canon_albums, _canon_argv, ("pipeline",)),

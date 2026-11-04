@@ -80,6 +80,21 @@ Search the album's name in the log. The import logs `[RELEASE]`/`[NOMB]`, then o
   `[LOCAL] … left to music-audit-dupes` means the audio matched several release tracks: run
   `audit_dupes` and `merge_items` the pair the user confirms. Other extras still there after a
   scan are another take (an alternate version, a 5.1 mix): keep them, or start the album over.
+- **A wrong extra:** a reimport doesn't take extras off, since the kept release lacks their
+  recording: a wrong release's live tracks stay as `[LOCAL]` extras after the right release
+  arrives. The user chooses them, and `retire_item` with the IDs and a reason takes them off,
+  after a dry run. Their files go to `quarantine/replaced/retired/`, which counts as superseded,
+  not only copies: the purge deletes them 14 days after the move, and `keep_quarantined` rescues
+  one before that. A release item an extra kept off its path (`[CLASH]`, canon_clash) moves
+  there at the next scan. It refuses the whole call, nothing moved, when one item is refused:
+  - A release's own track: the album is the unit, so `reset_album` with `reimport=true`.
+  - The last item a playlist entry resolves to: the dry run shows the entry. When the extra
+    holds the entry's Spotify ID wrongly, `unlink_spotify_id`, then retire; the slot goes empty
+    until an item holds the entry. When the user confirms a release item is that track,
+    `merge_items`, so the release item takes the entry.
+  - A loose copy (a spotdl item on the album with no album_extra): not an extra, so it goes by
+    `merge_items` onto the release item the user confirms; `audit_dupes` with `fingerprint_ids`
+    gives it a fingerprint to compare first.
 - **Two editions merged:** a scan's `[MERGED] … keeps its own release …` means two album
   records turned out to be one release group after both imported. The scan kept the record's
   own release and retired the other's copies as an import would (`[RETIRE]`, `[LOCAL]`). No
