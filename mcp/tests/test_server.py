@@ -20,10 +20,10 @@ PILOT = Caller("pilot", "read")
 
 READS = {"library_status", "find_albums", "get_album", "get_item", "list_quarantine", "get_playlist",
          "get_job", "get_guide", "audit_dupes", "audit_lengths", "audit_releases", "audit_want_albums", "audit_titles", "audit_artists", "audit_grabs", "check_release", "recheck_recordings", "search_releases",
-         "recording_candidates",
+         "recording_candidates", "compare_items",
          "album_history", "find_events", "digest_summary", "list_overrides", "list_requests", "get_later"}
 WRITES = {"reset_album", "requeue_albums", "merge_items", "replace_item", "unlink_spotify_id", "set_recording",
-          "keep_quarantined", "retire_item",
+          "keep_quarantined", "retire_item", "fingerprint_items",
           "embed_covers", "canon_albums",
           "apply_recheck",
           "trigger_scan", "trigger_album_tick", "set_search_override", "clear_search_override", "hold_album",
@@ -38,6 +38,7 @@ WRITE_CALLS = {
     "set_recording": {"id": 1, "recording": "dd51202e-05ac-4bc9-b597-e117f81c47f8"},
     "keep_quarantined": {"file": "17052"},
     "retire_item": {"ids": [8283], "reason": "the wrong box set"},
+    "fingerprint_items": {"ids": [534]},
     "embed_covers": {},
     "canon_albums": {},
     "apply_recheck": {"run_id": "3f2a9c0d1e2b4a5c"},
@@ -113,7 +114,8 @@ async def test_reads_route_to_the_contract(pipeline, fake, tool, args, method, p
 
 @pytest.mark.parametrize(("tool", "args", "path", "body"), [
     ("audit_dupes", {}, "/mcp-api/run/audit_dupes", {}),
-    ("audit_dupes", {"fingerprint_ids": []}, "/mcp-api/run/audit_dupes", {"fingerprint_ids": []}),
+    ("compare_items", {"ids": [534, 18521]}, "/mcp-api/run/compare_items", {"ids": [534, 18521]}),
+    ("fingerprint_items", {"ids": [534]}, "/mcp-api/run/fingerprint_items", {"ids": [534], "apply": False}),
     ("audit_lengths", {"silence": True}, "/mcp-api/run/audit_lengths", {"silence": True}),
     ("audit_releases", {}, "/mcp-api/run/audit_releases", {}),
     ("audit_releases", {"replaced_query": ""}, "/mcp-api/run/audit_releases", {"replaced_query": ""}),

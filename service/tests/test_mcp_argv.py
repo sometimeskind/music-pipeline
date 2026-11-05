@@ -22,7 +22,9 @@ class Parsed(Exception):
 
 # Normalised args per tool, every flag the builder can emit covered once.
 CASES = {
-    "audit_dupes": [{"fingerprint_ids": None}, {"fingerprint_ids": []}, {"fingerprint_ids": [3, 7]}],
+    "audit_dupes": [{}],
+    "compare_items": [{"ids": [534, 18521]}],
+    "fingerprint_items": [{"ids": [534]}, {"ids": [3, 7]}],
     "audit_lengths": [{"silence": False}, {"silence": True}],
     "audit_releases": [{"replaced_query": None}, {"replaced_query": ""}, {"replaced_query": "Artist — Album"},
                        {"replaced_query": "--apply"}],

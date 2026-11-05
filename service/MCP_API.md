@@ -287,7 +287,8 @@ A write tool's **apply** takes Prefect's `pipeline` lock (and first `albums`, fo
 
 | Tool | Body | argv |
 |---|---|---|
-| `audit_dupes` | `{"fingerprint_ids": [1, 2]}` (optional; `[]` = every item without a fingerprint) | `music-audit-dupes` / `music-audit-dupes --fingerprint [ID…]` |
+| `audit_dupes` | `{}` | `music-audit-dupes` |
+| `compare_items` | `{"ids": [534, 18521]}` (two different items) | `music-audit-dupes --compare <id> <id>` |
 | `audit_lengths` | `{"silence": false}` | `music-audit-lengths [--silence]` |
 | `audit_releases` | `{"replaced_query": "…"}` (optional; `""` lists every only copy) | `music-album-audit-releases` / `… --replaced` / `… --replaced=QUERY` |
 | `audit_want_albums` | `{}` | `music-audit-want-albums` |
@@ -318,6 +319,7 @@ Every write tool's body takes `"apply": false` (the default) or `true`.
 | `merge_items` | `{"pairs": [[keep_id, drop_id], …]}` | `music-audit-dupes --merge <keep> <drop>`, one per pair | pipeline |
 | `replace_item` | `{"id": 10001, "youtube_url": "…"}` | `music-audit-lengths --replace <id> --youtube https://www.youtube.com/watch?v=<video id>` | pipeline |
 | `unlink_spotify_id` | `{"id": 9674, "track": "…"}` | `music-audit-dupes --unlink <id> <track id>` | pipeline |
+| `fingerprint_items` | `{"ids": [534]}` (at least one) | `music-audit-dupes --fingerprint <id>…` | pipeline |
 | `set_recording` | `{"id": 4230, "recording": "…"}` | `music-mb-fingerprint --set-recording <id> <recording MBID>` | pipeline |
 | `keep_quarantined` | `{"file": "17052"}` | `music-album-audit-releases --keep=<file>` | pipeline |
 | `retire_item` | `{"ids": [8283], "reason": "…"}` | `music-album-audit-releases --reason=<reason> --retire <id>…` | pipeline |
@@ -356,6 +358,8 @@ The override tools (homelab#2484) write rows of their own tables, which the tick
 - When the item's disc or track doesn't fit its release, `[VARIANT]` says so. It then reads the release group's releases (`inc=media`), keeps those whose disc has the item's track (and its tracktotal), and reads up to three of them, digital first, then CD, those with the item's disc count first. Their recordings at the item's position and of its song are listed with the release each is on.
 - It never decides: the caller picks one with the user, then runs `set_recording`.
 - An item with no `mb_albumid`, a release MusicBrainz doesn't have, or a failed lookup fails the call (exit 1).
+
+`fingerprint_items` (homelab#2653) computes each item's AcoustID fingerprint from its file and stores it in the library database, replacing any it has and clearing its `acoustid_id`; the file is left alone and AcoustID isn't asked. The dry run reads no audio: a `[WOULD-FINGERPRINT]` line per item says what the apply changes, so an item that gained a fingerprint or moved since the dry run refuses the apply. An unknown ID is a warning, and a file that can't be read is logged and skipped: the job still ends `done`, and its last line counts what was stored. It is a write because the pipeline acts on the result: every scan's `retire_held` merges a local-only extra onto a release track that matches it by the audit's rule, and supersede does the same for a loose copy. `compare_items` reads stored fingerprints only: `[COMPARE] <id> ~ <id>: certain|uncertain: <evidence>`, `[COMPARE] <id> ~ <id>: different audio: ber=…`, or `[NOFINGERPRINT] <id>…` when there was nothing to compare; an unknown ID fails the job. Unlike `audit_dupes` it needs no shared artist word and answers for a pair that differs. Both tools read only the items named, not the whole library, and hold no database transaction while they work, so neither can make an import's commit wait (homelab#2665): the apply's `fpcalc` runs between transactions, and each item is stored in its own short one at the end.
 
 `set_recording` (homelab#2583) sets one item's `mb_trackid` by hand: `recording` is a MusicBrainz recording MBID or a `musicbrainz.org/recording/…` URL, reduced to the MBID (anything else is a 400). It is for an item whose AcoustID fingerprint names a sibling recording, so `recheck_recordings` can't fix it and would put the wrong one back. The dry run looks the recording up on MusicBrainz and prints `[SETREC] <id> — <title> (<artist>, <length>): mb_trackid <old> → <new>, '<recording title>' by <credit> (<length>)`, the `title`/`trackdisambig` changes that go with it (as `apply_recheck`'s refresh), and `[SUSPECT]` when the recording's title names another song. A recording MusicBrainz doesn't have, or a failed lookup, fails the call (exit 1) with nothing changed; a merged recording's old ID is set as the recording it was merged into. The apply stores it under the pipeline lock with a `recording_set` event (`data.old`, `data.new`, `data.refreshed`) in one transaction, sets the flexible field `recording_set` to the recording, and writes the file's tags. A recheck skips an item while its `mb_trackid` is its `recording_set` (counted as set by hand), and `apply_recheck` skips it too. Undo it with another `set_recording`.
 

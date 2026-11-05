@@ -74,7 +74,19 @@ run counts them; with ``--apply`` it computes and stores them in the database
 only, leaving the files alone).  Run it before the first audit.  New asis
 imports are fingerprinted by the plugin and ``music-audit-lengths --replace``
 refingerprints, but items replaced before that carry the old audio's
-fingerprint: ``--fingerprint ITEM_ID...`` recomputes those.
+fingerprint: ``--fingerprint ITEM_ID...`` recomputes those, and clears their
+``acoustid_id``, which was looked up from the old audio.  Its dry run lists each
+item and what the apply changes, reading no audio.
+
+``--compare ITEM_ID ITEM_ID`` says whether two items are the same audio by
+:func:`audio_match`, whatever their artists (homelab#2653).  The audit can't
+answer that: it compares only items sharing an artist word, skips a pair
+already joined by an ID, and says nothing about a pair that differs.
+
+``--compare`` and ``--fingerprint ITEM_ID...`` read only the items they name, never
+the whole library, and hold no transaction while they work: beets' SQLite is in
+rollback-journal mode, so a reader's lock makes a writer's commit wait, and an
+import gives up after 5 seconds (homelab#2665).
 
 Each audit pushes ``music_dupes_groups{tier=...}`` to the Pushgateway.
 """
@@ -704,6 +716,35 @@ def unlink_spotify_id(items: list, item_id: int, sid: str, apply: bool,
     return True
 
 
+def compare_items(items: list, a_id: int, b_id: int, decoder: Callable[[str], list[int]] = decode) -> None:
+    """Log whether the items *a_id* and *b_id* are the same audio.  Raises
+    :class:`SystemExit` on an unknown ID."""
+    by_id = {item.id: item for item in items}
+    if missing := [i for i in (a_id, b_id) if i not in by_id]:
+        raise SystemExit(f"--compare: no library item with id {', '.join(map(str, missing))}")
+    a, b = by_id[a_id], by_id[b_id]
+    for item in (a, b):
+        logger.info("    %s  %s — %s  %.0fs  %s", item.id, item.artist or "?", item.title or "?",
+                    float(item.length or 0), _rel(item))
+    frames_of = frames_reader(decoder)
+    if match := audio_match(a, b, frames_of):
+        logger.info("[COMPARE] %s ~ %s: %s: %s", a_id, b_id, *match)
+    elif unprinted := [i.id for i in (a, b) if not frames_of(i)]:
+        logger.info("[NOFINGERPRINT] %s: no readable fingerprint, so nothing was compared",
+                    ", ".join(map(str, unprinted)))
+    else:
+        logger.info("[COMPARE] %s ~ %s: different audio: ber=%.2f, a match is at most %.2f", a_id, b_id,
+                    bit_error_rate(frames_of(a), frames_of(b)), MATCH_BER)
+
+
+def _would_fingerprint(item) -> str:
+    """What ``--fingerprint ITEM_ID... --apply`` changes on *item*."""
+    change = "replaces its fingerprint" if item.get("acoustid_fingerprint") else "no fingerprint yet"
+    if acoustid := item.get("acoustid_id"):
+        change += f", clears acoustid_id {acoustid}"
+    return f"[WOULD-FINGERPRINT] {item.id} {_rel(item)}: {change}"
+
+
 def fingerprint_missing(items: list, apply: bool, ids: list[int] | None = None) -> int:
     """Fingerprint items with no ``acoustid_fingerprint``, or the items *ids* whatever they
     have (a stale one); with *apply*, store them.  Returns the count."""
@@ -716,6 +757,9 @@ def fingerprint_missing(items: list, apply: bool, ids: list[int] | None = None) 
         todo = [i for i in items if not i.get("acoustid_fingerprint")]
         logger.info("%d of %d item(s) have no fingerprint", len(todo), len(items))
     if not apply:
+        if ids:
+            for item in todo:
+                logger.info("%s", _would_fingerprint(item))
         logger.info("Dry run — nothing fingerprinted. Re-run with --fingerprint --apply.")
         return len(todo)
 
@@ -748,15 +792,26 @@ def push_metrics(certain: int, uncertain: int) -> None:
 
 
 def run(apply: bool = False, fingerprints: list[int] | None = None, merge_ids: list[int] | None = None,
-        allow_manual: bool = False, unlink: tuple[int, str] | None = None) -> tuple[list[Group], list[Group]]:
+        allow_manual: bool = False, unlink: tuple[int, str] | None = None,
+        compare: tuple[int, int] | None = None) -> tuple[list[Group], list[Group]]:
     """Audit, and with *apply* merge; with *fingerprints* (a list, empty for every item
     missing one) fingerprint instead; with *merge_ids* merge those items instead; with
-    *unlink* (item ID, Spotify track ID) take that ID off that item instead."""
+    *unlink* (item ID, Spotify track ID) take that ID off that item instead; with
+    *compare* (two item IDs) compare their audio instead."""
     from music_scan.library import LIBRARY_DB, MusicLibrary  # noqa: PLC0415
     from music_scan.navidrome import trigger_scan  # noqa: PLC0415
     from music_scan.scan import regen_playlists  # noqa: PLC0415
 
+    def named(ids) -> list:
+        return [item for item in map(lib.get_item, ids) if item is not None]
+
     with MusicLibrary(LIBRARY_DB) as lib:
+        if compare is not None:
+            compare_items(named(compare), *compare, decode)
+            return [], []
+        if fingerprints:
+            fingerprint_missing(named(fingerprints), apply, fingerprints)
+            return [], []
         items = lib.all_items()
         if fingerprints is not None:
             fingerprint_missing(items, apply, fingerprints)
@@ -821,9 +876,13 @@ def main() -> None:
     parser.add_argument("--unlink", nargs=2, metavar=("ITEM_ID", "SPOTIFY_ID"),
                         help="instead: take one Spotify track ID off one item's spotify_ids "
                              "(changed only with --apply)")
+    parser.add_argument("--compare", nargs=2, type=int, metavar="ITEM_ID",
+                        help="instead: say whether two items are the same audio (read-only)")
     args = parser.parse_args()
-    if sum(a is not None for a in (args.fingerprint, args.merge, args.unlink)) > 1:
-        parser.error("--fingerprint, --merge and --unlink are separate runs")
+    if sum(a is not None for a in (args.fingerprint, args.merge, args.unlink, args.compare)) > 1:
+        parser.error("--fingerprint, --merge, --unlink and --compare are separate runs")
+    if args.compare is not None and args.apply:
+        parser.error("--compare changes nothing: it takes no --apply")
     if args.allow_manual and args.merge is None:
         parser.error("--allow-manual goes with --merge")
     unlink = None
@@ -836,4 +895,4 @@ def main() -> None:
         unlink = (int(item_id), sid)
     logging.basicConfig(level=logging.INFO, format="[%(asctime)s] %(message)s", datefmt="%Y-%m-%dT%H:%M:%S%z")
     run(apply=args.apply, fingerprints=args.fingerprint, merge_ids=args.merge, allow_manual=args.allow_manual,
-        unlink=unlink)
+        unlink=unlink, compare=None if args.compare is None else tuple(args.compare))

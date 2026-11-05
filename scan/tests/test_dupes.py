@@ -2,6 +2,7 @@
 
 import logging
 import random
+import sqlite3
 from pathlib import Path
 
 import pytest
@@ -699,6 +700,126 @@ def test_fingerprint_ids_replaces_a_stale_fingerprint_and_acoustid(monkeypatch) 
     assert dupes.fingerprint_missing([stale, other], apply=True, ids=[873, 999]) == 1
     assert stale.get("acoustid_fingerprint") == "NEW" and stale.get("acoustid_id") == ""
     assert not other.stored
+
+
+def test_fingerprint_ids_dry_run_says_what_the_apply_changes(monkeypatch, caplog) -> None:
+    """homelab#2653: the gate compares this output, so it names each item and its state."""
+    monkeypatch.setattr(dupes, "fingerprint", lambda path: pytest.fail("a dry run reads no audio"))
+    bare = FakeItem(534, "Bare")
+    stale = FakeItem(873, "Stale", acoustid_fingerprint="OLD", acoustid_id="old-acid")
+    with caplog.at_level("INFO", logger=dupes.__name__):
+        assert dupes.fingerprint_missing([bare, stale], apply=False, ids=[534, 873]) == 2
+    assert "[WOULD-FINGERPRINT] 534 /lib/Artist/Bare-534.m4a: no fingerprint yet" in caplog.messages
+    assert ("[WOULD-FINGERPRINT] 873 /lib/Artist/Stale-873.m4a: replaces its fingerprint, "
+            "clears acoustid_id old-acid") in caplog.messages
+    assert not bare.stored and not stale.stored
+
+
+# --- comparing two items (homelab#2653) -----------------------------------------
+
+def _compared(caplog, *items) -> str:
+    frames = {"same-a": _frames(1), "same-b": _noisy(_frames(1), 1), "other": _frames(2)}
+    with caplog.at_level("INFO", logger=dupes.__name__):
+        dupes.compare_items(list(items), items[0].id, items[1].id, frames.__getitem__)
+    return caplog.messages[-1]
+
+
+def test_compare_needs_no_shared_artist_word(caplog) -> None:
+    a = FakeItem(1, "Song", artist="Somebody", acoustid_fingerprint="same-a")
+    b = FakeItem(2, "Song", artist="Else", acoustid_fingerprint="same-b")
+    assert _compared(caplog, a, b).startswith("[COMPARE] 1 ~ 2: certain: fingerprint ber=")
+
+
+def test_compare_says_why_a_match_is_uncertain(caplog) -> None:
+    a = FakeItem(1, "Song", length=240.0, acoustid_fingerprint="same-a")
+    b = FakeItem(2, "Song", length=200.0, acoustid_fingerprint="same-b")
+    message = _compared(caplog, a, b)
+    assert message.startswith("[COMPARE] 1 ~ 2: uncertain: fingerprint ber=") and "40s apart" in message
+
+
+def test_compare_reports_different_audio(caplog) -> None:
+    a = FakeItem(1, "Song", acoustid_fingerprint="same-a")
+    b = FakeItem(2, "Song", acoustid_fingerprint="other")
+    message = _compared(caplog, a, b)
+    assert message.startswith("[COMPARE] 1 ~ 2: different audio: ber=") and "at most 0.08" in message
+
+
+def test_compare_names_the_item_with_no_fingerprint(caplog) -> None:
+    a, b = FakeItem(534, "Song"), FakeItem(18521, "Song", acoustid_fingerprint="same-a")
+    assert _compared(caplog, a, b).startswith("[NOFINGERPRINT] 534: ")
+
+
+def test_compare_refuses_an_unknown_item() -> None:
+    with pytest.raises(SystemExit, match="no library item with id 2"):
+        dupes.compare_items([FakeItem(1, "Song")], 1, 2)
+
+
+# --- the item tools leave the database free (homelab#2665) ----------------------
+
+@pytest.fixture
+def real_library(tmp_path, monkeypatch):
+    """A real beets library of two items, where reading every item fails the test."""
+    from beets.library import Item, Library
+
+    from music_scan import library
+
+    db = tmp_path / "library.db"
+    lib = Library(str(db), directory=str(tmp_path))
+    for n in (1, 2):
+        lib.add(Item(title="Song", artist="Artist", length=200.0, acoustid_fingerprint=f"fp{n}",
+                     path=str(tmp_path / f"{n}.m4a").encode()))
+    lib._close()
+    monkeypatch.setattr(library, "LIBRARY_DB", db)
+    monkeypatch.setattr(library.MusicLibrary, "all_items", lambda self: pytest.fail("read every item"))
+    return db
+
+
+def _commit_now(db) -> None:
+    """Take the lock an import's commit needs, with no wait: raises when a reader holds the database."""
+    conn = sqlite3.connect(db, timeout=0)
+    try:
+        conn.execute("BEGIN EXCLUSIVE")
+        conn.rollback()
+    finally:
+        conn.close()
+
+
+def test_compare_leaves_the_database_free_while_it_works(real_library, monkeypatch, caplog) -> None:
+    probed = []
+
+    def decode(fp: str) -> list[int]:
+        _commit_now(real_library)
+        probed.append(fp)
+        return _frames(1)
+
+    monkeypatch.setattr(dupes, "decode", decode)
+    with caplog.at_level("INFO", logger=dupes.__name__):
+        dupes.run(compare=(1, 2))
+    assert probed == ["fp1", "fp2"]
+    assert caplog.messages[-1].startswith("[COMPARE] 1 ~ 2: certain: fingerprint ber=0.00")
+
+
+def test_fingerprinting_leaves_the_database_free_while_it_reads_the_audio(real_library, monkeypatch) -> None:
+    import contextlib
+
+    def fingerprint(path) -> str:
+        _commit_now(real_library)
+        return "NEW"
+
+    monkeypatch.setattr(dupes, "pipeline_lock", contextlib.nullcontext)
+    monkeypatch.setattr(dupes, "fingerprint", fingerprint)
+    dupes.run(apply=True, fingerprints=[1, 999])
+    conn = sqlite3.connect(real_library)
+    stored = dict(conn.execute("SELECT id, acoustid_fingerprint FROM items"))
+    conn.close()
+    assert stored == {1: "NEW", 2: "fp2"}
+
+
+def test_the_fingerprint_dry_run_reads_only_its_items(real_library, monkeypatch, caplog) -> None:
+    monkeypatch.setattr(dupes, "fingerprint", lambda path: pytest.fail("a dry run reads no audio"))
+    with caplog.at_level("INFO", logger=dupes.__name__):
+        dupes.run(fingerprints=[2])
+    assert sum("[WOULD-FINGERPRINT] 2 " in m for m in caplog.messages) == 1
 
 
 # --- album records: the album is the unit (#279, #311) ------------------------

@@ -42,7 +42,7 @@ MusicBrainz release group, an MBID or musicbrainz.org URL, and taken off Later
 from what the user typed (never search MusicBrainz with a
 title read from the library). An item ID is a
 beets item (an integer: get_item, merge_items pairs, replace_item, unlink_spotify_id,
-set_recording, retire_item, recording_candidates, audit_dupes fingerprint_ids); a recording (set_recording)
+set_recording, retire_item, recording_candidates, fingerprint_items, compare_items); a recording (set_recording)
 is a MusicBrainz recording MBID or musicbrainz.org/recording URL, which recording_candidates
 lists from the item's release;
 get_album also shows beets album IDs, which no tool takes. A playlist entry resolves to an item
@@ -52,7 +52,8 @@ that outlasts the inline wait returns a job_id: poll get_job. recheck_recordings
 the run ID, and apply_recheck applies the finished run.
 
 Tiers. Read tools anyone signed in may use. Write tools (reset_album, requeue_albums,
-merge_items, replace_item, unlink_spotify_id, set_recording, keep_quarantined, retire_item, embed_covers,
+merge_items, replace_item, unlink_spotify_id, set_recording, fingerprint_items, keep_quarantined, retire_item,
+embed_covers,
 canon_albums,
 apply_recheck,
 set_search_override, clear_search_override, hold_album, release_album, pin_track, unpin_track,
@@ -323,17 +324,27 @@ def build_server(
         return await run("recording_candidates", {"id": id})
 
     @mcp.tool(annotations={"readOnlyHint": True})
-    async def audit_dupes(
-        fingerprint_ids: Annotated[
-            list[int] | None,
-            Field(description="fingerprint these items first ([] = every item without one)"),
-        ] = None,
-    ) -> dict:
+    async def audit_dupes() -> dict:
         """music-audit-dupes dry run: duplicate groups, certain and uncertain, with item IDs, and how
-        many items had no fingerprint or no title words to compare. Merge a confirmed pair with
-        merge_items."""
-        body = {} if fingerprint_ids is None else {"fingerprint_ids": fingerprint_ids}
-        return await run("audit_dupes", body)
+        many items had no fingerprint or no title words to compare. It compares the fingerprints
+        already stored, between items sharing an artist word, and stores none. It reads the whole
+        library and runs for minutes, and imports running beside it have died with "database is
+        locked" (homelab#2665): for one pair use compare_items, not this. Merge a confirmed pair
+        with merge_items."""
+        return await run("audit_dupes", {})
+
+    @mcp.tool(annotations={"readOnlyHint": True})
+    async def compare_items(
+        ids: Annotated[list[ItemId], Field(description="the two items to compare", min_length=2, max_length=2)],
+    ) -> dict:
+        """music-audit-dupes --compare: whether two items are the same audio, by the rule the audit
+        merges on, whatever their artists. [COMPARE] says certain (a shared acoustid_id or a
+        fingerprint match, lengths within 2 s and one title), uncertain (the audio matches, but the
+        lengths or titles differ, and why) or different audio, with the bit error rate.
+        [NOFINGERPRINT] names an item with no readable fingerprint: nothing was compared, so
+        fingerprint_items it first. Reads only these two items' stored fingerprints, never the
+        files or the rest of the library, so it takes seconds and is safe beside an import."""
+        return await run("compare_items", {"ids": ids})
 
     @mcp.tool(annotations={"readOnlyHint": True})
     async def audit_lengths(silence: bool = False) -> dict:
@@ -494,6 +505,22 @@ def build_server(
         dry run shows where each entry with that ID resolves afterwards (by ISRC, or empty);
         the apply regenerates the .m3u files."""
         return await run("unlink_spotify_id", {"id": id, "track": track, "apply": apply}, write=True)
+
+    @mcp.tool(annotations={"destructiveHint": True})
+    async def fingerprint_items(
+        ids: Annotated[list[ItemId], Field(description="the items to fingerprint", min_length=1)],
+        apply: Apply = False,
+    ) -> dict:
+        """music-audit-dupes --fingerprint: compute each item's AcoustID fingerprint from its file
+        and store it in the library database, leaving the file alone, so compare_items can
+        compare it. No AcoustID lookup. The dry run reads no audio, only these items: each is a
+        [WOULD-FINGERPRINT] line saying whether it has no fingerprint yet or its fingerprint is
+        replaced, and any acoustid_id the apply clears; an unknown ID is a warning and is skipped.
+        The apply logs a file it can't read and goes on, so read its last line for how many were
+        stored. A stored fingerprint is evidence the pipeline acts on: every scan merges an album's
+        local-only extra onto a release track that matches it, so an extra's file can leave for
+        quarantine/replaced at the next scan with nobody asked."""
+        return await run("fingerprint_items", {"ids": ids, "apply": apply}, write=True)
 
     @mcp.tool(annotations={"destructiveHint": True})
     async def set_recording(

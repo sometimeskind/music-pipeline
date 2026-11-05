@@ -246,6 +246,37 @@ def test_a_poll_during_the_gate_says_nothing_is_applied_yet(client, env, monkeyp
     assert finished["phase"] is None and finished["output"].startswith("[MCP] dry run re-run matches")
 
 
+def test_audit_dupes_only_audits(client, env):
+    """homelab#2653: fingerprint_ids ran --fingerprint with no --apply, so neither happened."""
+    assert client.post("/mcp-api/run/audit_dupes", json={"fingerprint_ids": [1]}, headers=READ).status_code == 400
+    assert client.post("/mcp-api/run/audit_dupes", json={}, headers=READ).get_json()["argv"] == [["music-audit-dupes"]]
+
+
+def test_compare_items_is_a_read_of_two_items(client, env):
+    resp = client.post("/mcp-api/run/compare_items", json={"ids": [18521, 534]}, headers=READ)
+    assert resp.get_json()["argv"] == [["music-audit-dupes", "--compare", "534", "18521"]]
+    for ids in ([534], [534, 534], [1, 2, 3], "534"):
+        assert client.post("/mcp-api/run/compare_items", json={"ids": ids}, headers=READ).status_code == 400, ids
+
+
+def test_fingerprint_items_is_a_gated_write(client, env):
+    """homelab#2653: the read tier can't store a fingerprint, and an apply needs its dry run."""
+    body = {"ids": [18521, 534, 534]}
+    assert client.post("/mcp-api/run/fingerprint_items", json=body, headers=READ).status_code == 403
+    assert client.post("/mcp-api/run/fingerprint_items", json={**body, "apply": True}, headers=WRITE).status_code == 409
+    dry = client.post("/mcp-api/run/fingerprint_items", json=body, headers=WRITE).get_json()
+    assert dry["args"] == {"ids": [534, 18521]}
+    assert dry["argv"] == [["music-audit-dupes", "--fingerprint", "534", "18521"]]
+    applied = client.post("/mcp-api/run/fingerprint_items", json={**body, "apply": True}, headers=WRITE).get_json()
+    assert applied["status"] == "done" and applied["locks"] == ["pipeline"]
+    assert applied["argv"] == [["music-audit-dupes", "--fingerprint", "534", "18521", "--apply"]]
+
+
+@pytest.mark.parametrize("body", [{}, {"ids": []}, {"ids": [0]}, {"ids": "534"}, {"ids": [534], "other": 1}])
+def test_fingerprint_items_refuses_bad_arguments(client, body):
+    assert client.post("/mcp-api/run/fingerprint_items", json=body, headers=WRITE).status_code == 400, body
+
+
 def test_retire_item_normalises_its_ids_and_reason(client, env):
     resp = client.post("/mcp-api/run/retire_item", json={"ids": [8283, 534, 8283], "reason": "  wrong\n box  set "},
                        headers=WRITE)

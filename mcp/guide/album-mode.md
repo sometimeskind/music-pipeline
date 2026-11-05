@@ -103,8 +103,8 @@ Search the album's name in the log. The import logs `[RELEASE]`/`[NOMB]`, then o
     until an item holds the entry. When the user confirms a release item is that track,
     `merge_items`, so the release item takes the entry.
   - A loose copy (a spotdl item on the album with no album_extra): not an extra, so it goes by
-    `merge_items` onto the release item the user confirms; `audit_dupes` with `fingerprint_ids`
-    gives it a fingerprint to compare first.
+    `merge_items` onto the release item the user confirms; `compare_items` says whether they
+    are the same audio, and `fingerprint_items` gives one with no fingerprint its own first.
 - **Two editions merged:** a scan's `[MERGED] … keeps its own release …` means two album
   records turned out to be one release group after both imported. The scan kept the record's
   own release and retired the other's copies as an import would (`[RETIRE]`, `[LOCAL]`). No
