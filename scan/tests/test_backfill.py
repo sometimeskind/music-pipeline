@@ -2,7 +2,19 @@
 
 from unittest.mock import MagicMock, patch
 
-from music_scan.backfill import plan_backfill, run, unlink_wrong
+import pytest
+
+from music_scan.backfill import (
+    apply_album_ids,
+    main,
+    mb_recordings,
+    plan_album_ids,
+    plan_backfill,
+    report_albums,
+    run,
+    run_albums,
+    unlink_wrong,
+)
 
 URL = "https://open.spotify.com/track/"
 
@@ -186,3 +198,135 @@ def test_failed_redownload_keeps_the_wrong_version_on_the_playlist() -> None:
     studio, songs = _studio_and_live()
     _run([studio], songs, apply=True, redownload=5, downloaded=False)
     assert studio.data["sources"] == "a,b"
+
+
+# --albums (homelab#2664), on the issue's real items.
+
+
+def _usenet(id_, title, track, key, **data):
+    item = _item(id_, title, "fancy", via="usenet", album_record=key, **data)
+    item.disc, item.track, item.tracktotal = 0, track, 0
+    return item
+
+
+def _record(*entries, status="imported", playlist="fancy"):
+    return {"status": status, "playlists": {playlist: list(entries)}}
+
+
+FALLING_DOWN = ["Falling Down", "Muse", "3vMrcGW4o35zY6vXjWb1p7", "GBCVT9900017", 1, 4]
+SLIP = ["Never Let It Slip", "Jerry Harrison", "2Ya4yE3bFfMGKMIRQ53sOc", "GBUM70501082", 1, 8]
+WABBITZ = ["Huntin’ Wabbitz", "J. Cole", "2cH8wHImerFokgmhjyhCTU", "USUG12402405", 1, 4]
+DAVID = ["David", "Lorde", "6ghDayhHeBXAP4OOnnrFW9", "NZUM72500030", 1, 11]
+
+
+def test_albums_links_what_the_rung_links_and_reports_the_rest() -> None:
+    falling = _usenet(21317, "Falling Down", 4, "1658")
+    slip = _usenet(21142, "Never Let It Slip", 7, "1653")
+    cowboy = _usenet(21143, "Cowboy's Got to Go", 8, "1653")
+    wabbitz = _usenet(21753, "Huntin’ Wabbitz", 4, "1699", isrc="USUG12402418", mb_trackid="clean", channels=2)
+    david = _usenet(21978, "David", 11, "1718", isrc="NZUM72500041", mb_trackid="atmos", channels=2)
+    records = {"1658": _record(FALLING_DOWN), "1653": _record(SLIP), "1699": _record(WABBITZ), "1718": _record(DAVID)}
+    lookup = {"clean": {"isrcs": ["USUG12402418"], "disambiguation": "clean"},
+              "atmos": {"isrcs": ["NZUM72500041"], "disambiguation": "Dolby Atmos mix"}}.get
+    plan = plan_album_ids([falling, slip, cowboy, wabbitz, david], records, lookup)
+    assert [(k.key, k.item.id) for k in plan.links] == [("1658", 21317), ("1718", 21978)]
+    assert [(k.key, k.why["why"]) for k in plan.skips] == [("1653", "number, other title"),
+                                                           ("1699", "number, other isrc")]
+    assert plan.albums == 4
+    assert "spotify_ids" not in falling.data, "a plan changes nothing"
+
+
+def test_albums_leaves_entries_an_item_holds_and_records_not_imported() -> None:
+    by_id = _usenet(1, "One", 1, "10", spotify_ids="S1")
+    by_isrc = _usenet(2, "Two", 2, "10", isrc="GB2")
+    other_copy = _item(3, "Three", "other", spotify_ids="S3", via="spotdl")
+    third = _usenet(4, "Three", 3, "10")
+    wanted = _usenet(5, "Five", 5, "11")
+    records = {"10": _record(["One", "A", "S1", None, 1, 1], ["Two", "A", "S2", "GB2", 1, 2],
+                             ["Three", "A", "S3", None, 1, 3]),
+               "11": _record(["Five", "A", "S5", None, 1, 5], status="wanted")}
+    plan = plan_album_ids([by_id, by_isrc, other_copy, third, wanted], records, lambda _: None)
+    assert (plan.links, plan.skips, plan.albums) == ([], [], 1)
+
+
+def test_albums_reads_only_the_records_release_items() -> None:
+    """Not an extra, not a spotdl copy stamped with the record, not another record's item."""
+    extra = _usenet(1, "One", 1, "10", album_extra="1")
+    spotdl = _usenet(2, "One", 1, "10")
+    spotdl.data["via"] = "spotdl"
+    other = _usenet(3, "One", 1, "11")
+    plan = plan_album_ids([extra, spotdl, other], {"10": _record(["One", "A", "S1", None, 1, 1])}, lambda _: None)
+    assert plan.links == [] and plan.albums == 0
+
+
+def test_albums_one_entry_on_two_playlists_links_once() -> None:
+    item = _usenet(1, "One", 1, "10")
+    entry = ["One", "A", "S1", None, 1, 1]
+    record = {"status": "imported", "playlists": {"a": [entry], "b": [entry]}}
+    assert len(plan_album_ids([item], {"10": record}, lambda _: None).links) == 1
+
+
+def test_albums_apply_writes_ids_only_and_a_second_run_finds_nothing() -> None:
+    item = _usenet(21317, "Falling Down", 4, "1658")
+    records = {"1658": _record(FALLING_DOWN)}
+    plan = plan_album_ids([item], records, lambda _: None)
+    before = dict(item.data)
+    with patch("music_scan.backfill.events.record") as record:
+        apply_album_ids(plan)
+    assert {k: v for k, v in item.data.items() if before.get(k) != v} == {
+        "spotify_ids": "3vMrcGW4o35zY6vXjWb1p7", "words_ids": "3vMrcGW4o35zY6vXjWb1p7"}
+    item.store.assert_called_once_with()
+    item.try_write.assert_not_called()
+    item.move.assert_not_called()
+    (kind, _message), kw = record.call_args
+    assert kind == "id_linked" and kw["source"] == "backfill" and kw["item_id"] == 21317
+    assert kw["data"]["linked"] == [{"item_id": 21317, "song_id": "3vMrcGW4o35zY6vXjWb1p7", "via": "number"}]
+    assert plan_album_ids([item], records, lambda _: None).links == []
+
+
+def test_albums_report_lists_each_link_and_gap_and_the_totals(caplog) -> None:
+    falling = _usenet(21317, "Falling Down", 4, "1658")
+    records = {"1658": _record(FALLING_DOWN, ["Gone", "Muse", "S9", None, 1, 13])}
+    with caplog.at_level("INFO", logger="music_scan.backfill"):
+        report_albums(plan_album_ids([falling], records, lambda _: None))
+    assert "[LINK] 1658 fancy: Falling Down — Muse → item 21317 at 1-4" in caplog.text
+    assert "[NOID] 1658 fancy: Gone — Muse no item" in caplog.text
+    assert "1 empty entr(ies) to link, 1 left empty (1 no item)" in caplog.text
+
+
+@pytest.mark.parametrize("apply,links,written", [(False, True, False), (True, True, True), (True, False, False)])
+def test_run_albums_writes_regenerates_and_rescans_only_on_an_apply_with_links(apply, links, written) -> None:
+    item = _usenet(21317, "Falling Down", 4, "1658")
+    records = {"1658": _record(FALLING_DOWN if links else ["Gone", "Muse", "S9", None, 1, 13])}
+    lib = MagicMock()
+    lib.all_items.return_value = [item]
+    with patch("music_fetch.state.session"), \
+            patch("music_fetch.state.load_albums", return_value=MagicMock(albums=records)), \
+            patch("music_scan.library.MusicLibrary") as library, \
+            patch("music_scan.audit.pipeline_lock"), \
+            patch("music_scan.navidrome.trigger_scan") as rescan, \
+            patch("music_scan.scan.regen_playlists", return_value={}) as regen, \
+            patch("music_scan.backfill.events.record"):
+        library.return_value.__enter__.return_value = lib
+        run_albums(apply=apply)
+    assert item.store.called is written
+    assert regen.called is written and rescan.called is written
+
+
+def test_main_refuses_redownload_with_albums(monkeypatch) -> None:
+    monkeypatch.setattr("sys.argv", ["music-backfill-ids", "--albums", "--apply", "--redownload", "1"])
+    with pytest.raises(SystemExit) as exc:
+        main()
+    assert exc.value.code == 2
+
+
+def test_mb_recordings_asks_for_isrcs_once_and_a_failed_lookup_is_none() -> None:
+    client = MagicMock()
+    client.get.side_effect = [{"isrcs": ["X"]}, OSError("down")]
+    with patch("music_scan.mb_release.MusicBrainz", return_value=client):
+        lookup = mb_recordings()
+    assert lookup("a") == {"isrcs": ["X"]}
+    assert lookup("a") == {"isrcs": ["X"]}
+    assert lookup("b") is None
+    client.get.assert_any_call("recording/a", inc="isrcs")
+    assert client.get.call_count == 2

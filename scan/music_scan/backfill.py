@@ -25,6 +25,16 @@ playlist's source tag and the entry's ID.  The next scan imports the download
 as its own recording.
 
 Dry run by default; ``--apply`` writes.  Safe to re-run.
+
+``--albums`` is a pass of its own, over albums already imported
+(homelab#2664): it reads no Spotify pages and uses no title words.  Each entry
+of an imported album record that no library item holds by Spotify ID or ISRC
+goes through ``tag_album_ids``' number rung
+(:func:`music_scan.identity.number_match`) against the record's release items
+(``album_record``), as if the rung as it stands today had run at the import.
+Only ``spotify_ids`` and ``words_ids`` change, in the database and not in the
+file, and the ``.m3u`` files are regenerated.  An entry nothing holds has no
+item sharing its ID, so no retire, supersede or merge follows from a link.
 """
 
 from __future__ import annotations
@@ -37,16 +47,21 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+from collections import Counter
 from collections.abc import Callable
 
 from music_fetch import events
 from music_scan.identity import (
     BY_ISRC,
     BY_WORDS,
+    NO_ITEM,
     ItemIndex,
+    PlaylistTrack,
     add_isrcs,
     add_to_list,
     item_isrcs,
+    number_match,
+    skip_note,
     spotify_id,
     split_list,
 )
@@ -134,6 +149,26 @@ class MusicBrainzRecordings:
         except (OSError, ValueError) as exc:
             logger.warning("MusicBrainz lookup of ISRC %s failed: %s", isrc, exc)
         return None
+
+
+def mb_recordings() -> Callable[[str], dict | None]:
+    """``recording/<id>?inc=isrcs`` through the pipeline's MusicBrainz client,
+    cached; None when there is no such recording or the lookup fails."""
+    from music_scan.mb_release import MusicBrainz  # noqa: PLC0415
+
+    mb = MusicBrainz()
+    cache: dict[str, dict | None] = {}
+
+    def lookup(recording_id: str) -> dict | None:
+        if recording_id not in cache:
+            try:
+                cache[recording_id] = mb.get(f"recording/{recording_id}", inc="isrcs")
+            except (OSError, ValueError) as exc:
+                logger.warning("MusicBrainz lookup of recording %s failed: %s", recording_id, exc)
+                cache[recording_id] = None
+        return cache[recording_id]
+
+    return lookup
 
 
 def _same_recording(song: dict, item, recordings: Callable[[str], set[str] | None] | None) -> bool:
@@ -229,6 +264,119 @@ def report(plan: Plan) -> None:
     )
 
 
+@dataclasses.dataclass
+class AlbumLink:
+    key: str
+    playlist: str
+    track: PlaylistTrack
+    item: object
+
+
+@dataclasses.dataclass
+class AlbumSkip:
+    key: str
+    playlist: str
+    track: PlaylistTrack
+    why: dict
+
+
+@dataclasses.dataclass
+class AlbumPlan:
+    links: list[AlbumLink] = dataclasses.field(default_factory=list)
+    skips: list[AlbumSkip] = dataclasses.field(default_factory=list)
+    albums: int = 0
+
+
+def _record_order(key: str) -> tuple[int, str]:
+    return (int(key), "") if key.isdigit() else (1 << 62, key)
+
+
+def plan_album_ids(items: list, records: dict[str, dict],
+                   recordings: Callable[[str], dict | None]) -> AlbumPlan:
+    """The ``--albums`` pass on in-memory *items* and the album store's
+    *records*.  Changes nothing."""
+    from music_scan.release import EXTRA  # noqa: PLC0415
+
+    library = ItemIndex(items)
+    releases: dict[str, list] = {}
+    for item in items:
+        if item.get("album_record") and item.get("via") == "usenet" and not item.get(EXTRA):
+            releases.setdefault(str(item.get("album_record")), []).append(item)
+    plan = AlbumPlan()
+    for key in sorted(records, key=_record_order):
+        record, release = records[key], releases.get(key)
+        if record.get("status") != "imported" or not release:
+            continue
+        plan.albums += 1
+        seen: set[str] = set()
+        for playlist, tracks in sorted((record.get("playlists") or {}).items()):
+            for track in map(PlaylistTrack.from_entry, tracks):
+                if not track.song_id or track.song_id in seen:
+                    continue
+                seen.add(track.song_id)
+                if library.match(track.song_id, track.isrc, words=False)[0] is not None:
+                    continue
+                item, why = number_match(track, release, recordings) if track.disc and track.track else (None, None)
+                if item is not None:
+                    plan.links.append(AlbumLink(key, playlist, track, item))
+                else:
+                    plan.skips.append(AlbumSkip(key, playlist, track, why or {"why": NO_ITEM}))
+    return plan
+
+
+def report_albums(plan: AlbumPlan) -> None:
+    for link in plan.links:
+        logger.info("[LINK] %s %s: %s — %s → item %s at %d-%d", link.key, link.playlist, link.track.name,
+                    link.track.artist, link.item.id, link.track.disc, link.track.track)
+    for skip in plan.skips:
+        logger.info("[NOID] %s %s: %s — %s %s", skip.key, skip.playlist, skip.track.name, skip.track.artist,
+                    skip_note(skip.why))
+    why = Counter(skip.why["why"] for skip in plan.skips)
+    logger.info("Album IDs: %d imported album(s) read, %d empty entr(ies) to link, %d left empty (%s)", plan.albums,
+                len(plan.links), len(plan.skips), ", ".join(f"{n} {w}" for w, n in sorted(why.items())) or "none")
+
+
+def apply_album_ids(plan: AlbumPlan) -> None:
+    """Write *plan*'s links: the Spotify ID in ``spotify_ids`` and ``words_ids``
+    (never superseding, as in ``tag_album_ids``), and one ``id_linked`` event per album."""
+    by_key: dict[str, list[AlbumLink]] = {}
+    for link in plan.links:
+        add_to_list(link.item, "spotify_ids", link.track.song_id)
+        add_to_list(link.item, "words_ids", link.track.song_id)
+        link.item.store()
+        by_key.setdefault(link.key, []).append(link)
+    for key, links in by_key.items():
+        linked = [{"item_id": k.item.id, "song_id": k.track.song_id, "via": "number"} for k in links]
+        message = f"[IDS] {key}: {len(links)} Spotify track ID(s) linked by music-backfill-ids --albums"
+        events.record("id_linked", message, source="backfill", item_id=links[0].item.id if len(links) == 1 else None,
+                      data={"key": key, "playlist": links[0].playlist, "linked": linked, "skipped": []})
+
+
+def run_albums(apply: bool = False) -> AlbumPlan:
+    from music_fetch import state  # noqa: PLC0415
+    from music_scan.audit import pipeline_lock  # noqa: PLC0415
+    from music_scan.library import LIBRARY_DB, MusicLibrary  # noqa: PLC0415
+    from music_scan.navidrome import trigger_scan  # noqa: PLC0415
+    from music_scan.scan import regen_playlists  # noqa: PLC0415
+
+    with state.session() as conn:
+        records = state.load_albums(conn).albums
+    with MusicLibrary(LIBRARY_DB) as lib:
+        plan = plan_album_ids(lib.all_items(), records, mb_recordings())
+        report_albums(plan)
+        if not apply:
+            logger.info("Dry run — nothing written. Re-run with --apply to write.")
+            return plan
+        if plan.links:
+            with pipeline_lock():
+                apply_album_ids(plan)
+                counts = regen_playlists()
+            logger.info("Linked %d; playlists regenerated: %s", len(plan.links),
+                        ", ".join(f"{k} {v}" for k, v in sorted(counts.items())))
+            trigger_scan()
+    return plan
+
+
 def run(apply: bool = False, redownload: int = 0) -> Plan:
     from music_fetch import ingest  # noqa: PLC0415
     from music_fetch.config import load_playlists  # noqa: PLC0415
@@ -278,8 +426,17 @@ def main() -> None:
         "--redownload", type=int, default=0, metavar="N",
         help="with --apply: download the first N wrong versions' right versions",
     )
+    parser.add_argument(
+        "--albums", action="store_true",
+        help="link imported albums' empty entries by disc/track and title; reads no Spotify pages",
+    )
     args = parser.parse_args()
     if args.redownload and not args.apply:
         parser.error("--redownload needs --apply")
+    if args.redownload and args.albums:
+        parser.error("--redownload is not for --albums")
     logging.basicConfig(level=logging.INFO, format="[%(asctime)s] %(message)s", datefmt="%Y-%m-%dT%H:%M:%S%z")
-    run(apply=args.apply, redownload=args.redownload)
+    if args.albums:
+        run_albums(apply=args.apply)
+    else:
+        run(apply=args.apply, redownload=args.redownload)

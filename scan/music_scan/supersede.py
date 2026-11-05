@@ -12,7 +12,7 @@ playlist that listed the loose item lists the album item.
 Only identity decides which album item replaces a loose one (#255), first hit wins:
 
 1. a shared Spotify track ID, except one ``tag_album_ids`` gave the album
-   item by title words (``words_ids``);
+   item without the release's own numbering to back it (``words_ids``);
 2. a shared ISRC;
 3. the same MusicBrainz recording ID, with lengths within ``LENGTH_SLACK``
    (homelab#2540: beets' recording is a best guess per file, and a sibling
@@ -20,7 +20,7 @@ Only identity decides which album item replaces a loose one (#255), first hit wi
 4. disc and track: the loose item sits on the album's Spotify album (its
    ``spotify_album_id``, set by canon from Spotify's numbering) at the slot an
    album item with no Spotify ID holds, and the release has Spotify's track
-   count (``tag_album_ids``' guard: editions renumber tracks), and the two
+   count (editions renumber tracks), and the two
    have the same title once edition notes are dropped (homelab#2531: a number
    is not identity).  Disjoint ISRCs veto it.
 

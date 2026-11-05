@@ -90,6 +90,11 @@ Search the album's name in the log. The import logs `[RELEASE]`/`[NOMB]`, then o
   `[LOCAL] … left to music-audit-dupes` means the audio matched several release tracks: run
   `audit_dupes` and `merge_items` the pair the user confirms. Other extras still there after a
   scan are another take (an alternate version, a 5.1 mix): keep them, or start the album over.
+- **A track with no Spotify ID:** an album track gets an ID by ISRC, or by disc, track and title
+  together, never by title alone. A track left without one logs `[NOID]` or `[NUMBER]`, shows in
+  the id_linked event's `skipped`, and its playlist entry stays empty, so the fetch may download
+  it again. `backfill_album_ids` runs that rung over albums already imported: it only writes
+  Spotify IDs, so it moves no file and retires or merges nothing.
 - **A wrong extra:** a reimport doesn't take extras off, since the kept release lacks their
   recording: a wrong release's live tracks stay as `[LOCAL]` extras after the right release
   arrives. The user chooses them, and `retire_item` with the IDs and a reason takes them off,

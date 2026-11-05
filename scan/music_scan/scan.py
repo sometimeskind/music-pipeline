@@ -26,7 +26,8 @@ from music_scan import playlists
 from music_scan.guard import REASONS, recheck_unknown, verify_requests
 from music_scan.held import album_held, held_urls
 from music_scan.identity import (
-    ItemIndex, PlaylistTrack, add_to_list, item_isrcs, item_spotify_ids, same_base_title, spotify_id,
+    BY_WORDS, HELD_ELSEWHERE, NO_ITEM, OTHER_TITLE, ItemIndex, PlaylistTrack, add_to_list, disc_track, item_isrcs,
+    item_spotify_ids, number_match, same_base_title, skip_note, spotify_id,
 )
 from music_scan.identity import name_words as _name_words
 from music_scan.library import MusicLibrary
@@ -518,13 +519,16 @@ def _save_empty_slots(empty: dict[str, int], missing: dict[str, list[str]]) -> N
 
 
 def add_source(lib: MusicLibrary, have_source: str, new_source: str, tracks: list[list]) -> int:
-    """Append *new_source*, and the track's Spotify ID, to the *have_source* items
-    matching *tracks*.  Returns the count of items changed."""
+    """Append *new_source* to the *have_source* items matching *tracks*, and the
+    track's Spotify ID when an ID matched it.  Title words give the source only
+    (#279, homelab#2664): :func:`tag_album_ids` runs for *new_source* next and
+    decides the ID, so a track doesn't get one here that the first playlist's
+    entries wouldn't.  Returns the count of items changed."""
     index = ItemIndex(lib.items_by_source(have_source))
     count = 0
     for track in map(PlaylistTrack.from_entry, tracks):
-        item, _ = index.match_track(track)
-        if item is not None and _link(item, new_source, track.song_id):
+        item, rung = index.match_track(track)
+        if item is not None and _link(item, new_source, None if rung == BY_WORDS else track.song_id):
             count += 1
     return count
 
@@ -618,7 +622,7 @@ def _release_isrc_match(track: PlaylistTrack, items: list):
     have = [i for i in items if track.isrc in item_isrcs(i)]
 
     def key(i):
-        return (not same_base_title(track.name, i.title or ""), (i.disc, i.track) != (track.disc, track.track))
+        return (not same_base_title(track.name, i.title or ""), disc_track(i) != (track.disc, track.track))
 
     have.sort(key=key)
     if len(have) > 1 and key(have[0]) == key(have[1]):
@@ -627,7 +631,7 @@ def _release_isrc_match(track: PlaylistTrack, items: list):
 
 
 def tag_album_ids(lib: MusicLibrary, source: str, tracks: list[list], since: float, tracks_count: int,
-                  key: str | None = None) -> int:
+                  key: str | None = None, recordings=None) -> int:
     """Record each album-mode playlist track's Spotify ID on the *source* item it maps to.
 
     Usenet files carry no Spotify IDs (#176).  Per track, first hit wins:
@@ -635,27 +639,36 @@ def tag_album_ids(lib: MusicLibrary, source: str, tracks: list[list], since: flo
        whose title (edition notes dropped) and then disc/track agree when
        several carry it, none (``[AMBIG]``) when that leaves a tie (#278);
        else any of *source*'s items;
-    2. disc and track number, only on usenet items imported since *since*
-       whose release has Spotify's track count (editions renumber tracks),
-       and only when the title agrees too, edition notes dropped (#278): a
-       number alone is not identity.  A file beets matched to another
-       recording (*Love* tagged *Bodies*) gets no ID, and logs ``[NUMBER]``.
-    Title words never give an ID (#279): the IDs are a best effort, and an
+    2. disc and track number and title together, on usenet items imported
+       since *since* (:func:`~music_scan.identity.number_match`, which says
+       when they don't link): a number alone is not identity (#278), and a
+       file beets matched to another recording (*Love* tagged *Bodies*) gets
+       no ID and logs ``[NUMBER]``.  *recordings* looks up a recording when
+       ISRCs disagree (a seam for the tests).  A link the release's own
+       numbering doesn't back (a disc of 0, ``tracktotal`` not Spotify's
+       count, homelab#2664) only fills an empty entry: when any library item
+       holds the entry the release item stays as it is, because a shared ID
+       is what moves a copy out of the library (:mod:`music_scan.supersede`,
+       :class:`~music_scan.identity.Recordings`).  Its ID also goes in
+       ``words_ids``, so it never supersedes.
+    Title words alone never give an ID (#279): the IDs are a best effort, and an
     album record's membership never depends on them (``album_record``,
     :mod:`music_scan.release`).  The words rung of #240 is gone.
     Local-only extras (``album_extra``) are left out (#294): an older copy
     that already holds a track's ID or ISRC would take the match, and the
     release would never get the ID that retires the extra
     (``release.retire_held``).
-    The IDs linked and the tracks left without one (``[AMBIG]``, ``[NUMBER]``)
-    are one ``id_linked`` event for the album record *key* (homelab#2590).
-    Returns the count of items tagged.
+    The IDs linked and the tracks left without one (``[AMBIG]``, ``[NUMBER]``,
+    ``[NOID]``) are one ``id_linked`` event for the album record *key*
+    (homelab#2590).  Returns the count of items tagged.
     """
+    from music_scan.backfill import mb_recordings  # noqa: PLC0415
     from music_scan.release import EXTRA  # noqa: PLC0415
 
     index = ItemIndex(i for i in lib.items_by_source(source) if not i.get(EXTRA))
     imported = [i for i in index.items if i.get("via") == "usenet" and (i.added or 0) >= since]
-    fresh = [i for i in imported if tracks_count and i.tracktotal == tracks_count]
+    recordings = recordings or mb_recordings()
+    library: ItemIndex | None = None
     linked: list[dict] = []
     skipped: list[dict] = []
     for track in map(PlaylistTrack.from_entry, tracks):
@@ -671,17 +684,25 @@ def tag_album_ids(lib: MusicLibrary, source: str, tracks: list[list], since: flo
         if match is None:
             match, _ = index.match(None, track.isrc, words=False)
         via = "isrc" if match is not None else None
+        skip = None
         if match is None and track.disc and track.track:
-            at = next((i for i in fresh if (i.disc, i.track) == (track.disc, track.track)), None)
-            if at is not None and same_base_title(track.name, at.title or ""):
+            at, skip = number_match(track, imported, recordings)
+            backed = at is not None and bool(tracks_count) and at.tracktotal == tracks_count and at.disc == track.disc
+            if at is not None and not backed:
+                library = ItemIndex(lib.all_items()) if library is None else library
+                holder, _ = library.match(track.song_id, track.isrc, words=False)
+                if holder is not None and holder.id != at.id:
+                    at, skip = None, {"why": HELD_ELSEWHERE, "item_id": at.id, "held_by": holder.id,
+                                      "disc": track.disc, "track": track.track}
+            if at is not None:
                 match, via = at, "number"
-            elif at is not None:
-                logger.info("  [NUMBER] %s: %s — %s is at %d-%d, but the item there is %r; no ID by number",
-                            source, track.name, track.artist, track.disc, track.track, at.title)
-                skipped.append({"song_id": track.song_id, "title": track.name, "why": "number, other title",
-                                "item_id": at.id, "item_title": at.title, "disc": track.disc, "track": track.track})
+                if not backed:
+                    add_to_list(match, "words_ids", track.song_id)
         if match is None:
-            logger.debug("  [NOID] %s: %s — %s matches no library item", source, track.name, track.artist)
+            skip = skip or {"why": NO_ITEM}
+            logger.info("  [%s] %s: %s — %s %s; no ID", "NUMBER" if skip["why"] == OTHER_TITLE else "NOID", source,
+                        track.name, track.artist, skip_note(skip))
+            skipped.append({"song_id": track.song_id, "title": track.name, **skip})
             continue
         add_to_list(match, "spotify_ids", track.song_id)
         match.store()

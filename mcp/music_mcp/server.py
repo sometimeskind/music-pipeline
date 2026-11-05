@@ -54,7 +54,7 @@ the run ID, and apply_recheck applies the finished run.
 Tiers. Read tools anyone signed in may use. Write tools (reset_album, requeue_albums,
 merge_items, replace_item, unlink_spotify_id, set_recording, fingerprint_items, keep_quarantined, retire_item,
 embed_covers,
-canon_albums,
+canon_albums, backfill_album_ids,
 apply_recheck,
 set_search_override, clear_search_override, hold_album, release_album, pin_track, unpin_track,
 request_album, remove_from_later) are a dry run unless
@@ -588,6 +588,14 @@ def build_server(
         canonical album identity."""
         body = {"refresh": refresh, "search_budget": search_budget, "mb_budget": mb_budget, "apply": apply}
         return await run("canon_albums", body, write=True)
+
+    @mcp.tool(annotations={"destructiveHint": True})
+    async def backfill_album_ids(apply: Apply = False) -> dict:
+        """music-backfill-ids --albums: link imported albums' empty playlist entries to the
+        release item at their disc and track with their title. The dry run lists each [LINK] and
+        each [NOID] left empty, with the reason. Writes Spotify IDs only: it moves no file and
+        retires or merges nothing. unlink_spotify_id undoes one link."""
+        return await run("backfill_album_ids", {"apply": apply}, write=True)
 
     @mcp.tool(annotations={"destructiveHint": True})
     async def apply_recheck(
