@@ -850,9 +850,10 @@ def aligned_artists(item, recording: dict) -> dict[str, tuple]:
     (lists, one entry per credited artist, all kept), ``mb_artistid`` (the first).  They
     follow the recording when the item's ``mb_artistids`` are not the recording's artist
     IDs.  The same artists leave them alone, so the spelling beets chose (an alias, the
-    credited name) survives.  An item with no ``mb_artistids``, or a recording whose
-    credit carries no artist IDs (not looked up with its artists), is left alone too:
-    nothing shows the item's are wrong.
+    credited name) survives.  An item with no ``mb_artistids`` follows too: its artist is
+    the file's own tag, which may be junk (``Various Interprets``), and someone chose this
+    recording for it (homelab#2649).  A recording whose credit carries no artist IDs (not
+    looked up with its artists) changes nothing: it can't say who the artists are.
 
     ``arrangers`` and ``remixers`` (with their ``_ids``) come from the recording's artist
     relations, but only the pairs the item already holds: beets filled them from the
@@ -865,7 +866,7 @@ def aligned_artists(item, recording: dict) -> dict[str, tuple]:
     ids = [(c.get("artist") or {}).get("id") for c in credit]
     have = _as_list(item.get("mb_artistids"))
     after: dict[str, object] = {}
-    if all(ids) and have and have != ids:
+    if ids and all(ids) and have != ids:
         artists = [c["artist"] for c in credit]
         names = [a.get("name") or "" for a in artists]
         sorts = [a.get("sort-name") or a.get("name") or "" for a in artists]
