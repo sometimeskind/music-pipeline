@@ -1729,12 +1729,18 @@ def base_title(title: str) -> tuple[str, ...]:
     return tuple(words(clean_album(title or "")))
 
 
+def titles_held(wanted: list[str], titles: list[str]) -> tuple[int, int]:
+    """``(found, total)``: how many of the *wanted* titles (edition notes
+    dropped) are among *titles*."""
+    have = {base_title(t) for t in titles}
+    bases = [base_title(t) for t in wanted]
+    return sum(1 for t in bases if t in have), len(bases)
+
+
 def titles_found(record: dict, titles: list[str]) -> tuple[int, int]:
     """``(found, total)``: how many of the album's Spotify titles (edition
     notes dropped) the release's items carry."""
-    have = {base_title(t) for t in titles}
-    spotify = [base_title(t[0]) for t in album_tracks(record) if t and t[0]]
-    return sum(1 for t in spotify if t in have), len(spotify)
+    return titles_held([t[0] for t in album_tracks(record) if t and t[0]], titles)
 
 
 def wrong_album(found: int, total: int) -> bool:
@@ -1809,7 +1815,9 @@ def complete(
     Whichever copy is kept, *retire* sends the record's other copies (earlier
     releases, legacy items) whose recording it holds to
     ``quarantine/replaced/``; a copy of a recording it lacks stays on the album
-    as a local-only extra (#287).  Then *tag_ids* (playlist, tracks, start,
+    as a local-only extra (#287).  A reimport's old release that holds under half
+    of the kept release's titles goes whole (:func:`music_scan.release.retire`,
+    homelab#2662): ``reimport`` is still on the record when *retire* runs.  Then *tag_ids* (playlist, tracks, start,
     track count, record key) gives
     the kept copy Spotify track IDs as a best effort, retires the extras
     whose recording those IDs show the kept copy holds (#294), and
@@ -2159,8 +2167,10 @@ def reset_album(state: State, query: str, reimport: bool = False) -> tuple[str, 
     With *reimport* (#279) the album starts over from one release: the whole
     blocklist and every attempt are cleared, and the record is grabbed even
     though the library holds its tracks.  The import then retires the copies
-    there whose recording it holds; the rest stay as local extras (an album
-    mixed from several releases, spotdl's top-ups aside).  Returns ``(key, before, after)``; None when no album or more than
+    there whose recording it holds, and every item of an old release that is
+    another album (:func:`music_scan.release.retire`, homelab#2662); the rest stay
+    as local extras (an album mixed from several releases, spotdl's top-ups
+    aside).  Returns ``(key, before, after)``; None when no album or more than
     one matches (logged)."""
     hits = find_albums(state.albums, query)
     if len(hits) != 1:
@@ -2262,9 +2272,18 @@ def reset_notes(state: State, key: str, before: dict, after: dict) -> list[str]:
     else:
         lines.append("The next tick with a free slot searches it, unless the library holds its tracks: then it "
                      "turns have and nothing is grabbed (reimport=true grabs anyway).")
-    lines.append("Nothing is deleted now: the album's old items stay until an import. That import retires only the "
-                 "ones whose recording the new release also holds; the rest stay on the album as local extras, "
-                 "which retire_item takes off.")
+    if after.get("reimport"):
+        lines.append("Nothing is deleted now: the album's old items stay until an import. That import moves to "
+                     "quarantine/replaced/ the ones whose recording the new release also holds, and every item of "
+                     "the album's old release when it holds under half of the new release's titles: it is another "
+                     "album. Otherwise the rest stay on the album as local extras. Extras from an earlier import "
+                     "aren't judged: they stay unless the new release holds their recording, and retire_item takes "
+                     "them off. A playlist entry only a moved item held goes empty: a spotdl playlist downloads it "
+                     "at the next nightly, an album playlist's slot stays empty.")
+    else:
+        lines.append("Nothing is deleted now: the album's old items stay until an import. That import retires only "
+                     "the ones whose recording the new release also holds; the rest stay on the album as local "
+                     "extras, which retire_item takes off.")
     return lines
 
 
@@ -2295,7 +2314,8 @@ def reset_main() -> None:
                              "that matches exactly one album")
     parser.add_argument("--reimport", action="store_true",
                         help="start over from one release: clear the blocklist and attempts, grab it although the "
-                             "library has its tracks, and on import retire the copies whose recording it holds (#279)")
+                             "library has its tracks, and on import retire the copies whose recording it holds, and "
+                             "an old release that holds under half of the new one's titles (homelab#2662)")
     parser.add_argument("--apply", action="store_true", help="write the album store (default: dry run)")
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO, format="[%(asctime)s] %(message)s", datefmt="%Y-%m-%dT%H:%M:%S%z")

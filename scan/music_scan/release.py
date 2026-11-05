@@ -40,7 +40,10 @@ record is that album, imported whole.  This module holds the library side of
   ``album_extra``, and marked ``canon_wait`` so the next scan files it under
   the album's tags.  A later import that holds its recording retires it.
   Rolling a release back (*drop*) takes all of its items: they are the wrong
-  files, not copies.  A copy that goes first hands the kept item holding its
+  files, not copies.  On a ``reimport`` import an old release that holds under
+  half of the kept release's titles is another album (:func:`other_albums`,
+  homelab#2662): all its items go, and none stays as an extra.  A copy that
+  goes first hands the kept item holding its
   recording the Spotify IDs, ISRCs and ``sources`` that item lacks
   (:func:`_hand_over`, as a merge does, homelab#2601): a playlist entry
   resolves by Spotify ID or ISRC, and a holder that shares only a MusicBrainz
@@ -424,11 +427,49 @@ def _ids_note(moved: dict) -> str:
     return f"; {', '.join(ids) or 'its sources'} → {moved['ids_to']}"
 
 
+def other_albums(kept: list, others: list) -> dict[str, str]:
+    """The old releases among *others* (:func:`copies`) that are another album than
+    the *kept* release's items, each with the reason (homelab#2662): the same test as
+    :func:`music_fetch.albums.wrong_album`, on the kept release's titles.
+
+    The denominator is the kept release, so a deluxe replaced by its standard edition
+    holds every title and stays the album's.  Titles, not recording IDs, as two right
+    releases can share no recording.  Only a release still the record's counts: an
+    earlier import's extras are what that import left, a deluxe's bonus tracks, which
+    hold none of the titles whatever the deluxe was.  Legacy and spotdl copies are no
+    release, so nothing here judges them."""
+    from music_fetch.albums import titles_held, wrong_album  # noqa: PLC0415
+
+    titles = [i.get("title") for i in kept if i.get("title")]
+    releases: dict[str, list[str]] = {}
+    for item in others:
+        if item.get("release") and not item.get(EXTRA):
+            releases.setdefault(item.get("release"), []).append(item.get("title") or "")
+    judged = {release: titles_held(titles, held) for release, held in releases.items()}
+    return {release: f"another album: holds {found} of the kept release's {total} titles"
+            for release, (found, total) in judged.items() if wrong_album(found, total)}
+
+
+def _unheld(gone: list, items: list, listed) -> dict[int, list[str]]:
+    """Item ID → the playlists that list one of *gone*'s recordings when no item left
+    holds it: their entry goes empty (homelab#2662)."""
+    from music_scan.identity import Recordings  # noqa: PLC0415
+
+    ids = {i.id for i in gone}
+    left = Recordings(i for i in items if i.id not in ids)
+    return {i.id: sorted(listed(i)) for i in gone if listed(i) and not left.holds_item(i)}
+
+
 def retire(lib, key: str, record: dict, keep: str | None, drop: str | None, listed) -> int:
     """Quarantine the :func:`copies` whose recording release *keep* holds to
     ``quarantine/replaced/``, each handing its IDs to the release item that
     holds its recording (:func:`_hand_over`), and keep the others on the album
     as local-only extras (#287); with *drop*, quarantine that release's items.
+    On a reimport the items of an old release that is another album
+    (:func:`other_albums`) are quarantined too, whatever their recording, each
+    ``retire`` event with the reason and the playlists left with no item for it
+    (``unheld``): the entry goes empty, so the nightly downloads it for a spotdl
+    playlist, and *tag_ids* may still link it to the kept release.
     *listed* is :func:`_topup`'s.  Returns the count quarantined."""
     from music_scan.canon import WAIT  # noqa: PLC0415
     from music_scan.rollback import quarantine  # noqa: PLC0415
@@ -437,15 +478,24 @@ def retire(lib, key: str, record: dict, keep: str | None, drop: str | None, list
     others = copies(items, key, record, keep, drop, listed)
     gone, extras = (others, []) if drop is not None else superseded(items, key, keep, others)
     kept = [i for i in items if i.get("album_record") == key and i.get("release") == keep]
+    why = other_albums(kept, others) if record.get("reimport") and drop is None else {}
+    other = [i for i in extras if i.get("release") in why and not i.get(EXTRA)]
+    gone, extras = [*gone, *other], [i for i in extras if not (i.get("release") in why and not i.get(EXTRA))]
+    unheld = _unheld(other, items, listed) if other else {}
     group = _release_group(kept)
     album = primary_spotify(record)
     for item in gone:
         # A rolled-back release's files are the wrong ones: their IDs go with them.
         moved = _hand_over(item, kept) if drop is None else {}
+        reason = why.get(item.get("release"))
+        notes = {"reason": reason} if reason else {}
         line = (f"[RETIRE] {item.id} {item.get('artist')} — {item.get('title')} [{item.get('album')}] "
-                f"({_origin(item)}){_ids_note(moved)}")
+                f"({_origin(item)}){_ids_note(moved)}{f': {reason}' if reason else ''}")
+        if item.id in unheld:
+            notes["unheld"] = unheld[item.id]
+            line += f"; no item holds it now for {', '.join(unheld[item.id])}"
         logger.info("  %s", line)
-        _event("retire", item, album, group, line, origin=_origin(item), **moved)
+        _event("retire", item, album, group, line, origin=_origin(item), **moved, **notes)
     for item in extras:
         logger.info("  [LOCAL] %s %s — %s [%s] (%s): the kept release lacks its recording; stays on the album",
                     item.id, item.get("artist"), item.get("title"), item.get("album"), _origin(item))
