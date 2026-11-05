@@ -1165,6 +1165,21 @@ def test_another_song_gets_the_files_title_and_loses_the_recording() -> None:
     assert _warnings(plugin) == [f"[TITLE] {BABE} → {DURANGO} (recording dropped)"]
 
 
+def test_a_credit_in_the_files_title_keeps_the_recording() -> None:
+    """Ironman's files say Fish feat Raekwon & Cappadonna, MusicBrainz Fish: one song, so
+    the file's title goes back and the right recording stays."""
+    plugin = _make_plugin()
+    item = _file("/root/Music/inbox/usenet/keep/Ghostface-Ironman/05 - Fish.flac",
+                 "Fish feat Raekwon & Cappadonna", track=5)
+    task = _created(plugin, item)
+    _match(item, title="Fish", mb_trackid="fish-rec", mb_releasetrackid="fish-rec")
+
+    plugin.restore_file_title(session=MagicMock(), task=task)
+
+    assert (item.title, item.mb_trackid) == ("Fish feat Raekwon & Cappadonna", "fish-rec")
+    assert _warnings(plugin) == ["[TITLE] Fish → Fish feat Raekwon & Cappadonna"]
+
+
 def test_another_song_is_no_duplicate_by_the_wrong_recording() -> None:
     """The duplicate check runs before the restore: the other song's recording and ISRCs
     must not merge the file into, or let a manual import shadow it."""

@@ -229,13 +229,20 @@ def different_song(a: str, b: str) -> bool:
     Release tags misspell: dropped spaces (``Saved theEarth``) and a changed
     word in a long title (``Rockford River`` for ``Rock River``) are still one
     song, so two titles differ only when their letters are less than
-    :data:`SAME_SONG_RATIO` alike, as Durango and Babe are."""
-    x, y = release_words(clean_album(a or "")), release_words(clean_album(b or ""))
+    :data:`SAME_SONG_RATIO` alike, as Durango and Babe are.
+
+    An unbracketed credit is no part of the name either: ``Fish feat Raekwon &
+    Cappadonna`` is ``Fish``."""
+    x, y = (release_words(_TITLE_CREDIT.sub("", clean_album(t or ""))) for t in (a, b))
     if not (x and y):
         return False
     jx, jy = "".join(x), "".join(y)
     return jx != jy and difflib.SequenceMatcher(None, jx, jy).ratio() < SAME_SONG_RATIO
 
+
+_TITLE_CREDIT = re.compile(r"\s+(?:feat\.?|ft\.?|featuring)\s.*$", re.IGNORECASE)
+"""A featured-artist credit at the end of a title, outside brackets
+(:func:`~music_fetch.usenet.clean_album` drops the bracketed ones)."""
 
 SAME_SONG_RATIO = 0.8
 """How alike two titles' letters must be (difflib's ratio) to name one song.
