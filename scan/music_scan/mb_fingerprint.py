@@ -827,8 +827,6 @@ def aligned_isrcs(item, recording: dict, get: MusicBrainzGet | None) -> tuple[st
 
 # The artist fields beets copies from a recording's artist credit, and the credits from its
 # artist relations (the plugin's ``_parse_artist_credits`` and ``_parse_artist_relations``).
-_CREDIT_STRINGS = ("artist", "artist_sort", "artist_credit")
-_CREDIT_LISTS = ("artists", "artists_sort", "artists_credit", "mb_artistids")
 _RELATION_CREDITS = {"arranger": ("arrangers", "arrangers_ids"), "remixer": ("remixers", "remixers_ids")}
 
 
@@ -845,13 +843,17 @@ def aligned_artists(item, recording: dict) -> dict[str, tuple]:
     already agree (homelab#2647).
 
     beets copied the guessed recording's artist credit onto the item: ``artist``,
-    ``artist_sort`` and ``artist_credit`` (strings, the credited names joined by their
-    join phrases), ``artists``, ``artists_sort``, ``artists_credit`` and ``mb_artistids``
+    ``artist_sort`` and ``artist_credit`` (strings, the names joined by their join
+    phrases), ``artists``, ``artists_sort``, ``artists_credit`` and ``mb_artistids``
     (lists, one entry per credited artist, all kept), ``mb_artistid`` (the first).  They
     follow the recording when the item's ``mb_artistids`` are not the recording's artist
-    IDs.  The same artists leave them alone, so the spelling beets chose (an alias, the
-    credited name) survives.  An item with no ``mb_artistids`` follows too: its artist is
-    the file's own tag, which may be junk (``Various Interprets``), and someone chose this
+    IDs.  ``artist`` and ``artists`` take the names the recording credits, not the
+    artists' current names: an album's other tracks say ``Kanye West``, as the credit
+    does, where MusicBrainz now names the artist ``Ye`` (homelab#2661).  The same artists
+    leave the fields alone, so the spelling beets chose (an alias) survives, except an
+    ``artist`` that is the current names where the credit differs: that is this rule
+    not yet applied.  An item with no ``mb_artistids`` follows too: its artist is the
+    file's own tag, which may be junk (``Various Interprets``), and someone chose this
     recording for it (homelab#2649).  A recording whose credit carries no artist IDs (not
     looked up with its artists) changes nothing: it can't say who the artists are.
 
@@ -866,16 +868,20 @@ def aligned_artists(item, recording: dict) -> dict[str, tuple]:
     ids = [(c.get("artist") or {}).get("id") for c in credit]
     have = _as_list(item.get("mb_artistids"))
     after: dict[str, object] = {}
-    if ids and all(ids) and have != ids:
+    if ids and all(ids):
         artists = [c["artist"] for c in credit]
         names = [a.get("name") or "" for a in artists]
         sorts = [a.get("sort-name") or a.get("name") or "" for a in artists]
         credited = [c.get("name") or a.get("name") or "" for c, a in zip(credit, artists)]
         joins = [c.get("joinphrase") or "" for c in credit]
-        for field, parts in zip(_CREDIT_STRINGS, (names, sorts, credited)):
-            after[field] = "".join(p + j for p, j in zip(parts, joins))
-        after.update(artists=names, artists_sort=sorts, artists_credit=credited, mb_artistids=ids,
-                     mb_artistid=ids[0])
+
+        def joined(parts: list[str]) -> str:
+            return "".join(p + j for p, j in zip(parts, joins))
+
+        shown = joined(credited)
+        if have != ids or (shown != joined(names) and item.get("artist") == joined(names)):
+            after.update(artist=shown, artist_sort=joined(sorts), artist_credit=shown, artists=credited,
+                         artists_sort=sorts, artists_credit=credited, mb_artistids=ids, mb_artistid=ids[0])
     relations = [r for r in recording.get("relations") or [] if r.get("artist")] \
         if "relations" in recording else None
     if relations is not None:
