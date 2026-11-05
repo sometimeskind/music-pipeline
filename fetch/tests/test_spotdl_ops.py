@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 
 from music_fetch import state
+from music_fetch import spotdl_ops
 from music_fetch.spotdl_ops import sync_playlist
 
 PLAYLIST_URL = "https://open.spotify.com/playlist/abc"
@@ -1400,3 +1401,26 @@ def test_sync_writes_no_file(tmp_path: Path, simple_songs) -> None:
 
     assert sorted(p.relative_to(tmp_path) for p in tmp_path.rglob("*")) == [Path("mypl")]
     assert missing.url in _backoff()
+
+
+# ---------------------------------------------------------------------------
+# _make_spotdl — the process-wide client (homelab#2658)
+# ---------------------------------------------------------------------------
+
+
+def test_the_spotify_client_keeps_no_responses(monkeypatch):
+    """spotdl's cache has no bound: left on, a night's playlist reads hold 1.3 GB until
+    the flow ends."""
+    monkeypatch.setenv("SPOTIFY_CLIENT_ID", "id")
+    monkeypatch.setenv("SPOTIFY_CLIENT_SECRET", "secret")
+    with (
+        mock.patch.object(spotdl_ops, "_spotdl_instance", None),
+        mock.patch("spotdl.Spotdl") as spotdl,
+        mock.patch("spotdl.utils.spotify.SpotifyClient"),
+        mock.patch.object(spotdl_ops.spotify_limit, "install"),
+        mock.patch.object(spotdl_ops, "_install_name_cap"),
+        mock.patch.object(spotdl_ops, "_install_first_artist_search"),
+    ):
+        spotdl_ops._make_spotdl({})
+
+    assert spotdl.call_args.kwargs["no_cache"] is True
