@@ -391,6 +391,12 @@ def test_a_dashed_override_word_is_a_400(client, env):
     assert env["commands"].ran == []
 
 
+def test_check_release_still_shows_what_a_dashed_word_does(client, env):
+    resp = client.post("/mcp-api/run/check_release", headers=READ, json={
+        "album": "pastel", "title": "Nina Simone-Pastel Blues-FLAC", "words": "Pastel Blues -Live"})
+    assert resp.status_code == 200 and resp.json["args"]["words"] == "pastel blues live"
+
+
 def test_apply_without_a_dry_run_is_refused(client, env):
     resp = client.post("/mcp-api/run/embed_covers", json={"apply": True}, headers=WRITE)
     assert resp.status_code == 409 and resp.json["reason"] == "no_dry_run"

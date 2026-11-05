@@ -328,12 +328,10 @@ def _text(body: dict, name: str, required: bool = False) -> str:
 
 def search_words(value) -> str:
     """The search words as the tick searches them (``usenet.normalise``)."""
-    from music_fetch.usenet import exclusion, normalise  # noqa: PLC0415
+    from music_fetch.usenet import normalise  # noqa: PLC0415
 
     if not isinstance(value, str) or not (words := normalise(value)):
         raise BadRequest("words must hold readable search words")
-    if refused := exclusion(value):
-        raise BadRequest(refused)
     return words
 
 
@@ -365,9 +363,14 @@ def pin_url(value) -> str:
 
 
 def _set_search(body: dict, albums: Albums) -> dict:
+    """Unlike ``check_release``, which shows what a dashed word does, this would store it."""
+    from music_fetch.usenet import exclusion  # noqa: PLC0415
+
     _only(body, "album", "words", "reason")
-    return {"album": resolve_album(body.get("album"), albums), "words": search_words(body.get("words")),
-            "reason": _text(body, "reason")}
+    words = search_words(body.get("words"))
+    if refused := exclusion(body["words"]):
+        raise BadRequest(refused)
+    return {"album": resolve_album(body.get("album"), albums), "words": words, "reason": _text(body, "reason")}
 
 
 def _album_only(body: dict, albums: Albums) -> dict:

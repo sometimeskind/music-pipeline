@@ -151,8 +151,9 @@ not the blocklist, not whether the indexer has the release, and not how an accep
 
 An override leaves the matcher no artist, and its dry run says so. Every word must be in a title
 (`a`, `and` and `the` excepted), so a year or a word only some releases carry refuses the others:
-`Curtis Live 1971` needs `1971` in the title. Quotes mean nothing, and a word starting with `-` is
-refused, since nothing excludes. A title's first word must be one of the override's (`Harry
+`Curtis Live 1971` needs `1971` in the title. Quotes mean nothing. Nothing excludes:
+`set_search_override` refuses a word starting with `-`, and `check_release` shows why, reading
+`-Son` as the required word `son`. A title's first word must be one of the override's (`Harry
 Nilsson-…` needs `harry`: `nilsson schmilsson` alone refuses it, with `artist: doesn't start with
 an album word`). The `self-titled` and `artist words` checks and the second search by the artist
 alone are dropped. `reject word`, `leftover words` (the artist's words count unless they are among
