@@ -1,5 +1,6 @@
 """Tests for music_scan.audit — music-audit-lengths (#165)."""
 
+import logging
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -38,7 +39,27 @@ def test_audit_flags_wrong_length_by_spotify_id() -> None:
     wrong = _item(2, "Calico Skies", "wedding", 170.0, spotify_ids="C", comments=DEMO)
     suspects, counts = run_audit([right, wrong], {"wedding": [_song("R"), _song("C", "Calico Skies", 150)]})
     assert [(s.item, s.expected, s.delta) for s in suspects] == [(wrong, 150, 20.0)]
-    assert counts == {"matched": 2, "unmatched": 0, "no_duration": 0}
+    assert counts == {"matched": 2, "unmatched": 0, "no_duration": 0, "unlisted": 0, "no_file": 0}
+
+
+def test_audit_counts_library_items_no_playlist_reached(caplog) -> None:
+    listed = _item(1, "Right", "wedding", 201.0, spotify_ids="R")
+    other = _item(2, "Elsewhere", "gone", 170.0, spotify_ids="E")
+    suspects, counts = run_audit([listed, other], {"wedding": [_song("R"), _song("Z", "Not Held")]})
+    assert suspects == [] and counts["unlisted"] == 1 and counts["unmatched"] == 1
+    with caplog.at_level(logging.INFO, logger="music_scan.audit"):
+        audit.report(suspects, counts)
+    assert "not compared: 1 entr(ies) with no library item, 0 with no Spotify duration, 1 library item(s) on no " in caplog.text
+    assert "silence not checked" in caplog.text
+
+
+def test_audit_counts_files_the_silence_scan_could_not_find(caplog) -> None:
+    item = _item(1, "Right", "wedding", 201.0, spotify_ids="R")
+    suspects, counts = run_audit([item], {"wedding": [_song("R")]}, silence=True)
+    assert counts["no_file"] == 1
+    with caplog.at_level(logging.INFO, logger="music_scan.audit"):
+        audit.report(suspects, counts, silence=True)
+    assert "silence checked, 1 file(s) not found" in caplog.text
 
 
 def test_audit_finds_items_outside_the_playlist_by_isrc_but_words_only_within_it() -> None:

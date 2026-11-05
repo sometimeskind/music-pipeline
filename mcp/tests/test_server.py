@@ -19,7 +19,7 @@ TOM = Caller("sub-tom", "write")
 PILOT = Caller("pilot", "read")
 
 READS = {"library_status", "find_albums", "get_album", "get_item", "list_quarantine", "get_playlist",
-         "get_job", "get_guide", "audit_dupes", "audit_lengths", "audit_releases", "audit_want_albums", "audit_titles", "audit_artists", "audit_grabs", "recheck_recordings", "search_releases",
+         "get_job", "get_guide", "audit_dupes", "audit_lengths", "audit_releases", "audit_want_albums", "audit_titles", "audit_artists", "audit_grabs", "check_release", "recheck_recordings", "search_releases",
          "recording_candidates",
          "album_history", "find_events", "digest_summary", "list_overrides", "list_requests", "get_later"}
 WRITES = {"reset_album", "requeue_albums", "merge_items", "replace_item", "unlink_spotify_id", "set_recording",
@@ -121,6 +121,10 @@ async def test_reads_route_to_the_contract(pipeline, fake, tool, args, method, p
     ("audit_titles", {}, "/mcp-api/run/audit_titles", {}),
     ("audit_artists", {}, "/mcp-api/run/audit_artists", {}),
     ("audit_grabs", {}, "/mcp-api/run/audit_grabs", {}),
+    ("check_release", {"album": "pastel", "title": "Nina Simone-Pastel Blues-FLAC"}, "/mcp-api/run/check_release",
+     {"album": "pastel", "title": "Nina Simone-Pastel Blues-FLAC"}),
+    ("check_release", {"album": "pastel", "title": "x", "size_bytes": 400000000, "words": "pastel blues"},
+     "/mcp-api/run/check_release", {"album": "pastel", "title": "x", "size_bytes": 400000000, "words": "pastel blues"}),
     ("recheck_recordings", {}, "/mcp-api/run/recheck_recordings", {}),
     ("recheck_recordings", {"ids": [6994, 5672]}, "/mcp-api/run/recheck_recordings", {"ids": [6994, 5672]}),
     ("recheck_recordings", {"resume": "3f2a9c0d1e2b4a5c"}, "/mcp-api/run/recheck_recordings",

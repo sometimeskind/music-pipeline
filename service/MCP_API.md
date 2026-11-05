@@ -289,11 +289,14 @@ A write tool's **apply** takes Prefect's `pipeline` lock (and first `albums`, fo
 | `audit_titles` | `{}` | `music-audit-titles` |
 | `audit_artists` | `{}` | `music-audit-artists` |
 | `audit_grabs` | `{}` | `music-audit-grabs` |
+| `check_release` | `{"album": "…", "title": "…", "size_bytes": 400000000, "words": "…"}` (`size_bytes` and `words` optional) | `music-check-release --album=KEY --title=T [--size=N] [--words=W]` |
 | `recheck_recordings` | `{"ids": [6994, 5672]}` (optional; none = every item with an `mb_trackid`) or `{"resume": "<run ID>"}` | `music-mb-fingerprint --recheck --run-id=<job_id> [-- ID…]` / `… --run-id=<run ID>` (long lane) |
 | `search_releases` | `{"query": "…", "limit": 5}` | `music-requests search --limit=N -- QUERY` |
 | `recording_candidates` | `{"id": 13744}` | `music-mb-fingerprint --candidates <id>` |
 
 `audit_releases --replaced` takes the CLI's query as given, ambiguity included: the CLI itself refuses more than one match.
+
+`check_release` (homelab#2661) runs the tick's matcher, `usenet.rejection`, on one release title for one album, with what the tick passes it: the verdict, the album's search, whether a stored override applied, and whether the size rule ran. `album` is an album query, resolved here as `reset_album`'s is (`ambiguous` or 404 otherwise). `title` is at most 500 characters. `size_bytes`, a positive integer, is left out when unknown: the size rule then isn't checked, and the output says so. `words`, normalised as `set_search_override` stores them, are simulated through `albums.plan` in place of any stored override. A refused title is a successful call. No indexer call, no writes, no events.
 
 `recheck_recordings` (homelab#2553) is a recorded `music-mb-fingerprint --recheck` in the long lane: each item's guessed MusicBrainz recording (`mb_trackid`) checked against the recordings AcoustID links to its audio, at 3 lookups a second (about an hour for the whole library). Its run ID is its `job_id`. The run stores a checkpoint every 25 items and its findings in the `music` database, so a restart resumes it (above) and `apply_recheck` applies it. It changes nothing in the library. `ids` (positive integers, deduplicated and sorted) limits it to those items. `resume` (a run ID: 1 to 64 letters, digits, `-` or `_`, starting with a letter or digit) continues a run that ended `failed` or `interrupted`, with the items it was started with, so it can't be combined with `ids`. A finished run, an unknown one, or one another process holds fails the call (exit 1).
 

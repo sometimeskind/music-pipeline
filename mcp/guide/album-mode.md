@@ -118,8 +118,8 @@ Search the album's name in the log. The import logs `[RELEASE]`/`[NOMB]`, then o
 ## 7. Album never downloads
 
 `get_album`: a `wanted` album with no attempts hasn't been searched yet. The tick searches a
-few per run, and `audit_want_albums` shows what is still wanted, grouped by album. A
-`fallback` album went to spotdl after its releases failed. A name of glyphs only
+few per run, and `library_status` counts albums by status. `audit_want_albums` is the spotdl
+playlists' want list, so an album waiting on the tick isn't in it. A `fallback` album went to spotdl after its releases failed. A name of glyphs only
 (`[NOWORDS]`), or one whose `[MISS]` queries the indexer can't match, needs
 `set_search_override`. A `[MISS]` with results says which rule rejected them (`rejected: …;
 closest: "<title>" (<rule>: <detail>)`): `album words` on the closest means the release
@@ -132,3 +132,13 @@ box set or remix release holding the album's name) is too, unless the album itse
 Spotify name doesn't say so: an override with that word (`live`) matches it. An override is words a
 release title holds, which also steer the edition picked. Its dry run shows the query before
 and after, and when the album is searched again (a `missing` album at the next tick).
+
+To say whether a release matches, or to propose an override, run `check_release` with the album
+and the release title, and with `words` for an override. It is the tick's own matcher: it answers
+accepted, or the rule that refused the title and why. Every override word is required, so a year
+or a word only some releases carry refuses the others, and a leading `-` excludes nothing: `-Son`
+is the word `son`. An override has no artist, so the title's first word must be one of its words
+(`Harry Nilsson-…` needs `harry`: `nilsson schmilsson` alone refuses it), and `artist words` no
+longer runs. Give the release's size in bytes when you have it: without it the size rule isn't checked
+and the output says so. It covers the matcher only, not the blocklist, not whether the
+indexer has the release, and not how an accepted release ranks.

@@ -86,9 +86,11 @@ def off_by(expected: float, actual: float, tolerance: float, min_delta: float) -
 
 def audit(items: list, songs_by_playlist: dict[str, list[dict]], tolerance: float = guard.TOLERANCE,
           min_delta: float = MIN_DELTA_SECONDS, silence: bool = False) -> tuple[list[Suspect], dict]:
-    """Suspects (most off first) and counts: ``matched``, ``unmatched``, ``no_duration``."""
+    """Suspects (most off first) and counts: ``matched``, ``unmatched``, ``no_duration``,
+    ``unlisted`` (library items no playlist entry reached) and ``no_file`` (with
+    *silence*, files that weren't there to scan)."""
     library = ItemIndex(items)
-    counts = {"matched": 0, "unmatched": 0, "no_duration": 0}
+    counts = {"matched": 0, "unmatched": 0, "no_duration": 0, "unlisted": 0, "no_file": 0}
     suspects: dict[int, Suspect] = {}
     checked: set[int] = set()
     for playlist, songs in songs_by_playlist.items():
@@ -111,14 +113,17 @@ def audit(items: list, songs_by_playlist: dict[str, list[dict]], tolerance: floa
             gap = None
             if silence and item_path(item).exists():
                 gap = guard.mid_track_silence(guard.silence_windows(item_path(item)), actual)
+            elif silence:
+                counts["no_file"] += 1
             if not expected:
                 counts["no_duration"] += 1
             if gap or (expected and off_by(expected, actual, tolerance, min_delta)):
                 suspects[item.id] = Suspect(item, song, [playlist], expected or 0, actual, rung, gap)
+    counts["unlisted"] = sum(1 for i in items if i.id not in checked)
     return sorted(suspects.values(), key=lambda s: -abs(s.delta)), counts
 
 
-def report(suspects: list[Suspect], counts: dict) -> None:
+def report(suspects: list[Suspect], counts: dict, silence: bool = False) -> None:
     for s in suspects:
         why = f"expected {s.expected}s, has {s.actual:.0f}s ({s.delta:+.0f}s)"
         if s.silence:
@@ -130,9 +135,11 @@ def report(suspects: list[Suspect], counts: dict) -> None:
             ",".join(s.playlists), _label(s.song), why, s.item.id, item_path(s.item), s.item.get("comments") or "?",
         )
     logger.info(
-        "Audit: %d suspect(s) among %d matched playlist entr(ies); %d entr(ies) with no library item, "
-        "%d with no Spotify duration",
-        len(suspects), counts["matched"], counts["unmatched"], counts["no_duration"],
+        "Audit: %d suspect(s) among %d matched playlist entr(ies); not compared: %d entr(ies) with no library item, "
+        "%d with no Spotify duration, %d library item(s) on no playlist; %s. A clean result says nothing about what "
+        "wasn't compared",
+        len(suspects), counts["matched"], counts["unmatched"], counts["no_duration"], counts["unlisted"],
+        f"silence checked, {counts['no_file']} file(s) not found" if silence else "silence not checked",
     )
 
 
@@ -281,7 +288,7 @@ def run(apply: bool = False, tolerance: float = guard.TOLERANCE, min_delta: floa
             return []
 
         suspects, counts = audit(lib.all_items(), songs_by_playlist, tolerance, min_delta, silence)
-        report(suspects, counts)
+        report(suspects, counts, silence)
     if quarantine:
         audit_quarantine(QUARANTINE, songs_by_playlist)
     return suspects

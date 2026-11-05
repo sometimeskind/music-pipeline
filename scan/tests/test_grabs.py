@@ -40,6 +40,24 @@ def test_only_albums_the_library_holds_from_a_release_are_checked() -> None:
         "6": _record(*wrong, status="fallback", fallback_from="partial"),
     }, {})
     assert [f.key for f in report.flagged] == ["5", "6"] and report.compared == 2
+    assert report.skipped == {"wanted": 1, "grabbed": 1, "fallback": 1, "filled": 1}
+
+
+def test_a_clean_result_says_what_it_left_out(caplog) -> None:
+    """0 of N read as the check missing albums that had just been reset to wanted."""
+    wrong = ("Curtis Mayfield", "Curtis Live!", EUROPE)
+    report = grabs.audit({
+        "1": _record(*wrong, status="wanted"),
+        "2": _record(*wrong, status="wanted"),
+        "3": _record(*wrong, status="failed"),
+        "4": _record("Kate Bush", "The Sensual World", "Kate Bush-The Sensual World-NMR-1989-NMR"),
+    }, {})
+    assert report.flagged == [] and report.compared == 1
+    with caplog.at_level(logging.INFO, logger="music_scan.grabs"):
+        grabs.log_report(report)
+    assert "of 1 compared" in caplog.text
+    assert "not held from a release, so not read: 2 wanted, 1 failed" in caplog.text
+    assert "A clean result says nothing about the albums not compared or not read" in caplog.text
 
 
 def test_what_cant_be_compared_is_counted() -> None:

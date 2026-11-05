@@ -30,6 +30,8 @@ CASES = {
     "audit_titles": [{}],
     "audit_artists": [{}],
     "audit_grabs": [{}],
+    "check_release": [{"album": "1734", "title": "Artist-Album-FLAC", "size_bytes": None, "words": None},
+                      {"album": "-m-/le baptême", "title": "--apply -x", "size_bytes": 400000000, "words": "--apply"}],
     "recheck_recordings": [{"ids": [], "resume": None}, {"ids": [5672, 6994], "resume": None},
                            {"ids": [], "resume": "3f2a9c0d1e2b4a5c"}],
     "apply_recheck": [{"run_id": "3f2a9c0d1e2b4a5c"}],
