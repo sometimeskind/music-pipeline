@@ -91,7 +91,7 @@ import shutil
 import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Callable, Collection, Protocol
+from typing import Callable, Collection, Mapping, Protocol
 
 from music_fetch import album_requests, events, later_requests, overrides, resolve, store, stranded
 from music_fetch import state as statedb
@@ -320,12 +320,17 @@ class Plan:
     note: str = ""
 
 
+def override_words(key: str, record: dict, overrides: dict[str, str]) -> str | None:
+    """The album's search override: by album key (overrides.keyed), or by any of
+    the record's Spotify IDs (a file's, homelab#2410)."""
+    return next((overrides[ref] for ref in _refs(key, record) if ref in overrides), None)
+
+
 def plan(key: str, record: dict, overrides: dict[str, str]) -> Plan:
     """The searches for an album (#197).  An override wins; a title with no
     readable words searches the artist alone and matches any of their releases
     on size; with neither, there is nothing to search (``queries`` empty)."""
-    # By album key (overrides.keyed), or by any of the record's Spotify IDs (a file's, homelab#2410).
-    words = next((overrides[ref] for ref in _refs(key, record) if ref in overrides), None)
+    words = override_words(key, record, overrides)
     if words:
         return Plan([words], album=words, note=" (override)")
     artist = record["artist"] if readable(record["artist"]) else ""
@@ -338,6 +343,21 @@ def plan(key: str, record: dict, overrides: dict[str, str]) -> Plan:
     if artist:
         return Plan([normalise(artist)], artist=artist, album=record["name"], any_album=True, note=" (artist-only)")
     return Plan([])
+
+
+def track_count(record: dict) -> int:
+    """The album's tracks as the matcher counts them: Spotify's total, else its longest playlist's."""
+    return record.get("tracks_count") or max((len(t) for t in record["playlists"].values()), default=0)
+
+
+def match_args(record: dict, search: Plan) -> dict:
+    """The album's keywords for :func:`~music_fetch.usenet.rejection` and :func:`~music_fetch.usenet.rank`."""
+    return dict(album_type=record.get("album_type"), seconds=record.get("duration") or 0, any_album=search.any_album)
+
+
+def by_status(counts: Mapping[str, int]) -> str:
+    """Albums counted by status as an audit's output says them: ``12 wanted, 3 failed``."""
+    return ", ".join(f"{n} {status}" for status, n in sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))) or "none"
 
 
 # ---------------------------------------------------------------------------
@@ -1053,12 +1073,11 @@ def top_up(
             logger.warning("[ERR]  %s: %d albums in a row with 0 results — stopping; is the indexer failing silently?",
                            label, empty_run)
             break  # This album keeps its status; the next tick searches it first.
-        tracks = record.get("tracks_count") or max(len(t) for t in record["playlists"].values())
+        tracks = track_count(record)
         in_flight, imported = _taken(state, key)
         blocklist = set(record["blocklist"]) | imported
-        match_args = dict(album_type=record.get("album_type"), seconds=record.get("duration") or 0,
-                          any_album=search.any_album)
-        ranked = rank(releases, search.artist, search.album, tracks, blocklist, record.get("year"), **match_args)
+        matching = match_args(record, search)
+        ranked = rank(releases, search.artist, search.album, tracks, blocklist, record.get("year"), **matching)
         other_edition = 0
         record["searched_at"] = _iso(now())
         record["query"] = search.queries[0]
@@ -1103,7 +1122,7 @@ def top_up(
                 why = (f"{other_edition} match but not the edition of the copy kept "
                        f"({' '.join(record['edition']) or 'plain'})")
             else:
-                why = why_none(releases, search.artist, search.album, tracks, blocklist, **match_args)
+                why = why_none(releases, search.artist, search.album, tracks, blocklist, **matching)
             queries = ", ".join(f'"{q}"' for q in sent)
             message = (f"[MISS] {label}{search.note}: {len(releases)} result(s), none match; queries: {queries}"
                        f"{f'; {why}' if why else ''}"

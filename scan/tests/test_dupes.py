@@ -1,5 +1,6 @@
 """Tests for music_scan.dupes — music-audit-dupes (#210)."""
 
+import logging
 import random
 from pathlib import Path
 
@@ -427,6 +428,15 @@ def test_vegyn_single_and_album_track_merge_onto_the_album_item(tmp_path) -> Non
 
 
 # --- run ----------------------------------------------------------------------
+
+def test_coverage_counts_what_the_audio_and_title_comparisons_had_nothing_to_read_on(caplog) -> None:
+    items = [FakeItem(1, "Song", acoustid_fingerprint="fp"), FakeItem(2, "Song", acoustid_id="id"),
+             FakeItem(3, "Song"), FakeItem(4, "", artist="")]
+    with caplog.at_level(logging.INFO, logger="music_scan.dupes"):
+        dupes.log_coverage(items)
+    assert "Read 4 item(s): 2 with no fingerprint or AcoustID ID, so their audio wasn't compared, 1 with no" in caplog.text
+    assert "Audio is compared only between items sharing an artist word" in caplog.text
+
 
 def test_run_dry_run_reports_and_pushes_without_merging(monkeypatch, tmp_path) -> None:
     items = _vegyn(tmp_path)

@@ -774,6 +774,17 @@ def _flag_twins(items) -> None:
 # ---------------------------------------------------------------------------
 
 
+def may_be_mixed(record: dict) -> bool:
+    """Whether a record is one :func:`mixed_reasons` reads: imported, or
+    short of its tracks.  An album request's (homelab#2478) is imported whole,
+    its release stamped, and its spotdl fallback tracks are its own: never
+    mixed, whatever its blocklist says."""
+    from music_fetch.albums import GAP, IMPORTED, PARTIAL  # noqa: PLC0415
+
+    return ((record.get("status") == IMPORTED or record.get("fallback_from") in (PARTIAL, GAP))
+            and record.get("origin") != "request")
+
+
 def mixed_reasons(key: str, record: dict, items: list, listed) -> list[str]:
     """Why an imported album record's album is not one release: what the
     track-level rules before #279 did to it, and a reimport would undo.
@@ -784,13 +795,9 @@ def mixed_reasons(key: str, record: dict, items: list, listed) -> list[str]:
     takes, so a reimport would only grab the same album again (#295).  Nor
     do local-only extras count, or a spotdl copy another playlist also lists:
     :func:`retire` leaves both on purpose.  *listed* is :func:`_topup`'s."""
-    from music_fetch.albums import GAP, IMPORTED, PARTIAL  # noqa: PLC0415
+    from music_fetch.albums import GAP, PARTIAL  # noqa: PLC0415
 
-    if record.get("status") != IMPORTED and record.get("fallback_from") not in (PARTIAL, GAP):
-        return []
-    if record.get("origin") == "request":
-        # An album request's (homelab#2478) is imported whole, its release stamped, and its
-        # spotdl fallback tracks are its own: never mixed, whatever its blocklist says.
+    if not may_be_mixed(record):
         return []
     sid = primary_spotify(record)
     mine = [i for i in items if sid and i.get("spotify_album_id") == sid and not i.get(EXTRA)
@@ -1384,9 +1391,23 @@ def audit_main() -> None:
 
     with MusicLibrary(LIBRARY_DB) as lib:
         items = list(lib.all_items())
-    listed = store_listings()
+    list_mixed(records, items, store_listings())
+    twins = title_twins(items)
+    list_twins(records, twins, spotify_durations() if twins else {})
+
+
+def list_mixed(records: dict[str, dict], items: list, listed) -> int:
+    """Log each album mixed from several releases with its reset command, then
+    the count and, by status, the records :func:`may_be_mixed` leaves out.
+    Returns the albums listed."""
+    from music_fetch.albums import by_status  # noqa: PLC0415
+
     n = 0
+    skipped: Counter[str] = Counter()
     for key, record in records.items():
+        if not may_be_mixed(record):
+            skipped["album request" if record.get("origin") == "request" else record.get("status") or "no status"] += 1
+            continue
         reasons = mixed_reasons(key, record, items, listed)
         if not reasons:
             continue
@@ -1394,10 +1415,10 @@ def audit_main() -> None:
         name = f"{record.get('artist')} — {record.get('name')}"
         logger.info("[MIXED] %s (%s): %s", name, key, "; ".join(reasons))
         logger.info("    music-album-reset '%s' --reimport", album_query(records, key, name))
-    logger.info("%d imported album(s) mixed from several releases; reset each with --reimport (dry run, then "
-                "--apply), then clear its old copies with --replaced", n)
-    twins = title_twins(items)
-    list_twins(records, twins, spotify_durations() if twins else {})
+    logger.info("%d imported album(s) mixed from several releases, of %d read; not read: %s. A clean result says "
+                "nothing about those. Reset each mixed album with --reimport (dry run, then --apply), then clear its "
+                "old copies with --replaced", n, len(records) - sum(skipped.values()), by_status(skipped))
+    return n
 
 
 def _keep_main(name: str, apply: bool) -> None:

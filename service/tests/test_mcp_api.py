@@ -90,6 +90,25 @@ def test_read_tier_runs_the_audit_dry_runs(client, env):
     assert grabs.status_code == 200 and env["commands"].ran[-1] == ["music-audit-grabs"]
 
 
+def test_read_tier_checks_a_release_against_the_matcher(client, env):
+    body = {"album": "pastel", "title": "  Nina Simone-Pastel   Blues-FLAC ", "size_bytes": 400000000,
+            "words": "Pastel Blues -Live"}
+    resp = client.post("/mcp-api/run/check_release", json=body, headers=READ)
+    assert resp.status_code == 200 and resp.json["status"] == "done"
+    assert env["commands"].ran[-1] == ["music-check-release", f"--album={resp.json['args']['album']}",
+                                       "--title=Nina Simone-Pastel Blues-FLAC", "--size=400000000",
+                                       "--words=pastel blues live"]
+    bare = client.post("/mcp-api/run/check_release", json={"album": "pastel", "title": "x"}, headers=READ)
+    assert bare.status_code == 200 and len(env["commands"].ran[-1]) == 3
+
+
+def test_check_release_refuses_a_size_or_words_it_cant_use(client):
+    for extra in [{"size_bytes": 0}, {"size_bytes": "big"}, {"size_bytes": True}, {"words": "♫"}, {"apply": True}]:
+        body = {"album": "pastel", "title": "x", **extra}
+        assert client.post("/mcp-api/run/check_release", json=body, headers=READ).status_code == 400, extra
+    assert client.post("/mcp-api/run/check_release", json={"album": "pastel"}, headers=READ).status_code == 400
+
+
 # ---------------------------------------------------------------------------
 # Structured reads
 # ---------------------------------------------------------------------------

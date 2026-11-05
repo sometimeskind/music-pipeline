@@ -32,7 +32,7 @@ index routes a symptom to the tools that show and fix it, and says how to verify
 IDs. An album key is the album's row in the album store, an integer such as 1734 (before the
 operator's one-time rekey, homelab#2478, it was the Spotify album ID); find_albums and get_album
 show it, requeue_albums takes it or any of the album's Spotify album IDs, and it is never a
-Spotify ID itself. An album query (find_albums, get_album,
+Spotify ID itself. An album query (find_albums, get_album, check_release,
 reset_album, the override and hold tools, remove_from_later's albums) is the key, any of the album's Spotify IDs, its
 release group, the exact "artist — album", or a part matching one album; a query matching
 several returns "ambiguous" with the candidates and does nothing. A track (pin_track,
@@ -321,15 +321,18 @@ def build_server(
             Field(description="fingerprint these items first ([] = every item without one)"),
         ] = None,
     ) -> dict:
-        """music-audit-dupes dry run: duplicate groups, certain and uncertain, with item IDs.
-        Merge a confirmed pair with merge_items."""
+        """music-audit-dupes dry run: duplicate groups, certain and uncertain, with item IDs, and how
+        many items had no fingerprint or no title words to compare. Merge a confirmed pair with
+        merge_items."""
         body = {} if fingerprint_ids is None else {"fingerprint_ids": fingerprint_ids}
         return await run("audit_dupes", body)
 
     @mcp.tool(annotations={"readOnlyHint": True})
     async def audit_lengths(silence: bool = False) -> dict:
         """music-audit-lengths dry run: [SUSPECT] items whose length disagrees with Spotify's
-        (silence=true also looks for padded silence), with the video they came from."""
+        (silence=true also looks for padded silence), with the video they came from. It reads playlist
+        entries: entries with no item or no duration, and library items on no playlist, are counted, not
+        compared."""
         return await run("audit_lengths", {"silence": silence})
 
     @mcp.tool(annotations={"readOnlyHint": True})
@@ -340,13 +343,16 @@ def build_server(
         ] = None,
     ) -> dict:
         """music-album-audit-releases: albums mixed from several releases, or with
-        replaced_query, the album's [REPLACED] and [ONLYCOPY] files."""
+        replaced_query, the album's [REPLACED] and [ONLYCOPY] files. Albums not imported, and
+        album requests, are counted by status, not read."""
         body = {} if replaced_query is None else {"replaced_query": replaced_query}
         return await run("audit_releases", body)
 
     @mcp.tool(annotations={"readOnlyHint": True})
     async def audit_want_albums() -> dict:
-        """music-audit-want-albums: the tracks still wanted, grouped by album."""
+        """music-audit-want-albums: the spotdl playlists' want list, grouped by album. Album and nosync
+        playlists are left out and named, and tracks held back are counted: an album waiting on the
+        album tick isn't on this list (library_status counts those by status)."""
         return await run("audit_want_albums", {})
 
     @mcp.tool(annotations={"readOnlyHint": True})
@@ -369,9 +375,34 @@ def build_server(
     async def audit_grabs() -> dict:
         """music-audit-grabs: albums held from a release whose title the album-name check refuses (the
         album's words found only in the artist's name), each with its fix, and the count. Records with
-        no stored title or matched on an override are counted, not listed. A listed album may be right:
-        check its tracks. The fix is the album's: reset_album with reimport=true."""
+        no stored title or matched on an override are counted, not listed. Albums the library doesn't
+        hold from a release (wanted, failed, ...) are counted by status: a clean result says nothing about
+        them. A listed album may be right: check its tracks. The fix is the album's: reset_album with
+        reimport=true."""
         return await run("audit_grabs", {})
+
+    @mcp.tool(annotations={"readOnlyHint": True})
+    async def check_release(
+        album: AlbumQuery,
+        title: Annotated[str, Field(description="the release title, as a [MISS] line or the album's record gives it",
+                                    min_length=1, max_length=500)],
+        size_bytes: Annotated[int | None, Field(description="the release's size in bytes; without it the size rule "
+                                                            "isn't checked", gt=0)] = None,
+        words: Annotated[str | None, Field(description="override words to simulate, in place of any stored override; "
+                                                       "normalised as set_search_override stores them",
+                                           min_length=1)] = None,
+    ) -> dict:
+        """The tick's own matcher on one release title for one album: accepted, or the rule that
+        refused it and why, with the search the tick would run and whether a stored override applied.
+        With words, what that override would really do. Use it before saying a release would or
+        wouldn't match, and before proposing an override. It covers the matcher only: no indexer call,
+        not the blocklist, and not how an accepted release ranks."""
+        body: dict = {"album": album, "title": title}
+        if size_bytes is not None:
+            body["size_bytes"] = size_bytes
+        if words is not None:
+            body["words"] = words
+        return await run("check_release", body)
 
     @mcp.tool(annotations={"readOnlyHint": True})
     async def recheck_recordings(

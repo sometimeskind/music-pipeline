@@ -434,6 +434,16 @@ def report(certain: list[Group], uncertain: list[Group], distinct: int, duration
     )
 
 
+def log_coverage(items) -> None:
+    """What the groups can't show: items the audio or the title+artist comparison had nothing to read on."""
+    no_audio = sum(1 for i in items if not (i.get("acoustid_fingerprint") or i.get("acoustid_id")))
+    no_words = sum(1 for i in items if not (_title_key(i) and _artist_key(i)))
+    logger.info("Read %d item(s): %d with no fingerprint or AcoustID ID, so their audio wasn't compared, %d with no "
+                "title or artist words to compare. Audio is compared only between items sharing an artist word. A "
+                "clean result says nothing about copies only those comparisons would find",
+                sum(1 for _ in items), no_audio, no_words)
+
+
 def _log_merge_commands(group: Group, durations: dict[str, float], label: str) -> None:
     """One ``--merge`` command per pair of *group*, once though several rules matched it."""
     by_id = {item.id: item for item in group.items}
@@ -778,6 +788,7 @@ def run(apply: bool = False, fingerprints: list[int] | None = None, merge_ids: l
         certain, uncertain, distinct = find_dupes(items, decode)
         certain, held = hold_albums(certain)
         report(certain, uncertain, distinct, durations, held)
+        log_coverage(items)
         left = len(certain)
         if apply and certain:
             with pipeline_lock():

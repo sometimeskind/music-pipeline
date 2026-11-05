@@ -11,7 +11,8 @@ An album is checked when the library holds its release: ``imported``, or
 ``fallback``/``filled`` from a partial release (the tick's own test, which keeps
 it from being grabbed again).  Records with no stored title, and ones matched on
 a search override or on size alone, have no artist part to read: counted, not
-listed.
+listed.  So are the albums the library doesn't hold from a release, by status: a
+clean result says nothing about them.
 
 The output is for a person deciding what to change, and a listed album may be
 right: the title then only says less than the album's name.  Check its tracks
@@ -24,6 +25,7 @@ from __future__ import annotations
 import argparse
 import dataclasses
 import logging
+from collections import Counter
 from collections.abc import Mapping
 
 from music_fetch import albums
@@ -51,6 +53,8 @@ class Report:
     """Albums in the library with no release title stored."""
     no_artist: int = 0
     """Albums matched on a search override or on size alone."""
+    skipped: Counter[str] = dataclasses.field(default_factory=Counter)
+    """Albums the library doesn't hold from a release, by status."""
 
 
 def audit(records: Mapping[str, dict], search_words: Mapping[str, str]) -> Report:
@@ -61,6 +65,7 @@ def audit(records: Mapping[str, dict], search_words: Mapping[str, str]) -> Repor
         status = record.get("status")
         if not (status == albums.IMPORTED
                 or status in (albums.FALLBACK, albums.FILLED) and record.get("fallback_from") == albums.PARTIAL):
+            report.skipped[status or "no status"] += 1
             continue
         title = (record.get("candidate") or {}).get("title")
         if not title:
@@ -84,9 +89,11 @@ def log_report(report: Report) -> None:
         logger.info('[NOTALBUM] %s: %s — %s came from "%s" (%s): check its tracks, then reset_album with reimport=true',
                     f.key, f.artist, f.album, f.title, f.why)
     logger.info("%d album(s) held from a release the album-name check refuses, of %d compared; not compared: %d with "
-                "no release title stored, %d matched on a search override or on size alone. The title may only say "
-                "less than the album's name: check the tracks before a reset",
-                len(report.flagged), report.compared, report.no_title, report.no_artist)
+                "no release title stored, %d matched on a search override or on size alone; not held from a release, "
+                "so not read: %s. A clean result says nothing about the albums not compared or not read. The title "
+                "may only say less than the album's name: check the tracks before a reset",
+                len(report.flagged), report.compared, report.no_title, report.no_artist,
+                albums.by_status(report.skipped))
 
 
 def run() -> Report:

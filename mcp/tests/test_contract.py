@@ -159,6 +159,7 @@ async def test_a_read_caller_runs_the_audits(pipeline_url):
     async with Client(server(pipeline_url, PILOT)) as c:
         for tool, args in [("audit_want_albums", {}), ("audit_dupes", {}), ("audit_lengths", {"silence": True}), ("audit_titles", {}),
                            ("audit_artists", {}), ("audit_grabs", {}),
+                           ("check_release", {"album": "pastel", "title": "Nina Simone-Pastel Blues-FLAC"}),
                            ("audit_releases", {"replaced_query": ""})]:
             job = await finish(c, (await c.call_tool(tool, args)).data)
             assert job["status"] == "done", job

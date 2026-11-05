@@ -1,6 +1,7 @@
 """A Usenet release imported as one album (#279)."""
 
 import json
+import logging
 import shutil
 import subprocess
 from pathlib import Path
@@ -660,6 +661,22 @@ def test_extras_one_track_with_no_release_item_are_named_to_each_other(quarantin
     data = kw["data"]
     assert data["extras"] == [17051] and data["release_items"] == [] and data["left_to_dupes"] is True
     assert "USSM12503412" in data["evidence"] and data["origin"] == "extra, extras only"
+
+def test_list_mixed_says_what_it_read_and_what_it_left_out(caplog) -> None:
+    records = {
+        "RTD": {"status": "imported", "blocklist": ["r0"], "spotify_album_ids": ["RTD"], "artist": "A", "name": "B"},
+        "W1": {"status": "wanted"},
+        "W2": {"status": "wanted"},
+        "F": {"status": "failed"},
+        "P": {"status": "fallback", "fallback_from": "partial", "spotify_album_ids": ["P"]},
+        "Q": {"status": "imported", "origin": "request", "blocklist": ["r0"]},
+    }
+    with caplog.at_level(logging.INFO, logger="music_scan.release"):
+        assert release.list_mixed(records, [], _listed()) == 2
+    assert "[MIXED] A — B (RTD)" in caplog.text
+    assert "2 imported album(s) mixed from several releases, of 2 read; not read: 2 wanted, 1 album request, 1 failed." in caplog.text
+    assert "A clean result says nothing about those" in caplog.text
+
 
 def test_mixed_reasons_a_whole_import_with_a_loose_spotdl_copy_is_not_mixed() -> None:
     """Zero 7 Simple Things (#295): imported whole since #279 after a reset by

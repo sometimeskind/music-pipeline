@@ -20,7 +20,9 @@ grabbing the last two whole would land and supersede.
 
 Backoff is not applied: a track spotdl could not find is still wanted from
 Usenet.  The tracks album mode holds off spotdl (#324) are left out, so the
-report shows what is left for spotdl.  Read-only, and no Spotify or indexer call: the stores and the beets
+report shows what is left for spotdl: they and downloads held in the inbox or
+quarantine are counted as held back.  The default run also says which playlists
+it left out, since an album waiting on the album tick isn't on this list.  Read-only, and no Spotify or indexer call: the stores and the beets
 library are enough.
 """
 
@@ -68,6 +70,9 @@ class Report:
     playlist: str
     entries: int
     albums: list[AlbumWants]
+    held: int = 0
+    """Entries no library item holds that are left out: a download in the inbox
+    or quarantine, or a track album mode holds off spotdl."""
 
     @property
     def wanted(self) -> int:
@@ -108,7 +113,8 @@ def group(name: str, songs: list[dict], resolves: Callable[[dict], bool], held: 
                 int(song.get("tracks_count") or 0), [], position[song.get("url")],
             )
         album.wanted.append(song)
-    return Report(name, len(songs), list(albums.values()))
+    held_back = {s.get("url") for s in songs if s.get("url") in held and not resolves(s)}
+    return Report(name, len(songs), list(albums.values()), len(held_back))
 
 
 def spotdl_playlists(spotdl_dir: Path = SPOTDL_DIR) -> list[str]:
@@ -117,14 +123,15 @@ def spotdl_playlists(spotdl_dir: Path = SPOTDL_DIR) -> list[str]:
             if not (spotdl_dir / f"{n}.album").exists() and not (spotdl_dir / f"{n}.nosync").exists()]
 
 
-def _summary(label: str, entries: int, albums: list[AlbumWants], minimum: int) -> str:
+def _summary(label: str, entries: int, albums: list[AlbumWants], minimum: int, held: int = 0) -> str:
     wanted = sum(len(a.wanted) for a in albums)
     over = [a for a in albums if len(a.wanted) >= minimum]
     covered = sum(len(a.wanted) for a in over)
     share = f" ({covered * 100 // wanted}%)" if wanted else ""
     return (f"[WANT] {label}: {wanted} wanted of {entries} entr{'y' if entries == 1 else 'ies'} on {len(albums)} album(s); "
             f"{len(over)} album(s) hold {minimum}+ ({covered} wanted{share}), "
-            f"{sum(1 for a in albums if len(a.wanted) == 1)} singleton(s)")
+            f"{sum(1 for a in albums if len(a.wanted) == 1)} singleton(s)"
+            + (f"; {held} held back, not counted" if held else ""))
 
 
 def merged(reports: list[Report], refs: dict[str, str] | None = None) -> list[AlbumWants]:
@@ -157,13 +164,22 @@ def log_reports(reports: list[Report], minimum: int = DEFAULT_MIN, refs: dict[st
     (:func:`merged`), which is the album tick's rule (``feed_wants``); the
     entries are summed, since they are playlist slots."""
     for report in reports:
-        logger.info(_summary(report.playlist, report.entries, report.albums, minimum))
+        logger.info(_summary(report.playlist, report.entries, report.albums, minimum, report.held))
         for album in report.over(minimum):
             tracks = f" of {album.tracks}" if album.tracks else ""
             logger.info("  [ALBUM] %s: %d%s track(s) wanted, first at #%d: %s — %s (%s)",
                         report.playlist, len(album.wanted), tracks, album.first + 1, album.artist, album.name, album.key)
     if len(reports) > 1:
-        logger.info(_summary("total", sum(r.entries for r in reports), merged(reports, refs), minimum))
+        logger.info(_summary("total", sum(r.entries for r in reports), merged(reports, refs), minimum,
+                             sum(r.held for r in reports)))
+
+
+def log_left_out(stores: list[str], read: list[str]) -> None:
+    """The playlists a run of the spotdl want list didn't read, and what that leaves out."""
+    others = sorted(set(stores) - set(read))
+    logger.info("[WANT] left out: %d album or nosync playlist(s)%s. This is the spotdl want list: an album waiting on "
+                "the album tick isn't in it, and a clean result says nothing about those. library_status counts them "
+                "by status", len(others), f" ({', '.join(others)})" if others else "")
 
 
 @dataclasses.dataclass
@@ -365,6 +381,8 @@ def run(playlist: str | None = None, all_stores: bool = False, minimum: int = DE
             continue
         reports.append(group(name, playlist_store.songs, lambda s: index.match_song(s, words=False)[0] is not None, held))
     log_reports(reports, minimum, _album_refs() if len(reports) > 1 else None)
+    if not playlist and not all_stores:
+        log_left_out(store.names(), names)
     return reports
 
 

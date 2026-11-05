@@ -8,7 +8,7 @@ ts-egress, Prowlarr, cookies) stays in homelab's `docs/media/` runbooks.
 
 | Topic | Read it for |
 |-------|-------------|
-| `classify` | A symptom ("two copies", "mixed album", "wrong take", "titled as the wrong version", "under another artist", "another album by the artist", "no cover", "playlist missing tracks", "never downloads") → what to look at and which tool fixes it |
+| `classify` | A symptom ("two copies", "mixed album", "wrong take", "titled as the wrong version", "under another artist", "another album by the artist", "no cover", "playlist missing tracks", "never downloads", "would this release match")  → what to look at and which tool fixes it |
 | `album-mode` | How an album moves from `wanted` to `imported`, what each log tag means, and what to do when a stage fails |
 | `workflow` | Dry run → apply, jobs and paging, the read and write tiers, and the operations that stay on the operator's workstation |
 | `verify` | When a fix shows: tick and scan timing, and the line or metric that should change |
@@ -51,8 +51,8 @@ search can't find), each with its reason and who set it when. `set_search_overri
 `hold_album` and `pin_track` set them, and `clear_search_override`, `release_album` and
 `unpin_track` undo them, all dry run first. The tick and the nightly read them on their next
 run. There is no git history behind them: each change is an event in `album_history`, and a
-bad one is undone the same way. Routes: `[NOWORDS]` → `set_search_override`; an album mixed on
-purpose → `hold_album`; a `[MISS]` that never resolves → `pin_track` (see `classify`).
+bad one is undone the same way. Routes: `[NOWORDS]` → `set_search_override`, its words tested
+with `check_release` first; an album mixed on purpose → `hold_album`; a `[MISS]` that never resolves → `pin_track` (see `classify`).
 
 ## Requests
 

@@ -192,6 +192,23 @@ def _audit_releases_argv(args: dict, _: bool) -> list[list[str]]:
     return [["music-album-audit-releases", f"--replaced={query}"]] if query else [["music-album-audit-releases", "--replaced"]]
 
 
+def _check_release(body: dict, albums: Albums) -> dict:
+    _only(body, "album", "title", "size_bytes", "words")
+    size = body.get("size_bytes")
+    if size is not None and (isinstance(size, bool) or not isinstance(size, int) or size <= 0):
+        raise BadRequest("size_bytes must be a positive integer; leave it out when the size is unknown")
+    words = body.get("words")
+    return {"album": resolve_album(body.get("album"), albums), "title": _text(body, "title", required=True),
+            "size_bytes": size, "words": None if words is None else search_words(words)}
+
+
+def _check_release_argv(args: dict, _: bool) -> list[list[str]]:
+    # --name=VALUE: a key, title or word that starts with "-" stays the option's value.
+    argv = ["music-check-release", f"--album={args['album']}", f"--title={args['title']}"]
+    argv += [f"--size={args['size_bytes']}"] if args["size_bytes"] is not None else []
+    return [argv + ([f"--words={args['words']}"] if args["words"] is not None else [])]
+
+
 def _none(body: dict, _: Albums) -> dict:
     _only(body)
     return {}
@@ -536,6 +553,8 @@ TOOLS: dict[str, Tool] = {t.name: t for t in [
     Tool("audit_artists", READ, _none, lambda a, _: [["music-audit-artists"]]),
     # Albums held from a release the album-name check refuses (homelab#2656): no arguments.
     Tool("audit_grabs", READ, _none, lambda a, _: [["music-audit-grabs"]]),
+    # The matcher's verdict on one release title for one album (homelab#2661).
+    Tool("check_release", READ, _check_release, _check_release_argv),
     # homelab#2553: an hour-long AcoustID run in the long lane, resumed after a
     # restart from its checkpoint; its findings are applied with apply_recheck.
     Tool("recheck_recordings", READ, _recheck, _recheck_argv, lane="long", resumable=True),

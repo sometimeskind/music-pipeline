@@ -304,6 +304,16 @@ class Rejection:
         return f"{self.rule}: {self.detail}" if self.detail else self.rule
 
 
+def size_range(tracks: int, seconds: int = 0) -> tuple[int, int]:
+    """The bytes a release of the album may hold, by its duration or, unknown,
+    its track count; ``(0, 0)`` with neither, when size is no rule."""
+    if seconds > 0:
+        return seconds * MIN_BYTES_PER_SECOND, seconds * MAX_BYTES_PER_SECOND
+    if tracks > 0:
+        return tracks * MIN_BYTES_PER_TRACK, tracks * MAX_BYTES_PER_TRACK
+    return 0, 0
+
+
 def rejection(
     release: Release,
     artist: str,
@@ -357,12 +367,7 @@ def rejection(
     shorter = sorted(title & _SINGLE_WORDS - set(words(album)))
     if shorter and not is_single:
         return Rejection(7, "single", f"tagged {' '.join(shorter)}, the album isn't one")
-    if seconds > 0:
-        low, high = seconds * MIN_BYTES_PER_SECOND, seconds * MAX_BYTES_PER_SECOND
-    elif tracks > 0:
-        low, high = tracks * MIN_BYTES_PER_TRACK, tracks * MAX_BYTES_PER_TRACK
-    else:
-        low = high = 0
+    low, high = size_range(tracks, seconds)
     if high and not low <= release.size <= high:
         return Rejection(8, "size", f"{release.size / 1e6:.0f} MB, not {low / 1e6:.0f}-{high / 1e6:.0f} MB")
     return None

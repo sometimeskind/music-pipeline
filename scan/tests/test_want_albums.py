@@ -38,6 +38,7 @@ def test_group_counts_wanted_tracks_per_album_in_playlist_order() -> None:
 
     assert report.entries == 9
     assert report.wanted == 7  # x1 is held by the library, h1 waits in the inbox
+    assert report.held == 1
     by_key = {a.key: a for a in report.albums}
     assert [s["song_id"] for s in by_key["A"].wanted] == ["a1", "a2", "a3"]
     assert (by_key["A"].first, by_key["B"].first, by_key["C"].first) == (0, 1, 3)
@@ -62,12 +63,21 @@ def test_log_reports_summary_albums_and_total(caplog) -> None:
         want_albums.log_reports([report, other], minimum=2)
 
     lines = [r.getMessage() for r in caplog.records]
-    assert lines[0] == "[WANT] pl: 7 wanted of 9 entries on 4 album(s); 2 album(s) hold 2+ (5 wanted (71%)), 2 singleton(s)"
+    assert lines[0] == ("[WANT] pl: 7 wanted of 9 entries on 4 album(s); 2 album(s) hold 2+ (5 wanted (71%)), "
+                        "2 singleton(s); 1 held back, not counted")
     assert lines[1] == "  [ALBUM] pl: 3 of 10 track(s) wanted, first at #1: Artist — Album A (A)"
     assert lines[2] == "  [ALBUM] pl: 2 of 10 track(s) wanted, first at #2: Artist — Album B (B)"
     assert lines[3] == "[WANT] big: 2 wanted of 2 entries on 1 album(s); 1 album(s) hold 2+ (2 wanted (100%)), 0 singleton(s)"
     assert lines[4] == "  [ALBUM] big: 2 of 4 track(s) wanted, first at #1: Artist — Album Z (Z)"
-    assert lines[5] == "[WANT] total: 9 wanted of 11 entries on 5 album(s); 3 album(s) hold 2+ (7 wanted (77%)), 2 singleton(s)"
+    assert lines[5] == ("[WANT] total: 9 wanted of 11 entries on 5 album(s); 3 album(s) hold 2+ (7 wanted (77%)), "
+                        "2 singleton(s); 1 held back, not counted")
+
+
+def test_the_left_out_playlists_are_named(caplog) -> None:
+    with caplog.at_level(logging.INFO, logger="music_scan.want_albums"):
+        want_albums.log_left_out(["pl", "albums", "archive"], ["pl"])
+    assert "[WANT] left out: 2 album or nosync playlist(s) (albums, archive)." in caplog.text
+    assert "an album waiting on the album tick isn't in it" in caplog.text
 
 
 def test_total_merges_albums_and_counts_a_shared_track_once(caplog) -> None:
