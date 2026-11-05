@@ -199,6 +199,13 @@ def test_different_song_reads_titles_without_their_version_notes() -> None:
     # Short titles a letter or two apart are two songs.
     assert different_song("Intro", "Outro")
     assert different_song("Amy", "Ama")
+    # A credit in the title is not the song's name (Ironman, The Velvet Rope, homelab#2544).
+    assert not different_song("Fish feat Raekwon & Cappadonna", "Fish")
+    assert not different_song("Daytona 500 Ft. Raekwon", "Daytona 500")
+    assert not different_song("got til it's gone feat. q-tip and joni mitchell", "Got ’til It’s Gone")
+    assert not different_song("Song Featuring Someone (Live)", "Song (Live at X)")
+    assert different_song("Fish feat Raekwon & Cappadonna", "Camay")
+    assert different_song("Feat Of Clay", "Song")  # a title that opens with the word keeps it
     # Nothing to compare by: never two songs.
     assert not different_song("恋人", "Koibito")
     assert not different_song("", "Song")
