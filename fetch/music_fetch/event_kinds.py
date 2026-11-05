@@ -55,9 +55,9 @@ KINDS: dict[str, Kind] = {
     "import_done": Kind(ALBUM, "[DONE]: an album imported; an incomplete copy kept as the album says why.",
                         (*_RECORD, "why", "reposts", "missing", "lacking", "kept")),
     "import_wrong": Kind(ALBUM, "[WRONG]: a download that is not the album asked for.",
-                         (*_RECORD, "release", "found", "items", "total")),
+                         (*_RECORD, "release", "guid", "found", "items", "total")),
     "import_incomplete": Kind(ALBUM, "[INCOMPLETE]: a download lacking tracks of its release.",
-                              (*_RECORD, "release", "missing", "lacking", "kept", "same_gap")),
+                              (*_RECORD, "release", "guid", "missing", "lacking", "kept", "same_gap")),
     "import_lost": Kind(ALBUM, "[LOST]: a completed job whose directory is gone.", (*_RECORD, "path")),
     # --- The release check and the duplicate tools (music_scan.release, dupes, canon) ---
     "retire": Kind(ITEM, "[RETIRE]: an item of a release the album no longer keeps, retired; the IDs it "
@@ -79,7 +79,8 @@ KINDS: dict[str, Kind] = {
     "autoreset": Kind(ALBUM, "[AUTORESET]: an album reset automatically, with why.", (*_RECORD, "reasons")),
     "fallback": Kind(ALBUM, "[FALLBACK]: tracks left to the spotdl fallback.", (*_RECORD, "tracks", "left")),
     "failure": Kind(ALBUM, "[FAIL]/[ERR]/[MISS]: a grab, an album or a spotdl download given up on or backed off.",
-                    (*_RECORD, "what", "reason", "release", "gave_up", "track", "url", "kind", "attempts", "days")),
+                    (*_RECORD, "what", "reason", "release", "guid", "gave_up", "track", "url", "kind", "attempts",
+                     "days")),
     "filled": Kind(ALBUM, "[FILLED]: a fallback album the library now completes.", _RECORD),
     "fallback_deferred": Kind(ALBUM, "[DEFER]: a request album's spotdl fallback put off to the next session.",
                               (*_RECORD, "tracks", "why")),

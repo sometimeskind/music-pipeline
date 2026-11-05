@@ -317,6 +317,15 @@ class RealCli(mcp_harness.Commands):
         return 0
 
 
+@pytest.fixture
+def real_cli(env, tmp_path, monkeypatch):
+    cli = RealCli()
+    monkeypatch.setattr(env["jobs"], "_run_command", cli)
+    monkeypatch.setattr(albums, "OVERRIDES_FILE", tmp_path / "album-overrides.conf")
+    monkeypatch.delenv("PREFECT_API_URL", raising=False)
+    return cli
+
+
 def _blocklisted_album() -> None:
     """Pastel Blues with a broken download on its blocklist, and the events that say so."""
     rows = albums.State.load()
@@ -330,12 +339,9 @@ def _blocklisted_album() -> None:
     events.record("failure", "[FAIL]", source="albums", data={"key": "ALB3", "reason": "Aborted, encryption detected"})
 
 
-def test_the_reset_dry_run_passes_the_apply_gate(env, monkeypatch):
+def test_the_reset_dry_run_passes_the_apply_gate(env, real_cli):
     """The lines reset_notes adds repeat exactly, so the apply's fresh dry run matches, and the apply lands."""
     _blocklisted_album()
-    cli = RealCli()
-    monkeypatch.setattr(env["jobs"], "_run_command", cli)
-    monkeypatch.delenv("PREFECT_API_URL", raising=False)
     client = env["client"]
     dry = client.post("/mcp-api/run/reset_album", json={"query": "pastel", "reimport": True}, headers=WRITE)
     assert dry.json["status"] == "done", dry.json
@@ -345,17 +351,14 @@ def test_the_reset_dry_run_passes_the_apply_gate(env, monkeypatch):
     applied = client.post("/mcp-api/run/reset_album", json={"query": "pastel", "reimport": True, "apply": True},
                           headers=WRITE)
     assert applied.json["status"] == "done", applied.json
-    assert cli.ran[-1][:2] == ["music-album-reset", "--reimport"] and "--apply" in cli.ran[-1]
+    assert real_cli.ran[-1][:2] == ["music-album-reset", "--reimport"] and "--apply" in real_cli.ran[-1]
     record = albums.State.load().albums["ALB3"]
     assert record["blocklist"] == [] and record["attempts"] == 0 and record["reimport"] is True
 
 
-def test_an_event_that_changes_the_reason_refuses_the_reset(env, monkeypatch):
+def test_an_event_that_changes_the_reason_refuses_the_reset(env, real_cli):
     """The compared output does hold the reasons: one that changed is a dry run to show again."""
     _blocklisted_album()
-    cli = RealCli()
-    monkeypatch.setattr(env["jobs"], "_run_command", cli)
-    monkeypatch.delenv("PREFECT_API_URL", raising=False)
     client = env["client"]
     client.post("/mcp-api/run/reset_album", json={"query": "pastel"}, headers=WRITE)
     events.record("grab", "[GRAB]", source="albums", data={
@@ -366,11 +369,9 @@ def test_an_event_that_changes_the_reason_refuses_the_reset(env, monkeypatch):
     assert applied.json["status"] == "refused", applied.json
 
 
-def test_the_override_dry_run_passes_the_apply_gate(env, monkeypatch):
+def test_the_override_dry_run_passes_the_apply_gate(env, real_cli):
     with state.connect() as conn:
         state.put(conn, state.OVERRIDES_IMPORTED, {"at": "now"})
-    cli = RealCli()
-    monkeypatch.setattr(env["jobs"], "_run_command", cli)
     client = env["client"]
     body = {"album": "pastel", "words": "Pastel Blues"}
     dry = client.post("/mcp-api/run/set_search_override", json=body, headers=WRITE)

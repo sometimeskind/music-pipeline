@@ -30,6 +30,11 @@ OLD_ITEMS = ("Nothing is deleted now: the album's old items stay until an import
              "retire_item takes off.")
 
 
+@pytest.fixture(autouse=True)
+def _isolated(tmp_path, monkeypatch):
+    monkeypatch.setattr(albums, "OVERRIDES_FILE", tmp_path / "album-overrides.conf")
+
+
 def nilsson(**fields) -> dict:
     return {"artist": "Harry Nilsson", "name": "Nilsson Schmilsson", "status": albums.IMPORTED, "attempts": 2,
             "album_type": "album", "duration": 2815, "tracks_count": 10, "origin": albums.WANTS, "year": "1971",
