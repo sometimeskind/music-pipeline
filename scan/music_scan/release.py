@@ -13,6 +13,8 @@ record is that album, imported whole.  This module holds the library side of
   but unmatched is not missing.  It runs ``beet``'s own config and plugins in
   a subprocess (``python -m music_scan.release <dir>``), so beets' global state
   stays out of the service.
+- :func:`one_format` keeps the best format of a job that holds the same tracks
+  in several, before anything reads the job (homelab#2671).
 - :func:`import_rest` imports, as they are, the release's files the singleton
   import couldn't match and left in ``quarantine/usenet/<playlist>/<job>/``:
   every audio file of the release is part of the album.
@@ -132,16 +134,19 @@ import dataclasses
 import json
 import logging
 import os
+import re
 import shutil
 import subprocess
 import sys
 import tempfile
 import time
+import unicodedata
 from collections import Counter
 from pathlib import Path
 
 from music_fetch import events
 from music_fetch.state import primary_spotify
+from music_scan.library import LOSSLESS_FORMATS
 
 logger = logging.getLogger(__name__)
 
@@ -254,6 +259,157 @@ def import_rest(quarantine: Path, inbox: Path, playlist: str, job: str, run_impo
     return len(files)
 
 
+# Two encodes of one track can differ this much in seconds: album 1748's FLAC and MP3
+# were 2.7 s apart with the same AcoustID, so the duplicate check's 2 s would miss it.
+FORMAT_LENGTH_SLACK = 5.0
+# A file named for its track: ``01 - Ai No Corrida``, ``1. Velas``.
+FILE_TRACK = re.compile(r"(\d{1,3})[\s._-]+(.*\S)")
+# What a folder may say about its format alone (``FLAC``, ``MP3 320``, ``FLAC 24-96``,
+# ``Album [24bit 44.1kHz]``).  ``CD1``, ``Disc 2`` and ``Clean`` aren't here: such folders
+# hold different tracks.
+FORMAT_WORD = re.compile(r"flac|alac|mp3|m4a|aac|ogg|opus|wav|lossless|cbr|vbr|kbps|v[02]|\d{2,3}|\d{2}bit|"
+                         r"\d{1,3}k(bps|hz)?")
+
+
+@dataclasses.dataclass(frozen=True)
+class SourceFile:
+    """One audio file of a job as it arrived, before beets converts anything.
+    *title* and *album* have been through :func:`_fold`, *folder* through :func:`_folder`."""
+
+    path: Path
+    format: str
+    bitrate: int
+    length: float
+    folder: tuple[str, ...]
+    disc: int
+    track: int
+    title: str
+    album: str = ""
+    isrc: str = ""
+    recording: str = ""
+
+
+def _fold(text: str | None) -> str:
+    """*text* without case, accents, spaces or punctuation, so ``Betcha’ Wouldn’t`` meets
+    ``Betcha Wouldn't``.  Bracketed notes stay: ``Song (Clean)`` is not ``Song (Explicit)``."""
+    return "".join(c for c in unicodedata.normalize("NFKD", text or "").casefold() if c.isalnum())
+
+
+def _folder(parent: Path) -> tuple[str, ...]:
+    """*parent*, relative to the job, without the words that only name a format."""
+    parts = (" ".join(w for w in re.findall(r"[^\W_]+", part.casefold()) if not FORMAT_WORD.fullmatch(w))
+             for part in parent.parts)
+    return tuple(part for part in parts if part)
+
+
+def _source_file(f: Path, job: Path) -> SourceFile | None:
+    """*f*'s codec, bitrate and tags, ``None`` when unreadable.  An untagged file's
+    position and title come from its name, as beets' fromfilename takes them."""
+    from mediafile import MediaFile  # noqa: PLC0415
+
+    from music_scan.music_pipeline import own_title  # noqa: PLC0415
+
+    try:
+        mf = MediaFile(str(f))
+    except Exception:
+        return None
+    named = FILE_TRACK.fullmatch(f.stem)
+    track = mf.track or (int(named[1]) if named else 0)
+    title = own_title(mf.title, track) or (own_title(named[2], track) if named else None)
+    return SourceFile(f, mf.format, mf.bitrate or 0, mf.length or 0.0, _folder(f.parent.relative_to(job)),
+                      mf.disc or 1, track, _fold(title), _fold(mf.album), (mf.isrc or "").upper(), mf.mb_trackid or "")
+
+
+def _quality(files: list[SourceFile]) -> tuple[bool, float]:
+    """A format's rank: lossless first, then its files' mean bitrate."""
+    return files[0].format in LOSSLESS_FORMATS, sum(f.bitrate for f in files) / len(files)
+
+
+def _describe(name: str, files: list[SourceFile]) -> str:
+    return f"{name} ({round(_quality(files)[1] / 1000)} kbps)"
+
+
+def _tracks(files: list[SourceFile]) -> dict[tuple, SourceFile] | None:
+    """*files* by position and title together, ``None`` when any lacks one or two
+    share them: the files of two discs with no disc numbers, say."""
+    tracks = {(f.folder, f.disc, f.track, f.title): f for f in files}
+    return tracks if len(tracks) == len(files) and all(f.track and f.title for f in files) else None
+
+
+def _differ(a: SourceFile, b: SourceFile) -> str | None:
+    """Why two files at one position with one title may still be two tracks."""
+    name = f"{a.path.name} and {b.path.name}"
+    if abs(a.length - b.length) > FORMAT_LENGTH_SLACK:
+        return f"{name} differ in length ({a.length:.0f} s, {b.length:.0f} s)"
+    if a.album and b.album and a.album != b.album:
+        return f"{name} name different albums"
+    if a.isrc and b.isrc and a.isrc != b.isrc:
+        return f"{name} hold different ISRCs"
+    if a.recording and b.recording and a.recording != b.recording:
+        return f"{name} name different recordings"
+    return None
+
+
+def _apart(best: list[SourceFile], other: list[SourceFile]) -> str | None:
+    """Why two of a job's formats may not be the same tracks; ``None`` when every
+    file of each has its twin in the other.  The album is the unit: one track
+    without a twin leaves the whole job as it is."""
+    a, b = _tracks(best), _tracks(other)
+    if a is None or b is None:
+        return "a file has no position or title, or shares them"
+    if a.keys() != b.keys():
+        return "their tracks differ"
+    return next(filter(None, (_differ(a[k], b[k]) for k in a)), None)
+
+
+def one_format(job: Path, key: str, replaced_dir: Path | None = None, read=_source_file) -> dict | None:
+    """Keep one format of a job that holds the same tracks in several (homelab#2671),
+    and return ``{"kept": …, "dropped": […], "tracks": n}``; ``None`` when nothing went.
+    Some uploads hold a FLAC set and an MP3 set of one album, which beets imports side
+    by side: each track twice, and the number rung then links neither (``several items``).
+
+    It judges the source files, before beets' convert makes a FLAC an ``.m4a`` like any
+    other: lossless first, then bitrate.  Two formats are one album only when every file
+    has a twin at the same disc, track and title, in the same folder but for format
+    words, with the length (:data:`FORMAT_LENGTH_SLACK`) and any album, ISRC or recording
+    tags agreeing.  Anything less (a clean and an explicit set, a disc 2 reusing the
+    numbers, a real alternate take, a bonus track on one side) imports everything, as
+    before, and is logged.  This never merges two files on a title alone.  What can't
+    tell them apart: a clean and an explicit set in different formats with identical
+    tags, in one folder, where nothing says which is which.
+
+    The lesser formats go to ``retired/`` under *replaced_dir*, not away: no ID proves
+    the match, so ``keep_quarantined`` can rescue a file until the purge deletes it."""
+    sources = [read(f, job) for f in audio_files(job)]
+    formats: dict[str, list[SourceFile]] = {}
+    for source in sources:
+        if source is not None:
+            formats.setdefault(source.format, []).append(source)
+    if len(formats) < 2:
+        return None
+    ranked = sorted(formats.items(), key=lambda item: (_quality(item[1]), item[0]), reverse=True)
+    best = ranked[0][1]
+    why = "a file is unreadable" if None in sources else None
+    if not why and any(f.format not in LOSSLESS_FORMATS and not f.bitrate for f in sources):
+        why = "a file has no bitrate"
+    why = why or next(filter(None, (_apart(best, files) for _, files in ranked[1:])), None)
+    if why:
+        logger.info("[FORMAT] %s holds %s, but %s; importing them all", job.name,
+                    " and ".join(name for name, _ in ranked), why)
+        return None
+    if replaced_dir is None:
+        from music_scan.audit import REPLACED as replaced_dir  # noqa: PLC0415
+    from music_scan.dupes import _free  # noqa: PLC0415
+
+    for _, files in ranked[1:]:
+        for source in files:
+            # Not a bare number: the purge reads a leading number as the item this file was.
+            dest = _free(replaced_dir / RETIRED / f"album{key}-{source.path.name}")
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            shutil.move(str(source.path), dest)
+    return {"kept": _describe(*ranked[0]), "dropped": [_describe(*item) for item in ranked[1:]], "tracks": len(best)}
+
+
 def claim(items, playlist: str, since: float, key: str, guid: str, job: str) -> list:
     """Stamp the usenet *items* of *playlist* imported from job folder *job*
     since *since* that no record holds yet with ``album_record`` *key* and
@@ -324,7 +480,8 @@ def claim_fallback(items, records: dict[str, dict]) -> list:
 EXTRA = "album_extra"
 # The IDs of the kept release's items an extra shares a title with (#306).
 TWIN = "album_extra_twin"
-# Under quarantine/replaced/: the files a person retired by hand (homelab#2648).
+# Under quarantine/replaced/: the files dropped on purpose, which nothing supersedes: those a
+# person retired by hand (homelab#2648), and a job's lesser formats (homelab#2671).
 RETIRED = "retired"
 
 
@@ -1054,7 +1211,7 @@ def purge_replaced(replaced_dir: Path, library, days: int, now: float | None = N
             continue
         if due:
             purged += 1
-            message = (f"[PURGE] {f}: retired by hand {days}+ days ago" if retired(f) else
+            message = (f"[PURGE] {f}: retired {days}+ days ago" if retired(f) else
                        f"[PURGE] {f}: superseded {days}+ days ago, the library holds its recording")
             logger.info("  %s", message)
             _purged_event(f, tags, message, days=days)
