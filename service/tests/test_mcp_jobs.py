@@ -91,6 +91,15 @@ def test_dry_run_records_its_output_and_hash(make, tmp_path):
     assert (tmp_path / ".mcp-jobs" / f"{job['job_id']}.log").exists()
 
 
+def test_a_musicbrainz_retry_is_not_part_of_the_dry_run_hash():
+    """backfill_album_ids logged 9 retries on one dry run and 10 on the next, with the same
+    links, and the apply was refused (homelab#2664)."""
+    plain = ["[LINK] 1748 Razzamatazz", "Linked 1"]
+    retried = ["[2026-11-05T19:50:00+0000]   [MB-503] /recording/x: MusicBrainz is busy; retrying in 1s", *plain]
+    assert output_hash(retried) == output_hash(plain)
+    assert output_hash(["[LINK] 1748 Velas", "Linked 1"]) != output_hash(plain)
+
+
 def test_a_finished_job_records_an_mcp_job_event(make, monkeypatch):
     from music_service import mcp_jobs
 

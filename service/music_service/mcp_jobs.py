@@ -76,6 +76,9 @@ PAGE_BYTES = 32 * 1024
 _LOG_PREFIX = re.compile(r"^\[\d{4}-\d{2}-\d{2}T[^\]]*\]\s?")
 _ONLY_TIMESTAMP = re.compile(r"^\s*\[?\d{4}-\d{2}-\d{2}[T ][\d:.]+(Z|[+-]\d{2}:?\d{2})?\]?\s*$")
 # "[2026-11-01T10:00:00+0000] [PROGRESS] 500/9210, 9 flagged so far"
+# "  [MB-503] /recording/x: MusicBrainz is busy; retrying in 1s": how busy MusicBrainz was,
+# which differs on every run and changes nothing the tool would do.
+_MB_RETRY = re.compile(r"^\s*\[MB-503\] ")
 _PROGRESS = re.compile(r"^(?:\[(?P<at>\d{4}-\d{2}-\d{2}T[^\]]*)\]\s?)?(?P<line>\[PROGRESS\] (?P<done>\d+)/(?P<total>\d+).*)$")
 
 
@@ -96,10 +99,10 @@ def _parse(t: str | None) -> datetime | None:
 
 
 def output_hash(lines: list[str]) -> str:
-    """The hash an apply compares: each line without its log timestamp, and no
-    line that is only a timestamp."""
+    """The hash an apply compares: each line without its log timestamp, and no line
+    that is only a timestamp or a MusicBrainz retry."""
     kept = [_LOG_PREFIX.sub("", line) for line in lines]
-    kept = [line for line in kept if not _ONLY_TIMESTAMP.match(line)]
+    kept = [line for line in kept if not _ONLY_TIMESTAMP.match(line) and not _MB_RETRY.match(line)]
     return "sha256:" + hashlib.sha256("\n".join(kept).encode()).hexdigest()
 
 
