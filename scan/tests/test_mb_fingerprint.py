@@ -1214,10 +1214,10 @@ def test_a_recording_with_several_credited_artists_keeps_them_all():
                           ("The Band", "The Band", "Band, The", BAND, " feat. "),
                           ("Kid", "The Kid", "Kid, The", KID, ""))
     changes = mbf.aligned_artists(item, recording)
-    assert changes["artist"][1] == "Bruce Springsteen & The Band feat. The Kid"
+    assert changes["artist"][1] == "Bruce & The Band feat. Kid"
     assert changes["artist_credit"][1] == "Bruce & The Band feat. Kid"
     assert changes["artist_sort"][1] == "Springsteen, Bruce & Band, The feat. Kid, The"
-    assert changes["artists"][1] == ["Bruce Springsteen", "The Band", "The Kid"]
+    assert changes["artists"][1] == ["Bruce", "The Band", "Kid"]
     assert changes["artists_credit"][1] == ["Bruce", "The Band", "Kid"]
     assert changes["artists_sort"][1] == ["Springsteen, Bruce", "Band, The", "Kid, The"]
     assert changes["mb_artistids"][1] == [BOSS, BAND, KID] and changes["mb_artistid"][1] == BOSS
@@ -1304,8 +1304,8 @@ def test_the_artist_tags_reach_the_file(tmp_path, clip):
         item.store()
         assert item.try_write()
         tags = MediaFile(str(path))
-        assert tags.artist == "Bruce SpringsteenClarence Clemons"
-        assert tags.artists == ["Bruce Springsteen", "Clarence Clemons"]
+        assert tags.artist == "Bruce SpringsteenClarence"
+        assert tags.artists == ["Bruce Springsteen", "Clarence"]
         assert tags.mb_artistids == [BOSS, "id-c"]
         assert tags.mb_artistid == BOSS
     finally:
@@ -1329,3 +1329,41 @@ def test_setting_the_recording_an_item_already_holds_still_aligns_the_artist_fie
     caplog.clear()
     assert mbf.set_recording_on(FakeLib([item]), 18518, FIRE_BOSS, lambda _: recording) is False
     assert f"holds {FIRE_BOSS}, set by hand, already" in caplog.text  # once aligned, nothing to do
+
+
+def _slow_jamz(**data):
+    """Item 4565: MusicBrainz names the artist Ye now, and the recording credits Kanye West."""
+    return FakeItem(4565, "Slow Jamz", **data)
+
+
+SLOW_JAMZ_IDS = ["164f0d73-1234-4e2c-8743-d77bf2191051", "0bc858a1-3573-4216-9423-c96dd8c72919"]
+SLOW_JAMZ = {"artist-credit": [
+    {"name": "Kanye West", "joinphrase": " feat. ",
+     "artist": {"id": SLOW_JAMZ_IDS[0], "name": "Ye", "sort-name": "Ye"}},
+    {"name": "Twista", "joinphrase": "",
+     "artist": {"id": SLOW_JAMZ_IDS[1], "name": "Twista", "sort-name": "Twista"}},
+]}
+
+
+def test_the_artist_tags_take_the_name_the_recording_credits():
+    changes = mbf.aligned_artists(_slow_jamz(artist="Twista"), SLOW_JAMZ)
+
+    assert changes["artist"] == ("Twista", "Kanye West feat. Twista")
+    assert changes["artists"][1] == ["Kanye West", "Twista"]
+    assert changes["artist_sort"][1] == "Ye feat. Twista"
+
+
+def test_an_item_set_with_the_artists_current_names_takes_the_credit():
+    """Set before this rule: the same artists, so only the spelling is left to fix."""
+    item = _slow_jamz(artist="Ye feat. Twista", mb_artistids=SLOW_JAMZ_IDS, artists=["Ye", "Twista"])
+
+    changes = mbf.aligned_artists(item, SLOW_JAMZ)
+
+    assert changes["artist"] == ("Ye feat. Twista", "Kanye West feat. Twista")
+    assert changes["artists"] == (["Ye", "Twista"], ["Kanye West", "Twista"])
+
+
+def test_an_alias_of_the_same_artists_stays():
+    item = _slow_jamz(artist="Kanye feat. Twista", mb_artistids=SLOW_JAMZ_IDS)
+
+    assert mbf.aligned_artists(item, SLOW_JAMZ) == {}
