@@ -125,6 +125,8 @@ History comes from the event store (`music_fetch.events`, the `music` database's
 
 A track the import's duplicate check imports beside a library item is `import_alongside` (the same recording) or `kept_apart` (same artist and title, no shared ID), one event per item it goes beside, on the imported item: `data.why`, and `data.duplicate` for the library item.
 
+A job that held the same tracks in several formats, of which only the best was imported, is `format_dropped` on the album (homelab#2671): `data.kept`, `data.dropped` (each a format and its mean bitrate), `data.tracks` and `data.release`. An uncertain job imports every file and records no event, only a `[FORMAT]` log line.
+
 When the event store can't be read (unset, or the database is down): `503 {"status": "unavailable", "error": "…"}`.
 
 ### `GET /mcp-api/album_history?query=Q[&since=T][&offset=N]` (`album_history`)
