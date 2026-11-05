@@ -260,8 +260,8 @@ def import_rest(quarantine: Path, inbox: Path, playlist: str, job: str, run_impo
 
 
 # Two encodes of one track can differ this much in seconds: album 1748's FLAC and MP3
-# were 2.7 s apart with the same AcoustID, so the duplicate check's 2 s would miss it.
-FORMAT_LENGTH_SLACK = 5.0
+# were up to 5.8 s apart with the same AcoustID, so the duplicate check's 2 s would miss them.
+FORMAT_LENGTH_SLACK = 8.0
 # A file named for its track: ``01 - Ai No Corrida``, ``1. Velas``.
 FILE_TRACK = re.compile(r"(\d{1,3})[\s._-]+(.*\S)")
 # What a folder may say about its format alone (``FLAC``, ``MP3 320``, ``FLAC 24-96``,
