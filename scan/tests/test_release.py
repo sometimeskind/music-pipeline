@@ -1214,12 +1214,13 @@ def test_own_release_is_the_newest_started_by_imported_at() -> None:
 
 # --- one format per job (homelab#2671) ---
 
-# Album 1748's nine tracks.  The first two lengths are the library's, MP3 second: the two
-# encodes were up to 2.7 s apart, either way.  Its apostrophes differed between the copies too.
+# Album 1748's nine tracks, with the library's lengths, MP3 second (the FLAC's through its
+# .m4a): up to 5.8 s apart, either way.  Its apostrophes differed between the copies too.
 THE_DUDE = [
-    ("Ai No Corrida", 386.85, 389.0), ("Dude", 337.69, 335.0), ("Just Once", 276.0, 277.0),
-    ("Betcha’ Wouldn’t Hurt Me", 244.0, 245.0), ("Something Special", 300.0, 301.0), ("Razzamatazz", 263.0, 264.0),
-    ("One Hundred Ways", 257.0, 258.0), ("Velas", 240.0, 241.0), ("Turn On The Action", 280.0, 281.0),
+    ("Ai No Corrida", 386.85, 389.0), ("Dude", 337.69, 335.0), ("Just Once", 273.46, 271.0),
+    ("Betcha’ Wouldn’t Hurt Me", 214.16, 216.25), ("Something Special", 237.85, 237.76),
+    ("Razzamatazz", 255.86, 250.07), ("One Hundred Ways", 259.02, 259.04), ("Velas", 245.85, 245.83),
+    ("Turn On The Action", 260.02, 257.0),
 ]
 
 
