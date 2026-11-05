@@ -419,7 +419,8 @@ Without `--youtube` spotdl searches again and usually picks the same video; the 
 ```bash
 kubectl exec -n <ns> deploy/music-pipeline -- music-audit-dupes --fingerprint           # count items without a fingerprint
 kubectl exec -n <ns> deploy/music-pipeline -- music-audit-dupes --fingerprint --apply   # fingerprint and store them
-kubectl exec -n <ns> deploy/music-pipeline -- music-audit-dupes --fingerprint 873 615 --apply  # refingerprint these items
+kubectl exec -n <ns> deploy/music-pipeline -- music-audit-dupes --fingerprint 873 615 --apply  # refingerprint these items (the MCP's fingerprint_items)
+kubectl exec -n <ns> deploy/music-pipeline -- music-audit-dupes --compare 534 18521     # read-only: are these two the same audio (the MCP's compare_items)
 kubectl exec -n <ns> deploy/music-pipeline -- music-audit-dupes                         # dry run: both tiers with evidence
 kubectl exec -n <ns> deploy/music-pipeline -- music-audit-dupes --apply                 # merge the certain tier
 kubectl exec -n <ns> deploy/music-pipeline -- music-audit-dupes --merge 2898 92         # dry run: merge 92 onto 2898

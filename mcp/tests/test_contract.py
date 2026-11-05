@@ -158,7 +158,7 @@ async def test_history_reads(pipeline_url):
 async def test_a_read_caller_runs_the_audits(pipeline_url):
     async with Client(server(pipeline_url, PILOT)) as c:
         for tool, args in [("audit_want_albums", {}), ("audit_dupes", {}), ("audit_lengths", {"silence": True}), ("audit_titles", {}),
-                           ("audit_artists", {}), ("audit_grabs", {}),
+                           ("audit_artists", {}), ("audit_grabs", {}), ("compare_items", {"ids": [18521, 534]}),
                            ("check_release", {"album": "pastel", "title": "Nina Simone-Pastel Blues-FLAC"}),
                            ("audit_releases", {"replaced_query": ""})]:
             job = await finish(c, (await c.call_tool(tool, args)).data)
@@ -221,6 +221,7 @@ async def test_the_other_write_tools_dry_run(pipeline_url):
         for tool, args, normalised in [
             ("requeue_albums", {"ids": ["ALB3", "ALB2", "ALB3"]}, {"ids": ["ALB2", "ALB3"], "since": None}),
             ("merge_items", {"pairs": [[1, 2]]}, {"pairs": [[1, 2]]}),
+            ("fingerprint_items", {"ids": [18521, 534, 534]}, {"ids": [534, 18521]}),
             ("embed_covers", {}, {}),
             ("canon_albums", {"mb_budget": 3}, {"refresh": False, "search_budget": None, "mb_budget": 3}),
         ]:

@@ -14,7 +14,8 @@ Say what should change and when, and offer to check then.
   `replace_item`, `embed_covers`. `unlink_spotify_id` and `retire_item` regenerate the `.m3u` files themselves, so
   `get_playlist` shows the slot on its new item at once. `set_recording` shows in `get_item` at once
   (`mb_trackid` and the recording_set field both the new recording, `isrc` and
-  `mb_releasetrackid` as its dry run said) and in `album_history` as a recording_set event. Check the item afterwards with `get_item`, or the album with
+  `mb_releasetrackid` as its dry run said) and in `album_history` as a recording_set event. `fingerprint_items`
+  ends with how many it stored, and `compare_items` can use them at once. Check the item afterwards with `get_item`, or the album with
   `get_album`.
 - **Overrides, holds and pins** apply from the next run that reads them: a search override at
   the next tick (`get_album`'s `query` changes once it searches; a `missing` album is searched

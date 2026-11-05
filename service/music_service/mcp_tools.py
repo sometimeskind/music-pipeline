@@ -160,17 +160,6 @@ def _apply(argv: list[str], apply: bool, *values: str) -> list[str]:
     return [*argv, *(["--apply"] if apply else []), *(["--", *values] if values else [])]
 
 
-def _audit_dupes(body: dict, _: Albums) -> dict:
-    _only(body, "fingerprint_ids")
-    ids = body.get("fingerprint_ids")
-    return {"fingerprint_ids": None if ids is None else _ids(ids, "fingerprint_ids")}
-
-
-def _audit_dupes_argv(args: dict, _: bool) -> list[list[str]]:
-    ids = args["fingerprint_ids"]
-    return [["music-audit-dupes"] if ids is None else ["music-audit-dupes", "--fingerprint", *map(str, ids)]]
-
-
 def _audit_lengths(body: dict, _: Albums) -> dict:
     _only(body, "silence")
     return {"silence": _bool(body, "silence")}
@@ -274,6 +263,22 @@ def _unlink(body: dict, _: Albums) -> dict:
 def _item_only(body: dict, _: Albums) -> dict:
     _only(body, "id")
     return {"id": _id(body.get("id"), "id")}
+
+
+def _compare_items(body: dict, _: Albums) -> dict:
+    _only(body, "ids")
+    ids = _ids(body.get("ids"), "ids")
+    if len(ids) != 2:
+        raise BadRequest("ids must name two different items")
+    return {"ids": ids}
+
+
+def _fingerprint_items(body: dict, _: Albums) -> dict:
+    _only(body, "ids")
+    ids = _ids(body.get("ids"), "ids")
+    if not ids:
+        raise BadRequest("ids must name at least one item")
+    return {"ids": ids}
 
 
 def _set_recording(body: dict, _: Albums) -> dict:
@@ -547,7 +552,10 @@ def _apply_recheck(body: dict, _: Albums) -> dict:
 
 
 TOOLS: dict[str, Tool] = {t.name: t for t in [
-    Tool("audit_dupes", READ, _audit_dupes, _audit_dupes_argv),
+    Tool("audit_dupes", READ, _none, lambda a, _: [["music-audit-dupes"]]),
+    # Two items' audio, as the audit would judge them (homelab#2653).
+    Tool("compare_items", READ, _compare_items,
+         lambda a, _: [["music-audit-dupes", "--compare", *map(str, a["ids"])]]),
     Tool("audit_lengths", READ, _audit_lengths,
          lambda a, _: [["music-audit-lengths", "--silence"] if a["silence"] else ["music-audit-lengths"]]),
     Tool("audit_releases", READ, _audit_releases, _audit_releases_argv),
@@ -584,6 +592,11 @@ TOOLS: dict[str, Tool] = {t.name: t for t in [
     # One Spotify ID off one item (homelab#2530); the ID is base62, never a flag.
     Tool("unlink_spotify_id", WRITE, _unlink,
          lambda a, apply: [_apply(["music-audit-dupes", "--unlink", str(a["id"]), a["track"]], apply)],
+         ("pipeline",)),
+    # Given items' fingerprints (homelab#2653): the database only, but every scan's retire_held
+    # merges on them, so a write. The IDs are integers, never flags.
+    Tool("fingerprint_items", WRITE, _fingerprint_items,
+         lambda a, apply: [_apply(["music-audit-dupes", "--fingerprint", *map(str, a["ids"])], apply)],
          ("pipeline",)),
     # One item's recording by hand (homelab#2583); the MBID is hex and dashes, never a flag.
     Tool("set_recording", WRITE, _set_recording,
