@@ -670,22 +670,25 @@ def test_count_lossless_items_returns_none_when_library_unreadable() -> None:
 
 
 def _lib_item(title, *, isrc="", spotify_ids="", via="usenet", added=100.0, disc=1, track=1, tracktotal=2,
-              artist="Artist"):
+              artist="Artist", id=None, **fields):
     it = mock.MagicMock(title=title, artist=artist, albumartist="Artist", added=added,
                         disc=disc, track=track, tracktotal=tracktotal)
-    data = {"isrc": isrc, "spotify_ids": spotify_ids, "via": via, "sources": "later"}
+    if id is not None:
+        it.id = id
+    data = {"isrc": isrc, "spotify_ids": spotify_ids, "via": via, "sources": "later", **fields}
     it.get.side_effect = lambda k, d=None: data.get(k, d)
     it.__setitem__.side_effect = lambda k, v: data.__setitem__(k, v)
     it.data = data
     return it
 
 
-def _tag(items, tracks, since=50.0, tracks_count=2):
+def _tag(items, tracks, since=50.0, tracks_count=2, recordings=lambda _: None, library=None):
     from music_scan.scan import tag_album_ids
 
     lib = mock.MagicMock()
     lib.items_by_source.return_value = items
-    return tag_album_ids(lib, "later", tracks, since, tracks_count)
+    lib.all_items.return_value = items if library is None else library
+    return tag_album_ids(lib, "later", tracks, since, tracks_count, recordings=recordings)
 
 
 def test_tag_album_ids_prefers_isrc_over_track_number() -> None:
@@ -748,11 +751,217 @@ def test_tag_album_ids_records_one_id_linked_event_per_album(monkeypatch) -> Non
     assert recorded == []
 
 
-def test_tag_album_ids_track_number_needs_same_edition_and_this_import() -> None:
-    deluxe = _lib_item("Uno", track=1, tracktotal=18)
-    older = _lib_item("Dos", track=1, added=10.0)
-    spotdl = _lib_item("Tres", track=1, via="spotdl")
-    assert _tag([deluxe, older, spotdl], [["One", "Artist", "sid1", None, 1, 1]]) == 0
+def test_tag_album_ids_track_number_needs_this_import_and_a_usenet_item() -> None:
+    older = _lib_item("One", track=1, added=10.0)
+    spotdl = _lib_item("One", track=1, via="spotdl")
+    assert _tag([older, spotdl], [["One", "Artist", "sid1", None, 1, 1]]) == 0
+
+
+# The real items of homelab#2664, read with get_item and get_album on 2026-11-05: disc 0 and
+# tracktotal 0 on all of them, as on most Usenet files.
+def _usenet(title, track, **fields):
+    return _lib_item(title, disc=0, track=track, tracktotal=0, **fields)
+
+
+DAVID = ["David", "Lorde", "6ghDayhHeBXAP4OOnnrFW9", "NZUM72500030", 1, 11]
+ATMOS = {"5cea8039": {"isrcs": ["NZUM72500041"], "disambiguation": "Dolby Atmos mix"}}
+WABBITZ = ["Huntin’ Wabbitz", "J. Cole", "2cH8wHImerFokgmhjyhCTU", "USUG12402405", 1, 4]
+CLEAN = {"f56be6fe": {"isrcs": ["USUG12402418"], "disambiguation": "clean"}}
+
+
+def test_tag_album_ids_david_links_because_a_two_channel_file_is_not_the_atmos_mix() -> None:
+    """A CD rip took the Dolby Atmos mix's recording and ISRC from beets' singleton guess."""
+    david = _usenet("David", 11, isrc="NZUM72500041", mb_trackid="5cea8039", channels=2)
+    assert _tag([david], [DAVID], tracks_count=11, recordings=ATMOS.get) == 1
+    assert david.data["spotify_ids"] == "6ghDayhHeBXAP4OOnnrFW9"
+
+
+def test_tag_album_ids_a_real_surround_file_keeps_its_isrc() -> None:
+    surround = _usenet("David", 11, isrc="NZUM72500041", mb_trackid="5cea8039", channels=6)
+    assert _tag([surround], [DAVID], tracks_count=11, recordings=ATMOS.get) == 0
+    assert surround.data["spotify_ids"] == ""
+
+
+def test_tag_album_ids_falling_down_links_with_no_isrc_on_the_item() -> None:
+    """The file has no ISRC and the release 12 of Spotify's 13 tracks: position and title link it."""
+    item = _usenet("Falling Down", 4)
+    entry = ["Falling Down", "Muse", "3vMrcGW4o35zY6vXjWb1p7", "GBCVT9900017", 1, 4]
+    assert _tag([item], [entry], tracks_count=13) == 1
+    assert item.data["spotify_ids"] == "3vMrcGW4o35zY6vXjWb1p7"
+
+
+def test_tag_album_ids_a_renumbered_track_does_not_link(caplog) -> None:
+    """Jerry Harrison's *Walk On Water*: the release has 13 tracks and Spotify 11.  *Sleep Angel*
+    is 5 on both.  *Never Let It Slip* is 7 here and 8 there, and 8 here is another song."""
+    angel = _usenet("Sleep Angel", 5, id=21140)
+    slip = _usenet("Never Let It Slip", 7, id=21142)
+    cowboy = _usenet("Cowboy's Got to Go", 8, id=21143)
+    tracks = [["Sleep Angel", "Jerry Harrison", "7fmjEsUxObm3zh5JKT2kMR", "GBUM70501079", 1, 5],
+              ["Never Let It Slip", "Jerry Harrison", "2Ya4yE3bFfMGKMIRQ53sOc", "GBUM70501082", 1, 8]]
+    with caplog.at_level("INFO", logger="music_scan.scan"):
+        assert _tag([angel, slip, cowboy], tracks, tracks_count=11) == 1
+    assert angel.data["spotify_ids"] == "7fmjEsUxObm3zh5JKT2kMR"
+    assert slip.data["spotify_ids"] == cowboy.data["spotify_ids"] == ""
+    assert "[NUMBER]" in caplog.text and "Cowboy's Got to Go" in caplog.text
+
+
+def test_tag_album_ids_a_title_alone_does_not_link(caplog) -> None:
+    item = _usenet("Falling Down", 5)
+    with caplog.at_level("INFO", logger="music_scan.scan"):
+        assert _tag([item], [["Falling Down", "Muse", "sid", None, 1, 4]], tracks_count=13) == 0
+    assert item.data["spotify_ids"] == ""
+    assert "[NOID]" in caplog.text
+
+
+def test_tag_album_ids_a_position_alone_does_not_link() -> None:
+    item = _usenet("Cave", 4)
+    assert _tag([item], [["Falling Down", "Muse", "sid", None, 1, 4]], tracks_count=13) == 0
+    assert item.data["spotify_ids"] == ""
+
+
+def test_tag_album_ids_huntin_wabbitz_stays_empty_as_nothing_says_which_version_the_file_is(monkeypatch, caplog) -> None:
+    """Clean and explicit: one AcoustID track, one length, and this release's items hold ISRCs
+    of both, so the disagreement can't be read either way and the entry stays empty."""
+    from music_scan import scan
+
+    recorded = []
+    monkeypatch.setattr(scan.events, "record", lambda kind, message, **kw: recorded.append(kw))
+    item = _usenet("Huntin’ Wabbitz", 4, isrc="USUG12402418", mb_trackid="f56be6fe", channels=2, id=21753)
+    with caplog.at_level("INFO", logger="music_scan.scan"):
+        assert _tag([item], [WABBITZ], tracks_count=12, recordings=CLEAN.get) == 0
+    assert item.data["spotify_ids"] == ""
+    assert "[NOID]" in caplog.text and "USUG12402418" in caplog.text
+    skip, = recorded[0]["data"]["skipped"]
+    assert (skip["why"], skip["item_id"], skip["isrc"]) == ("number, other isrc", 21753, "USUG12402405")
+
+
+def test_tag_album_ids_disagreeing_isrcs_stay_empty_when_musicbrainz_cant_be_asked() -> None:
+    item = _usenet("David", 11, isrc="NZUM72500041", mb_trackid="5cea8039", channels=2)
+    assert _tag([item], [DAVID], tracks_count=11, recordings=lambda _: None) == 0
+    no_recording = _usenet("David", 11, isrc="NZUM72500041", channels=2)
+    assert _tag([no_recording], [DAVID], tracks_count=11, recordings=ATMOS.get) == 0
+
+
+def test_tag_album_ids_two_isrcs_of_one_recording_link() -> None:
+    item = _usenet("One", 1, isrc="USMB1", mb_trackid="rec")
+    assert _tag([item], [["One", "Artist", "sid", "GBS1", 1, 1]],
+                recordings={"rec": {"isrcs": ["USMB1", "GBS1"]}}.get) == 1
+
+
+def test_tag_album_ids_disagreeing_isrcs_veto_a_same_edition_link_too() -> None:
+    item = _lib_item("One", isrc="USMB1", mb_trackid="rec")
+    assert _tag([item], [["One", "Artist", "sid", "GBS1", 1, 1]], recordings={"rec": {"isrcs": ["USMB1"]}}.get) == 0
+
+
+def test_tag_album_ids_a_version_only_one_side_names_does_not_link() -> None:
+    live = _usenet("One (Live at Leeds)", 1)
+    assert _tag([live], [["One", "Artist", "sid", None, 1, 1]]) == 0
+    assert live.data["spotify_ids"] == ""
+    on_a_live_album = _usenet("One (Live)", 1, album="Live at Leeds")
+    assert _tag([on_a_live_album], [["One", "Artist", "sid", None, 1, 1]]) == 1
+
+
+def test_tag_album_ids_disc_0_on_several_discs_the_title_picks_the_item() -> None:
+    """Each disc numbers from 1 and no file says its disc, so both track 3s meet at disc 1."""
+    first = _usenet("Foo", 3, id=1)
+    second = _usenet("Bar", 3, id=2)
+    assert _tag([first, second], [["Foo", "Artist", "sid-foo", None, 1, 3]], tracks_count=20) == 1
+    assert (first.data["spotify_ids"], second.data["spotify_ids"]) == ("sid-foo", "")
+
+
+def test_tag_album_ids_disc_0_counts_as_disc_1_so_a_later_disc_finds_nothing(caplog) -> None:
+    item = _usenet("Bar", 3)
+    with caplog.at_level("INFO", logger="music_scan.scan"):
+        assert _tag([item], [["Bar", "Artist", "sid", None, 2, 3]], tracks_count=20) == 0
+    assert item.data["spotify_ids"] == ""
+    assert "[NOID]" in caplog.text
+
+
+def test_tag_album_ids_disc_0_with_one_title_twice_links_neither(caplog) -> None:
+    """A song on both discs, at one track number: the slot can't tell them apart."""
+    a, b = _usenet("Foo", 3, id=1), _usenet("Foo (Demo)", 3, id=2, album="Foo Demos")
+    with caplog.at_level("INFO", logger="music_scan.scan"):
+        assert _tag([a, b], [["Foo", "Artist", "sid", None, 1, 3]], tracks_count=20) == 0
+    assert a.data["spotify_ids"] == b.data["spotify_ids"] == ""
+    assert "[1, 2]" in caplog.text
+
+
+def test_tag_album_ids_a_real_disc_number_that_differs_does_not_link() -> None:
+    item = _lib_item("Foo", disc=2, track=3, tracktotal=0)
+    assert _tag([item], [["Foo", "Artist", "sid", None, 1, 3]], tracks_count=20) == 0
+
+
+def test_tag_album_ids_an_isrc_tie_with_disc_0_is_told_apart_by_track() -> None:
+    a, b = _usenet("Foo", 1, isrc="X"), _usenet("Foo", 2, isrc="X")
+    assert _tag([a, b], [["Foo", "Artist", "sid", "X", 1, 2]]) == 1
+    assert (a.data["spotify_ids"], b.data["spotify_ids"]) == ("", "sid")
+
+
+def test_tag_album_ids_a_link_the_numbering_doesnt_back_never_supersedes() -> None:
+    """homelab#2664: supersede's first rung moves a loose copy on a shared ID, and leaves words_ids out."""
+    from music_scan.supersede import _id_rung
+
+    item = _usenet("One", 1)
+    assert _tag([item], [["One", "Artist", "sid", None, 1, 1]]) == 1
+    assert item.data["words_ids"] == "sid"
+    loose = _lib_item("One", spotify_ids="sid", via="spotdl")
+    loose.length = item.length = 200.0
+    assert _id_rung(loose, item) is None
+
+
+def test_tag_album_ids_a_link_the_numbering_doesnt_back_leaves_a_held_entry_alone(caplog) -> None:
+    """The entry isn't empty, and a shared ID would retire, supersede or merge the other copy."""
+    item = _usenet("One", 1, id=1)
+    loose = _lib_item("One", spotify_ids="sid", via="spotdl", id=2, sources="other")
+    with caplog.at_level("INFO", logger="music_scan.scan"):
+        assert _tag([item], [["One", "Artist", "sid", None, 1, 1]], library=[item, loose]) == 0
+    assert item.data["spotify_ids"] == ""
+    assert "already holds it" in caplog.text
+    backed = _lib_item("One", id=3)
+    assert _tag([backed], [["One", "Artist", "sid", None, 1, 1]], library=[backed, loose]) == 1
+
+
+def test_tag_album_ids_logs_a_track_no_rung_links_as_skipped(monkeypatch, caplog) -> None:
+    """homelab#2664: the gap shows, with or without a position to look at."""
+    from music_scan import scan
+
+    recorded = []
+    monkeypatch.setattr(scan.events, "record", lambda kind, message, **kw: recorded.append((message, kw)))
+    tracks = [["Gone", "Artist", "sid1", None, 1, 9], ["Old", "Artist", "sid2"]]
+    with caplog.at_level("INFO", logger="music_scan.scan"):
+        assert _tag([_lib_item("One")], tracks) == 0
+    assert caplog.text.count("[NOID]") == 2
+    (message, kw), = recorded
+    assert message == "[IDS] later: 0 Spotify track ID(s) linked to this release's items, 2 left without one"
+    assert [(s["song_id"], s["why"]) for s in kw["data"]["skipped"]] == [("sid1", "no item"), ("sid2", "no item")]
+
+
+def test_add_source_title_words_give_the_source_and_no_id() -> None:
+    """J. Cole's 3001 took the explicit entry's ID this way, on a second playlist only, while the
+    first playlist's *Huntin' Wabbitz* got none: #279 holds for every playlist."""
+    from music_scan.scan import add_source
+
+    item = _usenet("3001", 10, isrc="USUG12402414", artist="J. Cole")
+    lib = mock.MagicMock()
+    lib.items_by_source.return_value = [item]
+    assert add_source(lib, "vibing", "simmering", [["3001", "J. Cole", "sid", "USUG12402411", 1, 10]]) == 1
+    assert item.data["sources"] == "later,simmering"
+    assert item.data["spotify_ids"] == ""
+
+
+def test_add_source_then_tag_album_ids_links_a_later_playlists_track_by_the_rungs() -> None:
+    """Shapeshifter, David's album mate on the album's second playlist."""
+    from music_scan.scan import add_source
+
+    item = _usenet("Shapeshifter", 3, isrc="NZUM72500033", mb_trackid="01c3e5ef", channels=2, artist="Lorde")
+    entry = ["Shapeshifter", "Lorde", "0vtgMfyOVM2Y97DcVVJw3m", "NZUM72500022", 1, 3]
+    lib = mock.MagicMock()
+    lib.items_by_source.return_value = [item]
+    add_source(lib, "hefty", "vibing", [entry])
+    assert item.data["spotify_ids"] == ""
+    atmos = {"01c3e5ef": {"isrcs": ["NZUM72500033"], "disambiguation": "Dolby Atmos mix"}}
+    assert _tag([item], [entry], tracks_count=11, recordings=atmos.get) == 1
+    assert item.data["spotify_ids"] == "0vtgMfyOVM2Y97DcVVJw3m"
 
 
 def test_tag_album_ids_skips_tagged_and_idless_tracks() -> None:

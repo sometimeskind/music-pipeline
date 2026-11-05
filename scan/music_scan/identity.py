@@ -244,6 +244,96 @@ _TITLE_CREDIT = re.compile(r"\s+(?:feat\.?|ft\.?|featuring)\s.*$", re.IGNORECASE
 """A featured-artist credit at the end of a title, outside brackets
 (:func:`~music_fetch.usenet.clean_album` drops the bracketed ones)."""
 
+
+def disc_track(item) -> tuple[int, int]:
+    """*item*'s position.  Disc 0 means the file has no disc number, and counts as disc 1."""
+    return item.disc or 1, item.track or 0
+
+
+SURROUND = re.compile(r"\batmos\b|(?<![\d.])[57]\.1(?![\d.])|\bsurround\b|\bquadraphonic\b|\bspatial\b", re.IGNORECASE)
+"""A recording's disambiguation naming a mix with more than two channels
+(``Dolby Atmos mix``, ``5.1 mix``)."""
+
+
+def isrc_guess_refuted(isrc: str, item, recordings) -> bool:
+    """True when *item*'s ISRCs disagreeing with an entry's *isrc* say nothing
+    about the file (homelab#2664).  They are its ``mb_trackid``'s: beets names a
+    singleton's recording from title, artist and length, so a sibling recording
+    gets in (:func:`same_mb_recording`).  *recordings* looks that recording up
+    (``recording/<id>?inc=isrcs``; None when it can't).  Two things refute it:
+
+    - MusicBrainz lists *isrc* on the recording too: one recording, two ISRCs;
+    - the recording is a surround mix and the file has two channels, which the
+      conversion keeps from its source: the file isn't that mix.  Lorde's
+      *Virgin* came from a CD and every file took the Dolby Atmos mix's ISRC.
+
+    Nothing else does.  A clean and an explicit recording share their title,
+    length and AcoustID track, so nothing here tells which the file is
+    (J. Cole's *Might Delete Later*, whose files hold ISRCs of both)."""
+    mbid = item.get("mb_trackid")
+    recording = recordings(mbid) if mbid else None
+    if not recording:
+        return False
+    if isrc in (recording.get("isrcs") or ()):
+        return True
+    channels = item.get("channels") or 0
+    return bool(SURROUND.search(recording.get("disambiguation") or "")) and 0 < channels <= 2
+
+
+OTHER_TITLE, SEVERAL_ITEMS = "number, other title", "number, several items"
+OTHER_VERSION, OTHER_ISRC = "number, other version", "number, other isrc"
+NO_ITEM, HELD_ELSEWHERE = "no item", "number, held by another item"
+
+
+def number_match(track: PlaylistTrack, items, recordings) -> tuple[object | None, dict | None]:
+    """The number rung (#278, homelab#2664): ``(item, None)`` for the one of
+    *items* (a release's) at *track*'s disc and track with its title, edition
+    notes dropped, or ``(None, why)`` when one is there and it doesn't link, or
+    ``(None, None)`` when none is.
+
+    The position and the title together are the link, so neither links alone:
+    a renumbered track finds another title at its slot and fails.  The file's
+    ``tracktotal`` isn't asked, being often 0 on a Usenet release.  An item with
+    disc 0 counts as disc 1 (:func:`disc_track`), so on a release of several
+    discs the items of each disc meet at one slot: the title picks one, one
+    title twice links neither, and an entry on a later disc finds no item.
+
+    A version only one side names (:func:`version_clash`) doesn't link, nor do
+    ISRCs that disagree, unless :func:`isrc_guess_refuted`."""
+    where = {"disc": track.disc, "track": track.track}
+    at = [i for i in items if disc_track(i) == (track.disc, track.track)]
+    if not at:
+        return None, None
+    named = [i for i in at if same_base_title(track.name, i.title or "")]
+    if not named:
+        return None, {"why": OTHER_TITLE, "item_id": at[0].id, "item_title": at[0].title, **where}
+    if len(named) > 1:
+        return None, {"why": SEVERAL_ITEMS, "item_ids": sorted(i.id for i in named), **where}
+    item = named[0]
+    album = item.get("album") or ""
+    if versions := version_clash(track.name, item.title or "", "", item.get("trackdisambig") or "", album, album):
+        return None, {"why": OTHER_VERSION, "item_id": item.id, "item_title": item.title, "versions": versions,
+                      **where}
+    have = item_isrcs(item)
+    if track.isrc and have and track.isrc not in have and not isrc_guess_refuted(track.isrc, item, recordings):
+        return None, {"why": OTHER_ISRC, "item_id": item.id, "item_isrc": item.get("isrc"), "isrc": track.isrc,
+                      **where}
+    return item, None
+
+
+def skip_note(skip: dict) -> str:
+    """Why an entry was left without an ID, for a log line (*skip*: as :func:`number_match` gives it)."""
+    slot = f"{skip.get('disc')}-{skip.get('track')}"
+    return {
+        OTHER_TITLE: f"is at {slot}, but the item there is {skip.get('item_title')!r}",
+        SEVERAL_ITEMS: f"items {skip.get('item_ids')} at {slot} all have its title",
+        OTHER_VERSION: f"item {skip.get('item_id')} at {slot} is another version ({skip.get('versions')})",
+        OTHER_ISRC: f"item {skip.get('item_id')} at {slot} holds ISRC {skip.get('item_isrc')}, "
+                    f"the entry {skip.get('isrc')}, and nothing says they are one recording",
+        HELD_ELSEWHERE: f"item {skip.get('held_by')} already holds it, so {skip.get('item_id')} at {slot} doesn't",
+    }.get(skip.get("why"), "no item by ISRC or at its disc/track")
+
+
 SAME_SONG_RATIO = 0.8
 """How alike two titles' letters must be (difflib's ratio) to name one song.
 ``Intro``/``Outro`` (0.6) and ``Amy``/``Ama`` (0.67) are two songs; a dropped
