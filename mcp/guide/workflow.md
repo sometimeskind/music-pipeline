@@ -13,6 +13,13 @@ login in the `music` group writes, whichever client holds it. Don't guess the ti
 you are; the server enforces it. A write refused as read-only is handed over as "in the
 claude.ai Music connector: `reset_album` …".
 
+## Claims
+
+State only what tool output shows, and "the tools can't tell me" is an answer: never fill the gap
+with a likely cause. Read the state again before advising on it, as it may have moved. Propose a
+fix only once its dry run has run or it has been tested, and say a release or an override matches
+only once `check_release` has answered.
+
 ## Dry run, then apply
 
 Every write tool is a dry run unless `apply=true`:

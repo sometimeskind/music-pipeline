@@ -172,14 +172,17 @@ def find_albums(lib: Library, records: dict[str, dict], query: str) -> list[dict
 
 
 def get_album(lib: Library, key: str, record: dict) -> dict:
-    """The album *key* names: its record, and the beets items on any of its
-    Spotify albums or stamped with its key (``album_record``, homelab#2478)."""
+    """The album *key* names: its record, what its blocklist's GUIDs were and why
+    (``blocklisted``, homelab#2661), and the beets items on any of its Spotify
+    albums or stamped with its key (``album_record``, homelab#2478)."""
+    from music_fetch.albums import blocklist_entries  # noqa: PLC0415
     from music_fetch.state import primary_spotify  # noqa: PLC0415
 
     sids = set(record.get("spotify_album_ids") or ())
     ids = {i for sid in sids for i in lib.ids_where("spotify_album_id", sid)} | set(lib.ids_where("album_record", key))
     items = lib.items(sorted(ids))
-    return {"album": {"key": key, "spotify_id": primary_spotify(record), "record": record},
+    return {"album": {"key": key, "spotify_id": primary_spotify(record), "record": record,
+                      "blocklisted": blocklist_entries(key, record)},
             "beets": {"album_ids": sorted({i["album_id"] for i in items if i.get("album_id")}),
                       "item_ids": [i["id"] for i in items]},
             "items": [item_summary(i) for i in items]}

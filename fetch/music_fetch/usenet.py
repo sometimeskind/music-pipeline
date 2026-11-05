@@ -136,6 +136,18 @@ def normalise(text: str) -> str:
     return " ".join(words(text))
 
 
+def exclusion(text: str) -> str:
+    """Why search words can't be used, when one is written as an exclusion
+    (``-Son``); else empty.  Nothing excludes: :func:`words` drops the dash, so
+    ``-Son`` would be a word every title must hold, refusing the album it
+    was meant to find.  A dash inside a word (Jay-Z) or on its own is left alone."""
+    dashed = [w for w in (t.strip("\"'“”‘’()") for t in text.split()) if w.startswith("-") and words(w)]
+    if not dashed:
+        return ""
+    return (f"{' '.join(dashed)}: there is no exclusion syntax, a word starting with - would be a word every "
+            "release title must hold; drop it, and pick the edition with words its title does hold")
+
+
 def readable(text: str) -> bool:
     """True when most of *text* survives as words.  A name made of glyphs or
     Zalgo marks leaves a few stray letters (an ``l``, a ``v``), which would
@@ -149,6 +161,11 @@ def latin(text: str) -> bool:
     """True when :func:`words` keeps every letter of *text*.  One it drops is
     another script (Кино, 坂本龍一): the words left can't speak for the name."""
     return not any(c.isalpha() and not c.isascii() for c in _prepare(text))
+
+
+def leading_word(name: str) -> str:
+    """The word a release title naming *name* starts with: its first but an article."""
+    return next((w for w in words(name) if w not in _ARTICLES), "")
 
 
 def clean_album(name: str) -> str:

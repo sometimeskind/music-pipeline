@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import os
 import sqlite3
 import sys
@@ -9,8 +10,10 @@ import threading
 from pathlib import Path
 from unittest.mock import patch
 
+import psycopg
 import pytest
 
+from music_fetch import albums, events, overrides, overrides_cli, state
 from music_service import mcp_jobs, mcp_reads
 
 sys.path.insert(0, str(Path(__file__).parent))  # importable however pytest imports this file
@@ -139,6 +142,22 @@ def test_get_album_resolves_one_album_or_returns_candidates(client, env):
     assert client.get("/mcp-api/album?query=nothing", headers=MCP).status_code == 404
 
 
+def test_get_album_says_what_the_blocklist_holds_and_keeps_the_stored_list(client, env):
+    _blocklisted_album()
+    album = client.get("/mcp-api/album?query=pastel", headers=MCP).json["album"]
+    assert album["record"]["blocklist"] == ["https://indexer/details/7"]
+    (entry,) = album["blocklisted"]
+    assert entry["guid"] == "https://indexer/details/7" and entry["title"] == "Nina.Simone-Pastel.Blues-FLAC-GRP"
+    assert entry["size"] == 300_000_000 and entry["reason"] == "Aborted, encryption detected" and entry["at"]
+
+
+def test_get_album_answers_with_the_reasons_unknown_when_the_events_cant_be_read(client, env):
+    _blocklisted_album()
+    with patch("music_fetch.blocklist.album_events", side_effect=psycopg.OperationalError("down")):
+        album = client.get("/mcp-api/album?query=pastel", headers=MCP).json["album"]
+    assert album["blocklisted"][0]["reason"] == "unknown: the event store can't be read"
+
+
 def test_get_item(client, env):
     item = env["items"][0]
     body = client.get(f"/mcp-api/items/{item.id}", headers=MCP).json
@@ -260,6 +279,122 @@ def test_reset_album_dry_run_then_apply(client, env):
     assert applied.status_code == 200 and applied.json["status"] == "done", applied.json
     assert env["commands"].ran[-1] == ["music-album-reset", "--apply", "--", "ALB3"]
     assert applied.json["locks"] == ["albums", "pipeline"]
+
+
+class RealCli(mcp_harness.Commands):
+    """The real music-album-reset and music-overrides, in this process: each run's
+    lines carry a log timestamp of their own, as a subprocess's do."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.runs = 0
+
+    def __call__(self, argv, env, on_line):
+        self.ran.append(argv)
+        self.runs += 1
+        stamp = f"[2026-11-05T10:{self.runs:02d}:00+0000] "
+
+        class Lines(logging.Handler):
+            def emit(self, record):
+                on_line(stamp + record.getMessage())
+
+        handler = Lines(logging.INFO)
+        loggers = [logging.getLogger("music_fetch.albums"), logging.getLogger("music_fetch.overrides_cli")]
+        levels = [log.level for log in loggers]
+        for log in loggers:
+            log.addHandler(handler)
+            log.setLevel(logging.INFO)
+        try:
+            if argv[0] == "music-album-reset":
+                with patch("sys.argv", argv):
+                    albums.reset_main()
+            else:
+                overrides_cli.main(argv[1:])
+        finally:
+            for log, level in zip(loggers, levels):
+                log.removeHandler(handler)
+                log.setLevel(level)
+        return 0
+
+
+@pytest.fixture
+def real_cli(env, tmp_path, monkeypatch):
+    cli = RealCli()
+    monkeypatch.setattr(env["jobs"], "_run_command", cli)
+    monkeypatch.setattr(albums, "OVERRIDES_FILE", tmp_path / "album-overrides.conf")
+    monkeypatch.delenv("PREFECT_API_URL", raising=False)
+    return cli
+
+
+def _blocklisted_album() -> None:
+    """Pastel Blues with a broken download on its blocklist, and the events that say so."""
+    rows = albums.State.load()
+    rows.albums["ALB3"].update(blocklist=["https://indexer/details/7"], attempts=1, duration=2400, tracks_count=9,
+                               candidate={"guid": "https://indexer/details/7", "title": "Nina.Simone-Pastel.Blues-FLAC-GRP",
+                                          "size": 300_000_000})
+    rows.save()
+    events.record("grab", "[GRAB]", source="albums", data={
+        "key": "ALB3", "guid": "https://indexer/details/7", "release": "Nina.Simone-Pastel.Blues-FLAC-GRP",
+        "size": 300_000_000})
+    events.record("failure", "[FAIL]", source="albums", data={"key": "ALB3", "reason": "Aborted, encryption detected"})
+
+
+def test_the_reset_dry_run_passes_the_apply_gate(env, real_cli):
+    """The lines reset_notes adds repeat exactly, so the apply's fresh dry run matches, and the apply lands."""
+    _blocklisted_album()
+    client = env["client"]
+    dry = client.post("/mcp-api/run/reset_album", json={"query": "pastel", "reimport": True}, headers=WRITE)
+    assert dry.json["status"] == "done", dry.json
+    output = dry.json["output"]
+    assert "Nina.Simone-Pastel.Blues-FLAC-GRP (300 MB): Aborted, encryption detected; the matcher accepts it again" in output
+    assert "up to 1 of the 3 the album then has" in output
+    applied = client.post("/mcp-api/run/reset_album", json={"query": "pastel", "reimport": True, "apply": True},
+                          headers=WRITE)
+    assert applied.json["status"] == "done", applied.json
+    assert real_cli.ran[-1][:2] == ["music-album-reset", "--reimport"] and "--apply" in real_cli.ran[-1]
+    record = albums.State.load().albums["ALB3"]
+    assert record["blocklist"] == [] and record["attempts"] == 0 and record["reimport"] is True
+
+
+def test_an_event_that_changes_the_reason_refuses_the_reset(env, real_cli):
+    """The compared output does hold the reasons: one that changed is a dry run to show again."""
+    _blocklisted_album()
+    client = env["client"]
+    client.post("/mcp-api/run/reset_album", json={"query": "pastel"}, headers=WRITE)
+    events.record("grab", "[GRAB]", source="albums", data={
+        "key": "ALB3", "guid": "https://indexer/details/7", "release": "Nina.Simone-Pastel.Blues-FLAC-GRP",
+        "size": 300_000_000})
+    events.record("failure", "[FAIL]", source="albums", data={"key": "ALB3", "reason": "Repair failed"})
+    applied = client.post("/mcp-api/run/reset_album", json={"query": "pastel", "apply": True}, headers=WRITE)
+    assert applied.json["status"] == "refused", applied.json
+
+
+def test_the_override_dry_run_passes_the_apply_gate(env, real_cli):
+    with state.connect() as conn:
+        state.put(conn, state.OVERRIDES_IMPORTED, {"at": "now"})
+    client = env["client"]
+    body = {"album": "pastel", "words": "Pastel Blues"}
+    dry = client.post("/mcp-api/run/set_search_override", json=body, headers=WRITE)
+    assert dry.json["status"] == "done", dry.json
+    output = dry.json["output"]
+    assert "Every word must be in a release title" in output and "nina isn't among these words" in output
+    applied = client.post("/mcp-api/run/set_search_override", json={**body, "apply": True}, headers=WRITE)
+    assert applied.json["status"] == "done", applied.json
+    search, _ = overrides.keyed(albums.album_fixes(), albums.State.load())
+    assert search == {"ALB3": "pastel blues"}
+
+
+def test_a_dashed_override_word_is_a_400(client, env):
+    resp = client.post("/mcp-api/run/set_search_override", json={"album": "pastel", "words": "Pastel Blues -Live"},
+                       headers=WRITE)
+    assert resp.status_code == 400 and "no exclusion syntax" in resp.json["error"]
+    assert env["commands"].ran == []
+
+
+def test_check_release_still_shows_what_a_dashed_word_does(client, env):
+    resp = client.post("/mcp-api/run/check_release", headers=READ, json={
+        "album": "pastel", "title": "Nina Simone-Pastel Blues-FLAC", "words": "Pastel Blues -Live"})
+    assert resp.status_code == 200 and resp.json["args"]["words"] == "pastel blues live"
 
 
 def test_apply_without_a_dry_run_is_refused(client, env):

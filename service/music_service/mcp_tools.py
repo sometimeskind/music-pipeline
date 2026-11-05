@@ -363,9 +363,14 @@ def pin_url(value) -> str:
 
 
 def _set_search(body: dict, albums: Albums) -> dict:
+    """Unlike ``check_release``, which shows what a dashed word does, this would store it."""
+    from music_fetch.usenet import exclusion  # noqa: PLC0415
+
     _only(body, "album", "words", "reason")
-    return {"album": resolve_album(body.get("album"), albums), "words": search_words(body.get("words")),
-            "reason": _text(body, "reason")}
+    words = search_words(body.get("words"))
+    if refused := exclusion(body["words"]):
+        raise BadRequest(refused)
+    return {"album": resolve_album(body.get("album"), albums), "words": words, "reason": _text(body, "reason")}
 
 
 def _album_only(body: dict, albums: Albums) -> dict:
