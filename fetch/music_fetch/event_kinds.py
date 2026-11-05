@@ -60,6 +60,9 @@ KINDS: dict[str, Kind] = {
     "import_incomplete": Kind(ALBUM, "[INCOMPLETE]: a download lacking tracks of its release.",
                               (*_RECORD, "release", "guid", "missing", "lacking", "kept", "same_gap")),
     "import_lost": Kind(ALBUM, "[LOST]: a completed job whose directory is gone.", (*_RECORD, "path")),
+    "format_dropped": Kind(ALBUM, "[FORMAT]: a job held the same tracks in several formats; kept is the one "
+                                  "imported, dropped the rest, moved to quarantine/replaced/retired/.",
+                           (*_RECORD, "release", "kept", "dropped", "tracks")),
     # --- The release check and the duplicate tools (music_scan.release, dupes, canon) ---
     "retire": Kind(ITEM, "[RETIRE]: an item of a release the album no longer keeps, retired; the IDs it "
                          "handed over in ids_to and the taken fields.  origin chosen: a person retired it "

@@ -1710,6 +1710,26 @@ def drop_copies(job: Path, label: str) -> int:
     return n
 
 
+def keep_one_format(one_format: OneFormat | None, job: Path, key: str, record: dict, label: str) -> None:
+    """Run *one_format* on *job* and record its choice.  A failure imports every
+    format, as an uncertain job does: the safe failure is both copies."""
+    if one_format is None:
+        return
+    try:
+        choice = one_format(job, key)
+    except Exception:
+        logger.exception("[FORMAT] %s: choosing a format in %s failed; importing them all", label, job.name)
+        return
+    if choice is None:
+        return
+    dropped = ", ".join(choice["dropped"])
+    message = (f"[FORMAT] {label}: {job.name} holds its {choice['tracks']} track(s) as {choice['kept']} and "
+               f"{dropped}; keeping {choice['kept']}, the rest → quarantine/replaced/retired/")
+    logger.info("%s", message)
+    _event("format_dropped", key, record, message, release=job.name, kept=choice["kept"], dropped=choice["dropped"],
+           tracks=choice["tracks"])
+
+
 class ImportDeferred(Exception):
     """*import_inbox* could not judge the release: a service it needs, such as
     MusicBrainz, was unavailable (#264).  Retried without blame, up to
@@ -1719,6 +1739,9 @@ class ImportDeferred(Exception):
 # identify(job dir): the release's own MusicBrainz match (#279), or None:
 # {"mb_albumid": …, "album": …, "tracks": n, "files": n, "missing": n, "mb": {MB album fields}}.
 Identify = Callable[[Path], "dict | None"]
+# one_format(job dir, key): drop the lesser formats of a job holding the same tracks in
+# several (homelab#2671): {"kept": …, "dropped": […], "tracks": n}, or None if nothing went.
+OneFormat = Callable[[Path, str], "dict | None"]
 # claim(playlist, since, key, release, job): stamp the release's fresh items (those
 # imported from inbox folder *job*, #284) with their album record and this import of
 # the release (``<guid>@<start>``: a release grabbed again after a reset is another
@@ -1795,6 +1818,7 @@ def complete(
     identify: Identify | None = None,
     import_rest: Callable[[str, str], int] | None = None,
     save: Callable[[], None] | None = None,
+    one_format: OneFormat | None = None,
     complete_root: Path = USENET_COMPLETE,
     inbox_root: Path = USENET_INBOX,
     quarantine_root: Path = USENET_QUARANTINE,
@@ -1805,7 +1829,8 @@ def complete(
     The album is the unit (#279): the whole release is the album, whatever its
     tracklist.  The job dir moves to ``inbox/usenet/<playlist>/``, without
     the byte-identical copies its unpack made (:func:`drop_copies`,
-    homelab#2636); *identify* matches it as a whole to a MusicBrainz release first (the files' own
+    homelab#2636) and, when it holds the same tracks in several formats, the
+    lesser ones (*one_format*, homelab#2671); *identify* matches it as a whole to a MusicBrainz release first (the files' own
     edition, and how many of that release's tracks have no file).
     *import_inbox* runs the beets import, and *import_rest* imports, as they
     are, the files beets couldn't match (a file present is never missing).
@@ -1886,6 +1911,7 @@ def complete(
         # Before identify, so the completeness check counts each track once
         # too; a retry finds them gone already.
         drop_copies(dest, label)
+        keep_one_format(one_format, dest, key, record, label)
         identity = None
         if "import_identity" in record:
             # Judged on the first try's files: those beets imported are gone from the dir.

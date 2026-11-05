@@ -650,6 +650,11 @@ def _album_library_hooks(lib):
 
         return release.identify(folder)
 
+    def one_format(folder, key: str) -> dict | None:
+        from music_scan import release  # noqa: PLC0415
+
+        return release.one_format(folder, key)
+
     def tag_ids(playlist: str, tracks: list[list], since: float, tracks_count: int, key: str) -> None:
         scan.tag_album_ids(lib, playlist, tracks, since, tracks_count, key)
         retire_held()
@@ -719,7 +724,7 @@ def _album_library_hooks(lib):
     def complete(state, completion) -> str | None:
         # save: the import's start is in the database before beets runs (homelab#2603).
         status = albums.complete(state, completion, import_inbox, claim, add_source, tag_ids, retire,
-                                 identify=identify, import_rest=import_rest, save=state.save)
+                                 identify=identify, import_rest=import_rest, save=state.save, one_format=one_format)
         keys.clear()
         albums_by_id.clear()
         return status

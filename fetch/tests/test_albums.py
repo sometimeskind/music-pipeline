@@ -794,7 +794,7 @@ def _job_files(folder: Path) -> list[str]:
     return sorted(p.relative_to(folder).as_posix() for p in folder.rglob("*") if p.is_file())
 
 
-def complete_seen(state, roots, import_inbox=None):
+def complete_seen(state, roots, import_inbox=None, one_format=None):
     """Run complete() on the roots' job; returns its status and the job's files
     as identify and as the import saw them."""
     complete_root, inbox, quarantine = roots
@@ -810,7 +810,8 @@ def complete_seen(state, roots, import_inbox=None):
     status = albums.complete(
         state, albums.Completion("nzo1", True, "album/Artist-Album-FLAC"), import_inbox or default_import,
         claim=_claim_all, add_source=lambda *a: None, retire=_no_retire, tag_ids=lambda *a: None,
-        identify=identify, complete_root=complete_root, inbox_root=inbox, quarantine_root=quarantine,
+        identify=identify, one_format=one_format, complete_root=complete_root, inbox_root=inbox,
+        quarantine_root=quarantine,
     )
     return status, identified, imported
 
@@ -832,6 +833,59 @@ def test_complete_drops_a_byte_identical_copy_before_identify_and_import(roots, 
     assert identified == imported == ["01.flac", "CD2/02-artist-two.mp3"]
     assert "[DUPFILE] Artist — Album: 01.1.flac is a byte-identical copy of 01.flac; skipped" in caplog.text
     assert "CD2/02-artist-two.1.mp3 is a byte-identical copy of 02-artist-two.mp3" in caplog.text
+
+
+def test_complete_keeps_one_format_before_identify_and_import(roots, caplog, recorded) -> None:
+    """homelab#2671: identify and beets see the job as one format, so the completeness
+    check counts each track once.  The byte-identical copies go first: they aren't formats."""
+    complete_root, _, _ = roots
+    job = complete_root / "album" / "Artist-Album-FLAC"
+    (job / "01.1.flac").write_bytes(b"x")
+    (job / "01.mp3").write_bytes(b"y")
+    calls = []
+
+    def one_format(folder: Path, key: str) -> dict:
+        calls.append((_job_files(folder), key))
+        (folder / "01.mp3").unlink()
+        return {"kept": "FLAC (870 kbps)", "dropped": ["MP3 (320 kbps)"], "tracks": 1}
+
+    with caplog.at_level("INFO", logger="music_fetch.albums"):
+        status, identified, imported = complete_seen(grabbed_state(), roots, one_format=one_format)
+    assert status == albums.IMPORTED
+    assert calls == [(["01.flac", "01.mp3"], "a0")]
+    assert identified == imported == ["01.flac"]
+    message = ("[FORMAT] Artist — Album: Artist-Album-FLAC holds its 1 track(s) as FLAC (870 kbps) and MP3 (320 kbps); "
+               "keeping FLAC (870 kbps), the rest → quarantine/replaced/retired/")
+    assert message in caplog.text
+    [event] = [e for e in recorded if e[0] == "format_dropped"]
+    assert event[1] == message
+    assert event[2]["source"] == "albums"
+    assert event[2]["data"] == {"album": "Artist — Album", "key": "a0", "origin": "album", "kept": "FLAC (870 kbps)",
+                                "dropped": ["MP3 (320 kbps)"], "tracks": 1, "release": "Artist-Album-FLAC"}
+
+
+def test_complete_imports_every_file_when_no_format_goes(roots, recorded) -> None:
+    """An uncertain job: one_format leaves it, and no choice is recorded."""
+    complete_root, _, _ = roots
+    (complete_root / "album" / "Artist-Album-FLAC" / "01.mp3").write_bytes(b"y")
+    _, identified, imported = complete_seen(grabbed_state(), roots, one_format=lambda folder, key: None)
+    assert identified == imported == ["01.flac", "01.mp3"]
+    assert not [e for e in recorded if e[0] == "format_dropped"]
+
+
+def test_complete_imports_every_file_when_choosing_a_format_fails(roots, caplog, recorded) -> None:
+    """The safe failure is both copies: a crash here costs the import nothing."""
+    complete_root, _, _ = roots
+    (complete_root / "album" / "Artist-Album-FLAC" / "01.mp3").write_bytes(b"y")
+
+    def broken(folder: Path, key: str) -> dict:
+        raise OSError("disk")
+
+    status, _, imported = complete_seen(grabbed_state(), roots, one_format=broken)
+    assert status == albums.IMPORTED
+    assert imported == ["01.flac", "01.mp3"]
+    assert "[FORMAT] Artist — Album: choosing a format in Artist-Album-FLAC failed; importing them all" in caplog.text
+    assert not [e for e in recorded if e[0] == "format_dropped"]
 
 
 def test_complete_keeps_a_copy_whose_content_differs(roots, caplog) -> None:

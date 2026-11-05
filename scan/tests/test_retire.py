@@ -278,7 +278,7 @@ def test_the_purge_deletes_a_retired_file_after_the_retention(replaced, caplog, 
     assert not f.exists() and (replaced / "17052-other.m4a").exists()
     [(kind, message, kw)] = recorded
     assert (kind, kw["item_id"]) == ("purged", 8283)
-    assert message == f"[PURGE] {f}: retired by hand 14+ days ago"
+    assert message == f"[PURGE] {f}: retired 14+ days ago"
 
 
 def test_keep_rescues_a_retired_file_by_its_item_id(replaced, tmp_path):

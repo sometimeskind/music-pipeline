@@ -610,6 +610,7 @@ def test_album_completion_wires_the_release_hooks():
         events.append(("retire", retire("K", {}, "r1", None)))
         events.append(("rest", hooks["import_rest"]("keep", "Job")))
         events.append(("identify", hooks["identify"]("/x")))
+        events.append(("format", hooks["one_format"]("/x", "K")))
         return albums.IMPORTED
 
     title = MagicMock(title="Juicy")
@@ -620,13 +621,15 @@ def test_album_completion_wires_the_release_hooks():
          patch.object(release, "retire", return_value=2) as retire, \
          patch.object(release, "import_rest", return_value=1) as rest, \
          patch.object(release, "identify", return_value={"missing": 0}), \
+         patch.object(release, "one_format", return_value=None), \
          patch.object(flows.scan, "regen_playlists", side_effect=lambda: events.append("m3u")), \
          patch.object(flows, "concurrency"):
         _, _, complete = flows._album_library_hooks(lib)
         state = albums.State()
         assert complete(state, albums.Completion(nzo_id="n", ok=True, path="x")) == albums.IMPORTED
 
-    assert events == [("claim", ["Juicy"]), "m3u", ("retire", 2), ("rest", 1), ("identify", {"missing": 0})]
+    assert events == [("claim", ["Juicy"]), "m3u", ("retire", 2), ("rest", 1), ("identify", {"missing": 0}),
+                      ("format", None)]
     # The import's start is saved before beets runs (homelab#2603).
     assert kw["save"] == state.save
     assert claim.call_args.args[1:] == ("keep", 100.0, "K", "r1", "Job")

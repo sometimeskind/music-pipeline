@@ -43,7 +43,9 @@ grabbed for 12 h. `SabnzbdQueueStalled` fires after 2 h with nothing downloaded.
 
 ## 4. A download doesn't import
 
-Search the album's name in the log. The import logs `[RELEASE]`/`[NOMB]`, then one outcome:
+Search the album's name in the log. A job holding the same tracks in two formats logs `[FORMAT]` first:
+the best format is imported and the rest wait in `quarantine/replaced/retired/`, where `keep_quarantined`
+rescues a file until the purge. The import logs `[RELEASE]`/`[NOMB]`, then one outcome:
 
 - `[DONE]`: imported. `[RETIRE]` lines before canon's `[RETAG]` are older copies moving to
   `quarantine/replaced/`. `[LOCAL]` keeps copies the release lacks as extras.

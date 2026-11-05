@@ -1210,3 +1210,255 @@ def test_own_release_is_the_newest_started_by_imported_at() -> None:
     assert release.own_release(_purple(2000), releases) == "b@2000"
     assert release.own_release(_purple(999), releases) is None
     assert release.own_release(_purple(999, best_copy={"release": "c@3000"}), releases) == "c@3000"
+
+
+# --- one format per job (homelab#2671) ---
+
+# Album 1748's nine tracks.  The first two lengths are the library's, MP3 second: the two
+# encodes were up to 2.7 s apart, either way.  Its apostrophes differed between the copies too.
+THE_DUDE = [
+    ("Ai No Corrida", 386.85, 389.0), ("Dude", 337.69, 335.0), ("Just Once", 276.0, 277.0),
+    ("Betcha’ Wouldn’t Hurt Me", 244.0, 245.0), ("Something Special", 300.0, 301.0), ("Razzamatazz", 263.0, 264.0),
+    ("One Hundred Ways", 257.0, 258.0), ("Velas", 240.0, 241.0), ("Turn On The Action", 280.0, 281.0),
+]
+
+
+def _files(job: Path, specs: list[dict]) -> dict[Path, dict]:
+    """Empty files in *job* for *specs* (``name`` relative to it, then what a tag read gives)."""
+    by_path = {}
+    for spec in specs:
+        path = job / spec["name"]
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.touch()
+        by_path[path] = spec
+    return by_path
+
+
+def _run_one_format(tmp_path: Path, specs: list[dict], key: str = "1748") -> tuple[dict | None, list[str], Path]:
+    """:func:`release.one_format` on a job of *specs*: its result, the files left, and replaced/."""
+    job, replaced = tmp_path / "job", tmp_path / "replaced"
+    job.mkdir()
+    by_path = _files(job, specs)
+
+    def read(f: Path, root: Path) -> release.SourceFile | None:
+        spec = by_path[f]
+        if spec.get("unreadable"):
+            return None
+        return release.SourceFile(
+            f, spec.get("format") or {".flac": "FLAC", ".mp3": "MP3", ".m4a": "AAC"}[f.suffix],
+            spec.get("bitrate", {".flac": 870000, ".mp3": 320000, ".m4a": 256000}[f.suffix]),
+            spec.get("length", 200.0), release._folder(f.parent.relative_to(root)), spec.get("disc", 0) or 1,
+            spec.get("track", 1), release._fold(spec.get("title", "Song")), release._fold(spec.get("album")),
+            spec.get("isrc", ""), spec.get("recording", ""))
+
+    choice = release.one_format(job, key, replaced, read=read)
+    return choice, sorted(p.relative_to(job).as_posix() for p in job.rglob("*") if p.is_file()), replaced
+
+
+def _album(ext: str, folder: str = "", n: int = 3, **tags) -> list[dict]:
+    """*n* tracks in format *ext*, each a position and a title of its own."""
+    return [{"name": f"{folder}{i:02d} - Song {i}{ext}", "track": i, "title": f"Song {i}", **tags}
+            for i in range(1, n + 1)]
+
+
+def test_one_format_keeps_the_flac_of_album_1748_shape(tmp_path: Path) -> None:
+    """One job, the record twice, side by side: 9 FLACs, which beets would convert to the
+    library's ``.m4a``, and 9 MP3s of the same tracks.  The FLAC stays, judged as the
+    source it is, although a 320k MP3's bitrate would beat the AAC it becomes."""
+    flac = [{"name": f"{i:02d} - {t}.flac", "track": i, "title": t, "length": a}
+            for i, (t, a, _) in enumerate(THE_DUDE, 1)]
+    mp3 = [{"name": f"{i:02d} - {t}.mp3", "track": i, "title": t.replace("’", "'"), "length": b}
+           for i, (t, _, b) in enumerate(THE_DUDE, 1)]
+    choice, left, replaced = _run_one_format(tmp_path, flac + mp3)
+    assert choice == {"kept": "FLAC (870 kbps)", "dropped": ["MP3 (320 kbps)"], "tracks": 9}
+    assert left == sorted(spec["name"] for spec in flac)
+    moved = sorted(p.name for p in (replaced / release.RETIRED).iterdir())
+    assert moved == sorted(f"album1748-{spec['name']}" for spec in mp3)
+    # Under retired/ it is held, so the purge takes it in time and it counts as no only copy.
+    assert release.retired(replaced / release.RETIRED / moved[0])
+
+
+def test_one_format_between_lossy_formats_the_higher_bitrate_stays(tmp_path: Path) -> None:
+    choice, left, _ = _run_one_format(tmp_path, _album(".m4a") + _album(".mp3"))
+    assert choice == {"kept": "MP3 (320 kbps)", "dropped": ["AAC (256 kbps)"], "tracks": 3}
+    assert all(name.endswith(".mp3") for name in left)
+
+
+def test_one_format_two_lossless_formats_keep_the_higher_bitrate(tmp_path: Path) -> None:
+    alac = _album(".m4a", format="ALAC", bitrate=900000)
+    choice, left, _ = _run_one_format(tmp_path, alac + _album(".flac"))
+    assert choice["kept"] == "ALAC (900 kbps)"
+    assert all(name.endswith(".m4a") for name in left)
+
+
+def test_one_format_three_formats_keep_one(tmp_path: Path) -> None:
+    choice, left, _ = _run_one_format(tmp_path, _album(".flac") + _album(".mp3") + _album(".m4a"))
+    assert choice == {"kept": "FLAC (870 kbps)", "dropped": ["MP3 (320 kbps)", "AAC (256 kbps)"], "tracks": 3}
+    assert all(name.endswith(".flac") for name in left)
+
+
+@pytest.mark.parametrize(("flac_folder", "mp3_folder"), [
+    ("FLAC/", "MP3/"),
+    ("Artist - Album [FLAC]/", "Artist - Album [MP3 320]/"),
+    ("Album (24bit)/", "Album (V0)/"),
+    ("Album [FLAC 24-96]/", "Album [MP3 320kbps]/"),
+    ("Album [24bit 44.1kHz]/", "Album/"),
+    ("FLAC/", ""),
+])
+def test_one_format_folders_that_only_name_a_format_are_one_album(tmp_path: Path, flac_folder, mp3_folder) -> None:
+    choice, left, _ = _run_one_format(tmp_path, _album(".flac", flac_folder) + _album(".mp3", mp3_folder))
+    assert choice is not None and all(name.endswith(".flac") for name in left)
+
+
+def test_one_format_two_discs_in_two_formats_keep_one_format(tmp_path: Path) -> None:
+    """Both discs are in both formats, so each file has its twin, disc by disc."""
+    specs = []
+    for ext in (".flac", ".mp3"):
+        for disc, folder in ((1, "CD1/"), (2, "CD2/")):
+            specs += [{"name": f"{folder}{i:02d}{ext}", "track": i, "title": f"D{disc} {i}", "disc": disc}
+                      for i in (1, 2)]
+    choice, left, _ = _run_one_format(tmp_path, specs)
+    assert choice == {"kept": "FLAC (870 kbps)", "dropped": ["MP3 (320 kbps)"], "tracks": 4}
+    assert left == ["CD1/01.flac", "CD1/02.flac", "CD2/01.flac", "CD2/02.flac"]
+
+
+def test_one_format_a_2lp_numbered_twice_with_no_disc_tags_keeps_one_format(tmp_path: Path) -> None:
+    """Album 1897's shape, *Exile On Main Street*: 01 to 09 twice on one disc number.
+    Position alone repeats, so the title has to tell the two sides apart."""
+    sides = [(1, "Rocks Off"), (1, "Happy"), (2, "Rip This Joint"), (2, "Turd on the Run")]
+    specs = [{"name": f"{folder}{track:02d} - {title}{ext}", "track": track, "title": title}
+             for folder, ext in (("FLAC/", ".flac"), ("MP3/", ".mp3")) for track, title in sides]
+    choice, left, _ = _run_one_format(tmp_path, specs)
+    assert choice == {"kept": "FLAC (870 kbps)", "dropped": ["MP3 (320 kbps)"], "tracks": 4}
+    assert all(name.startswith("FLAC/") for name in left)
+
+
+def _same_but(ext: str = ".mp3", **changes) -> list[dict]:
+    """:func:`_album` in *ext*, track 2 with *changes*."""
+    return [{**spec, **changes} if spec["track"] == 2 else spec for spec in _album(ext)]
+
+
+@pytest.mark.parametrize(("specs", "why"), [
+    pytest.param(_album(".flac") + [{**s, "title": s["title"] + " (Clean)"} for s in _album(".mp3")],
+                 "their tracks differ", id="clean-in-the-title"),
+    pytest.param(_album(".flac", "Explicit/") + _album(".mp3", "Clean/"), "their tracks differ", id="clean-folder"),
+    pytest.param(_album(".flac", "Album (Explicit) [FLAC]/") + _album(".mp3", "Album (Clean) [MP3]/"),
+                 "their tracks differ", id="clean-folder-beside-format-words"),
+    pytest.param(_album(".flac", isrc="USAAA0000001") + _album(".mp3", isrc="USAAA0000002"),
+                 "hold different ISRCs", id="clean-by-isrc"),
+    pytest.param(_album(".flac", recording="a") + _album(".mp3", recording="b"),
+                 "name different recordings", id="other-recording"),
+    pytest.param(_album(".flac", album="Album") + _album(".mp3", album="Album (Clean)"),
+                 "name different albums", id="clean-by-album-tag"),
+    pytest.param(_album(".flac", disc=1) + [{**s, "title": f"Other {s['track']}"} for s in _album(".mp3", disc=2)],
+                 "their tracks differ", id="disc-2-reusing-numbers"),
+    pytest.param(_album(".flac", disc=1) + _album(".mp3", disc=2), "their tracks differ",
+                 id="disc-2-reusing-numbers-and-titles"),
+    pytest.param(_album(".flac", "CD1/") + _album(".mp3", "CD2/"), "their tracks differ", id="disc-folders"),
+    pytest.param(_album(".flac", "Disc 1/") + _album(".mp3", "Disc 2/"), "their tracks differ", id="disc-folders-spaced"),
+    pytest.param(_album(".flac") + _same_but(length=240.0), "differ in length", id="alternate-take"),
+    pytest.param(_album(".flac") + _album(".mp3", n=4), "their tracks differ", id="bonus-track-on-one-side"),
+    pytest.param(_album(".flac") + _same_but(title="Song 3"), "their tracks differ", id="title-twice"),
+    pytest.param(_album(".flac") + _same_but(track=4), "their tracks differ", id="title-alone-another-position"),
+    pytest.param(_album(".flac") + _same_but(title="Another Song"), "their tracks differ",
+                 id="position-alone-another-title"),
+    pytest.param(_album(".flac") + _same_but(track=0), "no position or title", id="no-position"),
+    pytest.param(_album(".flac") + _same_but(title=""), "no position or title", id="no-title"),
+    pytest.param(_album(".flac") + _same_but(unreadable=True), "a file is unreadable", id="unreadable"),
+    pytest.param(_album(".m4a") + _same_but(bitrate=0), "a file has no bitrate", id="no-bitrate"),
+    pytest.param([{**s, "name": f"a{s['name']}"} for s in _album(".flac")] + _album(".flac") + _album(".mp3"),
+                 "no position or title, or shares", id="two-unnumbered-discs"),
+])
+def test_one_format_anything_uncertain_imports_every_file(tmp_path: Path, caplog, specs, why) -> None:
+    """The safe failure is both copies, as before: the whole job, not just the odd track."""
+    with caplog.at_level(logging.INFO, logger="music_scan.release"):
+        choice, left, replaced = _run_one_format(tmp_path, specs)
+    assert choice is None
+    assert left == sorted(spec["name"] for spec in specs)
+    assert not replaced.exists()
+    assert "[FORMAT] job holds " in caplog.text and why in caplog.text and "; importing them all" in caplog.text
+
+
+def test_one_format_leaves_a_job_of_one_format_alone(tmp_path: Path, caplog) -> None:
+    """Two discs of one format are no pair, whatever their numbers and titles."""
+    specs = _album(".flac", "CD1/") + _album(".flac", "CD2/")
+    with caplog.at_level(logging.INFO, logger="music_scan.release"):
+        choice, left, _ = _run_one_format(tmp_path, specs)
+    assert choice is None and len(left) == 6
+    assert "[FORMAT]" not in caplog.text
+
+
+@pytest.fixture
+def encode():
+    """Encode a short tone with ffmpeg; the dev image has it."""
+    if not shutil.which("ffmpeg"):
+        pytest.skip("ffmpeg not installed")
+
+    def run(path: Path, codec: list[str], **tags: str) -> Path:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        metadata = [arg for k, v in tags.items() for arg in ("-metadata", f"{k}={v}")]
+        subprocess.run(["ffmpeg", "-v", "error", "-y", "-f", "lavfi", "-i", "sine=frequency=440:duration=2",
+                        *codec, *metadata, str(path)], check=True)
+        return path
+
+    return run
+
+
+FLAC_CODEC, MP3_CODEC = ["-c:a", "flac"], ["-c:a", "libmp3lame", "-b:a", "320k"]
+ALAC_CODEC, AAC_CODEC = ["-c:a", "alac"], ["-c:a", "aac", "-b:a", "128k"]
+
+
+def test_source_file_reads_a_real_files_codec_and_tags(tmp_path: Path, encode) -> None:
+    job = tmp_path / "job"
+    f = encode(job / "FLAC" / "x.flac", FLAC_CODEC, title="Velas", track="8", disc="2", album="The Dude")
+    source = release._source_file(f, job)
+    assert (source.format, source.track, source.disc, source.title, source.album) == \
+        ("FLAC", 8, 2, "velas", "thedude")
+    assert source.folder == () and source.bitrate > 0 and 1.5 < source.length < 2.5
+
+
+def test_source_file_reads_an_untagged_files_name(tmp_path: Path, encode) -> None:
+    """beets' fromfilename imports such a file, so the pair has to be seen on it too."""
+    job = tmp_path / "job"
+    source = release._source_file(encode(job / "01 - Ai No Corrida.mp3", MP3_CODEC), job)
+    assert (source.track, source.disc, source.title) == (1, 1, "ainocorrida")
+
+
+def test_source_file_drops_a_title_that_names_nothing(tmp_path: Path, encode) -> None:
+    """``Track 03`` matches itself in any format, and says nothing about the song."""
+    job = tmp_path / "job"
+    source = release._source_file(encode(job / "x.mp3", MP3_CODEC, title="Track 03", track="3"), job)
+    assert source.title == ""
+
+
+def test_source_file_is_none_for_a_file_that_is_no_audio(tmp_path: Path) -> None:
+    f = tmp_path / "01 - Song.mp3"
+    f.write_bytes(b"not audio")
+    assert release._source_file(f, tmp_path) is None
+
+
+def test_one_format_on_real_files_keeps_the_flac(tmp_path: Path, encode) -> None:
+    """The read end to end: mediafile's format names, and an untagged MP3 set meeting a tagged FLAC set."""
+    job = tmp_path / "job"
+    for i, title in ((1, "Velas"), (2, "Razzamatazz")):
+        encode(job / f"{i:02d} - {title}.flac", FLAC_CODEC, title=title, track=str(i))
+        encode(job / f"{i:02d} - {title}.mp3", MP3_CODEC)
+    choice = release.one_format(job, "1748", tmp_path / "replaced")
+    assert choice["tracks"] == 2 and choice["kept"].startswith("FLAC (") and choice["dropped"][0].startswith("MP3 (")
+    assert sorted(p.suffix for p in job.iterdir()) == [".flac", ".flac"]
+
+
+def test_one_format_on_real_files_alac_in_m4a_counts_as_lossless(tmp_path: Path, encode) -> None:
+    """The codec decides, not the extension: this ``.m4a`` beats a 320k MP3, an AAC one wouldn't."""
+    job = tmp_path / "job"
+    encode(job / "01 - Velas.m4a", ALAC_CODEC, title="Velas", track="1")
+    encode(job / "01 - Velas.mp3", MP3_CODEC, title="Velas", track="1")
+    assert release.one_format(job, "1", tmp_path / "replaced")["kept"].startswith("ALAC (")
+    assert [p.suffix for p in job.iterdir()] == [".m4a"]
+
+
+def test_one_format_on_real_files_aac_loses_to_a_higher_bitrate(tmp_path: Path, encode) -> None:
+    job = tmp_path / "job"
+    encode(job / "01 - Velas.m4a", AAC_CODEC, title="Velas", track="1")
+    encode(job / "01 - Velas.mp3", MP3_CODEC, title="Velas", track="1")
+    assert release.one_format(job, "1", tmp_path / "replaced")["kept"].startswith("MP3 (")
