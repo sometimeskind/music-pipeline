@@ -448,8 +448,9 @@ def build_server(
     async def reset_album(query: AlbumQuery, reimport: bool = False, apply: Apply = False) -> dict:
         """music-album-reset: start one album over. reimport=true grabs a single release on the
         next tick, and only it clears the whole blocklist: a plain reset takes off the last candidate
-        alone. The import retires only the old items whose recording the new release also holds; the
-        rest stay on the album as local extras, which retire_item takes off. The dry run lists what it
+        alone. The import retires the old items whose recording the new release also holds, and with
+        reimport=true every item of the album's old release when it holds under half of the new
+        release's titles; the rest stay on the album as local extras, which retire_item takes off. The dry run lists what it
         clears and why each was there, and which of those the matcher accepts, so the tick may grab
         them again."""
         return await run("reset_album", {"query": query, "reimport": reimport, "apply": apply}, write=True)

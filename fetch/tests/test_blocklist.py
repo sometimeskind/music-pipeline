@@ -24,10 +24,17 @@ SON_TITLE = "Harry Nilsson - Son of Schmilsson - NMR"
 ENCRYPTED = "Aborted, encryption detected"
 REPAIR = "Repair failed, not enough repair blocks (1238 short)"
 AT = datetime(2026, 11, 3, 9, 52, tzinfo=timezone.utc)
-# What release.retire() does: a reimport of another album's items retires none of them.
-OLD_ITEMS = ("Nothing is deleted now: the album's old items stay until an import. That import retires only the ones "
-             "whose recording the new release also holds; the rest stay on the album as local extras, which "
-             "retire_item takes off.")
+# What release.retire() does: an import retires what the new release holds; a reimport also another album (homelab#2662).
+OLD_ITEMS = ("Nothing is deleted now: the album's old items stay until an import. That import moves to "
+             "quarantine/replaced/ the ones whose recording the new release also holds, and every item of the "
+             "album's old release when it holds under half of the new release's titles: it is another album. "
+             "Otherwise the rest stay on the album as local extras. Extras from an earlier import aren't judged: "
+             "they stay unless the new release holds their recording, and retire_item takes them off. A playlist "
+             "entry only a moved item held goes empty: a spotdl playlist downloads it at the next nightly, an "
+             "album playlist's slot stays empty.")
+PLAIN_OLD_ITEMS = ("Nothing is deleted now: the album's old items stay until an import. That import retires only the "
+                   "ones whose recording the new release also holds; the rest stay on the album as local extras, "
+                   "which retire_item takes off.")
 
 
 @pytest.fixture(autouse=True)
@@ -172,7 +179,7 @@ def test_a_plain_reset_clears_only_the_last_candidate(monkeypatch, caplog):
     assert f"  {WALKMAN_TITLE} (420 MB): {ENCRYPTED}" in lines
     assert not any(line.startswith("The tick may grab") for line in lines)
     assert any("turns have and nothing is grabbed" in line for line in lines)
-    assert OLD_ITEMS in lines
+    assert PLAIN_OLD_ITEMS in lines
 
 
 def test_a_plain_reset_of_a_blocklisted_candidate_frees_that_one(monkeypatch, caplog):

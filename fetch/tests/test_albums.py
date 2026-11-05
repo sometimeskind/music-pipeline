@@ -2015,6 +2015,22 @@ def test_grab_records_an_event(recorded) -> None:
     assert kw["data"]["album"] == "Artist — Album" and kw["data"]["guid"] == "r1"
 
 
+def test_a_reimport_is_still_a_reimport_when_retire_runs(roots) -> None:
+    """release.retire reads the flag (homelab#2662): _done clears it, after the retire."""
+    state = grabbed_state()
+    state.albums["a0"]["reimport"] = True
+    seen = []
+    complete_root, inbox, quarantine = roots
+    status = albums.complete(
+        state, albums.Completion("nzo1", True, "album/Artist-Album-FLAC"), lambda: None,
+        lambda playlist, since, key, guid, job: [t[0] for t in albums.album_tracks(state.albums["a0"])],
+        add_source=lambda *_: None, tag_ids=lambda *_: None,
+        retire=lambda key, record, keep, drop: seen.append(record.get("reimport")) or 0,
+        identify=lambda folder: None, complete_root=complete_root, inbox_root=inbox, quarantine_root=quarantine)
+    assert status == albums.IMPORTED and seen == [True]
+    assert "reimport" not in state.albums["a0"]
+
+
 def test_import_done_carries_the_release_group_identify_found(roots, recorded) -> None:
     state = grabbed_state()
     identity = {"missing": 0, "album": "Album", "mb_albumid": "mb1", "mb": {"mb_releasegroupid": RG}}

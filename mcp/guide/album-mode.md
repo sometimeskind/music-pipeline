@@ -73,9 +73,19 @@ Search the album's name in the log. The import logs `[RELEASE]`/`[NOMB]`, then o
 - **Before applying a reset**, read its dry run. It lists what it clears, why each was
   blocklisted, and which ones the matcher accepts. Those can be grabbed again, and a broken
   download may fail the same way: each costs one of the album's 3 attempts. Nothing is deleted
-  by a reset: the old items stay until an import, and that import retires only the ones whose
-  recording the new release also holds. The rest stay on the album as local extras (`[LOCAL]`), so
-  a wrong album's items all stay beside the right ones until `retire_item` takes them off.
+  by a reset: the old items stay until an import, and that import retires the ones whose
+  recording the new release also holds. With `reimport=true` the album's old release also goes
+  whole to `quarantine/replaced/` when it holds under half of the new release's titles, so a wrong
+  album leaves (`[RETIRE] … another album: holds 3 of the kept release's 13 titles`). Otherwise the
+  rest stay on the album as local extras (`[LOCAL]`), as a deluxe's bonus tracks do. A reimport
+  doesn't judge extras an earlier import left, even a wrong album's: `retire_item` takes those off.
+  The rule compares titles, so a right release can fall under half (a 16-track edition under a
+  92-track super deluxe). Its files stay in `quarantine/replaced/` as `[ONLYCOPY]` until the user
+  decides, and a wrong album sharing half the titles stays as `[LOCAL]`.
+- **A playlist entry only a retired item held** goes empty, and the `retire` event's `unheld`
+  names the playlists. The import's ID linking may give it to the new release. If not, a spotdl
+  playlist's next nightly downloads it, as it does any entry no item holds. An album playlist's
+  slot stays empty: the release is the album.
 - **Keep a hand-curated album out** of automatic reimports: `hold_album` with the reason
   (`release_album` undoes it). `reset_album` still works on a held album.
 - **Old copies:** `audit_releases` with `replaced_query='<artist — album>'` lists the album's

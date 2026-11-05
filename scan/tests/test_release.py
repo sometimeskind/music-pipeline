@@ -837,6 +837,130 @@ def test_retire_records_retire_and_local_events_under_the_kept_releases_group(qu
     assert kw["source"] == "release"
 
 
+def _on(release_id, titles, start=1, **fields):
+    """A release's items on record CURTIS, each its own recording: no ID agrees with another release's."""
+    return [FakeItem(start + n, via="usenet", album_record="CURTIS", release=release_id, title=title,
+                     isrc=f"{release_id[:3]}{n:03d}", **fields) for n, title in enumerate(titles)]
+
+
+CURTIS = {"name": "Curtis Live!", "artist": "Curtis Mayfield", "playlists": {"fancy": []},
+          "spotify_album_ids": ["CURTIS"], "reimport": True}
+# 670's two releases: 3 of the right album's 13 titles are on Live In Europe, as other recordings.
+RIGHT = ["We've Only Just Begun", "People Get Ready", "Gypsy Woman", "I Plan to Stay a Believer", "We're a Winner",
+         "Stare and Stare", "Check Out Your Mind", "The Makings of You", "Stone Junkie", "Rap Intro",
+         "We the People Who Are Darker Than Blue", "(Don't Worry) If There's a Hell Below We're All Going to Go",
+         "Mighty Mighty"]
+EUROPE = ["We've Only Just Begun", "People Get Ready", "Gypsy Woman", "Introduction", "Ice-9", "Back to the World",
+          "It's Alright / Amen", "Freddie's Dead", "Pusherman", "We've Gotta Have Peace", "Move on Up",
+          "If There's a Hell Below", "When Seasons Change"]
+
+
+def test_a_reimport_retires_another_album_whole(quarantined, recorded, caplog) -> None:
+    """670 (homelab#2662): all 13 of Live In Europe stayed as extras beside the right album."""
+    old, new = _on("old@1", EUROPE), _on("new@2", RIGHT, 100)
+    with caplog.at_level(logging.INFO, logger="music_scan.release"):
+        assert release.retire(FakeLib([*old, *new]), "CURTIS", CURTIS, "new@2", None, _listed()) == 13
+    assert quarantined == old and not any(i.get(release.EXTRA) for i in old)
+    assert [k for k, _, _ in recorded] == ["retire"] * 13
+    _, message, kw = recorded[0]
+    assert message == ("[RETIRE] 1 None — We've Only Just Begun [None] (release old@1): "
+                       "another album: holds 3 of the kept release's 13 titles")
+    assert kw["data"]["reason"] == "another album: holds 3 of the kept release's 13 titles"
+    assert "unheld" not in kw["data"]
+
+
+def test_an_ordinary_import_keeps_another_albums_items_as_extras(quarantined, recorded) -> None:
+    old, new = _on("old@1", EUROPE), _on("new@2", RIGHT, 100)
+    record = {k: v for k, v in CURTIS.items() if k != "reimport"}
+    assert release.retire(FakeLib([*old, *new]), "CURTIS", record, "new@2", None, _listed()) == 0
+    assert quarantined == [] and all(i[release.EXTRA] == "1" for i in old)
+    assert [k for k, _, _ in recorded] == ["local"] * 13
+
+
+def test_a_reimport_keeps_a_deluxes_bonus_tracks(quarantined) -> None:
+    """The denominator is the kept release: a standard edition under its deluxe, as
+    Sign O' the Times' 2CD under its Super Deluxe's 92 items, holds every title."""
+    deluxe = _on("old@1", [*RIGHT, "Demo 1", "Demo 2", "Outtake", "B-Side", "Live 1", "Live 2", "Live 3", "Live 4"])
+    standard = _on("new@2", RIGHT, 100)
+    assert release.retire(FakeLib([*deluxe, *standard]), "CURTIS", CURTIS, "new@2", None, _listed()) == 0
+    assert quarantined == [] and all(i[release.EXTRA] == "1" for i in deluxe)
+
+
+def test_a_reimport_compares_titles_not_recordings(quarantined) -> None:
+    """Album 1653's two releases share no recording ID: edition notes dropped, they are one album."""
+    old = _on("old@1", [f"{t} (2011 Remaster)" for t in RIGHT])
+    new = _on("new@2", RIGHT, 100)
+    assert release.retire(FakeLib([*old, *new]), "CURTIS", CURTIS, "new@2", None, _listed()) == 0
+    assert quarantined == [] and all(i[release.EXTRA] == "1" for i in old)
+
+
+def test_an_old_release_holding_half_the_titles_stays(quarantined) -> None:
+    titles = [f"Song {n}" for n in range(1, 9)]
+    half = _on("old@1", [*titles[:4], "One", "Two", "Three", "Four"])
+    under = _on("old@2", [*titles[:3], "One", "Two", "Three", "Four"], 50)
+    new = _on("new@3", titles, 100)
+    assert release.retire(FakeLib([*half, *under, *new]), "CURTIS", CURTIS, "new@3", None, _listed()) == 7
+    assert quarantined == under and all(i[release.EXTRA] == "1" for i in half)
+
+
+def test_a_new_release_under_four_titles_judges_nothing(quarantined) -> None:
+    old, new = _on("old@1", EUROPE), _on("new@2", ["A", "B", "C"], 100)
+    assert release.retire(FakeLib([*old, *new]), "CURTIS", CURTIS, "new@2", None, _listed()) == 0
+    assert quarantined == []
+
+
+def test_a_second_reimport_leaves_what_the_first_kept(quarantined, recorded) -> None:
+    """A deluxe's bonus tracks left as extras hold none of the next release's titles, and
+    its other tracks are gone: judged alone they would go.  An earlier extra isn't judged."""
+    bonus = _on("deluxe@1", ["Demo 1", "Demo 2", "Outtake"], album_extra="1")
+    wrong = _on("old@2", EUROPE, 20)
+    new = _on("new@3", RIGHT, 100)
+    assert release.retire(FakeLib([*bonus, *wrong, *new]), "CURTIS", CURTIS, "new@3", None, _listed()) == 13
+    assert quarantined == wrong
+    assert all(i[release.EXTRA] == "1" for i in bonus)
+    assert sum(k == "local" for k, _, _ in recorded) == 3
+
+
+def test_a_reimport_leaves_copies_of_no_release_as_now(quarantined) -> None:
+    old, new = _on("old@1", EUROPE), _on("new@2", RIGHT, 100)
+    topup = FakeItem(90, via="spotdl", spotify_album_id="CURTIS", spotify_ids="SPX", title="Superfly")
+    legacy = FakeItem(91, via="usenet", album="Curtis Live!", albumartist="Curtis Mayfield", title="Superfly")
+    lib = FakeLib([*old, *new, topup, legacy])
+    assert release.retire(lib, "CURTIS", CURTIS, "new@2", None, _listed({90: {"fancy"}})) == 13
+    assert quarantined == old and topup[release.EXTRA] == "1" and legacy[release.EXTRA] == "1"
+
+
+def test_a_reimports_rollback_is_only_the_rollback(quarantined, recorded) -> None:
+    """A [WRONG] import drops its own release: no old release is judged, and no reason is given."""
+    old, new = _on("old@1", EUROPE), _on("new@2", RIGHT, 100)
+    assert release.retire(FakeLib([*old, *new]), "CURTIS", CURTIS, None, "new@2", _listed()) == 13
+    assert quarantined == new and not any("reason" in kw["data"] for _, _, kw in recorded)
+
+
+def test_a_wanted_track_only_an_old_item_held_is_named_and_goes_back_on_the_want_list(quarantined, recorded) -> None:
+    """homelab#2662: the entry goes empty, the event names the playlist, and the store's want
+    list has it at the next nightly: nothing holds it, and a Usenet file holds no URL back."""
+    from music_fetch import store
+    from music_scan.identity import Recordings
+
+    old, new = _on("old@1", EUROPE), _on("new@2", RIGHT, 100)
+    wanted, held = old[3], old[0]
+    new[0]["isrc"] = held["isrc"]  # the kept release holds this one's recording
+    lib = FakeLib([*old, *new])
+    listed = _listed({wanted.id: {"fancy", "soft"}, held.id: {"fancy"}})
+    assert release.retire(lib, "CURTIS", CURTIS, "new@2", None, listed) == 13
+    by_item = {kw["item_id"]: (message, kw["data"]) for _, message, kw in recorded}
+    assert by_item[wanted.id][1]["unheld"] == ["fancy", "soft"]
+    assert by_item[wanted.id][0].endswith("; no item holds it now for fancy, soft")
+    assert "unheld" not in by_item[held.id][1]
+
+    left = Recordings(new)
+    songs = [{"url": "https://open.spotify.com/track/wanted", "isrc": wanted["isrc"]},
+             {"url": "https://open.spotify.com/track/held", "isrc": held["isrc"]}]
+    resolves = lambda song: left.holds_item(FakeItem(0, isrc=song["isrc"]))  # noqa: E731
+    assert store.want_list(songs, resolves) == ["https://open.spotify.com/track/wanted"]
+
+
 def test_retire_held_same_audio_is_one_merge_event(quarantined, recorded) -> None:
     track, extra = _stay_positive(spotify_ids="sp-old")
     other = _Audio(3790, "Navy Sheets", album_record="SP", release="r@2", acoustid_id="aid-8")
