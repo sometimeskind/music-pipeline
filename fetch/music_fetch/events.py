@@ -98,6 +98,13 @@ def spotify_album(ref: Any) -> str | None:
     return str(ref) if ref and state.is_spotify_album(str(ref)) else None
 
 
+def album_refs(key: str, record: dict) -> list[str]:
+    """What the album's events may name it by: its key now (a row id since
+    homelab#2478), every Spotify album ID and local name it has, which were its
+    keys before."""
+    return sorted({key, *(record.get("spotify_album_ids") or ()), *(record.get("names") or ())})
+
+
 def item_fields(item) -> dict[str, Any]:
     """A beets item's identity for an event's *data*: what it was, and where."""
     path = item.get("path")

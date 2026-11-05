@@ -328,10 +328,12 @@ def _text(body: dict, name: str, required: bool = False) -> str:
 
 def search_words(value) -> str:
     """The search words as the tick searches them (``usenet.normalise``)."""
-    from music_fetch.usenet import normalise  # noqa: PLC0415
+    from music_fetch.usenet import exclusion, normalise  # noqa: PLC0415
 
     if not isinstance(value, str) or not (words := normalise(value)):
         raise BadRequest("words must hold readable search words")
+    if refused := exclusion(value):
+        raise BadRequest(refused)
     return words
 
 

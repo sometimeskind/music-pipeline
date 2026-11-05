@@ -90,6 +90,28 @@ def _when(record: dict, new_words: str | None, key: str) -> str:
     return f"not while it is {status}: reset_album searches it again"
 
 
+def _matcher_notes(record: dict, words: str) -> list[str]:
+    """What an override does to the matcher (homelab#2661): with one ``albums.plan``
+    gives it no artist and these words for the album's name, so ``usenet.rejection``
+    runs without what it knows of the artist."""
+    from music_fetch.usenet import MAX_LEFTOVER_WORDS, leading_word  # noqa: PLC0415
+    from music_fetch.usenet import words as title_words  # noqa: PLC0415
+
+    lead = leading_word(record.get("artist") or "")
+    lines = ["Every word must be in a release title, in any order (a, and, the excepted). Nothing excludes and "
+             "quotes mean nothing, so a year or a quoted phrase only narrows the results: Curtis Live 1971 needs "
+             "1971 in the title.",
+             "A title must also start with one of these words, for the matcher no longer knows the artist.",
+             "Dropped with the artist: the check that a title starts with the artist, the self-titled check, the "
+             "artist words check, and the second search by the artist alone.",
+             f"Still applied: reject word, leftover words (at most {MAX_LEFTOVER_WORDS}; the artist's words count "
+             "unless they are among these), other release, single, size."]
+    if lead and lead not in title_words(words):
+        lines.append(f"{lead} isn't among these words, so a title starting with the artist's name is refused "
+                     "(artist: doesn't start with an album word). Add it to match one.")
+    return lines
+
+
 def search_dry_run(conn, rows, query: str, words: str | None, reason: str = "") -> tuple[str, dict, list[str]]:
     key, record = select_album(rows, query)
     old = ov.current(conn, ov.SEARCH, record["_id"])
@@ -100,6 +122,8 @@ def search_dry_run(conn, rows, query: str, words: str | None, reason: str = "") 
              f"Next search: {_next_search(key, record, old_words)} → {_next_search(key, record, words)}"]
     if old_words != words:
         lines.append(f"Searched again: {_when(record, words, key)}")
+    if words:
+        lines += _matcher_notes(record, words)
     return key, record, lines
 
 
@@ -288,7 +312,7 @@ def _listed(entry: dict) -> str:
 
 
 def run(args: argparse.Namespace) -> None:
-    from music_fetch.usenet import normalise  # noqa: PLC0415
+    from music_fetch.usenet import exclusion, normalise  # noqa: PLC0415
 
     with _connect(write=args.command not in ("list", "import")) as conn:
         rows = statedb.load_albums(conn)
@@ -311,6 +335,8 @@ def run(args: argparse.Namespace) -> None:
         if args.command in ("search", "clear-search"):
             words = None
             if args.command == "search":
+                if refused := exclusion(" ".join(args.words)):
+                    raise ov.Refused(refused)
                 words = normalise(" ".join(args.words))
                 if not words:
                     raise ov.Refused("the search words normalise to nothing")

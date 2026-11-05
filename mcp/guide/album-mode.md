@@ -4,7 +4,9 @@ Album mode grabs whole albums from Usenet for every album a Spotify playlist tou
 falls back to spotdl when no release works. The `music-albums` flow (the **tick**) runs every
 30 min, counted from pod start. It searches, grabs, and resets up to 3 mixed albums a day.
 When SABnzbd finishes a job, the `music-album-import` flow imports it. `get_album` shows an
-album's record: `status`, `attempts`, its `blocklist` of rejected releases.
+album's record: `status`, `attempts`, its `blocklist` of rejected releases. `blocklisted` shows
+each one's title, size and reason, read from the events. A reason of `unknown` means no event
+holds it: events began on 2026-10-29, and an `[ERR]` grab from before homelab#2661 lacks its GUID.
 
 Each tick ends with one summary line: `… N searched, N grabbed, N reset for a reimport;
 albums …=n; indexer 24h: …` (Loki: `|= "Album tick"`).
@@ -65,7 +67,15 @@ Search the album's name in the log. The import logs `[RELEASE]`/`[NOMB]`, then o
 ## 5. An album is wrong
 
 - **Start one album over** from a single release: `reset_album` with `reimport=true`. The next
-  tick grabs it, and old copies are retired on import.
+  tick grabs it. It clears the whole blocklist and every
+  attempt. A plain reset takes off only the last candidate and one attempt, and an album the
+  library holds then turns `have` with nothing grabbed.
+- **Before applying a reset**, read its dry run. It lists what it clears, why each was
+  blocklisted, and which ones the matcher accepts. Those can be grabbed again, and a broken
+  download may fail the same way: each costs one of the album's 3 attempts. Nothing is deleted
+  by a reset: the old items stay until an import, and that import retires only the ones whose
+  recording the new release also holds. The rest stay on the album as local extras (`[LOCAL]`), so
+  a wrong album's items all stay beside the right ones until `retire_item` takes them off.
 - **Keep a hand-curated album out** of automatic reimports: `hold_album` with the reason
   (`release_album` undoes it). `reset_album` still works on a held album.
 - **Old copies:** `audit_releases` with `replaced_query='<artist — album>'` lists the album's
@@ -135,10 +145,15 @@ and after, and when the album is searched again (a `missing` album at the next t
 
 To say whether a release matches, or to propose an override, run `check_release` with the album
 and the release title, and with `words` for an override. It is the tick's own matcher: it answers
-accepted, or the rule that refused the title and why. Every override word is required, so a year
-or a word only some releases carry refuses the others, and a leading `-` excludes nothing: `-Son`
-is the word `son`. An override has no artist, so the title's first word must be one of its words
-(`Harry Nilsson-…` needs `harry`: `nilsson schmilsson` alone refuses it), and `artist words` no
-longer runs. Give the release's size in bytes when you have it: without it the size rule isn't checked
-and the output says so. It covers the matcher only, not the blocklist, not whether the
-indexer has the release, and not how an accepted release ranks.
+accepted, or the rule that refused the title and why. Give the release's size in bytes when you
+have it: without it the size rule isn't checked and the output says so. It covers the matcher only,
+not the blocklist, not whether the indexer has the release, and not how an accepted release ranks.
+
+An override leaves the matcher no artist, and its dry run says so. Every word must be in a title
+(`a`, `and` and `the` excepted), so a year or a word only some releases carry refuses the others:
+`Curtis Live 1971` needs `1971` in the title. Quotes mean nothing, and a word starting with `-` is
+refused, since nothing excludes. A title's first word must be one of the override's (`Harry
+Nilsson-…` needs `harry`: `nilsson schmilsson` alone refuses it, with `artist: doesn't start with
+an album word`). The `self-titled` and `artist words` checks and the second search by the artist
+alone are dropped. `reject word`, `leftover words` (the artist's words count unless they are among
+the override's), `other release`, `single` and `size` stay.

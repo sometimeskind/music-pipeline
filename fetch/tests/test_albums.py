@@ -2034,6 +2034,7 @@ def test_wrong_release_records_import_wrong_and_a_failure(roots, recorded) -> No
     # The other album's release group is not this album's.
     assert all(kw["release_group"] is None for _, _, kw in recorded)
     assert recorded[1][2]["data"]["gave_up"] is False
+    assert [kw["data"]["guid"] for _, _, kw in recorded] == ["r1", "r1"]  # the blocklist's join (homelab#2661)
 
 
 def test_incomplete_copy_records_import_incomplete(roots, recorded) -> None:
@@ -2042,6 +2043,7 @@ def test_incomplete_copy_records_import_incomplete(roots, recorded) -> None:
                  identity=identity)
     (kind, message, kw), = recorded
     assert kind == "import_incomplete" and "kept for now" in message and kw["release_group"] == RG
+    assert kw["data"]["guid"] == "r1"
 
 
 def test_lost_job_records_import_lost(roots, recorded) -> None:
@@ -2055,6 +2057,7 @@ def test_giving_up_records_a_final_failure(roots, recorded) -> None:
     run_complete(state, albums.Completion("nzo1", False, "album/Artist-Album-FLAC"), roots, have_result=False)
     (kind, message, kw), = recorded
     assert kind == "failure" and "gave up after" in message and kw["data"]["gave_up"] is True
+    assert kw["data"]["guid"] == "r1"
 
 
 def test_fallback_and_filled_record_events(recorded) -> None:
@@ -2130,6 +2133,7 @@ def test_a_failed_grab_is_a_failure_not_given_up(recorded) -> None:
     (kind, message, kw), = recorded
     assert kind == "failure" and message.startswith("[ERR] Artist — Album: grab of Artist-Album-WEB-FLAC-2020 failed")
     assert kw["data"]["what"] == "grab" and kw["data"]["gave_up"] is False and kw["data"]["reason"] == "404"
+    assert kw["data"]["guid"] == state.albums["a0"]["blocklist"][0]
 
 
 def test_have_and_nowords_are_status_changes_once(recorded) -> None:

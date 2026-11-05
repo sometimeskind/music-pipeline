@@ -93,12 +93,14 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Callable, Collection, Mapping, Protocol
 
-from music_fetch import album_requests, events, later_requests, overrides, resolve, store, stranded
+import psycopg
+
+from music_fetch import album_requests, blocklist, db, events, later_requests, overrides, resolve, store, stranded
 from music_fetch import state as statedb
 from music_fetch.ids import spotify_key
 from music_fetch.metrics import _gauge, _push
 from music_fetch.usenet import (
-    Release, clean_album, edition, normalise, rank, readable, repost_name, search_title, why_none, words,
+    Release, clean_album, edition, normalise, rank, readable, rejection, repost_name, search_title, why_none, words,
 )
 
 logger = logging.getLogger(__name__)
@@ -347,7 +349,7 @@ def plan(key: str, record: dict, overrides: dict[str, str]) -> Plan:
 
 def track_count(record: dict) -> int:
     """The album's tracks as the matcher counts them: Spotify's total, else its longest playlist's."""
-    return record.get("tracks_count") or max((len(t) for t in record["playlists"].values()), default=0)
+    return record.get("tracks_count") or max((len(t) for t in record.get("playlists", {}).values()), default=0)
 
 
 def match_args(record: dict, search: Plan) -> dict:
@@ -1075,9 +1077,9 @@ def top_up(
             break  # This album keeps its status; the next tick searches it first.
         tracks = track_count(record)
         in_flight, imported = _taken(state, key)
-        blocklist = set(record["blocklist"]) | imported
+        blocked = set(record["blocklist"]) | imported
         matching = match_args(record, search)
-        ranked = rank(releases, search.artist, search.album, tracks, blocklist, record.get("year"), **matching)
+        ranked = rank(releases, search.artist, search.album, tracks, blocked, record.get("year"), **matching)
         other_edition = 0
         record["searched_at"] = _iso(now())
         record["query"] = search.queries[0]
@@ -1122,7 +1124,7 @@ def top_up(
                 why = (f"{other_edition} match but not the edition of the copy kept "
                        f"({' '.join(record['edition']) or 'plain'})")
             else:
-                why = why_none(releases, search.artist, search.album, tracks, blocklist, **matching)
+                why = why_none(releases, search.artist, search.album, tracks, blocked, **matching)
             queries = ", ".join(f'"{q}"' for q in sent)
             message = (f"[MISS] {label}{search.note}: {len(releases)} result(s), none match; queries: {queries}"
                        f"{f'; {why}' if why else ''}"
@@ -1155,7 +1157,7 @@ def top_up(
             # Release-specific (gone from the indexer, or refused): try the next one later.
             logger.warning("[ERR]  %s: grab of %s failed, blocklisting: %s", label, best.title, exc)
             _event("failure", key, record, f"[ERR] {label}: grab of {best.title} failed, blocklisting: {exc}",
-                   reason=str(exc), release=best.title, what="grab", gave_up=False)
+                   reason=str(exc), release=best.title, guid=best.guid, what="grab", gave_up=False)
             record["blocklist"].append(best.guid)
             record["status"] = WANTED
             continue
@@ -1919,7 +1921,7 @@ def complete(
             logger.warning("[WRONG] %s: %s is %s", label, job_name, reason)
             # Not the album's release group: identity is the other album's.
             _event("import_wrong", key, record, f"[WRONG] {label}: {job_name} is {reason}", release=title,
-                   found=found, total=total, items=len(titles))
+                   guid=guid, found=found, total=total, items=len(titles))
         else:
             imported = titles
         if imported is None and titles:
@@ -1962,7 +1964,7 @@ def complete(
                        f"[INCOMPLETE] {label}: {title} lacks {missing} track(s) of its own release; "
                        f"{best['title']} ({best['missing']}) stays"
                        f"{'; the same track(s): the edition lacks them' if same else ''}",
-                       release=title, missing=missing, lacking=mine.get("lacking"), kept=best["title"],
+                       release=title, guid=guid, missing=missing, lacking=mine.get("lacking"), kept=best["title"],
                        same_gap=same)
             else:
                 retire(key, record, this, None)
@@ -1973,7 +1975,7 @@ def complete(
                 _event("import_incomplete", key, record,
                        f"[INCOMPLETE] {label}: {title} lacks {missing} track(s) of its own release "
                        f"({identity.get('album') or identity.get('mb_albumid')}); kept for now",
-                       release=title, missing=missing, lacking=mine.get("lacking"), kept=title)
+                       release=title, guid=guid, missing=missing, lacking=mine.get("lacking"), kept=title)
             if guid and guid not in record["blocklist"]:
                 record["blocklist"].append(guid)
             record["attempts"] = record.get("attempts", 0) + 1
@@ -2017,7 +2019,7 @@ def complete(
     if record["attempts"] >= MAX_ATTEMPTS and best:
         logger.warning("[FAIL] %s: %s — gave up after %d release(s)", label, reason, record["attempts"])
         _event("failure", key, record, f"[FAIL] {label}: {reason} — gave up after {record['attempts']} release(s)",
-               reason=reason, attempts=record["attempts"], gave_up=True)
+               reason=reason, guid=guid, attempts=record["attempts"], gave_up=True)
         return _done(key, record, label, f": the most complete copy, {best['title']}, lacks {best['missing']} "
                                     "track(s) of its own release",
                      why="the most complete copy after the last attempt", missing=best["missing"],
@@ -2028,14 +2030,14 @@ def complete(
                        _back(record))
         _event("failure", key, record,
                f"[FAIL] {label}: {reason} — gave up after {record['attempts']} release(s){_back(record)}",
-               reason=reason, attempts=record["attempts"], gave_up=True)
+               reason=reason, guid=guid, attempts=record["attempts"], gave_up=True)
     else:
         if job_name:
             for playlist in playlists:
                 shutil.rmtree(quarantine_root / playlist / job_name, ignore_errors=True)
         logger.warning("[FAIL] %s: %s — blocklisted, will try the next release", label, reason)
         _event("failure", key, record, f"[FAIL] {label}: {reason} — blocklisted, will try the next release",
-               reason=reason, attempts=record["attempts"], gave_up=False)
+               reason=reason, guid=guid, attempts=record["attempts"], gave_up=False)
     return record["status"]
 
 
@@ -2157,8 +2159,8 @@ def reset_album(state: State, query: str, reimport: bool = False) -> tuple[str, 
     With *reimport* (#279) the album starts over from one release: the whole
     blocklist and every attempt are cleared, and the record is grabbed even
     though the library holds its tracks.  The import then retires the copies
-    already there (an album mixed from several releases, spotdl's top-ups
-    aside).  Returns ``(key, before, after)``; None when no album or more than
+    there whose recording it holds; the rest stay as local extras (an album
+    mixed from several releases, spotdl's top-ups aside).  Returns ``(key, before, after)``; None when no album or more than
     one matches (logged)."""
     hits = find_albums(state.albums, query)
     if len(hits) != 1:
@@ -2191,6 +2193,81 @@ def reset_record(record: dict, reimport: bool = False, keep_blocklist: bool = Fa
             record.pop(field, None)
 
 
+def blocklist_entries(key: str, record: dict) -> list[dict]:
+    """The record's blocklist with each release's title and reason, read from
+    the event store (:func:`blocklist.entries`).  Never raises: a read that
+    fails leaves the reasons unknown, and says so."""
+    if not record.get("blocklist"):
+        return []
+    rows = None
+    if db.configured():
+        try:
+            with db.connect() as conn:
+                rows = blocklist.album_events(conn, events.album_refs(key, record), _release_group(record))
+        except psycopg.Error as exc:
+            logger.warning("Reading why %s's releases are blocklisted failed: %s", key, type(exc).__name__)
+    return blocklist.entries(record, rows)
+
+
+def _verdict(entry: dict, record: dict, search: Plan, imported: set[str]) -> tuple[bool | None, str]:
+    """Whether the tick could grab a blocklisted *entry* once it is cleared, and
+    that in words: the matcher's own answer on the title and size its grab
+    recorded (None when they aren't), as the tick would ask it."""
+    if not entry["title"] or not entry["size"]:
+        return None, "the matcher can't be asked: its title or size isn't recorded"
+    release = Release(guid=entry["guid"], title=entry["title"], size=entry["size"], indexer_id=0, download_url="",
+                      categories=[])
+    why = rejection(release, search.artist, search.album, track_count(record), **match_args(record, search))
+    if why is not None:
+        return False, f"the matcher refuses it ({why})"
+    if entry["guid"] in imported:
+        return False, "the matcher accepts it, but another album holds it, so it isn't grabbed"
+    return True, "the matcher accepts it again"
+
+
+def reset_notes(state: State, key: str, before: dict, after: dict) -> list[str]:
+    """What a reset of *key* really does (homelab#2661), for its dry run: which
+    blocklisted releases it clears and why they were there, which of those the
+    tick could grab again and what that costs, and what happens to the album.
+    Read from *before* and *after*, so it can't differ from :func:`reset_record`.
+    The MCP compares it with the apply's dry run: nothing here may change between
+    two runs of the same reset."""
+    listed = blocklist_entries(key, before)
+    gone = set(before.get("blocklist") or ()) - set(after.get("blocklist") or ())
+    cleared = [e for e in listed if e["guid"] in gone]
+    kept = [e for e in listed if e["guid"] not in gone]
+    search = plan(key, after, _search_overrides(state))
+    imported = _taken(state, key)[1]
+    lines: list[str] = []
+    if cleared:
+        lines.append(f"Clears from the blocklist ({len(cleared)} of {len(listed)}):")
+    elif kept:
+        last = (before.get("candidate") or {}).get("title")
+        lines.append(f"Clears nothing from the blocklist: its last candidate{f', {last},' if last else ''} isn't on it")
+    else:
+        lines.append("The blocklist is empty: nothing to clear")
+    verdicts = [_verdict(e, after, search, imported) for e in cleared]
+    lines += [f"  {blocklist.describe(e)}; {note}" for e, (_, note) in zip(cleared, verdicts)]
+    if kept:
+        lines.append("Stays on the blocklist (only reimport=true clears all of it):")
+        lines += [f"  {blocklist.describe(e)}" for e in kept]
+    accepted = sum(ok is True for ok, _ in verdicts)
+    if accepted:
+        left = MAX_ATTEMPTS - after.get("attempts", 0)
+        lines.append(f"The tick may grab {accepted} cleared release(s) again. Each that fails the same way costs an "
+                     f"attempt: up to {min(accepted, left)} of the {left} the album then has.")
+    if after.get("reimport"):
+        lines.append("The next tick with a free slot grabs the best release the matcher accepts, although the "
+                     "library holds the album; with none left, nothing is grabbed.")
+    else:
+        lines.append("The next tick with a free slot searches it, unless the library holds its tracks: then it "
+                     "turns have and nothing is grabbed (reimport=true grabs anyway).")
+    lines.append("Nothing is deleted now: the album's old items stay until an import. That import retires only the "
+                 "ones whose recording the new release also holds; the rest stay on the album as local extras, "
+                 "which retire_item takes off.")
+    return lines
+
+
 def _state_lock(apply: bool):
     """The ``albums`` slot the tick and the import flow hold while they read and
     write the album store; a dry run needs none, nor a run whose MCP job already
@@ -2218,7 +2295,7 @@ def reset_main() -> None:
                              "that matches exactly one album")
     parser.add_argument("--reimport", action="store_true",
                         help="start over from one release: clear the blocklist and attempts, grab it although the "
-                             "library has its tracks, and retire the copies there on import (#279)")
+                             "library has its tracks, and on import retire the copies whose recording it holds (#279)")
     parser.add_argument("--apply", action="store_true", help="write the album store (default: dry run)")
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO, format="[%(asctime)s] %(message)s", datefmt="%Y-%m-%dT%H:%M:%S%z")
@@ -2234,6 +2311,8 @@ def reset_main() -> None:
         changed = [f for f in fields if before.get(f) != after.get(f)]
         for f in changed:
             logger.info("  %s: %s → %s", f, json.dumps(before.get(f)), json.dumps(after.get(f)))
+        for line in reset_notes(state, key, before, after):
+            logger.info("%s", line)
         if args.apply:
             state.save()
             logger.info("Saved; the next album tick searches it again")

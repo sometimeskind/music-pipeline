@@ -77,10 +77,10 @@ def album_group(record: dict) -> str | None:
 
 
 def album_refs(key: str, record: dict) -> list[str]:
-    """What the album's events may name it by: its key now (a row id since
-    homelab#2478), every Spotify album ID and local name it has, which were its
-    keys before."""
-    return sorted({key, *(record.get("spotify_album_ids") or ()), *(record.get("names") or ())})
+    """What the album's events may name it by (``events.album_refs``)."""
+    from music_fetch.events import album_refs as refs  # noqa: PLC0415
+
+    return refs(key, record)
 
 
 def uuid_or_none(value: str) -> str | None:
