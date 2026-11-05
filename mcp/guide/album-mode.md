@@ -139,7 +139,10 @@ an album word only as the artist's name, beside words of its own: `Curtis Mayfie
 for *Curtis Live!*) is another album by the artist, unless those words are only how the album's
 release spells it, which an override fixes. `other release` (a tour, live,
 box set or remix release holding the album's name) is too, unless the album itself is one whose
-Spotify name doesn't say so: an override with that word (`live`) matches it. An override is words a
+Spotify name doesn't say so: an override with that word (`live`) matches it. `subtitle` is what the
+title holds against the subtitle after ` - `, which the search leaves out: another decade (`The 60s`
+for *… - The 70's*), or leftover words and none of the subtitle's own. An override with the title's
+words matches it if the release is the album. An override is words a
 release title holds, which also steer the edition picked. Its dry run shows the query before
 and after, and when the album is searched again (a `missing` album at the next tick).
 
