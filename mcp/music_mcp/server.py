@@ -189,7 +189,9 @@ def build_server(
 
     @mcp.tool(annotations={"readOnlyHint": True})
     async def get_job(job_id: str, offset: Offset = 0) -> dict:
-        """A job's status and one page of its output; next_offset pages on."""
+        """A job's status and one page of its output; next_offset pages on. A running apply's phase
+        says whether it is still re-checking its dry run, when Dry run lines are expected and
+        nothing has been applied, or applying."""
         return await call("get_job", lambda c: pipeline.get(c, f"/jobs/{seg(job_id)}", offset=offset))
 
     @mcp.tool(annotations={"readOnlyHint": True})

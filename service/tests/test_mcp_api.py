@@ -179,6 +179,35 @@ def test_keep_quarantined_refuses_a_path_outside_replaced(client, file):
     assert client.post("/mcp-api/run/keep_quarantined", json={"file": file}, headers=WRITE).status_code == 400
 
 
+def test_a_poll_during_the_gate_says_nothing_is_applied_yet(client, env, monkeypatch):
+    """homelab#2643: the gate's dry-run lines read as a silent dry run under the apply argv."""
+    dry_run = "music-audit-dupes --merge 1 2"
+    env["commands"].outputs[dry_run] = (["[2026-11-04T13:57:47+0000] Dry run: nothing merged. Re-run with --apply."], 0)
+    body = {"pairs": [[1, 2]]}
+    assert client.post("/mcp-api/run/merge_items", json=body, headers=WRITE).json["phase"] is None
+
+    release = threading.Event()
+    run_command = env["jobs"]._run_command
+
+    def held(argv, environ, on_line):
+        code = run_command(argv, environ, on_line)
+        if " ".join(argv) == dry_run:
+            release.wait(5)
+        return code
+
+    env["jobs"]._run_command = held
+    monkeypatch.setenv("MCP_INLINE_SECONDS", "0.2")
+    job_id = client.post("/mcp-api/run/merge_items", json={**body, "apply": True}, headers=WRITE).json["job_id"]
+    polled = client.get(f"/mcp-api/jobs/{job_id}", headers=READ).json
+    assert polled["status"] == "running" and polled["phase"] == mcp_jobs.CHECKING_DRY_RUN
+    assert "nothing applied yet" in polled["phase"] and "nothing merged" in polled["output"]
+
+    release.set()
+    assert env["jobs"].wait(job_id, 5)["status"] == "done"  # the comparison still matched: not refused
+    finished = client.get(f"/mcp-api/jobs/{job_id}", headers=READ).json
+    assert finished["phase"] is None and finished["output"].startswith("[MCP] dry run re-run matches")
+
+
 def test_retire_item_normalises_its_ids_and_reason(client, env):
     resp = client.post("/mcp-api/run/retire_item", json={"ids": [8283, 534, 8283], "reason": "  wrong\n box  set "},
                        headers=WRITE)
