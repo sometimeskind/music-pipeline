@@ -348,6 +348,9 @@ def _make_spotdl(settings: dict):
         client_secret=client_secret,
         use_official_api=True,
         downloader_settings=settings,
+        # spotdl would otherwise keep every Spotify response for the life of the process:
+        # 1.3 GB for one night's playlist reads, each page read only once (homelab#2658).
+        no_cache=True,
     )
     # Every Spotify reader goes through this client: fail fast on a long 429 (#195).
     from spotdl.utils.spotify import SpotifyClient  # noqa: PLC0415
