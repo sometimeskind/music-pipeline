@@ -425,7 +425,8 @@ def make_blueprint(jobs: mcp_jobs.JobQueue) -> Blueprint:
         finished = job["status"] not in mcp_jobs.ACTIVE
         lines = jobs.output(job["job_id"])
         output, next_offset = mcp_jobs.page(lines, min(offset, len(lines)), finished)
-        return {**job, "progress": mcp_jobs.progress(lines), "output": output, "offset": offset,
+        return {**job, "phase": mcp_jobs.phase(job), "progress": mcp_jobs.progress(lines), "output": output,
+                "offset": offset,
                 "next_offset": next_offset, "total_lines": len(lines)}
 
     @bp.get("/jobs/<job_id>")

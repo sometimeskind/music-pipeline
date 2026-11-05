@@ -249,7 +249,7 @@ The CLI tools run as jobs in a **single-slot queue** of depth 5 (the short lane)
  "status": "done", "caller": "a1b2…", "tier": "write",
  "argv": [["music-album-reset", "--", "0ETF…"]], "lane": "short", "resumable": false, "resumes": 0,
  "created_at": "…", "started_at": "…", "finished_at": "…", "exit_code": 0,
- "dry_run_hash": "sha256:…", "error": null, "progress": null,
+ "dry_run_hash": "sha256:…", "error": null, "phase": null, "progress": null,
  "output": "…one page…", "offset": 0, "next_offset": null, "total_lines": 12}
 ```
 
@@ -264,6 +264,8 @@ The CLI tools run as jobs in a **single-slot queue** of depth 5 (the short lane)
 | `interrupted` | it was queued or running when the service restarted and is not resumable, or was resumed 5 times already; never retried |
 
 `args` are the **normalised** arguments: album queries resolved to their key, ID lists deduplicated and sorted, `since` in UTC. `argv` lists each command the job runs (`merge_items` runs one per pair). `dry_run_hash` is set on a successful dry run and on a refused apply.
+
+`phase` says where a running apply has got, and is `null` for any other job. An apply re-runs its dry run first, so until that matches `phase` is `checking dry run: nothing applied yet, the output so far is the dry run`: `output` holds the dry run's lines (`Dry run — nothing …`), `argv` the commands still to come, `dry_run_argv` the ones running, and `dry_run_hash` is `null`. The output is then cleared, `[MCP] dry run re-run matches (…); applying` is its first line, and `phase` is `applying`. It is a field, not an output line, because the comparison hashes the output.
 
 `lane` is `short` or `long`. `progress` is the output's latest `[PROGRESS] <done>/<total>…` line as `{"done": n, "total": n, "line": "…", "at": "<its log timestamp>"}`, or `null`: a long job's progress without paging through its output.
 

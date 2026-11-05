@@ -66,6 +66,8 @@ FAILED = "failed"
 REFUSED = "refused"
 INTERRUPTED = "interrupted"
 ACTIVE = (QUEUED, WAITING, RUNNING)
+CHECKING_DRY_RUN = "checking dry run: nothing applied yet, the output so far is the dry run"
+APPLYING = "applying"
 
 PAGE_LINES = 200
 PAGE_BYTES = 32 * 1024
@@ -107,6 +109,14 @@ def progress(lines: list[str]) -> dict | None:
         if m := _PROGRESS.match(line):
             return {"done": int(m["done"]), "total": int(m["total"]), "line": m["line"], "at": m["at"]}
     return None
+
+
+def phase(job: dict) -> str | None:
+    """Where a running apply has got (homelab#2643): a field, since a line in the output would
+    change the hash its dry-run comparison reads.  None for any other job."""
+    if job.get("mode") != "apply" or job.get("status") != RUNNING:
+        return None
+    return APPLYING if job.get("applying") else CHECKING_DRY_RUN
 
 
 def same_args(a: dict, b: dict) -> bool:

@@ -31,6 +31,11 @@ Every write tool is a dry run unless `apply=true`:
    `refused` with the new dry run as its output, and that becomes the dry run to apply. Show it
    and ask again.
 
+An apply job shows its dry run first. While `get_job`'s `phase` says `checking dry run`, `Dry run
+— nothing …` in the output and a null dry run hash are expected and nothing has been applied:
+this is not a failed apply, so keep polling. Once it matches, the output restarts at
+`[MCP] dry run re-run matches (…); applying`, and `phase` says `applying`.
+
 Writes are recoverable: the library and pipeline state are backed up, and a merged or replaced
 file goes to `quarantine/replaced/` for 14 days (`keep_quarantined` moves one out of the purge's
 reach, to `quarantine/keep/`). A file `retire_item` took off an album goes the same way, and

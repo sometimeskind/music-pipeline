@@ -67,6 +67,19 @@ def run(q: JobQueue, **kw) -> dict:
     return q.wait(job["job_id"], 5)
 
 
+@pytest.mark.parametrize("job, expected", [
+    ({"mode": "dry_run", "status": "running"}, None),
+    ({"mode": "apply", "status": "queued"}, None),
+    ({"mode": "apply", "status": "waiting_for_lock"}, None),
+    ({"mode": "apply", "status": "running"}, mcp_jobs.CHECKING_DRY_RUN),
+    ({"mode": "apply", "status": "running", "applying": True}, mcp_jobs.APPLYING),
+    ({"mode": "apply", "status": "done", "applying": True}, None),
+    ({"mode": "apply", "status": "refused"}, None),
+])
+def test_phase_names_the_step_of_a_running_apply(job, expected):
+    assert mcp_jobs.phase(job) == expected
+
+
 def test_dry_run_records_its_output_and_hash(make, tmp_path):
     q, commands, _ = make({"music-embed-covers": (["[2026-10-27T10:00:00+0000] 3 item(s) would get a cover"], 0)})
     job = run(q)
