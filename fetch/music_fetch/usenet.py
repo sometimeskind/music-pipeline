@@ -77,6 +77,13 @@ _EDITION_WORDS = {"deluxe": "deluxe", "expanded": "expanded", "anniversary": "an
                   "special": "special", "bonus": "bonus", "limited": "limited"}
 # Words a release name may add or drop around a name ("The Beatles", "Love & Devotion").
 _ARTICLES = {"the", "a", "and"}
+# A subtitle holding one of these describes the album rather than naming it
+# (homelab#2662): "Super Deluxe" is an edition, and "Original Motion Picture
+# Soundtrack" has "OST" for its release.
+_NOTE_WORDS = set(_EDITION_WORDS) | {"soundtrack", "ost", "motion", "picture", "film", "movie", "series", "score"}
+_DECADE = re.compile(r"(?:19|20)?\d0s")
+_BRACKETS = re.compile(r"\s*[\(\[][^\)\]]*[\)\]]")
+_SUBTITLE = re.compile(r"\s+-\s+(.*)$")
 
 
 @dataclasses.dataclass
@@ -174,9 +181,15 @@ def clean_album(name: str) -> str:
     "Abbey Road (Remastered 2009)" and "Rumours - Super Deluxe" both search as
     the bare title.
     """
-    name = re.sub(r"\s*[\(\[][^\)\]]*[\)\]]", "", name)
-    name = re.sub(r"\s+-\s+.*$", "", name)
+    name = _SUBTITLE.sub("", _BRACKETS.sub("", name))
     return name.strip() or name
+
+
+def subtitle(name: str) -> str:
+    """What :func:`clean_album` drops after ``" - "``: ``"The Very Best of Aretha
+    Franklin - The 70's"`` → ``"The 70's"``."""
+    found = _SUBTITLE.search(_BRACKETS.sub("", name))
+    return found[1] if found else ""
 
 
 def search_title(name: str) -> str:
@@ -306,6 +319,41 @@ def named_by_artist(release: Release, artist: str, album: str) -> str:
     return f"{' '.join(only)}, beside {' '.join(extra)}" if only and extra else ""
 
 
+def decades(text: str) -> set[str]:
+    """The decades *text* names, whatever the century: ``The '60s`` and ``1960s`` → ``{"60s"}``."""
+    return {w[-3:] for w in words(text) if _DECADE.fullmatch(w)}
+
+
+def subtitle_clash(release: Release, artist: str, album: str) -> str:
+    """How the title says it is another album than the one the subtitle names
+    (homelab#2662), which the album-name check can't see: it reads the name
+    without its subtitle.  Empty when it doesn't.  ``Aretha Franklin-The Very Best
+    Of Aretha Franklin The 60s-…`` holds every word of *The Very Best of Aretha
+    Franklin - The 70's* it is asked for, and it is another volume.
+
+    Two things say so: a decade other than the album's, with none of the album's;
+    or a title with none of the subtitle's own words and with leftover words
+    instead.  A title that only leaves the subtitle out is the album.  A subtitle
+    with a note word (``Rumours - Super Deluxe``) names nothing to miss; tags and
+    the name's own words aren't its own, nor are numbers and years, which titles
+    hold for other reasons.  A leftover word in the artist's segment says nothing
+    about the album: ``Prince And The Revolution-Parade-…``.
+    """
+    wanted, found = decades(album), decades(release.title)
+    if wanted and found and not wanted & found:
+        return f"{' '.join(sorted(found))}, not {' '.join(sorted(wanted))}"
+    note = words(subtitle(album))
+    known = set(words(artist)) | set(words(search_title(album))) | _TAG_WORDS
+    own = [w for w in dict.fromkeys(note)
+           if w not in known and (_DECADE.fullmatch(w) or not any(c.isdigit() for c in w))]
+    if not own or set(note) & _NOTE_WORDS or set(own) & set(words(release.title)):
+        return ""
+    segments = re.split(r"(?<! )-(?! )", _drop_group(release.title))
+    lead = set(words(segments[0])) if len(segments) >= 2 else set()
+    extra = [w for w in leftover(release, artist, album) if w not in lead]
+    return f"lacks {' '.join(own)}, beside {' '.join(extra)}" if extra else ""
+
+
 @dataclasses.dataclass(frozen=True)
 class Rejection:
     """Why a release is not the album (homelab#2568).  *stage* counts the rules
@@ -380,13 +428,16 @@ def rejection(
     other = [] if any_album else other_release(release, artist, album)
     if other:
         return Rejection(6, "other release", " ".join(other))
+    clash = "" if any_album else subtitle_clash(release, artist, album)
+    if clash:
+        return Rejection(7, "subtitle", clash)
     is_single = album_type == "single" if album_type else 0 < tracks <= 3
     shorter = sorted(title & _SINGLE_WORDS - set(words(album)))
     if shorter and not is_single:
-        return Rejection(7, "single", f"tagged {' '.join(shorter)}, the album isn't one")
+        return Rejection(8, "single", f"tagged {' '.join(shorter)}, the album isn't one")
     low, high = size_range(tracks, seconds)
     if high and not low <= release.size <= high:
-        return Rejection(8, "size", f"{release.size / 1e6:.0f} MB, not {low / 1e6:.0f}-{high / 1e6:.0f} MB")
+        return Rejection(9, "size", f"{release.size / 1e6:.0f} MB, not {low / 1e6:.0f}-{high / 1e6:.0f} MB")
     return None
 
 
@@ -415,7 +466,7 @@ def why_none(
     for r in releases:
         why = rejection(r, artist, album, tracks, album_type=album_type, seconds=seconds, any_album=any_album)
         if why is None:
-            why = Rejection(9, "blocklisted") if r.guid in blocklist else Rejection(9, "no download link")
+            why = Rejection(10, "blocklisted") if r.guid in blocklist else Rejection(10, "no download link")
         found.append((r, why))
     if not found:
         return ""

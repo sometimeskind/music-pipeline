@@ -7,7 +7,7 @@ import requests
 
 from music_fetch.usenet import (
     Prowlarr, Release, Sabnzbd, clean_album, leftover, matches, normalise, rank, readable, rejection, search_title,
-    tier, why_none,
+    subtitle, tier, why_none,
 )
 
 MB = 1_000_000
@@ -719,3 +719,80 @@ def test_keeps_matching_the_album_itself(artist: str, album: str, title: str) ->
 def test_any_album_and_an_override_have_no_artist_part_to_check() -> None:
     assert matches(rel(CURTIS_EUROPE), "Curtis Mayfield", "★★★", 18, album_type="album", any_album=True)
     assert matches(rel(CURTIS_EUROPE), "", "curtis mayfield live", 18, album_type="album")
+
+
+# ---------------------------------------------------------------------------
+# A title against the subtitle the search leaves out (homelab#2662)
+# ---------------------------------------------------------------------------
+
+ARETHA_70S = "The Very Best of Aretha Franklin - The 70's"
+ARETHA_60S = "Aretha Franklin-The Very Best Of Aretha Franklin The 60s-Remastered-CD-FLAC-1994-FORSAKEN"
+
+
+def test_rejects_the_other_decade_album_862_took() -> None:
+    """homelab#2662: without its subtitle the album is *The Very Best of Aretha
+    Franklin*, and 60s is a number, so no rule saw the title's other volume."""
+    why = rejection(rel(ARETHA_60S, size=308 * MB), "Aretha Franklin", ARETHA_70S, 16, album_type="compilation",
+                    seconds=4224)
+    assert why is not None and str(why) == "subtitle: 60s, not 70s"
+
+
+@pytest.mark.parametrize("title", [
+    "Aretha Franklin-The Very Best Of Aretha Franklin The 70s-Remastered-CD-FLAC-1994-GRP",
+    "Aretha Franklin-The Very Best Of Aretha Franklin The 1970s-CD-FLAC-1994-GRP",
+    "Aretha Franklin-The Very Best Of Aretha Franklin The 60s And 70s-CD-FLAC-1994-GRP",
+    "Aretha Franklin-The Very Best Of Aretha Franklin-CD-FLAC-1994-GRP",
+])
+def test_a_title_with_the_decade_or_none_is_the_album(title: str) -> None:
+    assert rejection(rel(title), "Aretha Franklin", ARETHA_70S, 16, album_type="compilation") is None
+
+
+def test_a_decade_in_brackets_counts_too() -> None:
+    why = rejection(rel("Artist-Greatest Hits The 60s-CD-FLAC-1994-GRP"), "Artist", "Greatest Hits (The 70's)", 16,
+                    album_type="album")
+    assert why is not None and why.rule == "subtitle"
+
+
+@pytest.mark.parametrize("artist, album, title, detail", [
+    # Real grabs, another compilation by their titles; both downloads failed, so no files to check.
+    ("Various Artists", "Acid Jazz - Verve 50", "Various Artists-Swaraj-1997-FLAC-Acid Jazz, JAZID CD 171, CD-",
+     "lacks verve, beside swaraj jazid"),
+    ("Various Artists", "New Year's Eve - NYE 2018/2019",
+     "Various Artists - Fantazia New Years Eve 2012 (2012) CD MP3 320", "lacks nye, beside fantazia"),
+])
+def test_rejects_words_where_the_subtitle_should_be(artist: str, album: str, title: str, detail: str) -> None:
+    why = rejection(rel(title), artist, album, 30, album_type="compilation")
+    assert why is not None and str(why) == f"subtitle: {detail}"
+
+
+@pytest.mark.parametrize("artist, album, title", [
+    # Edition suffixes search as the bare title, whatever else the title says.
+    ("Fleetwood Mac", "Rumours - Super Deluxe", "Fleetwood Mac-Rumours-Japan Import-CD-FLAC-2004-GRP"),
+    ("The Beatles", "Abbey Road - Remastered 2009", "The Beatles-Abbey Road-Mobile Fidelity-CD-FLAC-1995-GRP"),
+    ("Artist", "Album - Bonus Track Version", "Artist-Album-Japan-CD-FLAC-2004-GRP"),
+    # A soundtrack's subtitle says what it is, and its release says so its own way.
+    ("Cliff Martinez", "Drive - Original Motion Picture Soundtrack", "Cliff Martinez-Drive-OST-WEB-FLAC-2011-GRP"),
+    # The title leaves the subtitle out, or holds a word of it.
+    ("Prince", "Parade - Music from the Motion Picture Under the Cherry Moon", "Prince - Parade"),
+    ("Alabaster DePlume", "Copernicus - The Good Book of No", "Alabaster DePlume-Copernicus-WEB-2012-KNOWN"),
+    ("Spandau Ballet", "Gold - The Best of Spandau Ballet", "Spandau Ballet - Gold The Best Of Spandau Ballet"),
+    ("Artist", "Album - The Other Side", "Artist-Album Side-WEB-FLAC-2004-GRP"),
+    # More people named in the artist's segment say nothing about the album.
+    ("Prince", "Album - Words Of Its Own", "Prince And The Revolution-Album-CD-FLAC-1986-GRP"),
+])
+def test_a_subtitle_left_out_is_not_another_album(artist: str, album: str, title: str) -> None:
+    assert rejection(rel(title), artist, album, 10, album_type="album") is None
+
+
+@pytest.mark.parametrize("name, expected", [
+    (ARETHA_70S, "The 70's"),
+    ("Abbey Road (Remastered 2009)", ""),
+    ("Break Out (1983 Version - Expanded Edition)", ""),
+    ("Rumours", ""),
+])
+def test_subtitle_is_what_clean_album_drops_after_the_dash(name: str, expected: str) -> None:
+    assert subtitle(name) == expected
+
+
+def test_any_album_has_no_subtitle_to_check() -> None:
+    assert matches(rel(ARETHA_60S), "Aretha Franklin", "★ - The 70's", 16, album_type="album", any_album=True)
