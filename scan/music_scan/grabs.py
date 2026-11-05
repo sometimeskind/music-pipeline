@@ -62,10 +62,8 @@ def audit(records: Mapping[str, dict], search_words: Mapping[str, str]) -> Repor
     the search overrides by album key."""
     report = Report([])
     for key, record in records.items():
-        status = record.get("status")
-        if not (status == albums.IMPORTED
-                or status in (albums.FALLBACK, albums.FILLED) and record.get("fallback_from") == albums.PARTIAL):
-            report.skipped[status or "no status"] += 1
+        if not albums.from_release(record):
+            report.skipped[record.get("status") or "no status"] += 1
             continue
         title = (record.get("candidate") or {}).get("title")
         if not title:

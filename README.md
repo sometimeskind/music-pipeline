@@ -487,6 +487,12 @@ kubectl exec -n <ns> deploy/music-pipeline -- music-audit-artists
 kubectl exec -n <ns> deploy/music-pipeline -- music-audit-grabs
 ```
 
+**Albums imported with none of their wanted tracks (homelab#2662):** an album of fewer than 4 wanted tracks isn't judged by its titles, so a wrong album with few wanted tracks imports as `[DONE]`. `music-audit-zero-wanted` lists the albums the library holds from a release whose last import found 0 of N: each with its release and its fix (`reset_album` with `reimport=true`), then the count. It only reports, and a listed album may be right: title formats can differ, and the wanted tracks may be another edition's, so check its tracks first. It reads the album store and the `import_done` events (`found` and `total` since homelab#2662, the `[DONE]` line before), never the beets database. It can't see an import before 2026-10-29, or one whose event was pruned, and a wrong album sharing one wanted track isn't 0 of N. Read-only.
+
+```bash
+kubectl exec -n <ns> deploy/music-pipeline -- music-audit-zero-wanted
+```
+
 **Would a release match (homelab#2661):** `music-check-release` runs the tick's matcher (`usenet.rejection`, with the arguments the tick passes) on one release title for one album, and says accepted, or the rule that refused it and why, with the album's search and whether a stored override applied. `--words` simulates a search override, in place of any stored one: the album then has no artist, so the title must start with one of the words and hold them all, and `artist words` doesn't run. Without `--size` the size rule isn't checked, and the output says so. The blocklist and releases other albums took go by GUID, which a title doesn't have, so they aren't covered, nor is how an accepted release ranks. Read-only: the album store, no indexer call, no writes, no events.
 
 ```bash

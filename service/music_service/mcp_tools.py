@@ -566,6 +566,8 @@ TOOLS: dict[str, Tool] = {t.name: t for t in [
     Tool("audit_artists", READ, _none, lambda a, _: [["music-audit-artists"]]),
     # Albums held from a release the album-name check refuses (homelab#2656): no arguments.
     Tool("audit_grabs", READ, _none, lambda a, _: [["music-audit-grabs"]]),
+    # Albums imported with none of their wanted tracks found (homelab#2662): no arguments.
+    Tool("audit_zero_wanted", READ, _none, lambda a, _: [["music-audit-zero-wanted"]]),
     # The matcher's verdict on one release title for one album (homelab#2661).
     Tool("check_release", READ, _check_release, _check_release_argv),
     # homelab#2553: an hour-long AcoustID run in the long lane, resumed after a
