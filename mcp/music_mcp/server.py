@@ -401,6 +401,15 @@ def build_server(
         return await run("audit_grabs", {})
 
     @mcp.tool(annotations={"readOnlyHint": True})
+    async def audit_zero_wanted() -> dict:
+        """music-audit-zero-wanted: albums whose import found 0 of their N wanted tracks, each with its
+        release, and the count. It only reports. A listed album may be right: title formats can differ,
+        or the wanted tracks may be another edition's, so check its tracks. It can't see imports before
+        2026-10-29 or a wrong album sharing one wanted track; imports with no count and albums the library
+        doesn't hold from a release are counted. The fix is the album's: reset_album with reimport=true."""
+        return await run("audit_zero_wanted", {})
+
+    @mcp.tool(annotations={"readOnlyHint": True})
     async def check_release(
         album: AlbumQuery,
         title: Annotated[str, Field(description="the release title, as a [MISS] line or the album's record gives it",

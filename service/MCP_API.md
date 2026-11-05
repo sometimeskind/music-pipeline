@@ -295,6 +295,7 @@ A write tool's **apply** takes Prefect's `pipeline` lock (and first `albums`, fo
 | `audit_titles` | `{}` | `music-audit-titles` |
 | `audit_artists` | `{}` | `music-audit-artists` |
 | `audit_grabs` | `{}` | `music-audit-grabs` |
+| `audit_zero_wanted` | `{}` | `music-audit-zero-wanted` |
 | `check_release` | `{"album": "…", "title": "…", "size_bytes": 400000000, "words": "…"}` (`size_bytes` and `words` optional) | `music-check-release --album=KEY --title=T [--size=N] [--words=W]` |
 | `recheck_recordings` | `{"ids": [6994, 5672]}` (optional; none = every item with an `mb_trackid`) or `{"resume": "<run ID>"}` | `music-mb-fingerprint --recheck --run-id=<job_id> [-- ID…]` / `… --run-id=<run ID>` (long lane) |
 | `search_releases` | `{"query": "…", "limit": 5}` | `music-requests search --limit=N -- QUERY` |

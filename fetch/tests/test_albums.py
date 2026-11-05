@@ -1651,6 +1651,7 @@ def test_a_retry_lacking_the_same_tracks_settles_the_album(roots, recorded) -> N
     assert dkw["data"]["why"] == "edition lacks the same tracks"
     assert dkw["data"]["kept"] == "The_Notorious_BIG-Ready_To_Die-CD-FLAC-1994"
     assert dkw["data"]["lacking"] == ["1-17"] and dkw["data"]["missing"] == 1
+    assert (dkw["data"]["found"], dkw["data"]["total"]) == albums.titles_found(record, RTD[:-1])  # homelab#2662
 
 
 def test_a_retry_lacking_other_tracks_of_the_same_count_retries_again(roots, recorded) -> None:
@@ -2022,6 +2023,17 @@ def test_import_done_carries_the_release_group_identify_found(roots, recorded) -
     (kind, message, kw), = recorded
     assert kind == "import_done" and message.startswith("[DONE] Artist — Album: 2 file(s) from ")
     assert kw["release_group"] == RG and kw["spotify_album_id"] == "a0"
+
+
+def test_import_done_says_how_many_titles_it_found(roots, recorded) -> None:
+    """homelab#2662: an album under WRONG_ALBUM_MIN_TRACKS isn't judged, so 0 of 2 is [DONE]."""
+    state = grabbed_state()
+    status, _, _ = run_complete(state, albums.Completion("nzo1", True, "album/Artist-Album-FLAC"), roots,
+                                titles=["Else", "Other"])
+    assert status == albums.IMPORTED
+    (kind, message, kw), = recorded
+    assert kind == "import_done" and "2 of Spotify's 2 titles not in this release" in message
+    assert (kw["data"]["found"], kw["data"]["total"]) == (0, 2)
 
 
 def test_wrong_release_records_import_wrong_and_a_failure(roots, recorded) -> None:

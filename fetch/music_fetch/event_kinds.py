@@ -52,8 +52,9 @@ class Kind(NamedTuple):
 
 KINDS: dict[str, Kind] = {
     # --- An album-mode import (music_fetch.albums) ---
-    "import_done": Kind(ALBUM, "[DONE]: an album imported; an incomplete copy kept as the album says why.",
-                        (*_RECORD, "why", "reposts", "missing", "lacking", "kept")),
+    "import_done": Kind(ALBUM, "[DONE]: an album imported; an incomplete copy kept as the album says why.  "
+                               "found of total: its wanted titles the release holds, since homelab#2662.",
+                        (*_RECORD, "why", "reposts", "missing", "lacking", "kept", "found", "total")),
     "import_wrong": Kind(ALBUM, "[WRONG]: a download that is not the album asked for.",
                          (*_RECORD, "release", "guid", "found", "items", "total")),
     "import_incomplete": Kind(ALBUM, "[INCOMPLETE]: a download lacking tracks of its release.",
