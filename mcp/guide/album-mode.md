@@ -139,6 +139,6 @@ accepted, or the rule that refused the title and why. Every override word is req
 or a word only some releases carry refuses the others, and a leading `-` excludes nothing: `-Son`
 is the word `son`. An override has no artist, so the title's first word must be one of its words
 (`Harry Nilsson-…` needs `harry`: `nilsson schmilsson` alone refuses it), and `artist words` no
-longer runs. Give `size_bytes` when you have it: without it the size rule isn't checked and the
-output says so. It covers the matcher only, not the blocklist, not whether the
+longer runs. Give the release's size in bytes when you have it: without it the size rule isn't checked
+and the output says so. It covers the matcher only, not the blocklist, not whether the
 indexer has the release, and not how an accepted release ranks.
