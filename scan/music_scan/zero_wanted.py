@@ -2,10 +2,11 @@
 
 :func:`~music_fetch.albums.wrong_album` doesn't judge an album of fewer than
 ``WRONG_ALBUM_MIN_TRACKS`` tracks, and a wants record's tracks are only the
-wanted ones, so a wrong album with few wanted tracks imports as ``[DONE]``:
-*2 of its 2 wanted track(s) not in this release*.  This audit lists the albums
-the library holds from a release whose last import found 0 of N.  It reports and
-refuses nothing.
+wanted ones, so until homelab#2683 a wrong album with few wanted tracks imported
+as ``[DONE]``: *2 of its 2 wanted track(s) not in this release*.
+:func:`~music_fetch.albums.holds_none` refuses those now, unless a file's title
+is blank.  This audit lists the albums the library holds from a release whose
+last import found 0 of N.  It reports and refuses nothing.
 
 The count is the ``import_done`` event's ``found`` and ``total``, or, before
 homelab#2662, the ``[DONE]`` line's sentence, which is left out when the release

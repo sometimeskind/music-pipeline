@@ -163,6 +163,12 @@ words matches it if the release is the album. An override is words a
 release title holds, which also steer the edition picked. Its dry run shows the query before
 and after, and when the album is searched again (a `missing` album at the next tick).
 
+The dry run never searches the indexer: it prints the words and the rules, so it says nothing
+about what they would find, and "nothing matches" can only come from comparing it with an earlier
+search's results. `check_release` doesn't search either. Only a reset and the next tick test the
+words: read that tick's `[GRAB]`, `[MISS]` or `[STAYS]` line. A grab under an override is judged
+at import, where a release holding none of the album's titles is `[WRONG]`, and the old items stay.
+
 To say whether a release matches, or to propose an override, run `check_release` with the album
 and the release title, and with `words` for an override. It is the tick's own matcher: it answers
 accepted, or the rule that refused the title and why. Give the release's size in bytes when you

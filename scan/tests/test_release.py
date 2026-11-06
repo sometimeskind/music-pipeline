@@ -351,6 +351,17 @@ def test_retire_with_drop_takes_the_whole_release(quarantined) -> None:
     assert quarantined == wrong and not wrong[0].get(release.EXTRA)
 
 
+def test_a_refused_reimport_leaves_the_old_release_alone(quarantined) -> None:
+    """homelab#2683: on a reimport refused as another album only the new release goes.
+    The old items keep their place, and no other_albums judgement runs on them."""
+    old = [_cd("deluxe@1", n) for n in range(1, 3)]
+    wrong = [FakeItem(9, album_record="BOYS", release="wrong@3", isrc="XX0000000001")]
+    assert release.retire(FakeLib([*old, *wrong]), "BOYS", {**BOYS, "reimport": True}, None, "wrong@3",
+                          _listed()) == 1
+    assert quarantined == wrong
+    assert all(i.get("album_record") == "BOYS" and not i.get(release.EXTRA) for i in old)
+
+
 def test_split_replaced_deletes_only_what_the_library_holds(tmp_path, ffmpeg) -> None:
     """--replaced (#287): a mix of superseded files and only copies."""
     from music_scan.identity import Recordings
