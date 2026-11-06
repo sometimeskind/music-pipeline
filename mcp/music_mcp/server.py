@@ -635,7 +635,8 @@ def build_server(
         """Search an album by these words from the next tick on, for a name no normalisation
         reaches ([NOWORDS]) or to pick an edition. The dry run shows the query before and after,
         when the album is searched again, and which matcher checks the override drops: the matcher
-        no longer knows the artist, so a title must start with one of the words."""
+        no longer knows the artist, so a title must start with one of the words. The dry run never
+        searches the indexer: only a reset and the next tick test the words."""
         body = {"album": album, "words": words, "reason": reason, "apply": apply}
         return await run("set_search_override", body, write=True)
 
