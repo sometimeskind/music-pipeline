@@ -73,6 +73,21 @@ def test_a_kept_copy_is_named_by_its_own_title() -> None:
     assert zero_wanted.audit({"770": _record()}, [row]).flagged[0].title == "Kept-FLAC"
 
 
+def test_a_release_is_named_by_its_import_not_a_later_candidate() -> None:
+    message = ("[DONE] Paul McCartney — McCartney (Archive Collection) (wants: soft): 11 file(s) from "
+               "Paul McCartney-McCartney III-24-96-WEB-FLAC-2020-OBZEN; 2 of its 2 wanted track(s) not in this "
+               "release go back to spotdl")
+    record = _record(candidate={"title": "Paul McCartney-Oceans Kingdom-24-96-WEB-FLAC-2011-OBZEN"})
+    assert zero_wanted.audit({"813": record}, [_row("813", message)]).flagged[0].title \
+        == "Paul McCartney-McCartney III-24-96-WEB-FLAC-2020-OBZEN"
+
+
+def test_a_message_naming_no_release_falls_back_to_the_candidate() -> None:
+    row = _row("770", "[DONE] x: the most complete copy, Kept, lacks 1 track(s) of its own release", found=0, total=2)
+    assert zero_wanted.audit({"770": _record()}, [row]).flagged[0].title \
+        == "Dry Cleaning-Secret Love-16BIT-WEB-FLAC-2026-OBZEN"
+
+
 def test_what_cant_be_compared_is_counted() -> None:
     report = zero_wanted.audit({
         "1": _record(),

@@ -46,6 +46,9 @@ SELECT at, spotify_album_id, message, data FROM events
 # The [DONE] line's note (albums.complete), for an event without found and total.
 _NOT_IN_RELEASE = re.compile(r"(\d+) of (?:its (\d+) wanted track\(s\)|Spotify's (\d+) titles) not in this release")
 
+# The release the [DONE] line says it imported (albums.complete: its note follows after "; ").
+_IMPORTED_FROM = re.compile(r"\d+ file\(s\) from (.+?)(?:; |$)")
+
 
 @dataclasses.dataclass
 class Flagged:
@@ -82,6 +85,15 @@ def counted(message: str, data: dict) -> tuple[int, int] | None:
     return None if data.get("why") else (0, 0)
 
 
+def release_title(message: str, data: dict, record: dict) -> str | None:
+    """The release one ``import_done`` event imported: its kept copy, or the one its ``[DONE]``
+    line names.  The record's candidate only when neither says, as it is the last release
+    *grabbed*: a grab reset before it imported leaves it there, naming a release the library
+    never held (homelab#2661, album 813)."""
+    match = _IMPORTED_FROM.search(message)
+    return data.get("kept") or (match and match[1]) or (record.get("candidate") or {}).get("title")
+
+
 def latest_imports(records: Mapping[str, dict], rows: Iterable[tuple]) -> dict[str, tuple[datetime, str, dict]]:
     """Each album's last ``import_done``: album key → ``(at, message, data)``.  *rows* are
     :data:`_IMPORTS`'s, oldest first; an event names the album by any of its refs."""
@@ -113,8 +125,8 @@ def audit(records: Mapping[str, dict], rows: Iterable[tuple]) -> Report:
         report.compared += 1
         found, total = count
         if total and not found:
-            title = data.get("kept") or (record.get("candidate") or {}).get("title")
-            report.flagged.append(Flagged(key, record["artist"], record["name"], title, total, at))
+            report.flagged.append(Flagged(key, record["artist"], record["name"], release_title(message, data, record),
+                                          total, at))
     return report
 
 
