@@ -1619,6 +1619,82 @@ def test_wrong_album_check_skips_short_records() -> None:
     assert albums.wrong_album(1, 4) and not albums.wrong_album(2, 4)
 
 
+def wants_state(titles: list[str], **fields) -> State:
+    """A wants album of many tracks with these wanted *titles*: a record's tracks are the wanted ones."""
+    state = grabbed_state(playlists={"fancy": [[t, "Artist", f"s{i}"] for i, t in enumerate(titles)]})
+    state.albums["a0"].update({"origin": "wants", "tracks_count": 20, **fields})
+    return state
+
+
+MCCARTNEY_WANTS = ["Every Night - Remastered 2011", "Maybe I\u2019m Amazed - Remastered 2011"]
+
+
+def test_a_reimport_refuses_a_release_holding_none_of_its_few_wanted_tracks(roots, caplog, recorded) -> None:
+    """homelab#2683, album 813: its override grabbed the ballet score Ocean's Kingdom. Under
+    WRONG_ALBUM_MIN_TRACKS it would have imported, 0 of 2, and retired the album's old items."""
+    state = wants_state(MCCARTNEY_WANTS, reimport=True)
+    retired = []
+    with caplog.at_level("INFO", logger="music_fetch.albums"):
+        status, _, _ = run_complete(state, albums.Completion("nzo1", True, "album/Artist-Album-FLAC"), roots,
+                                    titles=["Ocean's Kingdom", "Hall of Dance", "Imprisonment", "Moonrise"],
+                                    retired=retired)
+    record = state.albums["a0"]
+    assert status == albums.WANTED and record["blocklist"] == ["r1"] and record["attempts"] == 1
+    # Only the release's own items go: retire(keep=None) with a drop never touches the old ones.
+    assert [(k, d.split("@")[0]) for k, d in retired] == [(None, "r1")]
+    assert record["reimport"] is True  # the next release is a reimport too
+    assert "another album: 0 of the album's 2 titles in it" in caplog.text
+    assert [k for k, _, _ in recorded] == ["import_wrong", "failure"]
+
+
+def test_a_right_edition_lacking_some_wanted_tracks_still_imports(roots, caplog) -> None:
+    """homelab#2683, album 1377: the plain CD holds Queer but not the deluxe's Trip My Wire."""
+    state = wants_state(["Queer", "Trip My Wire"], reimport=True)
+    retired = []
+    with caplog.at_level("INFO", logger="music_fetch.albums"):
+        status, _, _ = run_complete(state, albums.Completion("nzo1", True, "album/Artist-Album-FLAC"), roots,
+                                    titles=["Supervixen", "Queer", "Only Happy When It Rains", "Vow"],
+                                    retired=retired)
+    assert status == albums.IMPORTED and state.albums["a0"]["blocklist"] == []
+    assert [(k.split("@")[0], d) for k, d in retired] == [("r1", None)]
+    assert "1 of its 2 wanted track(s) not in this release go back to spotdl" in caplog.text
+
+
+@pytest.mark.parametrize("wanted, titles", [
+    pytest.param(MCCARTNEY_WANTS, ["Long Tailed Winter Bird", "Find My Way", "Deep Down"], id="813-McCartney-III"),
+    pytest.param(["I'm Coming Out", "Upside Down"], ["Reach Out and Touch (Somebody's Hand)"], id="1453-Diana-Ross"),
+    # Whole words: "as" is in neither title.
+    pytest.param(["As"], ["Last Christmas", "Faster"], id="a-word-inside-a-word"),
+    # The album may be right, but it holds nothing wanted, and spotdl gets those tracks either way.
+    pytest.param(["Grass", "I Have The Key"], ["Hit My Head All Day", "Joy"], id="770-a-deluxes-bonus-tracks"),
+])
+def test_holds_none_of_the_wanted_titles(wanted, titles) -> None:
+    assert albums.holds_none(wants_state(wanted).albums["a0"], titles)
+
+
+@pytest.mark.parametrize("wanted, titles", [
+    pytest.param(["Hot Topic"], ["Le Tigre-01-deceptacon", "Le Tigre-02-hot topic"], id="1357-file-name-as-title"),
+    pytest.param(["Overs"], ["Simon & Garfunkel Overs"], id="452-artist-in-the-title"),
+    pytest.param(["The Faster Blade (feat. Raekwon)"], ["The Faster Blade feat Raekwon"], id="1700-unbracketed-feat"),
+    pytest.param(["That Lady, Pts. 1 & 2"], ["That Lady", "Summer Breeze"], id="1485-the-file-says-less"),
+    pytest.param(["Le Lis"], ["To the Women in My Life / Le Lis"], id="1639-a-medley"),
+    pytest.param(["Alphabet St."], ["", ""], id="1467-untagged"),
+    pytest.param(["Electric Feel"], ["Future Reflections", ""], id="2100-partly-untagged"),
+    pytest.param(["()"], ["Gl\u00f3s\u00f3li"], id="a-wanted-title-with-no-words"),
+    pytest.param(["\u590f"], ["Summer"], id="a-title-in-another-script"),
+])
+def test_a_title_written_otherwise_or_unreadable_is_not_held_against_the_release(wanted, titles) -> None:
+    """Each from a right album a plain ``found == 0`` would refuse: titles that can't
+    be read prove nothing, and a false refusal blocklists a right release."""
+    assert not albums.holds_none(wants_state(wanted).albums["a0"], titles)
+
+
+def test_holds_none_needs_tracks_and_titles() -> None:
+    record = wants_state(["One"]).albums["a0"]
+    assert not albums.holds_none(record, [])
+    assert not albums.holds_none({**record, "playlists": {}}, ["One"])
+
+
 def test_an_incomplete_copy_is_kept_and_the_same_edition_grabbed_again(roots, caplog) -> None:
     state = ready_to_die()
     retired = []
@@ -2098,10 +2174,10 @@ def test_import_done_carries_the_release_group_identify_found(roots, recorded) -
 
 
 def test_import_done_says_how_many_titles_it_found(roots, recorded) -> None:
-    """homelab#2662: an album under WRONG_ALBUM_MIN_TRACKS isn't judged, so 0 of 2 is [DONE]."""
+    """homelab#2662: untagged files can't be told from another album's (homelab#2683), so 0 of 2 is [DONE]."""
     state = grabbed_state()
     status, _, _ = run_complete(state, albums.Completion("nzo1", True, "album/Artist-Album-FLAC"), roots,
-                                titles=["Else", "Other"])
+                                titles=["", ""])
     assert status == albums.IMPORTED
     (kind, message, kw), = recorded
     assert kind == "import_done" and "2 of Spotify's 2 titles not in this release" in message

@@ -30,7 +30,7 @@ On album playlists the album is the unit, not its tracks (#279, operator
 album, whatever its tracklist: an edition other than Spotify's, a missing or
 extra track, a file beets can't match.  Nothing of it is quarantined, and
 nothing it lacks goes to spotdl.  A release fails only for a broken download,
-for being another album (:func:`wrong_album`), or for lacking tracks of its own
+for being another album (:func:`wrong_album`, :func:`holds_none`), or for lacking tracks of its own
 MusicBrainz release, when another copy of the same edition is tried
 (:func:`complete`).
 
@@ -166,8 +166,9 @@ COPY_STEM = re.compile(r"(.+)\.\d+")
 WINDOW = timedelta(hours=24)
 # Spotify album tracklists read per tick for spotdl fallbacks (#268): two calls each.
 TRACKLISTS_PER_TICK = 10
-# Albums shorter than this aren't judged by their titles (#279): a single's
-# one title proves little either way.
+# Albums shorter than this aren't judged by the share of their titles (#279): a
+# single's one title proves little either way.  :func:`holds_none` still refuses
+# a release that holds none of them (homelab#2683).
 WRONG_ALBUM_MIN_TRACKS = 4
 
 
@@ -1777,8 +1778,28 @@ def titles_found(record: dict, titles: list[str]) -> tuple[int, int]:
 
 def wrong_album(found: int, total: int) -> bool:
     """A release that names fewer than half the album's titles is another album
-    (#279).  Records of fewer than WRONG_ALBUM_MIN_TRACKS tracks aren't judged."""
+    (#279).  Records of fewer than WRONG_ALBUM_MIN_TRACKS tracks aren't judged here:
+    one title of two says little, and a wants record's tracks are only the wanted
+    ones.  :func:`holds_none` judges them."""
     return total >= WRONG_ALBUM_MIN_TRACKS and found * 2 < total
+
+
+def holds_none(record: dict, titles: list[str]) -> bool:
+    """Whether every one of the release's *titles* is readable and none is one of the
+    album's (homelab#2683), however few those are: a release of the album's wanted
+    tracks that holds not one of them is another album, or brings nothing wanted.
+
+    Looser than :func:`titles_found`, as a refusal blocklists the release: a title
+    counts when its words run inside the other's, either way, since a file's title
+    often holds more (``Le Tigre-02-hot topic``, ``The Faster Blade feat Raekwon``) or
+    less (``That Lady`` for ``That Lady, Pts. 1 & 2``).  A title with no words, an
+    untagged file's or one in another script, proves nothing, so one of them on
+    either side leaves the release unjudged."""
+    wanted = [" ".join(base_title(t[0])) for t in album_tracks(record) if t and t[0]]
+    have = [" ".join(base_title(t)) for t in titles]
+    if not (wanted and have and all(wanted) and all(have)):
+        return False
+    return not any(f" {w} " in f" {h} " or f" {h} " in f" {w} " for w in wanted for h in have)
 
 
 def _counts(copy: dict) -> dict:
@@ -1966,7 +1987,7 @@ def complete(
             reason = gave_up
         elif not titles:
             reason = "beets imported none of its files"
-        elif wrong_album(found, total):
+        elif wrong_album(found, total) or holds_none(record, titles):
             reason = f"another album: {found} of the album's {total} titles in it"
             logger.warning("[WRONG] %s: %s is %s", label, job_name, reason)
             # Not the album's release group: identity is the other album's.
