@@ -408,14 +408,15 @@ def test_the_reset_dry_run_passes_the_apply_gate(env, real_cli):
     dry = client.post("/mcp-api/run/reset_album", json={"query": "pastel", "reimport": True}, headers=WRITE)
     assert dry.json["status"] == "done", dry.json
     output = dry.json["output"]
-    assert "Nina.Simone-Pastel.Blues-FLAC-GRP (300 MB): Aborted, encryption detected; the matcher accepts it again" in output
-    assert "up to 1 of the 3 the album then has" in output
+    assert "Nina.Simone-Pastel.Blues-FLAC-GRP (300 MB): Aborted, encryption detected" in output
+    assert "Clears nothing from the blocklist" in output
     applied = client.post("/mcp-api/run/reset_album", json={"query": "pastel", "reimport": True, "apply": True},
                           headers=WRITE)
     assert applied.json["status"] == "done", applied.json
     assert real_cli.ran[-1][:2] == ["music-album-reset", "--reimport"] and "--apply" in real_cli.ran[-1]
     record = albums.State.load().albums["ALB3"]
-    assert record["blocklist"] == [] and record["attempts"] == 0 and record["reimport"] is True
+    assert record["blocklist"] == ["https://indexer/details/7"]  # a broken download stays (homelab#2661)
+    assert record["attempts"] == 0 and record["reimport"] is True
 
 
 def test_an_event_that_changes_the_reason_refuses_the_reset(env, real_cli):

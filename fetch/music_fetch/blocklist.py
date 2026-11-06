@@ -20,6 +20,9 @@ from datetime import datetime, timezone
 
 UNKNOWN = "unknown"
 UNREADABLE = "unknown: the event store can't be read"
+# How the two verdicts on what a release held begin (:func:`stays`).
+ANOTHER_ALBUM = "another album: "
+LACKS = "lacks "
 
 # Only the album tick's: spotdl's own failures carry the album's Spotify ID too.
 _EVENTS = """
@@ -38,7 +41,7 @@ def album_events(conn, refs: list[str], group: str | None) -> list[tuple[datetim
 
 def _reason(kind: str, data: dict) -> str:
     if kind == "import_incomplete":
-        return f"lacks {data.get('missing')} track(s) of its own release"
+        return f"{LACKS}{data.get('missing')} track(s) of its own release"
     return data.get("reason") or UNKNOWN
 
 
@@ -83,6 +86,16 @@ def entries(record: dict, rows: list[tuple[datetime, str, dict]] | None) -> list
                     "reason": known.get("reason") or (UNREADABLE if rows is None else UNKNOWN),
                     "at": known.get("at")})
     return out
+
+
+def stays(entry: dict) -> bool:
+    """Whether a reset leaves *entry* on the blocklist (homelab#2661).  Only a
+    verdict on what a release held comes off, another album or an incomplete
+    copy, as such a release can be wanted after all.  Any other failure stays,
+    a broken download above all: it would fail the same way, an attempt each
+    time, and the album is better missing than broken.  So does an entry whose
+    reason isn't known."""
+    return not entry["reason"].startswith((ANOTHER_ALBUM, LACKS))
 
 
 def describe(entry: dict) -> str:

@@ -8,6 +8,7 @@ from __future__ import annotations
 import logging
 from datetime import datetime, timedelta, timezone
 
+import psycopg
 import pytest
 
 from music_fetch import albums, blocklist, events, overrides_cli, state
@@ -23,6 +24,8 @@ JAPANESE_TITLE = "Harry Nilsson  1971 - Nilsson Schmilsson (Japanese issue)"
 SON_TITLE = "Harry Nilsson - Son of Schmilsson - NMR"
 ENCRYPTED = "Aborted, encryption detected"
 REPAIR = "Repair failed, not enough repair blocks (1238 short)"
+WRONG = "another album: 0 of the album's 10 titles in it"
+LACKS = "lacks 2 track(s) of its own release"
 AT = datetime(2026, 11, 3, 9, 52, tzinfo=timezone.utc)
 # What release.retire() does: an import retires what the new release holds; a reimport also another album (homelab#2662).
 OLD_ITEMS = ("Nothing is deleted now: the album's old items stay until an import. That import moves to "
@@ -32,6 +35,8 @@ OLD_ITEMS = ("Nothing is deleted now: the album's old items stay until an import
              "they stay unless the new release holds their recording, and retire_item takes them off. A playlist "
              "entry only a moved item held goes empty: a spotdl playlist downloads it at the next nightly, an "
              "album playlist's slot stays empty.")
+STAYS = ("Stays on the blocklist (a reset clears only another album or an incomplete copy, and only reimport=true "
+         "more than the last candidate):")
 PLAIN_OLD_ITEMS = ("Nothing is deleted now: the album's old items stay until an import. That import retires only the "
                    "ones whose recording the new release also holds; the rest stay on the album as local extras, "
                    "which retire_item takes off.")
@@ -61,6 +66,10 @@ def grab(minutes: int, guid: str, title: str, size: int) -> tuple:
 ROWS = [grab(0, WALKMAN, WALKMAN_TITLE, 420043632), row(1, "failure", reason=ENCRYPTED, attempts=1),
         grab(2, JAPANESE, JAPANESE_TITLE, 49799414), row(3, "failure", reason=REPAIR, attempts=2),
         grab(4, SON, SON_TITLE, 255225091)]
+# The same grabs refused for what they held: the two a reset takes off.
+JUDGED = [grab(0, WALKMAN, WALKMAN_TITLE, 420043632), row(1, "failure", reason=WRONG, attempts=1),
+          grab(2, JAPANESE, JAPANESE_TITLE, 49799414), row(3, "import_incomplete", release=JAPANESE_TITLE, missing=2),
+          grab(4, SON, SON_TITLE, 255225091)]
 
 
 def test_a_failure_with_no_guid_is_the_grab_before_it():
@@ -127,8 +136,8 @@ def test_an_unreadable_store_says_so():
     assert blocklist.entries(nilsson(), None)[0]["reason"] == blocklist.UNREADABLE
 
 
-def record_events() -> None:
-    for at, kind, data in ROWS:
+def record_events(rows: list[tuple] = ROWS) -> None:
+    for at, kind, data in rows:
         reason = data.get("reason") or ""
         assert events.record(kind, f"[{kind}] {reason}", source="albums", spotify_album_id=SID,
                              data={"key": "1274", **data})
@@ -152,17 +161,22 @@ def run_reset(monkeypatch, caplog, *flags: str) -> list[str]:
     return [r.getMessage() for r in caplog.records if r.name == "music_fetch.albums"]
 
 
-def seed_nilsson(**fields) -> None:
+def seed_nilsson(rows: list[tuple] = ROWS, **fields) -> None:
     State(albums={"1274": nilsson(**fields)}).save()
-    record_events()
+    record_events(rows)
+
+
+def stored() -> dict:
+    (record,) = State.load().albums.values()  # saved under a key of its own, not "1274"
+    return record
 
 
 def test_a_reimport_reset_lists_what_it_frees_and_what_that_costs(monkeypatch, caplog):
-    seed_nilsson()
+    seed_nilsson(JUDGED)
     lines = run_reset(monkeypatch, caplog, "--reimport")
     assert "Clears from the blocklist (2 of 2):" in lines
-    assert (f"  {WALKMAN_TITLE} (420 MB): {ENCRYPTED}; the matcher accepts it again") in lines
-    assert (f"  {JAPANESE_TITLE} (50 MB): {REPAIR}; the matcher accepts it again") in lines
+    assert (f"  {WALKMAN_TITLE} (420 MB): {WRONG}; the matcher accepts it again") in lines
+    assert (f"  {JAPANESE_TITLE} (50 MB): {LACKS}; the matcher accepts it again") in lines
     assert ("The tick may grab 2 cleared release(s) again. Each that fails the same way costs an attempt: "
             "up to 2 of the 3 the album then has.") in lines
     assert any(line.startswith("The next tick with a free slot grabs the best release") for line in lines)
@@ -174,8 +188,8 @@ def test_a_plain_reset_clears_only_the_last_candidate(monkeypatch, caplog):
     """1274's last candidate imported, so a plain reset clears nothing at all."""
     seed_nilsson()
     lines = run_reset(monkeypatch, caplog)
-    assert f"Clears nothing from the blocklist: its last candidate, {SON_TITLE}, isn't on it" in lines
-    assert "Stays on the blocklist (only reimport=true clears all of it):" in lines
+    assert "Clears nothing from the blocklist" in lines
+    assert STAYS in lines
     assert f"  {WALKMAN_TITLE} (420 MB): {ENCRYPTED}" in lines
     assert not any(line.startswith("The tick may grab") for line in lines)
     assert any("turns have and nothing is grabbed" in line for line in lines)
@@ -183,12 +197,70 @@ def test_a_plain_reset_clears_only_the_last_candidate(monkeypatch, caplog):
 
 
 def test_a_plain_reset_of_a_blocklisted_candidate_frees_that_one(monkeypatch, caplog):
-    seed_nilsson(candidate={"guid": JAPANESE, "title": JAPANESE_TITLE, "size": 49799414}, status=albums.FAILED)
+    seed_nilsson(JUDGED, candidate={"guid": JAPANESE, "title": JAPANESE_TITLE, "size": 49799414}, status=albums.FAILED)
     lines = run_reset(monkeypatch, caplog)
     assert "Clears from the blocklist (1 of 2):" in lines
-    assert f"  {JAPANESE_TITLE} (50 MB): {REPAIR}; the matcher accepts it again" in lines
-    assert f"  {WALKMAN_TITLE} (420 MB): {ENCRYPTED}" in lines
+    assert f"  {JAPANESE_TITLE} (50 MB): {LACKS}; the matcher accepts it again" in lines
+    assert f"  {WALKMAN_TITLE} (420 MB): {WRONG}" in lines
     assert any("up to 1 of the 2 the album then has" in line for line in lines)
+
+
+def test_a_reimport_keeps_a_release_that_failed_as_a_download(monkeypatch, caplog):
+    """Album 1454: two uploads failed repair.  Cleared, they could be grabbed again and fail the same
+    way, an attempt each: better no album than a broken one (homelab#2661)."""
+    seed_nilsson()
+    lines = run_reset(monkeypatch, caplog, "--reimport", "--apply")
+    assert "Clears nothing from the blocklist" in lines and STAYS in lines
+    assert f"  {WALKMAN_TITLE} (420 MB): {ENCRYPTED}" in lines
+    assert f"  {JAPANESE_TITLE} (50 MB): {REPAIR}" in lines
+    assert not any(line.startswith("The tick may grab") for line in lines)
+    record = stored()
+    assert record["blocklist"] == [WALKMAN, JAPANESE]
+    assert record["attempts"] == 0 and record["reimport"] is True and record["status"] == albums.WANTED
+
+
+def test_a_plain_reset_keeps_a_last_candidate_that_failed_as_a_download(monkeypatch, caplog):
+    seed_nilsson(candidate={"guid": JAPANESE, "title": JAPANESE_TITLE, "size": 49799414}, status=albums.FAILED,
+                 attempts=3)
+    lines = run_reset(monkeypatch, caplog, "--apply")
+    assert "Clears nothing from the blocklist" in lines
+    record = stored()
+    assert record["blocklist"] == [WALKMAN, JAPANESE] and record["attempts"] == 2
+
+
+def test_a_reimport_clears_what_was_judged_and_keeps_the_rest_in_order(monkeypatch, caplog):
+    rows = [grab(0, JAPANESE, JAPANESE_TITLE, 49799414), row(1, "failure", reason=WRONG),
+            grab(2, WALKMAN, WALKMAN_TITLE, 420043632), row(3, "failure", reason=REPAIR)]
+    other = "https://indexer/details/other"
+    seed_nilsson(rows, blocklist=[other, JAPANESE, WALKMAN], candidate={})
+    lines = run_reset(monkeypatch, caplog, "--reimport", "--apply")
+    assert "Clears from the blocklist (1 of 3):" in lines
+    assert f"  {JAPANESE_TITLE} (50 MB): {WRONG}; the matcher accepts it again" in lines
+    assert stored()["blocklist"] == [other, WALKMAN]
+
+
+def test_an_import_of_nothing_stays_like_a_broken_download(monkeypatch, caplog):
+    """Album 1550: a job beets could import none of was no verdict on its music."""
+    rows = [grab(0, WALKMAN, WALKMAN_TITLE, 420043632), row(1, "failure", reason="beets imported none of its files")]
+    seed_nilsson(rows, blocklist=[WALKMAN])
+    run_reset(monkeypatch, caplog, "--reimport", "--apply")
+    assert stored()["blocklist"] == [WALKMAN]
+
+
+def test_an_unreadable_event_store_clears_nothing(monkeypatch, caplog):
+    seed_nilsson(JUDGED)
+    monkeypatch.setattr(blocklist, "album_events", lambda *_: (_ for _ in ()).throw(psycopg.OperationalError("down")))
+    lines = run_reset(monkeypatch, caplog, "--reimport", "--apply")
+    assert "Clears nothing from the blocklist" in lines
+    assert stored()["blocklist"] == [WALKMAN, JAPANESE]
+
+
+@pytest.mark.parametrize(("reason", "stays"), [
+    (WRONG, False), (LACKS, False), (ENCRYPTED, True), (REPAIR, True), ("download failed", True), ("404", True),
+    ("beets imported none of its files", True), ("the import crashed 3 times", True), (blocklist.UNKNOWN, True),
+    (blocklist.UNREADABLE, True)])
+def test_only_a_verdict_on_what_a_release_held_leaves_the_blocklist(reason, stays):
+    assert blocklist.stays({"reason": reason}) is stays
 
 
 def test_a_cleared_release_the_matcher_refuses_is_not_a_cost(monkeypatch, caplog):
@@ -196,15 +268,15 @@ def test_a_cleared_release_the_matcher_refuses_is_not_a_cost(monkeypatch, caplog
     seed_nilsson(blocklist=[other])
     events.record("grab", "[GRAB]", source="albums", spotify_album_id=SID,
                   data={"guid": other, "release": SON_TITLE, "size": 255225091})
-    events.record("failure", "[FAIL]", source="albums", spotify_album_id=SID, data={"reason": "beets imported none"})
+    events.record("failure", "[FAIL]", source="albums", spotify_album_id=SID, data={"reason": WRONG})
     lines = run_reset(monkeypatch, caplog, "--reimport")
-    assert (f"  {SON_TITLE} (255 MB): beets imported none; "
+    assert (f"  {SON_TITLE} (255 MB): {WRONG}; "
             "the matcher refuses it (artist words: nilsson, beside son nmr)") in lines
     assert not any(line.startswith("The tick may grab") for line in lines)
 
 
 def test_a_reset_judges_a_release_as_the_override_would(monkeypatch, caplog):
-    seed_nilsson()
+    seed_nilsson(JUDGED)
     with state.connect() as conn:
         state.put(conn, state.OVERRIDES_IMPORTED, {"at": "now"})
     overrides_cli.main(["search", "--apply", "--", "Harry Nilsson — Nilsson Schmilsson", "Nilsson Schmilsson"])
@@ -215,10 +287,10 @@ def test_a_reset_judges_a_release_as_the_override_would(monkeypatch, caplog):
 
 
 def test_an_entry_with_no_grab_recorded_cant_be_judged(monkeypatch, caplog):
-    seed_nilsson(blocklist=["https://indexer/details/old"], candidate={})
+    old = "https://indexer/details/old"
+    seed_nilsson([row(0, "failure", reason=WRONG, guid=old)], blocklist=[old], candidate={})
     lines = run_reset(monkeypatch, caplog, "--reimport")
-    assert ("  https://indexer/details/old: unknown; the matcher can't be asked: its title or size isn't recorded"
-            in lines)
+    assert f"  {old}: {WRONG}; the matcher can't be asked: its title or size isn't recorded" in lines
     assert not any(line.startswith("The tick may grab") for line in lines)
 
 
@@ -227,7 +299,7 @@ def test_a_release_another_album_holds_is_not_grabbed(monkeypatch, caplog):
                   "9": {"artist": "Harry Nilsson", "name": "Other", "status": albums.IMPORTED, "blocklist": [],
                         "spotify_album_ids": ["0ETFjACtuP2ADo6LFhL6HN"], "playlists": {},
                         "candidate": {"guid": WALKMAN, "title": WALKMAN_TITLE}}}).save()
-    record_events()
+    record_events(JUDGED)
     lines = run_reset(monkeypatch, caplog, "--reimport")
     assert any(WALKMAN_TITLE in line and "another album holds it" in line for line in lines)
     assert any("up to 1 of the 3 the album then has" in line for line in lines)
