@@ -456,8 +456,9 @@ def build_server(
     @mcp.tool(annotations={"destructiveHint": True})
     async def reset_album(query: AlbumQuery, reimport: bool = False, apply: Apply = False) -> dict:
         """music-album-reset: start one album over. reimport=true grabs a single release on the
-        next tick, and only it clears the whole blocklist: a plain reset takes off the last candidate
-        alone. The import retires the old items whose recording the new release also holds, and with
+        next tick, and only it clears more of the blocklist than the last candidate. Neither clears a
+        broken download, or any release but another album or an incomplete copy: the album goes without
+        rather than grab it again. The import retires the old items whose recording the new release also holds, and with
         reimport=true every item of the album's old release when it holds under half of the new
         release's titles; the rest stay on the album as local extras, which retire_item takes off. The dry run lists what it
         clears and why each was there, and which of those the matcher accepts, so the tick may grab

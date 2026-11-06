@@ -1988,7 +1988,7 @@ def complete(
         elif not titles:
             reason = "beets imported none of its files"
         elif wrong_album(found, total) or holds_none(record, titles):
-            reason = f"another album: {found} of the album's {total} titles in it"
+            reason = f"{blocklist.ANOTHER_ALBUM}{found} of the album's {total} titles in it"
             logger.warning("[WRONG] %s: %s is %s", label, job_name, reason)
             # Not the album's release group: identity is the other album's.
             _event("import_wrong", key, record, f"[WRONG] {label}: {job_name} is {reason}", release=title,
@@ -2228,9 +2228,11 @@ def reset_album(state: State, query: str, reimport: bool = False) -> tuple[str, 
     off the blocklist, one attempt fewer, and its fallback cleared, so the next
     tick searches it again.
 
-    With *reimport* (#279) the album starts over from one release: the whole
-    blocklist and every attempt are cleared, and the record is grabbed even
-    though the library holds its tracks.  The import then retires the copies
+    With *reimport* (#279) the album starts over from one release: the blocklist
+    and every attempt are cleared, and the record is grabbed even though the
+    library holds its tracks.  Neither reset clears a release
+    :func:`blocklist.stays` keeps there (homelab#2661): a broken download, say,
+    is never grabbed again.  The import then retires the copies
     there whose recording it holds, and every item of an old release that is
     another album (:func:`music_scan.release.retire`, homelab#2662); the rest stay
     as local extras (an album mixed from several releases, spotdl's top-ups
@@ -2243,16 +2245,19 @@ def reset_album(state: State, query: str, reimport: bool = False) -> tuple[str, 
         return None
     key, record = hits[0]
     before = json.loads(json.dumps(record))
-    reset_record(record, reimport)
+    broken = {entry["guid"] for entry in blocklist_entries(key, record) if blocklist.stays(entry)}
+    reset_record(record, reimport, broken=broken)
     return key, before, record
 
 
-def reset_record(record: dict, reimport: bool = False, keep_blocklist: bool = False) -> None:
+def reset_record(record: dict, reimport: bool = False, keep_blocklist: bool = False,
+                 broken: Collection[str] = ()) -> None:
     """:func:`reset_album` on one *record*: also the album tick's automatic
     reimport of a mixed album (:func:`auto_reimport`, #288), which passes
-    *keep_blocklist* so a reimport clears only the last release (#305)."""
+    *keep_blocklist* so a reimport clears only the last release (#305).  The
+    GUIDs in *broken* stay on the blocklist whatever else is cleared."""
     guid = (record.get("candidate") or {}).get("guid")
-    if guid in record.get("blocklist", []):
+    if guid in record.get("blocklist", []) and guid not in broken:
         record["blocklist"].remove(guid)
     record["attempts"] = max(0, record.get("attempts", 0) - 1)
     record["status"] = WANTED
@@ -2262,7 +2267,7 @@ def reset_record(record: dict, reimport: bool = False, keep_blocklist: bool = Fa
     if reimport:
         record.update(attempts=0, reimport=True)
         if not keep_blocklist:
-            record["blocklist"] = []
+            record["blocklist"] = [g for g in record.get("blocklist", []) if g in broken]
         for field in ("gaps", "settled_from", "filled_at", "release_files"):
             record.pop(field, None)
 
@@ -2316,14 +2321,14 @@ def reset_notes(state: State, key: str, before: dict, after: dict) -> list[str]:
     if cleared:
         lines.append(f"Clears from the blocklist ({len(cleared)} of {len(listed)}):")
     elif kept:
-        last = (before.get("candidate") or {}).get("title")
-        lines.append(f"Clears nothing from the blocklist: its last candidate{f', {last},' if last else ''} isn't on it")
+        lines.append("Clears nothing from the blocklist")
     else:
         lines.append("The blocklist is empty: nothing to clear")
     verdicts = [_verdict(e, after, search, imported) for e in cleared]
     lines += [f"  {blocklist.describe(e)}; {note}" for e, (_, note) in zip(cleared, verdicts)]
     if kept:
-        lines.append("Stays on the blocklist (only reimport=true clears all of it):")
+        lines.append("Stays on the blocklist (a reset clears only another album or an incomplete copy, and only "
+                     "reimport=true more than the last candidate):")
         lines += [f"  {blocklist.describe(e)}" for e in kept]
     accepted = sum(ok is True for ok, _ in verdicts)
     if accepted:
@@ -2377,8 +2382,10 @@ def reset_main() -> None:
                         help="the album's Spotify ID or open.spotify.com URL, its 'artist — album', or a part of it "
                              "that matches exactly one album")
     parser.add_argument("--reimport", action="store_true",
-                        help="start over from one release: clear the blocklist and attempts, grab it although the "
-                             "library has its tracks, and on import retire the copies whose recording it holds, and "
+                        help="start over from one release: clear the attempts and the blocklist, except a broken "
+                             "download or any failure but another album or an incomplete copy (homelab#2661), grab "
+                             "it although the library has its tracks, and on import retire the copies whose "
+                             "recording it holds, and "
                              "an old release that holds under half of the new one's titles (homelab#2662)")
     parser.add_argument("--apply", action="store_true", help="write the album store (default: dry run)")
     args = parser.parse_args()

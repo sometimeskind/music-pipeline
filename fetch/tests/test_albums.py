@@ -1376,8 +1376,15 @@ def test_release_a_failed_album_held_is_grabbed() -> None:
 
 
 
-def test_reset_album_undoes_the_last_attempt() -> None:
-    """Zero 7's vinyl release was blocklisted for a deleted dir (#261): put it back."""
+def judged_blocklist(monkeypatch) -> None:
+    """Every blocklisted release refused as another album, which a reset may take off (homelab#2661)."""
+    monkeypatch.setattr(albums, "blocklist_entries", lambda key, record: [
+        {"guid": guid, "reason": "another album: 0 of the album's 5 titles in it"} for guid in record["blocklist"]])
+
+
+def test_reset_album_undoes_the_last_attempt(monkeypatch) -> None:
+    """The last release, refused as another album, goes back."""
+    judged_blocklist(monkeypatch)
     state = grabbed_state()
     record = state.albums["a0"]
     record.update(status=albums.FALLBACK, attempts=3, blocklist=["r0", "r1"], fallback_from=albums.FAILED,
@@ -1898,8 +1905,9 @@ def test_a_copy_of_the_same_edition_replaces_the_incomplete_one() -> None:
     assert record["status"] == albums.GRABBED and record["candidate"]["guid"] == "r3"
 
 
-def test_reset_reimport_starts_over_from_one_release() -> None:
+def test_reset_reimport_starts_over_from_one_release(monkeypatch) -> None:
     """The operator's reset of an album mixed from several releases (#279)."""
+    judged_blocklist(monkeypatch)
     state = grabbed_state()
     record = state.albums["a0"]
     record.update(status=albums.IMPORTED, attempts=2, blocklist=["r0", "r1"], gaps=["s2"],
@@ -2016,7 +2024,8 @@ def test_auto_reimport_never_grabs_a_release_that_failed_for_the_album(caplog) -
     assert record["status"] == albums.GRABBED and record["candidate"]["guid"] == "dx"
 
 
-def test_operator_reimport_still_clears_the_whole_blocklist() -> None:
+def test_operator_reimport_clears_the_releases_judged_for_what_they_held(monkeypatch) -> None:
+    judged_blocklist(monkeypatch)
     state = _stop_making_sense()
     _, _, after = albums.reset_album(state, "Stop Making Sense", reimport=True)
     assert after["blocklist"] == []

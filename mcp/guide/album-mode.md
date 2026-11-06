@@ -69,12 +69,16 @@ rescues a file until the purge. The import logs `[RELEASE]`/`[NOMB]`, then one o
 ## 5. An album is wrong
 
 - **Start one album over** from a single release: `reset_album` with `reimport=true`. The next
-  tick grabs it. It clears the whole blocklist and every
-  attempt. A plain reset takes off only the last candidate and one attempt, and an album the
-  library holds then turns `have` with nothing grabbed.
+  tick grabs it. It clears every attempt and the blocklisted releases refused for what they held
+  (another album, an incomplete copy). A plain reset takes off only the last candidate, if it was
+  refused that way, and one attempt, and an album the library holds then turns `have` with nothing
+  grabbed.
+- **No reset clears any other failure.** A broken download, a job beets imported nothing from, a
+  crashed import or a reason nobody recorded stays on the blocklist: such a release is never
+  grabbed again, even if the fault was a one-off, and the album goes without rather than be broken.
 - **Before applying a reset**, read its dry run. It lists what it clears, why each was
-  blocklisted, and which ones the matcher accepts. Those can be grabbed again, and a broken
-  download may fail the same way: each costs one of the album's 3 attempts. Nothing is deleted
+  blocklisted, and which ones the matcher accepts. Those can be grabbed again, and each may be
+  refused the same way, at the cost of one of the album's 3 attempts. Nothing is deleted
   by a reset: the old items stay until an import, and that import retires the ones whose
   recording the new release also holds. With `reimport=true` the album's old release also goes
   whole to `quarantine/replaced/` when it holds under half of the new release's titles, so a wrong
