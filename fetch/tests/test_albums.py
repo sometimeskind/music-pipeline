@@ -1959,6 +1959,8 @@ def test_auto_reimport_with_no_release_left_keeps_the_album(caplog) -> None:
         top_up(state, Settings(mode="on"), prowlarr, sab, lambda key, r: True, albums.TickResult(), now=lambda: NOW)
     assert record["status"] == albums.IMPORTED and "reimport" not in record
     assert "[STAYS] Talking Heads — Stop Making Sense: 2 result(s), no release left to reimport" in caplog.text
+    assert "(2 blocklisted); rejected: 2 blocklisted; closest:" in caplog.text
+    assert "the album stays as it is" in caplog.text
     sab.add_url.assert_not_called()
     albums.fallbacks(state, lambda playlist, tracks: tracks)
     assert record["status"] == albums.IMPORTED  # nothing goes to spotdl

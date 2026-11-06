@@ -1115,8 +1115,11 @@ def top_up(
             was = record.get("status")
             record["status"] = IMPORTED
             record.pop("reimport", None)
+            # Why, as a [MISS] says: the words of an override are chosen from this.
+            why = why_none(releases, search.artist, search.album, tracks, blocked, **matching)
             message = (f"[STAYS] {label}{search.note}: {len(releases)} result(s), no release left to reimport "
-                       f"({len(record['blocklist'])} blocklisted); the album stays as it is")
+                       f"({len(record['blocklist'])} blocklisted){f'; {why}' if why else ''}; "
+                       "the album stays as it is")
             logger.info(message)
             _status_changed(key, record, was, message, "no release left to reimport")
             continue
