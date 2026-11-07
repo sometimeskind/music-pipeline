@@ -385,7 +385,7 @@ Since homelab#2623 `set_recording` also aligns the item's `isrc` and `mb_release
 409 {"status": "refused", "reason": "no_dry_run", "error": "run reset_album with apply=false first (same args, within 15 min)", "args": {…}}
 ```
 
-Accepted, the apply job, holding its locks, runs the dry run again and compares its output hash with that dry run's. Lines are compared without their leading log timestamp (`[2026-10-27T14:03:11+0000] `), and lines that are nothing but a timestamp are dropped. A mismatch ends the job `refused`, with the new dry run as its output and no change made. That new dry run is now the one to apply. A match runs the `--apply` commands, and the job's output is theirs.
+Accepted, the apply job, holding its locks, runs the dry run again and compares its output hash with that dry run's. Lines are compared without their leading log timestamp (`[2026-10-27T14:03:11+0000] `), and lines that are nothing but a timestamp are dropped. So is what differs between runs without changing what the apply does: MusicBrainz retries (`[MB-503]`), `backfill_album_ids`' failed lookups (`MusicBrainz lookup of … failed: …`; one that changes a link changes its `[LINK]` or `[NOID]` line) and the number of albums in its `Album IDs:` summary, which rises with every import. A mismatch ends the job `refused`, with the new dry run as its output and no change made. That new dry run is now the one to apply. A match runs the `--apply` commands, and the job's output is theirs.
 
 ### Triggers (write tier, no dry run)
 
