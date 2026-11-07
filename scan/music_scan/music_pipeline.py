@@ -24,8 +24,7 @@ Responsibilities
    Handles both singleton (``task.item``) and album (``task.items``) import
    tasks.
 
-   Caches both ``filename → playlist`` and ``title → playlist`` in
-   ``_pending_sources`` for step 1a.
+   Keeps what it read in ``_pending``, by item, for step 1a.
 
 1a. **tag_source_on_stored** (``item_imported``): re-applies ``sources=`` and
     ``via=`` after the item is fully persisted, then calls ``item.store()``.
@@ -34,10 +33,11 @@ Responsibilities
     flex attributes set in memory at ``import_task_created`` are not marked
     dirty for the eventual ``item.add(lib)`` call; and
     (b) beets renames the file on import (spotdl names ``Artist - Title.m4a``;
-    beets renames to ``NN - Title.m4a``), so the inbox filename no longer
-    matches ``item.path`` at ``item_imported`` time.  The title-based key
-    survives both.  This hook guarantees the tags land in the database on
-    clean first-time imports.  It also records the events that need the
+    beets renames to ``NN - Title.m4a``) and a match can change the title, and
+    two tracks can share a title, so neither names the item at ``item_imported``
+    time (homelab#2707).  The item object does: beets keeps it from
+    ``import_task_created`` to here.  This hook guarantees the tags land in the
+    database on clean first-time imports.  It also records the events that need the
     stored item's ID (homelab#2590): ``imported`` for a spotdl item (a Usenet
     item's import is its album's ``[DONE]``), ``retitled`` for a title
     step 1b put back, and ``import_alongside`` or ``kept_apart`` for each
@@ -292,6 +292,19 @@ class SpotdlTags(NamedTuple):
     isrc: str | None = None
 
 
+class Pending(NamedTuple):
+    """What an inbox item's path and file said at ``import_task_created``, for
+    ``item_imported`` to put back.  By ``id()``, as neither its file name nor its
+    title tells it from another item by then (homelab#2707).  Holds the item,
+    like :class:`FileTags`."""
+
+    item: object
+    playlist: str
+    via: str
+    job: str | None
+    tags: SpotdlTags
+
+
 def _read_spotdl_tags(path: str | bytes) -> SpotdlTags:
     """Return the Spotify URL and ISRC spotdl embedded in an M4A file.
 
@@ -443,18 +456,8 @@ class MusicPipelinePlugin(BeetsPlugin):
                 _chroma.API_KEY = key
             except Exception:
                 pass
-        # Keys: inbox filename OR normalised title → playlist name.
-        # Populated at import_task_created, consumed at item_imported.
-        # Two keys per track because beets renames the file on import
-        # (spotdl names "Artist - Title.m4a"; beets renames to "NN - Title.m4a"),
-        # so the filename key no longer matches at item_imported time.
-        # The title key survives both the rename and MB autotag metadata replacement.
-        self._pending_sources: dict[str, str] = {}
-        self._pending_spotdl: dict[str, SpotdlTags] = {}
-        # Same keys → via (spotdl or usenet).
-        self._pending_via: dict[str, str] = {}
-        # Same keys → usenet job folder (#284).
-        self._pending_job: dict[str, str] = {}
+        # id(item) → its playlist, via, job and spotdl tags, from import_task_created to item_imported.
+        self._pending: dict[int, Pending] = {}
         # id(item) → a Usenet item's own tags, from import_task_created to import_task_apply.
         self._file_tags: dict[int, FileTags] = {}
         # id(item) → its retitle, from import_task_apply to item_imported, which
@@ -476,8 +479,7 @@ class MusicPipelinePlugin(BeetsPlugin):
         autotag mode — while item.path still points to the inbox file (before
         any pipeline stage runs).
 
-        Caches both the inbox filename and the normalised title in
-        _pending_sources so tag_source_on_stored can re-apply the tags after
+        Keeps them in _pending so tag_source_on_stored can re-apply them after
         MusicBrainz autotag may have discarded them and beets has renamed the
         file.
         """
@@ -488,16 +490,9 @@ class MusicPipelinePlugin(BeetsPlugin):
             via = _via_from_path(item.path)
             item["sources"] = playlist
             item["via"] = via
-            path = item.path.decode() if isinstance(item.path, bytes) else item.path
-            filename = Path(path).name
-            self._pending_sources[filename] = playlist
-            self._pending_via[filename] = via
-            job = _job_from_path(path)
+            job = _job_from_path(item.path)
             if job:
                 item["usenet_job"] = job
-                self._pending_job[filename] = job
-            title = (item.title or "").lower()
-            keys = {title}
             if via == "usenet":
                 # Its own title goes back on at import_task_apply (homelab#2544).
                 own = own_title(item.title, getattr(item, "track", None))
@@ -505,18 +500,10 @@ class MusicPipelinePlugin(BeetsPlugin):
                     item, item.title or "", own, {f: item.get(f) for f in RECORDING_FIELDS},
                     {f: item.get(f) for f in ARTIST_FIELDS}, artist_credit(item) | artist_credit(item, album=True),
                     compilation(item), " ".join(filter(None, (item.get("album"), job))))
-                keys.add((own or "").lower())
-            for key in keys - {""}:
-                self._pending_sources[key] = playlist
-                self._pending_via[key] = via
-                if job:
-                    self._pending_job[key] = job
             tags = _read_spotdl_tags(item.path)
             if tags.url or tags.isrc:
                 self._apply_spotdl_tags(item, tags)
-                self._pending_spotdl[filename] = tags
-                if title:
-                    self._pending_spotdl[title] = tags
+            self._pending[id(item)] = Pending(item, playlist, via, job, tags)
             self._log.debug(
                 "tagged incoming track source={} via={}: {}", playlist, via, item.path
             )
@@ -552,9 +539,7 @@ class MusicPipelinePlugin(BeetsPlugin):
             if title != matched and "".join(words(title)) == "".join(words(matched)):
                 # Only case, punctuation or spacing differs (In My Time of Need, In My
                 # Time Of Need; Saved theEarth): no sibling, and MusicBrainz's spelling
-                # is the better one.  It
-                # becomes a pending key too, so tag_source_on_stored finds the tags.
-                self._alias_pending((entry.title.lower(), title.lower()), matched.lower())
+                # is the better one.
                 title = matched
             item["title"] = title
             item["trackdisambig"] = ""
@@ -597,14 +582,6 @@ class MusicPipelinePlugin(BeetsPlugin):
         if item is not None and item.get("mb_releasetrackid") and item.get("mb_releasetrackid") == item.get("mb_trackid"):
             item["mb_releasetrackid"] = ""
 
-    def _alias_pending(self, keys: tuple[str, ...], alias: str) -> None:
-        """Make *alias* find what any of *keys* holds in the pending tags."""
-        for pending in (self._pending_sources, self._pending_via, self._pending_job, self._pending_spotdl):
-            for key in keys:
-                if key in pending:
-                    pending.setdefault(alias, pending[key])
-                    break
-
     def _wrong_recording(self, item, info) -> bool:
         """True when a Usenet item's own title and its match's are two songs
         (homelab#2544) or two versions (homelab#2609), or its artist and the
@@ -623,56 +600,28 @@ class MusicPipelinePlugin(BeetsPlugin):
         Fires from item_imported, after autotag and item.store() have run.
         MusicBrainz autotag can replace the item's metadata dict wholesale and
         beets renames the file, both of which discard the flex attributes set
-        earlier by tag_source_on_created.  We try the post-rename filename
-        first (handles no-rename edge cases), then fall back to the normalised
-        title (the common case after a move-import).
+        earlier by tag_source_on_created.  They are found by the item object,
+        the one thing here that is still the inbox item's alone (homelab#2707).
         """
         # An as-is import never reaches import_task_apply (homelab#2544).
         self._file_tags.pop(id(item), None)
         self._record_retitle(item)
         self._record_beside(item)
-        path = item.path.decode() if isinstance(item.path, bytes) else item.path
-        title = (item.title or "").lower()
-        playlist = self._pending_sources.pop(Path(path).name, None)
-        if playlist is not None:
-            # Matched on filename — also clean the title key to avoid stale entries.
-            if title:
-                self._pending_sources.pop(title, None)
-        elif title:
-            playlist = self._pending_sources.pop(title, None)
-            # The original spotdl inbox filename key cannot be recovered from
-            # item.path (which is now the renamed library path), so it may
-            # remain in _pending_sources.  That is harmless: _pending_sources
-            # is session-scoped and is GC'd when the import session ends.
-        if playlist is None:
+        pending = self._pending.pop(id(item), None)
+        if pending is None:
             return
-        via = self._pending_via.pop(Path(path).name, None)
-        if title:
-            via = self._pending_via.pop(title, None) or via
-        via = via or "spotdl"
-        item["sources"] = playlist
-        item["via"] = via
-        job = self._pending_job.pop(Path(path).name, None)
-        if title:
-            job = self._pending_job.pop(title, None) or job
-        if job:
-            item["usenet_job"] = job
-        filename = Path(path).name
-        tags = self._pending_spotdl.pop(filename, None)
-        if tags is not None:
-            if title:
-                self._pending_spotdl.pop(title, None)
-        elif title:
-            tags = self._pending_spotdl.pop(title, None)
-        if tags is not None:
-            self._apply_spotdl_tags(item, tags)
+        item["sources"] = pending.playlist
+        item["via"] = pending.via
+        if pending.job:
+            item["usenet_job"] = pending.job
+        self._apply_spotdl_tags(item, pending.tags)
         item.store()
         self._log.debug(
-            "persisted source={} via={} on stored item: {}", playlist, via, item.path
+            "persisted source={} via={} on stored item: {}", pending.playlist, pending.via, item.path
         )
-        if via == "spotdl":
+        if pending.via == "spotdl":
             # A Usenet item is one of a release: its album's [DONE] is the event.
-            self._record_imported(item, playlist)
+            self._record_imported(item, pending.playlist)
 
     def _record_retitle(self, item) -> None:
         """The ``retitled`` event for a title :meth:`restore_file_title` put back (homelab#2590)."""
@@ -764,13 +713,8 @@ class MusicPipelinePlugin(BeetsPlugin):
 
     def _incoming_spotdl_tags(self, item) -> SpotdlTags:
         """spotdl tags of an inbox item: cached at task creation, else read again."""
-        path = item.path if isinstance(item.path, str) else item.path.decode()
-        title = (item.title or "").lower()
-        return (
-            self._pending_spotdl.get(Path(path).name)
-            or (self._pending_spotdl.get(title) if title else None)
-            or _read_spotdl_tags(path)
-        )
+        pending = self._pending.get(id(item))
+        return pending.tags if pending else _read_spotdl_tags(item.path)
 
     def handle_duplicates(self, session, task):
         """Handle duplicate tracks to support multi-playlist membership.
@@ -866,20 +810,8 @@ class MusicPipelinePlugin(BeetsPlugin):
             return
 
         if _all_via_spotdl(dup_items):
-            # Resolve the incoming playlist name.
-            # Try _pending_sources first (populated by tag_source_on_created).
-            # Fall back to reading the path directly if the cache missed.
-            incoming_playlist = None
-            for item in items:
-                path = item.path if isinstance(item.path, str) else item.path.decode()
-                title = (item.title or "").lower()
-                incoming_playlist = (
-                    self._pending_sources.get(Path(path).name)
-                    or (self._pending_sources.get(title) if title else None)
-                    or _playlist_from_path(item.path)
-                )
-                if incoming_playlist:
-                    break
+            # The incoming playlist name: the file is still at its inbox path.
+            incoming_playlist = next(filter(None, (_playlist_from_path(item.path) for item in items)), None)
 
             if not incoming_playlist:
                 self._log.warning(
