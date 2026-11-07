@@ -79,6 +79,14 @@ _ONLY_TIMESTAMP = re.compile(r"^\s*\[?\d{4}-\d{2}-\d{2}[T ][\d:.]+(Z|[+-]\d{2}:?
 # "  [MB-503] /recording/x: MusicBrainz is busy; retrying in 1s": how busy MusicBrainz was,
 # which differs on every run and changes nothing the tool would do.
 _MB_RETRY = re.compile(r"^\s*\[MB-503\] ")
+# "MusicBrainz lookup of recording x failed: HTTP Error 503: …": the retries ran out
+# (homelab#2700).  Only music-backfill-ids logs it, and a lookup that changes what it would
+# write changes a [LINK] or [NOID] line as well.  A line that says what a tool does about a
+# failed lookup ([NOREFRESH]) is worded otherwise, and stays compared.
+_MB_FAILED = re.compile(r"^MusicBrainz lookup of (?:recording|ISRC) \S+ failed: ")
+# "Album IDs: 1349 imported album(s) read, 2 empty entr(ies) to link, …": the number read rises
+# with every import, and says nothing of what the apply writes; the rest of the line is compared.
+_ALBUMS_READ = re.compile(r"^Album IDs: \d+ imported album\(s\) read, ")
 _PROGRESS = re.compile(r"^(?:\[(?P<at>\d{4}-\d{2}-\d{2}T[^\]]*)\]\s?)?(?P<line>\[PROGRESS\] (?P<done>\d+)/(?P<total>\d+).*)$")
 
 
@@ -99,10 +107,12 @@ def _parse(t: str | None) -> datetime | None:
 
 
 def output_hash(lines: list[str]) -> str:
-    """The hash an apply compares: each line without its log timestamp, and no line
-    that is only a timestamp or a MusicBrainz retry."""
-    kept = [_LOG_PREFIX.sub("", line) for line in lines]
-    kept = [line for line in kept if not _ONLY_TIMESTAMP.match(line) and not _MB_RETRY.match(line)]
+    """The hash an apply compares: each line without its log timestamp or the albums
+    backfill read, and no line that is only a timestamp, a MusicBrainz retry or backfill's
+    failed lookup."""
+    kept = [_ALBUMS_READ.sub("Album IDs: ", _LOG_PREFIX.sub("", line)) for line in lines]
+    kept = [line for line in kept
+            if not _ONLY_TIMESTAMP.match(line) and not _MB_RETRY.match(line) and not _MB_FAILED.match(line)]
     return "sha256:" + hashlib.sha256("\n".join(kept).encode()).hexdigest()
 
 

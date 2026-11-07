@@ -7,6 +7,9 @@ import json
 import os
 import threading
 from datetime import datetime, timedelta, timezone
+from email.message import Message
+from unittest.mock import MagicMock, patch
+from urllib.error import HTTPError
 
 import pytest
 
@@ -98,6 +101,89 @@ def test_a_musicbrainz_retry_is_not_part_of_the_dry_run_hash():
     retried = ["[2026-11-05T19:50:00+0000]   [MB-503] /recording/x: MusicBrainz is busy; retrying in 1s", *plain]
     assert output_hash(retried) == output_hash(plain)
     assert output_hash(["[LINK] 1748 Velas", "Linked 1"]) != output_hash(plain)
+
+
+@pytest.mark.parametrize("failed", [
+    "MusicBrainz lookup of recording 9b73f625 failed: HTTP Error 503: Service Temporarily Unavailable",
+    "MusicBrainz lookup of ISRC GBCVT9900017 failed: HTTP Error 503: Service Temporarily Unavailable",
+    "MusicBrainz lookup of recording 55f5e765 failed: The read operation timed out",
+])
+def test_a_failed_musicbrainz_lookup_is_not_part_of_the_dry_run_hash(failed):
+    """Retries ran out on another recording each run, with the same links, and the apply was
+    refused (homelab#2700)."""
+    plain = ["[LINK] 1748 fancy: Razzamatazz — Pulp → item 7 at 1-1", "Linked 1"]
+    assert output_hash([f"[2026-11-07T12:12:32+0000] {failed}", *plain]) == output_hash(plain)
+    assert output_hash(["[LINK] 1748 fancy: Velas — Pulp → item 7 at 1-1", "Linked 1"]) != output_hash(plain)
+
+
+@pytest.mark.parametrize("line", [
+    "[NOREFRESH] 4230: the MusicBrainz lookup of abc failed (HTTP Error 503); title and trackdisambig left",
+    "  [MB-WAIT] 1748: MusicBrainz lookup failed, retried next run: HTTP Error 503",
+    "--set-recording: the MusicBrainz lookup of abc failed (HTTP Error 503); nothing changed",
+])
+def test_a_failed_lookup_that_changes_what_a_tool_does_stays_in_the_dry_run_hash(line):
+    """apply_recheck skips an item on [NOREFRESH]: only backfill's warning changes nothing by itself."""
+    assert output_hash([line, "Linked 1"]) != output_hash(["Linked 1"])
+
+
+SUMMARY = "Album IDs: {} imported album(s) read, {} empty entr(ies) to link, {} left empty ({})"
+
+
+def test_the_albums_read_count_is_not_part_of_the_dry_run_hash():
+    """It rises with every import, and a run outlasts the gap between imports (homelab#2700)."""
+    read = output_hash([SUMMARY.format(1349, 2, 419, "419 no item")])
+    assert output_hash([f"[2026-11-07T12:12:32+0000] {SUMMARY.format(1350, 2, 419, '419 no item')}"]) == read
+    assert output_hash([SUMMARY.format(1349, 3, 419, "419 no item")]) != read, "the links are compared"
+    assert output_hash([SUMMARY.format(1349, 2, 420, "420 no item")]) != read, "the left-empty count is compared"
+    assert output_hash([SUMMARY.format(1349, 2, 419, "418 no item, 1 number, other isrc")]) != read
+
+
+def _album_item(id_, key, track, **data):
+    data |= {"via": "usenet", "album_record": key}
+    item = MagicMock(id=id_, title=f"Song {track}", artist="Muse", albumartist="Muse", disc=1, track=track)
+    item.get = lambda k, d=None: data.get(k, d)
+    return item
+
+
+def _backfill_output(caplog, recording, items, records) -> list[str]:
+    """What ``music-backfill-ids --albums`` logs, a MusicBrainz *recording* read (a value, or an
+    exception to raise) under the real client, so the hash is tested on its real lines."""
+    from music_scan.backfill import mb_recordings, plan_album_ids, report_albums
+
+    caplog.clear()
+    read = {"side_effect": recording} if isinstance(recording, Exception) else {"return_value": recording}
+    with patch("music_scan.mb_release.MusicBrainz.get", **read), caplog.at_level("INFO", logger="music_scan.backfill"):
+        report_albums(plan_album_ids(items, records, mb_recordings()))
+    return list(caplog.messages)
+
+
+def _says(lines: list[str], text: str) -> bool:
+    return any(text in line for line in lines)
+
+
+BUSY = HTTPError("https://musicbrainz.org", 503, "Service Temporarily Unavailable", Message(), None)
+ENTRY = {"status": "imported", "playlists": {"fancy": [["Song 4", "Muse", "S1", "ENTRY", 1, 4]]}}
+
+
+def test_backfills_real_output_hashes_alike_when_only_the_lookup_and_the_count_differ(caplog):
+    items, records = [_album_item(1, "10", 4, isrc="ITEM", mb_trackid="r1")], {"10": ENTRY}
+    told = _backfill_output(caplog, {"isrcs": ["ITEM"]}, items, records)
+    busy = _backfill_output(caplog, BUSY, items, records)
+    assert _says(told, "[NOID] 10 fancy") and _says(busy, "lookup of recording r1 failed")
+    assert output_hash(busy) == output_hash(told)
+
+    records = {**records, "11": {"status": "imported", "playlists": {}}}
+    more = _backfill_output(caplog, {"isrcs": ["ITEM"]}, [*items, _album_item(2, "11", 1)], records)
+    assert _says(more, "Album IDs: 2 imported") and output_hash(more) == output_hash(told)
+
+
+def test_a_failed_lookup_that_loses_a_link_still_changes_the_hash(caplog):
+    """A failed lookup refutes nothing, so the entry a good lookup would link shows as [NOID]."""
+    items, records = [_album_item(1, "10", 4, isrc="ITEM", mb_trackid="r1")], {"10": ENTRY}
+    linked = _backfill_output(caplog, {"isrcs": ["ITEM", "ENTRY"]}, items, records)
+    lost = _backfill_output(caplog, BUSY, items, records)
+    assert _says(linked, "[LINK] 10 fancy") and _says(lost, "[NOID] 10 fancy")
+    assert output_hash(lost) != output_hash(linked)
 
 
 def test_a_finished_job_records_an_mcp_job_event(make, monkeypatch):
