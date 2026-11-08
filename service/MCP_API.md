@@ -244,6 +244,8 @@ The CLI tools run as jobs in a **single-slot queue** of depth 5 (the short lane)
 - **finished:** `200` with the job record and the first page of output;
 - **not yet:** `202` with the job record (`queued`, `waiting_for_lock` or `running`); poll `GET /mcp-api/jobs/<job_id>`.
 
+A waiting call holds one of the server's 16 threads (`API_THREADS` in `cli.py`, homelab#2701), so a batch of calls leaves threads free for `/health` and polls.
+
 ### Job record
 
 ```json

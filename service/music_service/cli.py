@@ -63,6 +63,19 @@ def album_schedule(interval: int, now: datetime | None = None):
     return Interval(interval, anchor_date=now + timedelta(seconds=FIRST_ALBUM_TICK_SECONDS))
 
 
+# Waitress's default 4 let four waiting tool calls starve /health past the
+# probes' timeout (homelab#2701): each /mcp-api/run call holds a thread for up
+# to MCP_INLINE_SECONDS, the short lane takes 5 jobs, and polls come on top.
+API_THREADS = 16
+
+
+def make_api_server(app, host: str = "0.0.0.0", port: int = 8080):
+    """The waitress server for the Flask API."""
+    import waitress
+
+    return waitress.create_server(app, host=host, port=port, threads=API_THREADS)
+
+
 def main() -> None:
     missing = [v for v in ("SPOTIFY_CLIENT_ID", "SPOTIFY_CLIENT_SECRET", "API_BEARER_TOKEN") if not os.environ.get(v)]
     if missing:
@@ -83,7 +96,6 @@ def main() -> None:
     from music_service.flows import album_import_flow, albums_flow, fetch_and_scan_flow, scan_flow
     from music_service.mcp_jobs import JobQueue
     from music_service.prefect_client import ensure_concurrency_limits, trigger_scan
-    import waitress
 
     fetch_cron = os.environ.get("FETCH_CRON", "0 3 * * *")
 
@@ -96,10 +108,8 @@ def main() -> None:
     # Flask API in a background daemon thread.
     # Loading the job records marks jobs a restart cut short as interrupted.
     app = create_app(schedule_scan=debouncer.trigger, mcp_jobs=JobQueue())
-    flask_thread = threading.Thread(
-        target=lambda: waitress.serve(app, host="0.0.0.0", port=8080),
-        daemon=True,
-    )
+    api_server = make_api_server(app)
+    flask_thread = threading.Thread(target=api_server.run, daemon=True)
     flask_thread.start()
     logger.info("Flask API started on 0.0.0.0:8080")
 
