@@ -29,6 +29,13 @@ def _start_file_watcher(on_audio_created):
                 logger.debug("File created: %s — scheduling debounced scan", event.src_path)
                 on_audio_created()
 
+        # A file written under a temporary name and renamed when complete, as
+        # rclone does (homelab#2698), never shows up as a created audio file.
+        def on_moved(self, event):
+            if not event.is_directory and Path(event.dest_path).suffix.lower() in _AUDIO_EXTS:
+                logger.debug("File renamed: %s — scheduling debounced scan", event.dest_path)
+                on_audio_created()
+
     inbox = Path(os.environ.get("MUSIC_INBOX", "/root/Music/inbox"))
     observer = Observer()
     observer.schedule(_Handler(), str(inbox), recursive=True)
