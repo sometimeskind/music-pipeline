@@ -252,6 +252,7 @@ def import_asis_from_quarantine() -> int:
                 config.write_text(_ASIS_CONFIG)
                 if staged > len(moved):
                     run_beet_import(staging, asis=True, config=config)
+                keep_start = time.time()
                 if moved:
                     keep = Path(config_dir) / "keep.yaml"
                     keep.write_text(asis_apart.KEEP_CONFIG)
@@ -259,7 +260,7 @@ def import_asis_from_quarantine() -> int:
             if moved:
                 try:
                     with MusicLibrary(LIBRARY_DB) as lib:
-                        asis_apart.record_kept(lib._lib, moved)
+                        asis_apart.record_kept(lib._lib, moved, keep_start)
                 except Exception:
                     logger.warning("Could not record the kept_apart events", exc_info=True)
             _return_to_quarantine(staging)
