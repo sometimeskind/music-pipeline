@@ -12,7 +12,10 @@ for good, retried at every scan without a log line.
 
 :func:`move_apart` takes those files out of the as-is staging tree, and the
 scan imports them with :data:`KEEP_CONFIG`.  A file whose duplicate shares an
-ID is the same recording, and stays skipped as before.
+ID is the same recording, and stays skipped as before.  Two staged copies of
+one recording are each another recording than their library duplicate, so
+only one of them moves (:func:`one_per_recording`); the other is skipped
+beside it, and at the next scan it shares an ID with the new item.
 
 ``python -m music_scan.asis_apart`` counts what the quarantine holds, read-only
 and counts only.  It uses nothing newer than this module, so piped into a pod
@@ -21,12 +24,13 @@ running an image without it (``python - < asis_apart.py``) it counts too.
 
 from __future__ import annotations
 
+import functools
 import logging
 import shutil
 import sys
 from collections import Counter
 from pathlib import Path
-from typing import Iterator, NamedTuple
+from typing import Callable, Iterator, NamedTuple
 
 logger = logging.getLogger(__name__)
 
@@ -48,6 +52,10 @@ class Verdict(NamedTuple):
     kind: str
     incoming: object = None
     duplicates: tuple = ()
+    # The beets item read from the file, and where the file is: in staging, or
+    # under the apart dir once move_apart has moved it.
+    item: object = None
+    path: Path | None = None
 
 
 def eligible(quarantine: Path) -> Iterator[Path]:
@@ -93,69 +101,156 @@ def _incoming(item, path: Path):
     return Incoming(spotify_id(tags.url), frozenset(isrcs), recording, item.get("length"))
 
 
-def classify(lib, path: Path) -> Verdict:
+def library_recordings(lib):
+    """The recordings *lib* holds (:class:`~music_scan.identity.Recordings`),
+    read once for a whole pass: a flex-attribute query per file reads the whole
+    attributes table, minutes for a quarantine's worth of files."""
+    from music_scan.identity import Recordings  # noqa: PLC0415
+
+    return Recordings(lib.items())
+
+
+def _ids(incoming) -> frozenset[str]:
+    from music_scan.identity import recording_ids  # noqa: PLC0415
+
+    return recording_ids([incoming.spotify_id] if incoming.spotify_id else [], incoming.isrcs, incoming.mb_trackid)
+
+
+def classify(lib, path: Path, recordings: Callable[[], object] | None = None) -> Verdict:
     """*path* against the beets library *lib*: beets' duplicates for it (its
     artist and title), and whether any of them, or any other item, is the same
-    recording by ID, as the main import's duplicate hook decides."""
+    recording by ID, as the main import's duplicate hook decides
+    (:func:`~music_scan.music_pipeline._find_same_recording`).
+
+    *recordings* returns the library's :func:`library_recordings`, called only
+    for a file with duplicates; a pass hands every file the same cached one.
+    Without it, each call reads its own."""
     from beets.library import Item  # noqa: PLC0415
 
-    from music_scan.music_pipeline import _different_recording, _find_same_recording  # noqa: PLC0415
+    from music_scan.music_pipeline import _different_recording  # noqa: PLC0415
 
     try:
         item = Item.from_path(str(path))
     except Exception:
-        return Verdict(UNREADABLE)
+        return Verdict(UNREADABLE, path=path)
     if not item.get("artist"):
-        return Verdict(NO_DUPLICATE)  # beets skips the check without an artist
+        return Verdict(NO_DUPLICATE, item=item, path=path)  # beets skips the check without an artist
     duplicates = tuple(lib.items(item.duplicates_query(DUPLICATE_KEYS)))
     if not duplicates:
-        return Verdict(NO_DUPLICATE)
+        return Verdict(NO_DUPLICATE, item=item, path=path)
     incoming = _incoming(item, path)
-    if _find_same_recording(lib, incoming):
-        return Verdict(SAME, incoming, duplicates)
+    held = (recordings or functools.partial(library_recordings, lib))()
+    if held.holds(_ids(incoming), incoming.length):
+        return Verdict(SAME, incoming, duplicates, item, path)
     kind = SPLIT if any(_different_recording(incoming, d) for d in duplicates) else APART
-    return Verdict(kind, incoming, duplicates)
+    return Verdict(kind, incoming, duplicates, item, path)
+
+
+def _same_recording(a, b) -> bool:
+    """True when two incoming files share a Spotify ID, an ISRC or a
+    MusicBrainz recording (with lengths that agree, as the library's)."""
+    from music_scan.identity import same_mb_recording  # noqa: PLC0415
+
+    return (bool(a.spotify_id) and a.spotify_id == b.spotify_id) or not a.isrcs.isdisjoint(b.isrcs) \
+        or same_mb_recording(a.mb_trackid, a.length, b.mb_trackid, b.length)
+
+
+def one_per_recording(verdicts: list[Verdict]) -> tuple[list[Verdict], list[Verdict]]:
+    """*verdicts* split into the ones to import and the copies to leave.
+
+    Each is another recording than its library duplicates, but two of them can
+    be one recording: spotdl fetched it twice, once with an ISRC and once
+    without.  Imported under ``keep``, both would land.  So of the files that
+    share an ID only the best moves: the one with an ISRC, then the higher
+    bitrate, then the first by path.  Copies that share no ID (a fingerprint
+    is all that says they're one) both import; ``music-audit-dupes`` finds them."""
+    ranked = sorted(verdicts, key=lambda v: (not v.incoming.isrcs, -((v.item and v.item.get("bitrate")) or 0)))
+    keep: list[Verdict] = []
+    leave: list[Verdict] = []
+    for v in ranked:
+        (leave if any(_same_recording(v.incoming, k.incoming) for k in keep) else keep).append(v)
+    order = {id(v): n for n, v in enumerate(verdicts)}
+    return sorted(keep, key=lambda v: order[id(v)]), sorted(leave, key=lambda v: order[id(v)])
 
 
 def move_apart(staging: Path, apart: Path, lib) -> list[Verdict]:
     """Move each file in *staging* that is another recording than its
-    artist-and-title duplicates to the same place under *apart*; log each one."""
+    artist-and-title duplicates to the same place under *apart*, one copy per
+    recording (:func:`one_per_recording`); log each one.  Returns their
+    verdicts, each with its new path."""
     from music_scan.scan import AUDIO_EXTS  # noqa: PLC0415
 
-    moved = []
+    recordings = functools.cache(functools.partial(library_recordings, lib))
+    others = []
     for f in sorted(staging.rglob("*")):
         if not f.is_file() or f.suffix.lower() not in AUDIO_EXTS:
             continue
-        verdict = classify(lib, f)
-        if verdict.kind not in OTHER_RECORDING:
-            continue
-        dest = apart / f.relative_to(staging)
+        verdict = classify(lib, f, recordings)
+        if verdict.kind in OTHER_RECORDING:
+            others.append(verdict)
+    keep, leave = one_per_recording(others)
+    if leave:
+        logger.info("Asis apart    : %d file(s) left in quarantine, another copy of a file imported beside "
+                    "its duplicate", len(leave))
+        for v in leave:
+            logger.info("  [COPY] %s: another copy of a file this pass imports; left in quarantine",
+                        v.path.relative_to(staging))
+    moved = []
+    for verdict in keep:
+        dest = apart / verdict.path.relative_to(staging)
         dest.parent.mkdir(parents=True, exist_ok=True)
-        shutil.move(str(f), dest)
+        shutil.move(str(verdict.path), dest)
         for dup in verdict.duplicates:
             logger.warning("  [%s] %s — %s: %s, item %d; importing it separately (as-is)",
                            "SPLIT" if verdict.kind == SPLIT else "APART",
                            dup.get("artist"), dup.get("title"), verdict.kind, dup.id)
-        moved.append(verdict)
+        moved.append(verdict._replace(path=dest))
     return moved
 
 
-def record_kept(lib, moved: list[Verdict]) -> int:
-    """The ``kept_apart`` events for the files :func:`move_apart` moved that are
-    now in the library, found by their Spotify ID.  Returns how many imported."""
-    from music_fetch import events  # noqa: PLC0415
-    from music_scan.identity import item_spotify_ids  # noqa: PLC0415
+def _new_items(lib, moved: list[Verdict], since: float) -> list[tuple[Verdict, object]]:
+    """Each of *moved* that is now in *lib*, with its own new item.
 
-    imported = 0
-    for verdict in moved:
-        sid = verdict.incoming.spotify_id
-        dup_ids = {d.id for d in verdict.duplicates}
-        found = [i for i in lib.items(f"spotify_url:{sid}") if sid in item_spotify_ids(i) and i.id not in dup_ids] \
-            if sid else []
-        if not found:
-            continue
-        item = max(found, key=lambda i: i.id)
-        imported += 1
+    The new items are the ones the keep run added (``added`` from *since* on,
+    which only the files under the apart dir make).  Each goes to the file
+    whose IDs it carries; a file with no ID left in common (a loose file
+    imports without its spotdl tags) takes a new item with its artist and
+    title.  No item goes to two files.  A file still under the apart dir
+    wasn't imported."""
+    from beets.dbcore.query import NumericQuery  # noqa: PLC0415
+
+    from music_scan.identity import item_recording_ids  # noqa: PLC0415
+
+    new = sorted(lib.items(NumericQuery("added", f"{since}..")), key=lambda i: i.id)
+    claimed: set[int] = set()
+    found: dict[int, object] = {}
+    pending = [(n, v) for n, v in enumerate(moved) if not (v.path and v.path.exists())]
+
+    def claim(n: int, match) -> None:
+        for item in new:
+            if item.id not in claimed and match(item):
+                claimed.add(item.id)
+                found[n] = item
+                return
+
+    for n, v in pending:
+        ids = _ids(v.incoming)
+        if ids:
+            claim(n, lambda i: not ids.isdisjoint(item_recording_ids(i)))
+    for n, v in pending:
+        if n not in found and v.item is not None:
+            claim(n, lambda i: (i.get("artist"), i.get("title")) == (v.item.get("artist"), v.item.get("title")))
+    return [(moved[n], found[n]) for n, _ in pending if n in found]
+
+
+def record_kept(lib, moved: list[Verdict], since: float) -> int:
+    """The ``kept_apart`` events for the files :func:`move_apart` moved that
+    the keep run, started at *since*, imported (:func:`_new_items`).  Returns
+    how many imported."""
+    from music_fetch import events  # noqa: PLC0415
+
+    pairs = _new_items(lib, moved, since)
+    for verdict, item in pairs:
         why = "ISRCs differ" if verdict.kind == SPLIT else "no shared ID"
         for dup in verdict.duplicates:
             events.record(
@@ -167,7 +262,9 @@ def record_kept(lib, moved: list[Verdict]) -> int:
                                     "isrc": dup.get("isrc") or None},
                       "isrcs": sorted(verdict.incoming.isrcs)},
             )
-    return imported
+    if len(pairs) < len(moved):
+        logger.info("Asis apart    : %d of %d moved file(s) not imported", len(moved) - len(pairs), len(moved))
+    return len(pairs)
 
 
 def main() -> int:
@@ -178,8 +275,9 @@ def main() -> int:
     kinds: Counter = Counter()
     vias: Counter = Counter()
     with MusicLibrary(LIBRARY_DB) as library:
+        recordings = functools.cache(functools.partial(library_recordings, library._lib))
         for f in eligible(QUARANTINE):
-            verdict = classify(library._lib, f)
+            verdict = classify(library._lib, f, recordings)
             kinds[verdict.kind] += 1
             if verdict.kind in OTHER_RECORDING:
                 vias.update(d.get("via") or "none" for d in verdict.duplicates)
