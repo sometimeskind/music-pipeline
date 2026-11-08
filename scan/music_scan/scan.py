@@ -190,39 +190,22 @@ _ASIS_SUBTREES = ("spotdl",)
 # The music_pipeline plugin's duplicate hook doesn't run under --asis (beets
 # sends no import_task_choice there), so beets would apply the main config's
 # duplicate_action: remove and delete the existing item and its file (#202).
-# A duplicate stays in quarantine instead.
+# A duplicate stays in quarantine instead, unless it is another recording
+# (music_scan.asis_apart, homelab#2698).
 _ASIS_CONFIG = "import:\n  duplicate_action: skip\n"
 
 
 def _move_asis_eligible(quarantine: Path, staging: Path) -> int:
-    """Move audio files from *quarantine* that have all required tags to *staging*.
+    """Move the audio files in *quarantine* the as-is pass takes
+    (:func:`music_scan.asis_apart.eligible`) to *staging*.
 
-    Only spotdl leftovers (``spotdl/<playlist>/``) and loose files at the
-    quarantine root are eligible; every other subtree is skipped (#202).
     Files missing title, artist, album, or tracknumber are left in quarantine.
     Returns the count of files moved.
     """
-    from mutagen import File as MutagenFile  # noqa: PLC0415 — beets dep, always available
+    from music_scan.asis_apart import eligible  # noqa: PLC0415
 
     moved = 0
-    for f in sorted(quarantine.rglob("*")):
-        if not f.is_file() or f.suffix.lower() not in AUDIO_EXTS:
-            continue
-        # An allow-list, so a new quarantine subtree is skipped until it is
-        # known to be safe.  Skipped: album-mode releases (usenet/: verified by
-        # the strict match alone, a release beets can't match is blocklisted),
-        # the rejected downloads (rejected/, homelab#2546) and the files
-        # music-audit-lengths --replace swapped out (replaced/, #202): both
-        # carry the right tags on the wrong audio.
-        parts = f.relative_to(quarantine).parts
-        if len(parts) > 1 and parts[0] not in _ASIS_SUBTREES:
-            continue
-        try:
-            tags = MutagenFile(f, easy=True)
-            if tags is None or not all(tags.get(k) for k in _ASIS_REQUIRED_TAGS):
-                continue
-        except Exception:
-            continue
+    for f in list(eligible(quarantine)):
         dest = staging / f.relative_to(quarantine)
         dest.parent.mkdir(parents=True, exist_ok=True)
         shutil.move(str(f), dest)
@@ -230,28 +213,57 @@ def _move_asis_eligible(quarantine: Path, staging: Path) -> int:
     return moved
 
 
+def _return_to_quarantine(staging: Path) -> None:
+    """Move the files beets left in *staging* back to their quarantine paths."""
+    for remaining in staging.rglob("*"):
+        if remaining.is_file() and remaining.suffix.lower() in AUDIO_EXTS:
+            dest = QUARANTINE / remaining.relative_to(staging)
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            shutil.move(str(remaining), dest)
+
+
 def import_asis_from_quarantine() -> int:
     """Import quarantine files that have sufficient existing tags (--asis).
 
     Moves eligible files to a temp staging dir, runs ``beet import --asis``,
-    and returns any beet-skipped files back to quarantine.  Returns the count
-    of tracks imported.
+    and returns any beet-skipped files back to quarantine.  A file that is
+    another recording than its artist-and-title duplicates is imported in a
+    second run that keeps both (:mod:`music_scan.asis_apart`).  Returns the
+    count of tracks imported.
     """
+    from music_scan import asis_apart  # noqa: PLC0415
+
     asis_start = time.time()
-    with tempfile.TemporaryDirectory(prefix="asis-staging-") as staging_str:
-        staging = Path(staging_str)
+    with tempfile.TemporaryDirectory(prefix="asis-staging-") as staging_str, \
+            tempfile.TemporaryDirectory(prefix="asis-apart-") as apart_str:
+        staging, apart = Path(staging_str), Path(apart_str)
         staged = _move_asis_eligible(QUARANTINE, staging)
         logger.info("Asis eligible : %d file(s) with sufficient tags", staged)
         if staged:
+            moved: list = []
+            try:
+                with MusicLibrary(LIBRARY_DB) as lib:
+                    moved = asis_apart.move_apart(staging, apart, lib._lib)
+            except Exception:
+                logger.warning("Could not check the as-is files for other recordings", exc_info=True)
+            logger.info("Asis apart    : %d file(s) another recording than their duplicates", len(moved))
             with tempfile.TemporaryDirectory(prefix="asis-config-") as config_dir:
                 config = Path(config_dir) / "config.yaml"
                 config.write_text(_ASIS_CONFIG)
-                run_beet_import(staging, asis=True, config=config)
-            for remaining in staging.rglob("*"):
-                if remaining.is_file() and remaining.suffix.lower() in AUDIO_EXTS:
-                    dest = QUARANTINE / remaining.relative_to(staging)
-                    dest.parent.mkdir(parents=True, exist_ok=True)
-                    shutil.move(str(remaining), dest)
+                if staged > len(moved):
+                    run_beet_import(staging, asis=True, config=config)
+                if moved:
+                    keep = Path(config_dir) / "keep.yaml"
+                    keep.write_text(asis_apart.KEEP_CONFIG)
+                    run_beet_import(apart, asis=True, config=keep)
+            if moved:
+                try:
+                    with MusicLibrary(LIBRARY_DB) as lib:
+                        asis_apart.record_kept(lib._lib, moved)
+                except Exception:
+                    logger.warning("Could not record the kept_apart events", exc_info=True)
+            _return_to_quarantine(staging)
+            _return_to_quarantine(apart)
     with MusicLibrary(LIBRARY_DB) as lib:
         asis_imported = lib.items_added_since(asis_start)
     logger.info("Asis pass     : %d track(s) imported from quarantine", len(asis_imported))
