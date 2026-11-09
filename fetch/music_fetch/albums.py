@@ -1834,7 +1834,7 @@ def same_gap(kept: dict, copy: dict) -> bool:
 def complete(
     state: State,
     completion: Completion,
-    import_inbox: Callable[[], None],
+    import_inbox: Callable[[Path], None],
     claim: Claim,
     add_source: Callable[[str, str, list[list[str]]], None],
     tag_ids: Callable[[str, list[list], float, int, str], None],
@@ -1856,7 +1856,8 @@ def complete(
     homelab#2636) and, when it holds the same tracks in several formats, the
     lesser ones (*one_format*, homelab#2671); *identify* matches it as a whole to a MusicBrainz release first (the files' own
     edition, and how many of that release's tracks have no file).
-    *import_inbox* runs the beets import, and *import_rest* imports, as they
+    *import_inbox* runs the beets import of that folder alone (homelab#2751:
+    the rest of the inbox is the scan's), and *import_rest* imports, as they
     are, the files beets couldn't match (a file present is never missing).
     *claim* stamps the release's items with the album record and the release,
     and the import is judged:
@@ -1950,7 +1951,7 @@ def complete(
                 _save_import(save, label)
         gave_up = ""  # why a retried import now counts against the release
         try:
-            import_inbox()
+            import_inbox(dest)
             if import_rest is not None:
                 import_rest(first, job_name)
         except ImportDeferred as exc:

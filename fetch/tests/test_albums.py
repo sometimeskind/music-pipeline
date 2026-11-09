@@ -505,8 +505,9 @@ def run_complete(state, completion, roots, have_result=True, imported=None, tagg
     if titles is None:
         titles = [t[0] for t in albums.album_tracks(next(iter(state.albums.values())))] if have_result else []
 
-    def import_inbox():
-        seen.extend(p.relative_to(inbox).as_posix() for p in inbox.rglob("*.flac"))
+    def import_inbox(folder):
+        # What beets is handed: the folder, not the inbox around it (homelab#2751).
+        seen.extend(p.relative_to(inbox).as_posix() for p in folder.rglob("*.flac"))
 
     def claim(playlist, since, key, guid, job):
         claimed.append((playlist, key, guid))
@@ -533,6 +534,25 @@ def test_complete_imports_from_the_playlist_inbox(roots) -> None:
     # Moved out of SABnzbd's dir, and leftovers cleaned from the inbox.
     assert not (complete_root / "album" / "Artist-Album-FLAC").exists()
     assert not (inbox / "later" / "Artist-Album-FLAC").exists()
+
+
+def test_complete_imports_only_its_own_release_folder(roots) -> None:
+    """homelab#2751: the import is handed the release's inbox folder, so whatever
+    else the inbox holds (another job, a spotdl batch) is left for the scan."""
+    complete_root, inbox, _ = roots
+    other = inbox / "later" / "Other-Album-MP3" / "01.mp3"
+    other.parent.mkdir(parents=True)
+    other.write_bytes(b"x")
+    folders = []
+    state = grabbed_state()
+    status = albums.complete(
+        state, albums.Completion("nzo1", True, "album/Artist-Album-FLAC"), folders.append,
+        claim=_claim_all, add_source=lambda *a: None, retire=_no_retire, tag_ids=lambda *a: None,
+        complete_root=complete_root, inbox_root=inbox, quarantine_root=roots[2],
+    )
+    assert status == albums.IMPORTED
+    assert folders == [inbox / "later" / "Artist-Album-FLAC"]
+    assert other.exists()
 
 
 def test_complete_tags_the_other_playlists(roots) -> None:
@@ -595,7 +615,7 @@ def test_complete_import_crash_keeps_the_release_for_a_retry(roots) -> None:
     complete_root, inbox, quarantine = roots
     state = grabbed_state()
 
-    def crash():
+    def crash(folder):
         raise ValueError("No closing quotation")
 
     status = albums.complete(
@@ -613,7 +633,7 @@ def test_complete_import_crash_keeps_the_release_for_a_retry(roots) -> None:
     # The next tick's recovery imports it, counting items from the first try.
     since = []
     status = albums.complete(
-        state, albums.Completion("nzo1", True, "album/Artist-Album-FLAC"), lambda: None,
+        state, albums.Completion("nzo1", True, "album/Artist-Album-FLAC"), lambda folder: None,
         claim=_claim_all, add_source=lambda *a: None, retire=_no_retire,
         tag_ids=lambda pl, tracks, start, count, key: since.append(start),
         complete_root=complete_root, inbox_root=inbox, quarantine_root=quarantine,
@@ -666,7 +686,7 @@ def test_restart_mid_import_resumes_it_instead_of_a_loose_scan(roots) -> None:
     record = state.albums["a0"]
     whole = {"missing": 0, "album": "Album", "mb_albumid": "mb1"}
 
-    def killed_after_one():
+    def killed_after_one(folder):
         (inbox / "later" / "Artist-Album-FLAC" / "01.flac").unlink()  # beets imported it
         raise Killed
 
@@ -691,7 +711,7 @@ def test_restart_mid_import_resumes_it_instead_of_a_loose_scan(roots) -> None:
     # The lost-trigger recovery: the rest is imported as the release.
     since, identified = [], []
     status = albums.complete(
-        state, albums.Completion("nzo1", True, "album/Artist-Album-FLAC"), lambda: None,
+        state, albums.Completion("nzo1", True, "album/Artist-Album-FLAC"), lambda folder: None,
         claim=_claim_all, add_source=lambda *a: None, retire=_no_retire,
         tag_ids=lambda pl, tracks, start, count, key: since.append(start),
         identify=lambda folder: identified.append(folder) or {"missing": 1, "album": "Album", "mb_albumid": "mb1"},
@@ -718,7 +738,7 @@ def test_restart_mid_import_resumes_from_the_saved_record(roots, caplog, saved) 
     state = State.load()  # as album_import_flow loads it
     whole = {"missing": 0, "album": "Album", "mb_albumid": "mb1"}
 
-    def killed_after_one():
+    def killed_after_one(folder):
         (inbox / "later" / "Artist-Album-FLAC" / "01.flac").unlink()  # beets imported it
         raise Killed
 
@@ -742,7 +762,7 @@ def test_restart_mid_import_resumes_from_the_saved_record(roots, caplog, saved) 
     def recover():
         [completion] = albums.lost_completions(state, sab, now=NOW)
         return albums.complete(
-            state, completion, lambda: None,
+            state, completion, lambda folder: None,
             claim=_claim_all, add_source=lambda *a: None, retire=_no_retire,
             tag_ids=lambda pl, tracks, start, count, key: since.append(start),
             identify=lambda folder: identified.append(folder) or {"missing": 1},
@@ -781,7 +801,7 @@ def test_a_failed_mid_import_save_does_not_stop_the_import(roots, caplog) -> Non
 
     complete_root, inbox, quarantine = roots
     status = albums.complete(
-        state, albums.Completion("nzo1", True, "album/Artist-Album-FLAC"), lambda: None,
+        state, albums.Completion("nzo1", True, "album/Artist-Album-FLAC"), lambda folder: None,
         claim=_claim_all, add_source=lambda *a: None, retire=_no_retire, tag_ids=lambda *a: None,
         identify=lambda folder: {"missing": 0}, save=down,
         complete_root=complete_root, inbox_root=inbox, quarantine_root=quarantine,
@@ -804,7 +824,7 @@ def complete_seen(state, roots, import_inbox=None, one_format=None):
         identified.extend(_job_files(folder))
         return {"missing": 0, "album": "Album", "mb_albumid": "mb1"}
 
-    def default_import():
+    def default_import(folder):
         imported.extend(_job_files(inbox / "later" / "Artist-Album-FLAC"))
 
     status = albums.complete(
@@ -925,7 +945,7 @@ def test_complete_retry_after_dropping_a_copy_imports_the_rest(roots) -> None:
     state = grabbed_state()
     record = state.albums["a0"]
 
-    def crash():
+    def crash(folder):
         raise ValueError("No closing quotation")
 
     status, identified, _ = complete_seen(state, roots, import_inbox=crash)
@@ -1421,7 +1441,7 @@ def test_complete_an_import_that_always_crashes_counts_against_the_release(roots
     complete_root, inbox, quarantine = roots
     state = grabbed_state()
 
-    def crash():
+    def crash(folder):
         raise ValueError("boom")
 
     statuses = [
@@ -1501,7 +1521,7 @@ def test_complete_musicbrainz_outage_retries_without_blame(roots, caplog) -> Non
     complete_root, inbox, quarantine = roots
     state = grabbed_state()
 
-    def outage():
+    def outage(folder):
         raise albums.ImportDeferred("MusicBrainz unavailable (503)")
 
     with caplog.at_level("INFO", logger="music_fetch.albums"):
@@ -1523,7 +1543,7 @@ def test_complete_musicbrainz_outage_does_not_spend_the_crash_retries(roots) -> 
     complete_root, inbox, quarantine = roots
     state = grabbed_state()
 
-    def outage():
+    def outage(folder):
         raise albums.ImportDeferred("MusicBrainz unavailable (503)")
 
     statuses = [
@@ -1541,7 +1561,7 @@ def test_complete_musicbrainz_outage_does_not_spend_the_crash_retries(roots) -> 
 
     # MusicBrainz is back: the import succeeds and the counters go.
     status = albums.complete(
-        state, albums.Completion("nzo1", True, "album/Artist-Album-FLAC"), lambda: None,
+        state, albums.Completion("nzo1", True, "album/Artist-Album-FLAC"), lambda folder: None,
         claim=_claim_all, add_source=lambda *a: None, retire=_no_retire, tag_ids=lambda *a: None,
         complete_root=complete_root, inbox_root=inbox, quarantine_root=quarantine,
     )
@@ -1555,7 +1575,7 @@ def test_complete_an_endless_outage_counts_against_the_release(roots) -> None:
     state = grabbed_state()
     state.albums["a0"]["import_deferrals"] = albums.MAX_IMPORT_DEFERRALS
 
-    def outage():
+    def outage(folder):
         raise albums.ImportDeferred("MusicBrainz unavailable (503)")
 
     status = albums.complete(
@@ -2164,7 +2184,7 @@ def test_a_reimport_is_still_a_reimport_when_retire_runs(roots) -> None:
     seen = []
     complete_root, inbox, quarantine = roots
     status = albums.complete(
-        state, albums.Completion("nzo1", True, "album/Artist-Album-FLAC"), lambda: None,
+        state, albums.Completion("nzo1", True, "album/Artist-Album-FLAC"), lambda folder: None,
         lambda playlist, since, key, guid, job: [t[0] for t in albums.album_tracks(state.albums["a0"])],
         add_source=lambda *_: None, tag_ids=lambda *_: None,
         retire=lambda key, record, keep, drop: seen.append(record.get("reimport")) or 0,

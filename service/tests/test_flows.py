@@ -211,7 +211,7 @@ def test_fetch_flow_runs_fetch_then_scan():
         mock_ingest.sync_playlists.side_effect = lambda *_, **__: call_order.append("spotdl-sync")
         mock_scan.sync_hooks.return_value = nullcontext({})
         mock_scan.check_request_downloads.side_effect = lambda: (call_order.append("verify-requests"), {})[1]
-        mock_scan.run_inbox_import.side_effect = lambda: (call_order.append("beet-import"), [])[1]
+        mock_scan.run_inbox_import.side_effect = lambda **_: (call_order.append("beet-import"), [])[1]
 
         fetch_and_scan_flow()
 
@@ -282,8 +282,8 @@ def test_scan_flow_runs_all_scan_steps_in_order():
         mock_concurrency.return_value.__enter__.return_value = None
         mock_concurrency.return_value.__exit__.return_value = False
         mock_scan.check_request_downloads.side_effect = lambda: (call_order.append("verify-requests"), {})[1]
-        mock_scan.run_inbox_import.side_effect = lambda: (call_order.append("beet-import"), [])[1]
-        mock_scan.quarantine_inbox_leftovers.side_effect = lambda: (call_order.append("quarantine"), 0)[1]
+        mock_scan.run_inbox_import.side_effect = lambda **_: (call_order.append("beet-import"), [])[1]
+        mock_scan.quarantine_inbox_leftovers.side_effect = lambda **_: (call_order.append("quarantine"), 0)[1]
         mock_scan.import_asis_from_quarantine.side_effect = lambda: (call_order.append("asis-import"), 0)[1]
         mock_scan.regen_playlists.side_effect = lambda metrics: (call_order.append("regen-playlists"), {})[1]
 
@@ -496,8 +496,9 @@ def test_scan_reports_a_musicbrainz_outage():
     mock_scan.regen_playlists.assert_called_once()
 
 
-def test_album_import_defers_on_a_musicbrainz_outage():
-    """The album flow sees an outage as ImportDeferred, not a crash (#264)."""
+def test_album_import_defers_on_a_musicbrainz_outage(tmp_path):
+    """The album flow sees an outage as ImportDeferred, not a crash (#264); the
+    files beets skipped stay in the folder, which goes back, so none is quarantined."""
     import music_fetch.albums as albums
     from music_scan.scan import MusicBrainzUnavailable
     from music_service import flows
@@ -506,17 +507,119 @@ def test_album_import_defers_on_a_musicbrainz_outage():
 
     def fake_complete(state, completion, import_inbox, *args, **kw):
         with pytest.raises(albums.ImportDeferred) as exc:
-            import_inbox()
+            import_inbox(tmp_path)
         seen.append(exc.value)
         return albums.GRABBED
 
     with patch.object(albums, "complete", side_effect=fake_complete), \
-         patch.object(flows, "_run_scan_tasks", side_effect=MusicBrainzUnavailable("503")), \
+         patch.object(flows.scan, "run_inbox_import", side_effect=MusicBrainzUnavailable("503")), \
+         patch.object(flows.scan, "quarantine_inbox_leftovers") as quarantine, \
+         patch.object(flows.scan, "regen_playlists"), \
+         patch("music_scan.navidrome.trigger_scan"), \
          patch.object(flows, "concurrency"):
         _, _, complete = flows._album_library_hooks(MagicMock())
         assert complete(albums.State(albums={}), albums.Completion(nzo_id="nzo_1", ok=True, path="x")) == albums.GRABBED
 
     assert len(seen) == 1 and isinstance(seen[0].__cause__, MusicBrainzUnavailable)
+    quarantine.assert_not_called()
+
+
+def _inbox_with_a_release_and_a_batch(tmp_path, monkeypatch):
+    """An inbox holding an album job's release folder and an unrelated spotdl batch,
+    with a beets stand-in that imports (moves to the library) every audio file
+    under the folder it is handed, and records that folder."""
+    from music_scan import scan
+
+    inbox, quarantine, library = tmp_path / "inbox", tmp_path / "quarantine", tmp_path / "library"
+    release = inbox / "usenet" / "later" / "Artist-Album-FLAC"
+    batch = inbox / "spotdl" / "mix"
+    for f in (release / "01.flac", release / "02.flac", batch / "a.m4a", batch / "b.m4a"):
+        f.parent.mkdir(parents=True, exist_ok=True)
+        f.write_bytes(b"x")
+    # 03 is a file beets can't match: it goes to quarantine for import_rest.
+    (release / "03.flac").write_bytes(b"x")
+    handed: list = []
+
+    def beet_import(root, skip_limit=None, **_):
+        handed.append(root)
+        for f in sorted(root.rglob("*")):
+            if f.is_file() and f.name != "03.flac":
+                target = library / f.relative_to(inbox)
+                target.parent.mkdir(parents=True, exist_ok=True)
+                f.rename(target)
+        return 0
+
+    monkeypatch.setattr(scan, "INBOX", inbox)
+    monkeypatch.setattr(scan, "QUARANTINE", quarantine)
+    monkeypatch.setattr(scan, "run_beet_import", beet_import)
+    lib = MagicMock()
+    lib.return_value.__enter__.return_value.items_added_since.return_value = []
+    monkeypatch.setattr(scan, "MusicLibrary", lib)
+    return inbox, quarantine, release, batch, handed
+
+
+def test_album_import_imports_only_its_own_release_folder(tmp_path, monkeypatch):
+    """homelab#2751: an album import hands beets its release folder, not the inbox,
+    and quarantines only that folder's leftovers, so an unrelated batch in the inbox
+    doesn't import inside the albums slot.  The ordinary scan still imports it.  The
+    playlists and Navidrome follow the release's own steps (claim, IDs, canon)."""
+    import music_fetch.albums as albums
+    from music_service import flows
+
+    inbox, quarantine, release, batch, handed = _inbox_with_a_release_and_a_batch(tmp_path, monkeypatch)
+    events: list = []
+
+    def fake_complete(state, completion, import_inbox, claim, add_source, tag_ids, retire, **kw):
+        import_inbox(release)
+        events.append("claim")
+        return albums.IMPORTED
+
+    with patch.object(albums, "complete", side_effect=fake_complete), \
+         patch.object(flows.scan, "regen_playlists", side_effect=lambda metrics=None: events.append("m3u") or {}), \
+         patch("music_scan.navidrome.trigger_scan", side_effect=lambda: events.append("rescan")), \
+         patch.object(flows, "concurrency"):
+        _, _, complete = flows._album_library_hooks(MagicMock())
+        assert complete(albums.State(), albums.Completion(nzo_id="n", ok=True, path="x")) == albums.IMPORTED
+
+    assert handed == [release]
+    assert sorted(p.name for p in batch.iterdir()) == ["a.m4a", "b.m4a"]
+    assert [p.relative_to(quarantine).as_posix() for p in quarantine.rglob("*.flac")] == [
+        "usenet/later/Artist-Album-FLAC/03.flac"]
+    assert events == ["claim", "m3u", "rescan"]
+
+    # The scan imports what the album import left in the inbox.
+    with patch.object(flows, "pre_import_tasks"), \
+         patch.object(flows, "asis_import_task", return_value=0), \
+         patch.object(flows, "restamp_task"), patch.object(flows, "retire_merged_task"), \
+         patch.object(flows, "retire_held_task"), patch.object(flows, "canon_task"), \
+         patch.object(flows, "beet_update_task"), patch.object(flows, "regen_playlists_task"), \
+         patch.object(flows, "purge_replaced_task"), patch.object(flows, "navidrome_task"), \
+         patch.object(flows.scan, "count_lossless_items", return_value=0), \
+         patch("music_scan.metrics.ScanMetrics.push"), \
+         patch.object(flows, "concurrency"):
+        flows._run_scan_tasks()
+
+    assert handed == [release, inbox]
+    assert not any(batch.iterdir())
+
+
+def test_album_import_does_not_wait_on_a_busy_pipeline_for_the_playlists():
+    """homelab#2751: whatever holds the pipeline then regenerates the playlists
+    itself; waiting would keep the albums slot behind it.  Navidrome still rescans."""
+    from music_service import flows
+
+    events: list = []
+
+    def busy(name, occupy, timeout_seconds=None):
+        raise TimeoutError
+
+    with patch.object(flows, "concurrency", side_effect=busy), \
+         patch.object(flows, "get_run_logger"), \
+         patch.object(flows.scan, "regen_playlists", side_effect=lambda metrics=None: events.append("m3u")), \
+         patch("music_scan.navidrome.trigger_scan", side_effect=lambda: events.append("rescan")):
+        flows._after_album_import()
+
+    assert events == ["rescan"]
 
 
 # ---------------------------------------------------------------------------

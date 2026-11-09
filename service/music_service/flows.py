@@ -8,6 +8,7 @@ import logging
 import time
 from collections import Counter
 from collections.abc import Iterator
+from pathlib import Path
 
 from prefect import flow, get_run_logger, task
 from prefect.concurrency.sync import concurrency
@@ -208,12 +209,13 @@ def pre_import_tasks(metrics: ScanMetrics) -> None:
 
 
 @task(name="beet-import", log_prints=True)
-def beet_import_task() -> list:
-    """Import inbox audio files into the beets library."""
+def beet_import_task(folder: Path | None = None) -> list:
+    """Import inbox audio files into the beets library: the whole inbox, or
+    only *folder* (an album import's release, homelab#2751)."""
     logger = get_run_logger()
     with hold("beet-import"):
-        imported = scan.run_inbox_import()
-    logger.info("Imported %d track(s) from inbox", len(imported))
+        imported = scan.run_inbox_import(folder=folder)
+    logger.info("Imported %d track(s) from %s", len(imported), "inbox" if folder is None else folder.name)
     for title, artist in imported[:10]:
         logger.info("  + %s — %s", title, artist)
     if len(imported) > 10:
@@ -222,10 +224,11 @@ def beet_import_task() -> list:
 
 
 @task(name="quarantine-leftovers", log_prints=True)
-def quarantine_task() -> int:
-    """Move unmatched inbox audio files to quarantine for manual review."""
+def quarantine_task(folder: Path | None = None) -> int:
+    """Move unmatched inbox audio files to quarantine for manual review: the
+    whole inbox's, or only *folder*'s (an album import's release, homelab#2751)."""
     logger = get_run_logger()
-    moved = scan.quarantine_inbox_leftovers()
+    moved = scan.quarantine_inbox_leftovers(folder=folder)
     if moved:
         logger.info("Quarantined %d unmatched file(s) for manual review", moved)
     else:
@@ -567,6 +570,33 @@ def _request_fill(lib):
     return Filler(lib, lock=lambda: hold("pipeline"))
 
 
+def _after_album_import() -> None:
+    """What an album import still runs of the scan's later steps for its own
+    release (homelab#2751): the playlists and a Navidrome rescan.  After the
+    claim, the Spotify IDs and canon, so the ``.m3u`` files list the release by
+    its stamp and IDs and Navidrome sees its canonical paths.
+
+    The playlists skip when busy rather than wait: whatever holds ``pipeline``
+    is most likely a fetch or scan, which regenerates them itself once done,
+    and waiting here would keep the albums slot behind it.  Never raises: the
+    release is imported and judged, and the next scan does both again."""
+    with contextlib.ExitStack() as stack:
+        try:
+            stack.enter_context(concurrency("pipeline", occupy=1, timeout_seconds=SKIP_IF_BUSY_SECONDS))
+        except TimeoutError:
+            get_run_logger().info(
+                "Album import: playlists not regenerated — pipeline busy; the next scan regenerates them")
+        else:
+            try:
+                regen_playlists_task()
+            except Exception:
+                get_run_logger().exception("Album import: regenerating the playlists failed; the next scan retries it")
+    try:
+        navidrome_task()
+    except Exception:
+        get_run_logger().exception("Album import: the Navidrome rescan failed; the next scan asks again")
+
+
 def _album_library_hooks(lib):
     """have / missing / complete callbacks over one open beets library.
 
@@ -609,14 +639,23 @@ def _album_library_hooks(lib):
         source, library = indexes(playlist)
         return scan.missing_tracks(source, tracks, library)
 
-    def import_inbox() -> None:
-        # Waits for a running fetch or scan: beets' SQLite has one writer.
+    imported: list[bool] = []  # whether this completion ran the import
+
+    def import_inbox(folder) -> None:
+        # Only the release's own folder (homelab#2751): the rest of the inbox
+        # is the scan's, and imported here it held the albums slot for as long
+        # as beets took over it.  Waits for a running fetch or scan: beets'
+        # SQLite has one writer.
         with hold("pipeline"):
+            imported.append(True)
             try:
-                _run_scan_tasks()
+                beet_import_task(folder)
             except MusicBrainzUnavailable as exc:
-                # Not the release's fault: retried without blame (#264).
+                # Not the release's fault: retried without blame (#264).  The
+                # files beets skipped stay in the folder, which goes back.
                 raise albums.ImportDeferred(str(exc)) from exc
+            # Where import_rest finds the files beets couldn't match (#279).
+            quarantine_task(folder)
 
     def add_source(have_source: str, new_source: str, tracks: list[list[str]]) -> None:
         scan.add_source(lib, have_source, new_source, tracks)
@@ -722,9 +761,12 @@ def _album_library_hooks(lib):
             cover.logger.exception("Album covers: embedding failed; music-embed-covers retries it")
 
     def complete(state, completion) -> str | None:
+        imported.clear()
         # save: the import's start is in the database before beets runs (homelab#2603).
         status = albums.complete(state, completion, import_inbox, claim, add_source, tag_ids, retire,
                                  identify=identify, import_rest=import_rest, save=state.save, one_format=one_format)
+        if imported:
+            _after_album_import()
         keys.clear()
         albums_by_id.clear()
         return status
