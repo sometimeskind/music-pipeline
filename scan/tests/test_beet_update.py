@@ -194,3 +194,149 @@ def test_keeps_suffixed_name(tmp_path) -> None:
     assert not keeps_suffixed_name(as_bytes(dest), as_bytes(dest))
     assert not keeps_suffixed_name(as_bytes(tmp_path / "01 - Song.1.mp3"), as_bytes(dest))
     assert not keeps_suffixed_name(as_bytes(tmp_path / "elsewhere" / "01 - Song.1.m4a"), as_bytes(dest))
+
+
+# ISRCs and recording IDs stored without their file (homelab#2726): made-up codes.
+ISRC_MB = "XXAAA2600001"
+ISRC_SPOTDL = "XXAAA2600002"
+SPOTIFY_URL = "https://open.spotify.com/track/abc123"  # conftest's: the clip's own spotdl URL
+
+
+def _plugin():
+    from unittest.mock import MagicMock
+
+    from music_scan import music_pipeline
+
+    plugin = music_pipeline.MusicPipelinePlugin.__new__(music_pipeline.MusicPipelinePlugin)
+    plugin._log = MagicMock()
+    plugin._pending, plugin._file_tags, plugin._retitled, plugin._beside = {}, {}, {}, {}
+    plugin._unwritten = set()
+    return plugin
+
+
+def _survives(lib, item_id, **expected) -> None:
+    for _ in range(2):
+        _update(lib)
+        after = lib.get_item(item_id)
+        assert {k: after.get(k) for k in expected} == expected
+
+
+def test_spotdls_isrc_added_at_import_survives_beet_update(lib, add, monkeypatch) -> None:
+    """item_imported runs after beets' import.write: spotdl's ISRC joins MusicBrainz's on the file too."""
+    from music_fetch import events
+    from music_scan.music_pipeline import Pending, SpotdlTags
+
+    monkeypatch.setattr(events, "record", lambda *a, **kw: None)
+    item = lib.get_item(add(isrc=ISRC_MB).id)  # as beets' import left it: MusicBrainz's ISRC, file and database
+    plugin = _plugin()
+    plugin._pending[id(item)] = Pending(item, "made-up-playlist", "spotdl", None, SpotdlTags(SPOTIFY_URL, ISRC_SPOTDL))
+    plugin.tag_source_on_stored(lib, item)
+    assert lib.get_item(item.id).isrc == f"{ISRC_MB};{ISRC_SPOTDL}"
+    _survives(lib, item.id, isrc=f"{ISRC_MB};{ISRC_SPOTDL}", sources="made-up-playlist")
+
+
+def test_a_fallbacks_recording_id_set_at_import_survives_beet_update(lib, add, monkeypatch) -> None:
+    from music_fetch import events
+    from music_fetch.album_requests import recording_url
+    from music_scan.music_pipeline import FALLBACK_RECORDING, Pending, SpotdlTags
+
+    monkeypatch.setattr(events, "record", lambda *a, **kw: None)
+    recording = "00000000-0000-4000-8000-000000000001"
+    item = lib.get_item(add().id)
+    plugin = _plugin()
+    plugin._pending[id(item)] = Pending(item, "made-up-playlist", "spotdl", None, SpotdlTags(recording_url(recording)))
+    plugin.tag_source_on_stored(lib, item)
+    assert lib.get_item(item.id).mb_trackid == recording
+    _survives(lib, item.id, mb_trackid=recording, **{FALLBACK_RECORDING: recording})
+
+
+def _listening_plugin(monkeypatch):
+    """The plugin as beets loads it, with the listeners it registers, by event."""
+    from unittest.mock import MagicMock, patch
+
+    from beets.library import Item
+    from beets.plugins import BeetsPlugin
+
+    from music_scan import music_pipeline
+
+    monkeypatch.setattr(Item, "move_file", Item.move_file)  # the plugin patches it at load
+    listeners: dict[str, list] = {}
+    with patch.object(BeetsPlugin, "register_listener",
+                      lambda self, event, fn: listeners.setdefault(event, []).append(fn)):
+        with patch.object(BeetsPlugin, "__init__", lambda self, name: None):
+            plugin = music_pipeline.MusicPipelinePlugin()
+    plugin._log = MagicMock()
+    return plugin, listeners
+
+
+def test_isrcs_merged_into_a_duplicate_survive_beet_update(lib, add, tmp_path, monkeypatch) -> None:
+    """[SAME] at import: the library item takes the incoming ISRCs, and its file gets them
+    once the import is done (the ``import`` event), not mid-pipeline."""
+    from unittest.mock import MagicMock
+
+    from beets import importer as beets_importer
+    from beets.library import Item
+
+    from music_fetch import events
+    from music_scan import music_pipeline
+    from music_scan.music_pipeline import Pending, SpotdlTags
+
+    monkeypatch.setattr(events, "record", lambda *a, **kw: None)
+    monkeypatch.setattr(music_pipeline, "SPOTDL_INBOX", tmp_path / "inbox")
+    dup = add(isrc=ISRC_MB, via="spotdl", sources="made-up-playlist-a")
+    incoming = Item(path=str(tmp_path / "inbox" / "made-up-playlist-b" / "Made Up Song.m4a"),
+                    title="Made Up Song", artist="Made Up Artist")
+    plugin, listeners = _listening_plugin(monkeypatch)
+    tags = SpotdlTags("https://open.spotify.com/track/def456", f"{ISRC_MB};{ISRC_SPOTDL}")
+    plugin._pending[id(incoming)] = Pending(incoming, "made-up-playlist-b", "spotdl", None, tags)
+    task = MagicMock(item=incoming, items=None, choice_flag=beets_importer.Action.APPLY)
+    task.find_duplicates.return_value = []
+    task.chosen_info.return_value = {}
+
+    for listener in listeners["import_task_choice"]:
+        listener(session=MagicMock(lib=lib), task=task)
+    task.set_choice.assert_called_once_with(beets_importer.Action.SKIP)
+    assert lib.get_item(dup.id).isrc == f"{ISRC_MB};{ISRC_SPOTDL}"
+    for listener in listeners.get("import", []):
+        listener(lib=lib, paths=[])
+    _survives(lib, dup.id, isrc=f"{ISRC_MB};{ISRC_SPOTDL}", sources="made-up-playlist-a,made-up-playlist-b")
+
+
+def test_a_backfilled_isrc_survives_beet_update(lib, add, monkeypatch) -> None:
+    """music-backfill-ids --apply: the playlist entry's ISRC joins the item's own, on the file too."""
+    from unittest.mock import MagicMock, patch
+
+    from music_scan import audit, backfill
+
+    monkeypatch.setattr(audit, "pipeline_lock", contextlib.nullcontext)
+    item = add(isrc=ISRC_MB, sources="made-up-playlist", spotify_url=SPOTIFY_URL)
+    song = {"name": "Made Up Song", "artists": ["Made Up Artist"], "url": SPOTIFY_URL, "song_id": "abc123",
+            "isrc": ISRC_SPOTDL}
+    library = MagicMock()
+    library.__enter__.return_value = library
+    library.all_items.return_value = list(lib.items())
+    playlist = MagicMock(url="made-up-playlist")
+    playlist.name = "made-up-playlist"
+    with patch("music_scan.library.MusicLibrary", return_value=library), \
+         patch("music_fetch.config.load_playlists", return_value=[playlist]), \
+         patch("music_fetch.spotdl_ops.SpotifyPlaylists") as reader:
+        reader.return_value.songs.return_value = [song]
+        plan = backfill.run(apply=True)
+    assert plan.isrcs_added == 1
+    assert lib.get_item(item.id).isrc == f"{ISRC_MB};{ISRC_SPOTDL}"
+    _survives(lib, item.id, isrc=f"{ISRC_MB};{ISRC_SPOTDL}", spotify_ids="abc123")
+
+
+def test_isrc_drift_counts_an_isrc_the_database_alone_holds(lib, add) -> None:
+    from music_scan.isrc_drift import drift
+
+    item = add(isrc=ISRC_MB)
+    assert drift(lib.items())["isrc differs"] == 0
+    stored = lib.get_item(item.id)
+    stored["isrc"] = f"{ISRC_MB};{ISRC_SPOTDL}"
+    stored.store()
+    counts = drift(lib.items())
+    assert (counts["isrc differs"], counts["file lacks some of the database's ISRCs"], counts["mtime 0"]) == (1, 1, 1)
+    stored.try_write()
+    stored.store()
+    assert drift(lib.items())["isrc differs"] == 0
