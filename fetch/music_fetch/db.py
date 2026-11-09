@@ -473,6 +473,14 @@ MIGRATIONS: list[str] = [
         PRIMARY KEY (playlist, item)
     );
     """,
+    # 25: drop the two-way sync's first snapshots (homelab#2742).  They were taken by
+    # exact path, so of two files whose paths differ only in case a playlist held the
+    # twin, not its view's item, and the snapshot lacks the view's item.  The sync is
+    # dry-run only, so they are report state: the next cycle takes them again with
+    # Navidrome's case-insensitive matching.  An older image retakes them its own way.
+    """
+    DELETE FROM playlist_sync;
+    """,
 ]
 
 
