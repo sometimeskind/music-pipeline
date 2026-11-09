@@ -8,6 +8,7 @@ name then flipped between ``.1`` and ``.2`` because its destination was taken.
 """
 
 import contextlib
+import os
 
 import pytest
 
@@ -194,6 +195,110 @@ def test_keeps_suffixed_name(tmp_path) -> None:
     assert not keeps_suffixed_name(as_bytes(dest), as_bytes(dest))
     assert not keeps_suffixed_name(as_bytes(tmp_path / "01 - Song.1.mp3"), as_bytes(dest))
     assert not keeps_suffixed_name(as_bytes(tmp_path / "elsewhere" / "01 - Song.1.m4a"), as_bytes(dest))
+
+
+# Paths that differ only in case (homelab#2742): Navidrome can't tell them apart.
+
+
+def _patched(monkeypatch) -> None:
+    from beets.library import Item
+
+    from music_scan import music_pipeline
+
+    monkeypatch.setattr(Item, "move_file", getattr(Item.move_file, "__wrapped__", Item.move_file))
+    music_pipeline._patch_move_file()
+
+
+def _rel(lib, item) -> str:
+    return os.path.relpath(os.fsdecode(lib.get_item(item.id).path), os.fsdecode(lib.directory))
+
+
+def test_a_destination_that_differs_from_another_items_path_only_in_case_is_taken(lib, add, monkeypatch) -> None:
+    """The spotdl copy's title is ``Look At``, the Usenet album's MusicBrainz title ``Look at``:
+    beets' unique_path checks the case-sensitive filesystem, so it placed both."""
+    _patched(monkeypatch)
+    first = add(title="Look At Where We Are")
+    second = add(title="Look at Where We Are")
+    assert _rel(lib, first) == "Made Up Artist/Made Up Album/01 - Look At Where We Are.m4a"
+    assert _rel(lib, second) == "Made Up Artist/Made Up Album/01 - Look at Where We Are.1.m4a"
+    # It keeps its name through the scan's beet update while the twin stands, as for an exact clash.
+    assert _changed_names(lib, second) == ["01 - Look at Where We Are.1.m4a"] * 2
+    lib.get_item(first.id).remove(delete=True)
+    assert _changed_names(lib, second, times=1) == ["01 - Look at Where We Are.m4a"]
+
+
+def test_a_case_twin_in_the_album_folder_is_taken_too(lib, add, monkeypatch) -> None:
+    """The whole path folds: an album ``Lose`` and ``LOSE`` are one folder to Navidrome."""
+    _patched(monkeypatch)
+    add(album="Lose")
+    second = add(album="LOSE")
+    assert _rel(lib, second) == "Made Up Artist/LOSE/01 - Made Up Song.1.m4a"
+
+
+def test_a_destination_in_another_unicode_form_is_taken(lib, add, monkeypatch) -> None:
+    import unicodedata
+
+    _patched(monkeypatch)
+    add(title=unicodedata.normalize("NFC", "Café"))
+    second = add(title=unicodedata.normalize("NFD", "Café"))
+    assert _rel(lib, second).endswith(".1.m4a")
+
+
+def test_without_the_fold_beets_places_a_case_twin(lib, add, monkeypatch) -> None:
+    """Why the patch folds: beets alone puts both names on disk."""
+    from beets.library import Item
+
+    monkeypatch.setattr(Item, "move_file", getattr(Item.move_file, "__wrapped__", Item.move_file))
+    add(title="Look At Where We Are")
+    assert _name(add(title="Look at Where We Are")) == "01 - Look at Where We Are.m4a"
+
+
+def test_an_item_changing_only_its_own_case_moves(lib, add, monkeypatch) -> None:
+    _patched(monkeypatch)
+    item = lib.get_item(add(title="Look At Where We Are").id)
+    item.title = "Look at Where We Are"
+    item.move()
+    assert _name(lib.get_item(item.id)) == "01 - Look at Where We Are.m4a"
+
+
+def test_case_twins_already_in_the_library_stay_where_they_are(lib, add, monkeypatch) -> None:
+    """Deploying the fold moves no existing file: an item whose destination is its own path isn't moved."""
+    from beets.library import Item
+
+    monkeypatch.setattr(Item, "move_file", getattr(Item.move_file, "__wrapped__", Item.move_file))
+    first, second = add(title="Look At Where We Are"), add(title="Look at Where We Are")
+    _patched(monkeypatch)
+    for item in (first, second):
+        current = lib.get_item(item.id)
+        current["comments"] = "the database only"
+        current.store()
+    _update(lib)
+    assert (_name(lib.get_item(first.id)), _name(lib.get_item(second.id))) == (
+        "01 - Look At Where We Are.m4a", "01 - Look at Where We Are.m4a")
+
+
+def test_unique_folded(tmp_path) -> None:
+    from music_scan.music_pipeline import unique_folded
+    from music_scan.pathfold import fold
+
+    dest = str(tmp_path / "01 - Song.m4a").encode()
+    assert unique_folded(dest, set()) == dest
+    taken = {fold(tmp_path / "01 - SONG.m4a")}
+    assert unique_folded(dest, taken) == str(tmp_path / "01 - Song.1.m4a").encode()
+    taken.add(fold(tmp_path / "01 - SONG.1.m4a"))
+    (tmp_path / "01 - Song.2.m4a").write_bytes(b"x")
+    assert unique_folded(dest, taken) == str(tmp_path / "01 - Song.3.m4a").encode()
+
+
+def test_keeps_suffixed_name_while_a_case_twin_holds_the_destination(tmp_path) -> None:
+    from music_scan.music_pipeline import keeps_suffixed_name
+    from music_scan.pathfold import fold
+
+    one = tmp_path / "01 - Song.1.m4a"
+    one.write_bytes(b"x")
+    dest = str(tmp_path / "01 - Song.m4a").encode()
+    assert not keeps_suffixed_name(str(one).encode(), dest)
+    assert keeps_suffixed_name(str(one).encode(), dest, {fold(tmp_path / "01 - SONG.m4a")})
 
 
 # ISRCs and recording IDs stored without their file (homelab#2726): made-up codes.

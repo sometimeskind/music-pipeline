@@ -410,6 +410,18 @@ def build_server(
         return await run("audit_zero_wanted", {})
 
     @mcp.tool(annotations={"readOnlyHint": True})
+    async def audit_case_twins() -> dict:
+        """music-audit-case-twins: items whose library paths differ only in case (or Unicode form), which
+        Navidrome can't tell apart: a playlist line links either file, so it may play the item the store
+        doesn't list. Each group lists its items (ID, path, via, length), and each pair the IDs that agree
+        (Spotify ID, ISRC, MusicBrainz recording) and what the stored fingerprints say, with a verdict:
+        duplicate (merge_items), same ID over different audio (another master or a wrong download:
+        compare_items, replace_item), same audio with no ID, distinct recordings (keep both, one needs
+        another path), or not compared (fingerprint_items first). Reads only the beets database's paths
+        and the twins' stored fields, so it takes seconds and is safe beside an import."""
+        return await run("audit_case_twins", {})
+
+    @mcp.tool(annotations={"readOnlyHint": True})
     async def check_release(
         album: AlbumQuery,
         title: Annotated[str, Field(description="the release title, as a [MISS] line or the album's record gives it",
