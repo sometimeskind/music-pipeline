@@ -138,6 +138,17 @@ Responsibilities
    ``.1`` and ``.2`` (homelab#2723).  A move onto a taken destination now
    leaves an item already at one of its suffixed names where it is.
 
+5. **unique_folded** (in the same patch): a destination that differs from
+   another item's path only in case (or Unicode normalisation) is taken too
+   (homelab#2742).  Navidrome links a ``.m3u`` line to either of two such
+   files, but the library's filesystem is case sensitive, so ``unique_path``
+   never saw one: the import placed ``04 - Look at Where We Are.m4a`` beside
+   ``04 - Look At Where We Are.m4a``.  Such an item now takes the next
+   suffixed name, as for an exact clash (``[CASECLASH]``), and keeps it while
+   the twin stands.  Every move through beets goes here: the import (playlist
+   and Usenet album alike, and the as-is pass), ``beet update`` and
+   ``beet move``.  An item already on the library isn't moved by it.
+
 Note
 ----
 ``import_task_start`` is inside ``lookup_candidates`` and only fires when
@@ -157,11 +168,13 @@ duplicate check fires. After the rebuild completes all tracks will carry
 
 import os
 import re
+from collections.abc import Collection
 from pathlib import Path
 from typing import NamedTuple
 
 from beets import importer as beets_importer
 from beets import library as beets_library
+from beets import logging as beets_logging
 from beets import util as beets_util
 from beets.plugins import BeetsPlugin
 
@@ -174,6 +187,10 @@ from music_scan.identity import (
     Credit, add_isrcs, add_to_list, artist_credit, compilation, different_artist, different_song, fingerprint,
     item_isrcs, item_spotify_ids, same_mb_recording, split_list, spotify_id, version_clash,
 )
+from music_scan.pathfold import fold, library_paths
+
+# The plugin's logger, for the move_file patch, which runs without the plugin instance.
+_log = beets_logging.getLogger("beets").getChild("music_pipeline")
 
 # The two locations where spotdl downloads land at beet-import time.
 # 1. Main inbox: downloaded files sit here until beet import runs.
@@ -326,11 +343,14 @@ class Pending(NamedTuple):
     tags: SpotdlTags
 
 
-def keeps_suffixed_name(current: bytes, dest: bytes) -> bool:
-    """True when *dest* is held by another file and *current* is one of the
-    names ``beets.util.unique_path`` picks for it (``<stem>.<n><ext>``), so a
-    move should leave the item where it is (homelab#2723)."""
-    if not os.path.exists(beets_util.syspath(dest)) or beets_util.samefile(current, dest):
+def keeps_suffixed_name(current: bytes, dest: bytes, taken: Collection[str] = ()) -> bool:
+    """True when *dest* is held by another file, or its :func:`~music_scan.pathfold.fold`
+    is in *taken* (another item's path differs from it only in case, homelab#2742),
+    and *current* is one of the names ``beets.util.unique_path`` picks for it
+    (``<stem>.<n><ext>``), so a move should leave the item where it is (homelab#2723)."""
+    if beets_util.samefile(current, dest):
+        return False
+    if not os.path.exists(beets_util.syspath(dest)) and fold(dest) not in taken:
         return False
     base, ext = os.path.splitext(os.fsencode(dest))
     base = re.sub(rb"\.\d+$", b"", base)  # unique_path counts on from a suffix dest already has
@@ -338,17 +358,53 @@ def keeps_suffixed_name(current: bytes, dest: bytes) -> bool:
     return current_ext == ext and re.fullmatch(re.escape(base) + rb"\.\d+", name) is not None
 
 
+def unique_folded(dest: bytes, taken: Collection[str]) -> bytes:
+    """*dest*, or when its :func:`~music_scan.pathfold.fold` is in *taken* (another
+    item's path, which differs from it only in case: a *case twin*, homelab#2742),
+    the first of ``beets.util.unique_path``'s names for it (``<stem>.<n><ext>``)
+    that no file holds and no other item's path folds to.  The library's
+    filesystem is case sensitive, so ``unique_path`` alone never sees a case twin."""
+    if fold(dest) not in taken:
+        return dest
+    base, ext = os.path.splitext(os.fsencode(dest))
+    found = re.search(rb"\.(\d+)$", base)
+    num = int(found.group(1)) if found else 0
+    base = base[: found.start()] if found else base
+    while True:
+        num += 1
+        candidate = base + f".{num}".encode() + ext
+        if not os.path.exists(beets_util.syspath(candidate)) and fold(candidate) not in taken:
+            return candidate
+
+
+def _taken(item) -> set[str]:
+    """The folded paths of the library's items other than *item* (one query)."""
+    db = getattr(item, "_db", None)
+    if db is None:
+        return set()
+    return {folded for folded, holders in library_paths(db).items() if set(holders) - {item.id}}
+
+
 def _patch_move_file() -> None:
     """Make ``Item.move_file`` keep an item at its suffixed name while its
-    destination is taken (:func:`keeps_suffixed_name`).  Idempotent."""
+    destination is taken (:func:`keeps_suffixed_name`), and give an item whose
+    destination is another item's path but for case a unique name, as beets
+    does for an exact one (:func:`unique_folded`, homelab#2742).  Idempotent."""
     move_file = beets_library.Item.move_file
     if getattr(move_file, "_keeps_suffixed_name", False):
         return
 
     def keeping_suffixed_name(self, dest, operation=beets_util.MoveOperation.MOVE):
-        if operation == beets_util.MoveOperation.MOVE and keeps_suffixed_name(self.path, dest):
+        if beets_util.samefile(self.path, dest):
+            return move_file(self, dest, operation)
+        taken = _taken(self)
+        if operation == beets_util.MoveOperation.MOVE and keeps_suffixed_name(self.path, dest, taken):
             return  # already at a unique name for dest: moving would only take the next one
-        return move_file(self, dest, operation)
+        unique = unique_folded(dest, taken)
+        if unique != dest:
+            _log.info("[CASECLASH] {}: {} differs from another item's path only in case; placed at {}",
+                      self.id, beets_util.displayable_path(dest), beets_util.displayable_path(unique))
+        return move_file(self, unique, operation)
 
     keeping_suffixed_name._keeps_suffixed_name = True
     keeping_suffixed_name.__wrapped__ = move_file

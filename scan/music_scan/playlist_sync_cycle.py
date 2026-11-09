@@ -76,7 +76,6 @@ import logging
 import os
 import re
 import time
-import unicodedata
 from collections import Counter
 from collections.abc import Callable, Collection, Mapping, Sequence
 from datetime import datetime
@@ -86,6 +85,7 @@ from music_fetch import config, state, store
 from music_scan import metrics, navidrome, playlist_shadow, playlist_sync, playlists, scan
 from music_scan.identity import ItemIndex, item_isrcs, item_spotify_ids
 from music_scan.library import MusicLibrary
+from music_scan.pathfold import fold
 from music_scan.playlist_sync import Entry, Held, Plan, Track
 
 logger = logging.getLogger(__name__)
@@ -210,16 +210,6 @@ def entries_of(name: str, playlist: store.Store, library: ItemIndex, by_album, s
             item = local.get("id")
             out.append(Entry(key, item if item in items else None, local=True))
     return out
-
-
-_ASCII_LOWER = str.maketrans("ABCDEFGHIJKLMNOPQRSTUVWXYZ", "abcdefghijklmnopqrstuvwxyz")
-
-
-def fold(path) -> str:
-    """*path* as Navidrome matches a ``.m3u`` line to a file (v0.64.2,
-    ``core/playlists/parse_m3u.go``): Unicode-normalized, compared with SQLite's
-    ``NOCASE``, which folds ASCII letters only."""
-    return unicodedata.normalize("NFC", str(path)).translate(_ASCII_LOWER)
 
 
 def by_fold(items) -> dict[str, list]:

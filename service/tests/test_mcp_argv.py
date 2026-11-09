@@ -33,6 +33,7 @@ CASES = {
     "audit_artists": [{}],
     "audit_grabs": [{}],
     "audit_zero_wanted": [{}],
+    "audit_case_twins": [{}],
     "check_release": [{"album": "1734", "title": "Artist-Album-FLAC", "size_bytes": None, "words": None},
                       {"album": "-m-/le baptême", "title": "--apply -x", "size_bytes": 400000000, "words": "--apply"}],
     "recheck_recordings": [{"ids": [], "resume": None}, {"ids": [5672, 6994], "resume": None},

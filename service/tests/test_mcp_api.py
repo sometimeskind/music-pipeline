@@ -93,6 +93,8 @@ def test_read_tier_runs_the_audit_dry_runs(client, env):
     assert grabs.status_code == 200 and env["commands"].ran[-1] == ["music-audit-grabs"]
     zero = client.post("/mcp-api/run/audit_zero_wanted", json={}, headers=READ)
     assert zero.status_code == 200 and env["commands"].ran[-1] == ["music-audit-zero-wanted"]
+    twins = client.post("/mcp-api/run/audit_case_twins", json={}, headers=READ)
+    assert twins.status_code == 200 and env["commands"].ran[-1] == ["music-audit-case-twins"]
 
 
 def test_read_tier_checks_a_release_against_the_matcher(client, env):

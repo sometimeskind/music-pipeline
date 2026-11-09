@@ -77,6 +77,7 @@ from pathlib import Path
 from music_scan.identity import (
     PlaylistTrack, item_isrcs, item_spotify_ids, same_base_title, same_mb_recording, split_list,
 )
+from music_scan.pathfold import fold
 
 logger = logging.getLogger(__name__)
 
@@ -296,9 +297,10 @@ def plan(release: list, library: list, tracks_count: int, tracks=(),
 
 
 def _freed(p: Pair) -> str | None:
-    """The path the album item moves to once its loose items are gone: one of theirs (a ``.1`` clash)."""
+    """The path the album item moves to once its loose items are gone: one of theirs (a ``.1`` clash),
+    or one that differs from it only in case (homelab#2742)."""
     dest = os.fsdecode(p.album.destination())
-    return dest if dest != _path(p.album) and dest in {_path(i) for i in p.loose} else None
+    return dest if dest != _path(p.album) and fold(dest) in {fold(_path(i)) for i in p.loose} else None
 
 
 def log(pairs: list[Pair], kept: list[Kept], apply: bool) -> None:

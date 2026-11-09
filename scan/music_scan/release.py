@@ -1383,12 +1383,15 @@ def _freed(chosen: list, items: list) -> list[str]:
     from music_scan.audit import item_path  # noqa: PLC0415
     from music_scan.canon import CLASH  # noqa: PLC0415
 
-    paths = {str(item_path(i)): i for i in chosen}
+    from music_scan.pathfold import fold  # noqa: PLC0415
+
+    # Folded: canon tags in place an item whose path differs from another's only in case too (homelab#2742).
+    paths = {fold(item_path(i)): i for i in chosen}
     gone = {i.id for i in chosen}
     lines = []
     for item in items:
         if item.get(CLASH) and item.id not in gone:
-            holder = paths.get(os.fsdecode(item.destination()))
+            holder = paths.get(fold(os.fsdecode(item.destination())))
             if holder is not None:
                 lines.append(f"[FREED] {item.id} {item.get('title')} waits for the path {holder.id} holds; the next "
                              "scan's canon moves it there")

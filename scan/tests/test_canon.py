@@ -648,6 +648,58 @@ def test_a_move_onto_another_items_file_is_left_alone(tmp_path, ffmpeg, lib):
     assert Path(os.fsdecode(lib.get_item(there.id).path)).exists()
 
 
+def test_a_move_onto_another_items_path_but_for_case_is_left_alone(tmp_path, ffmpeg, lib, monkeypatch):
+    """homelab#2742: Navidrome links a playlist line to either of two files whose paths differ
+    only in case.  The library is checked, not only the items canon is given."""
+    from music_scan import canon
+    from music_scan.canon import canonicalize, placements_from
+
+    recorded = []
+    monkeypatch.setattr(canon.events, "record", lambda kind, message, **kw: recorded.append((kind, message, kw)))
+    there_path = tmp_path / "library" / "Artist" / "ALBUM" / "01 - one.m4a"
+    there = _add(lib, _m4a(there_path), title="one", album="ALBUM", track=1)
+    mover = _add(lib, _m4a(tmp_path / "in" / "one.m4a"), title="One", album="One", spotify_ids="B")
+    placements = placements_from([([_song("B", track=1)], True)])
+
+    plan = canonicalize([lib.get_item(mover.id)], placements, None, fetch=lambda u: _jpeg(tmp_path / "c.jpg"))
+    assert plan.clashes == 1 and plan.changes == []
+    stored = lib.get_item(mover.id)
+    assert stored.album == "One" and Path(os.fsdecode(stored.path)) == tmp_path / "in" / "one.m4a"
+    assert Path(os.fsdecode(lib.get_item(there.id).path)) == there_path
+    (kind, message, kw), = recorded
+    assert kind == "clash" and kw["data"]["in_place"] is False
+    assert message.endswith(f"item {there.id} has {there_path}, which differs from it only in case; left as it is")
+
+
+def test_two_items_canonicalised_onto_paths_that_differ_only_in_case_clash(tmp_path, ffmpeg, lib, monkeypatch):
+    from music_scan import canon
+    from music_scan.canon import canonicalize, placements_from
+
+    monkeypatch.setattr(canon.events, "record", lambda *a, **kw: None)
+    first = _add(lib, _m4a(tmp_path / "in" / "a.m4a"), title="One", album="x", spotify_ids="A")
+    second = _add(lib, _m4a(tmp_path / "in" / "b.m4a"), title="ONE", album="y", spotify_ids="B")
+    placements = placements_from([([_song("A", track=1), _song("B", track=1)], True)])
+
+    plan = canonicalize(lib.all_items(), placements, None, fetch=lambda u: _jpeg(tmp_path / "c.jpg"))
+    assert plan.clashes == 1 and [c.item.id for c in plan.changes] == [first.id]
+    assert Path(os.fsdecode(lib.get_item(first.id).path)).name == "01 - One.m4a"
+    assert Path(os.fsdecode(lib.get_item(second.id).path)) == tmp_path / "in" / "b.m4a"
+
+
+def test_a_move_that_changes_only_the_items_own_case_goes_ahead(tmp_path, ffmpeg, lib, monkeypatch):
+    from music_scan import canon
+    from music_scan.canon import canonicalize, placements_from
+
+    monkeypatch.setattr(canon.events, "record", lambda *a, **kw: None)
+    here = tmp_path / "library" / "Artist" / "album" / "01 - One.m4a"
+    item = _add(lib, _m4a(here), title="One", album="album", track=1, spotify_ids="A")
+    placements = placements_from([([_song("A", track=1)], True)])
+
+    plan = canonicalize(lib.all_items(), placements, None, fetch=lambda u: _jpeg(tmp_path / "c.jpg"))
+    assert plan.clashes == 0 and plan.moved == 1
+    assert Path(os.fsdecode(lib.get_item(item.id).path)) == tmp_path / "library" / "Artist" / "Album" / "01 - One.m4a"
+
+
 # ----------------------------------------------------------------------
 # Twin releases (#214)
 # ----------------------------------------------------------------------
@@ -1069,6 +1121,31 @@ def test_an_album_records_item_whose_path_is_taken_is_tagged_in_place(tmp_path, 
         cover.download = monkey_download
     item = lib.get_item(track.id)
     assert Path(os.fsdecode(item.path)) == album_dir / "02 - Tonight, Tonight.m4a" and not item.get("canon_clash")
+
+
+def test_an_album_records_item_whose_path_is_a_case_twin_is_tagged_in_place(tmp_path, ffmpeg, lib, monkeypatch):
+    """homelab#2742: The Magnetic Fields' Usenet copy (23440) would move onto a folder the spotdl copy
+    (331) holds in another case; it takes the album's tags where it is and waits, marked canon_clash."""
+    from music_scan import canon, cover
+
+    monkeypatch.setattr(cover, "download", lambda url: _jpeg(tmp_path / "c.jpg"))
+    recorded = []
+    monkeypatch.setattr(canon.events, "record", lambda kind, message, **kw: recorded.append((kind, message, kw)))
+    twin = tmp_path / "library" / PUMPKINS / MC.upper() / "02 - Tonight, Tonight.m4a"
+    spotdl = _add(lib, _m4a(twin), title="Tonight, Tonight", artist=PUMPKINS, albumartist=PUMPKINS, album=MC.upper(),
+                  track=2, via="spotdl")
+    stray = tmp_path / "library" / "Unknown" / "Mellon Collie" / "02 - Tonight, Tonight.m4a"
+    track = _add(lib, _m4a(stray), title="Tonight, Tonight", artist=PUMPKINS, albumartist="", album="Mellon Collie",
+                 track=2, via="usenet", album_record="MC30", release="r1")
+    records = {"MC30": {**_pumpkins_records()["MC30"], "release_files": {"mb": {"mb_albumid": "MB2025"}}}}
+
+    canon.canonicalize_items([lib.get_item(track.id)], _pumpkins_songs(), budget=None, records=records)
+    item = lib.get_item(track.id)
+    assert (item.album, item.albumartist) == (MC, PUMPKINS)
+    assert Path(os.fsdecode(item.path)) == stray and item.get(canon.CLASH) == "1"
+    assert Path(os.fsdecode(lib.get_item(spotdl.id).path)) == twin
+    (kind, message, kw), = [r for r in recorded if r[0] == "clash"]
+    assert kw["data"]["in_place"] is True and "differs from it only in case; tagged in place" in message
 
 
 def test_a_move_between_spotify_albums_is_a_moved_event(monkeypatch):

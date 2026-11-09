@@ -85,6 +85,14 @@ rather than showing as a stray one, and is marked ``canon_clash``: every scan
 tries the move again until the path is free (#306).  Spotify IDs come only from ISRC or disc/track
 (``tag_album_ids``), never from a title.
 
+A path that differs from another item's only in case (or Unicode
+normalisation) is a clash too (homelab#2742): Navidrome links a ``.m3u`` line
+to either of two such files, though the case-sensitive filesystem holds both.
+The check folds the destination as Navidrome does (:func:`music_scan.pathfold.fold`)
+against every library item's path, read from the library once per run, not
+only the items canonicalised; the item's own path doesn't count, so a move
+that only changes its own case goes ahead.
+
 The album copy then supersedes loose items that predate it
 (:mod:`music_scan.supersede`).
 
@@ -111,6 +119,7 @@ import psycopg
 from music_fetch import events, state
 from music_scan.identity import item_spotify_ids, spotify_id
 from music_scan.mb_release import MB_ALBUM_FIELDS, Resolver, SpotifyAlbum
+from music_scan.pathfold import fold, library_paths
 
 logger = logging.getLogger(__name__)
 
@@ -587,9 +596,9 @@ def plan_changes(
     # (album ID, ISRC) → a placement on that twin, to confirm a twin without a search.
     by_isrc = {(q.release.album_id, q.isrc.upper()): q for q in placements.values()
                if q.isrc and q.release.album_id in plan.twins}
-    dests: dict[str, object] = {}
     releases = {q.release.album_id: q.release for q in placements.values()}
     items = list(items)
+    dests = _library_dests(items)
     # An album record's highest disc among these items (homelab#2491).
     discs: Counter[str] = Counter()
     for item in items:
@@ -753,6 +762,17 @@ def _plan_request_item(item, key: str, record: dict, plan: Plan, dests: dict, di
     _plan_fields(item, p, fields, plan, dests, in_place=True)
 
 
+def _library_dests(items: list) -> dict[str, dict[int, str]]:
+    """The paths the library's items hold, folded (:func:`~music_scan.pathfold.fold`),
+    each with the items on it (ID → path): what a move must not land on, whether
+    the path is the same or differs only in case (homelab#2742).  Read from the
+    beets library *items* come from, so it covers the items canon isn't given."""
+    db = next((getattr(i, "_db", None) for i in items if getattr(i, "_db", None) is not None), None)
+    if db is None:
+        return {}
+    return library_paths(db)
+
+
 def _clash_event(item, dest: str, message: str, in_place: bool, album: str | None = None) -> None:
     """A clash stands until someone fixes it, and every scan sees it again: one
     event a day per clash (homelab#2413).  *album*: the album record's primary
@@ -790,29 +810,33 @@ def _plan_fields(item, p: Placement, fields: dict, plan: Plan, dests: dict, in_p
     dest = os.fsdecode(item.destination())
     for k, v in old.items():
         item[k] = v
-    if dest != _path(item) and (dest in dests or os.path.exists(dest)):
+    # Another item on dest, or on a path that differs from it only in case (homelab#2742): Navidrome
+    # can't tell those apart, though the filesystem can.  The item's own path doesn't count, so a
+    # move that changes only its own case goes ahead.
+    others = {i: path for i, path in dests.get(fold(dest), {}).items() if i != item.id}
+    if dest != _path(item) and (others or os.path.exists(dest)):
         plan.clashes += 1
+        why = ("another item already has that path" if os.path.exists(dest) or dest in others.values()
+               else f"{', '.join(f'item {i} has {path}' for i, path in sorted(others.items()))}, "
+                    "which differs from it only in case")
         if not in_place:
             # Moving would overwrite another file: leave this item as it is (a duplicate, #210).  The line
             # repeats every scan while the clash stands: the once-a-day event is the report, the Changes
             # line counts them (homelab#2590).
-            logger.debug("  [CLASH] %s → %s: another item already has that path; left as it is",
-                         _path(item), dest)
-            _clash_event(item, dest, f"[CLASH] {_path(item)} → {dest}: another item already has that path; "
-                                     "left as it is", in_place=False)
+            logger.debug("  [CLASH] %s → %s: %s; left as it is", _path(item), dest, why)
+            _clash_event(item, dest, f"[CLASH] {_path(item)} → {dest}: {why}; left as it is", in_place=False)
             return
         # The release's track stays on its album, where it is; the next scan tries the move again.
-        logger.debug("  [CLASH] %s %s → %s: another item already has that path; tagged in place",
-                     item.id, _path(item), dest)
-        _clash_event(item, dest, f"[CLASH] {item.id} {_path(item)} → {dest}: another item already has that path; "
-                                 "tagged in place", in_place=True, album=fields.get("spotify_album_id"))
+        logger.debug("  [CLASH] %s %s → %s: %s; tagged in place", item.id, _path(item), dest, why)
+        _clash_event(item, dest, f"[CLASH] {item.id} {_path(item)} → {dest}: {why}; tagged in place",
+                     in_place=True, album=fields.get("spotify_album_id"))
         fields[CLASH] = "1"
         diff = {k: (item.get(k), v) for k, v in fields.items() if item.get(k) != v}
         if not diff and not art:
             return
         dest = _path(item)
         write = art or any(k in Item._media_fields for k in diff)
-    dests[dest] = item
+    dests.setdefault(fold(dest), {})[item.id] = dest
     plan.changes.append(Change(item, p, diff, dest, art, write, _path(item)))
     plan.kinds[_kind(diff, write)] += 1
 
