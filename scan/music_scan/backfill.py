@@ -16,7 +16,12 @@ track ID) and, per playlist entry:
    (``mb_trackid``): one recording often has several ISRCs (editions,
    clean/explicit, labels), so that is the same recording, as in the
    duplicate hook (#191).  Only these candidates are looked up.
-   Other matches get the entry's ID and ISRC.
+   Other matches by ID or ISRC get the entry's ID and ISRC.  A match by
+   title+artist words alone (``[WORDS]``) is no identity (homelab#2731): the
+   entry's ID goes in ``words_ids`` only, never in ``spotify_ids``, and its
+   ISRC is not added, so nothing downstream takes the guess for an ID match.
+   The ladder doesn't read ``words_ids``, so a re-run matches it by words
+   again and changes nothing.
 
 Wrong versions are only listed unless ``--redownload N``: then the first N are
 downloaded from their entries straight into the playlist inbox (so ``nosync``
@@ -86,7 +91,7 @@ class Plan:
     ids_from_url: int = 0
     ids_added: int = 0
     isrcs_added: int = 0
-    by_words: int = 0
+    by_words: int = 0  # title+artist matches: their IDs go in words_ids only
     missing: int = 0
     # Own entries whose Spotify ISRC MusicBrainz doesn't list, of those MusicBrainz tagged.
     disagree: int = 0
@@ -114,6 +119,17 @@ def _record(plan: Plan, playlist: str, song: dict, item) -> None:
         plan.changed[item.id] = item
     if add_isrcs(item, [song.get("isrc")]):
         plan.isrcs_added += 1
+        plan.changed[item.id] = item
+
+
+def _record_words(plan: Plan, playlist: str, song: dict, item) -> None:
+    """The entry maps to *item* by title+artist words alone: a weak link, its
+    ID in ``words_ids`` only (homelab#2731), as ``tag_album_ids`` marks an
+    unbacked number link.  No ``spotify_ids`` and no ISRC: those are identity."""
+    plan.claimed.add((playlist, item.id))
+    plan.by_words += 1
+    logger.info("  [WORDS] %s: %s matched by title+artist only", playlist, _label(song))
+    if add_to_list(item, "words_ids", _song_id(song)):
         plan.changed[item.id] = item
 
 
@@ -225,10 +241,9 @@ def plan_backfill(
                     _record(plan, playlist, song, item)
                 else:
                     plan.wrong.append(WrongVersion(playlist, song, item))
+            elif rung == BY_WORDS:
+                _record_words(plan, playlist, song, item)
             else:
-                if rung == BY_WORDS:
-                    plan.by_words += 1
-                    logger.info("  [WORDS] %s: %s matched by title+artist only", playlist, _label(song))
                 _record(plan, playlist, song, item)
     return plan
 
@@ -253,8 +268,8 @@ def report(plan: Plan) -> None:
         )
     logger.info(
         "Backfill: %d item(s) to change — %d spotify_ids from spotify_url, %d Spotify ID(s) and %d ISRC(s) "
-        "added, %d by title+artist only; %d wrong version(s), %d same recording by MusicBrainz; "
-        "%d playlist entr(ies) with no library item",
+        "added by own entries and ID, ISRC or [SAME] matches; %d by title+artist only (words_ids, no ISRC); "
+        "%d wrong version(s), %d same recording by MusicBrainz; %d playlist entr(ies) with no library item",
         len(plan.changed), plan.ids_from_url, plan.ids_added, plan.isrcs_added, plan.by_words,
         len(plan.wrong), plan.same_recording, plan.missing,
     )
