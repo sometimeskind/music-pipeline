@@ -413,10 +413,27 @@ def run(apply: bool = False, redownload: int = 0) -> Plan:
                           data={**events.item_fields(item), "playlist": wrong.playlist,
                                 "song_id": _song_id(wrong.song), "song_isrc": wrong.song.get("isrc"),
                                 "downloaded": str(path)})
-        for item in plan.changed.values():
-            item.store()
+        store_changed(plan)
         logger.info("Wrote %d item(s)", len(plan.changed))
     return plan
+
+
+def store_changed(plan: Plan) -> None:
+    """Store *plan*'s changed items, writing the files of those whose ISRCs changed.
+
+    An ISRC is a tag field: setting it zeroes the item's stored mtime, so the
+    scan's ``beet update`` would re-read the file and take its ISRCs back
+    (homelab#2726).  Written first, so the store keeps the file's new mtime.
+    Under the pipeline lock: a scan moves and writes these files too.
+    """
+    from music_scan.audit import pipeline_lock  # noqa: PLC0415
+
+    with pipeline_lock():
+        for item in plan.changed.values():
+            if not item.mtime and not item.try_write():
+                logger.warning("item %s: the tags couldn't be written, so the next scan's beet update "
+                               "takes the file's ISRCs back", item.id)
+            item.store()
 
 
 def main() -> None:

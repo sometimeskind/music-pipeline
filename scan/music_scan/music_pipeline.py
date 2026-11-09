@@ -41,7 +41,11 @@ Responsibilities
     stored item's ID (homelab#2590): ``imported`` for a spotdl item (a Usenet
     item's import is its album's ``[DONE]``), ``retitled`` for a title
     step 1b put back, and ``import_alongside`` or ``kept_apart`` for each
-    duplicate step 2 imported it beside.
+    duplicate step 2 imported it beside.  When re-applying spotdl's tags
+    changes a tag field (spotdl's ISRC added to MusicBrainz's, a fallback's
+    recording ID), the file is written before the store (homelab#2726): this
+    runs after beets' own ``import.write``, so the file would otherwise keep
+    the older tags, and the next scan's ``beet update`` would take them back.
 
 2. **Multi-playlist membership** (``import_task_choice``): duplicates are the
    library items that are the same recording by identity (Spotify track ID,
@@ -69,6 +73,10 @@ Responsibilities
    * All duplicates have ``via=spotdl`` or ``usenet`` → append the incoming playlist name to
      the ``sources`` field of every existing duplicate (idempotent), delete the
      incoming inbox file, and set SKIP so beets does not re-import the track.
+     A same-recording duplicate also takes the incoming ISRCs (``;``-joined,
+     which every tag format keeps as one string), written to its file once
+     the import is done (:meth:`MusicPipelinePlugin.write_merged_isrcs`,
+     homelab#2726).
      If the incoming playlist cannot be resolved (cache miss and unrecognisable
      path), fall through to ``duplicate_action: remove`` with a warning.
 
@@ -508,12 +516,15 @@ class MusicPipelinePlugin(BeetsPlugin):
         self._retitled: dict[int, Retitle] = {}
         # id(item) → what it was imported beside, from import_task_choice to item_imported.
         self._beside: dict[int, list[Beside]] = {}
+        # IDs of library items handle_duplicates gave ISRCs, whose files are written at the import's end.
+        self._unwritten: set[int] = set()
         self.register_listener("import_task_created", self.tag_source_on_created)
         self.register_listener("import_task_apply", self.restore_file_title)
         self.register_listener("import_task_apply", self.clear_singleton_release_track)
         self.register_listener("item_imported", self.tag_source_on_stored)
         self.register_listener("import_task_choice", self.handle_duplicates)
         self.register_listener("item_imported", self.fingerprint_if_missing)
+        self.register_listener("import", self.write_merged_isrcs)
 
     def tag_source_on_created(self, session, task):
         """Tag incoming tracks with source= and via= at task creation.
@@ -658,6 +669,11 @@ class MusicPipelinePlugin(BeetsPlugin):
         if pending.job:
             item["usenet_job"] = pending.job
         self._apply_spotdl_tags(item, pending.tags)
+        if not item.mtime:
+            # A tag field changed (beets zeroes mtime): spotdl's ISRC or the fallback's recording ID.
+            # Written first, so the store keeps the file's new mtime and the scan's beet update reads
+            # the tags back instead of the file's older ones (homelab#2726).
+            item.try_write()
         item.store()
         self._log.debug(
             "persisted source={} via={} on stored item: {}", pending.playlist, pending.via, item.path
@@ -721,6 +737,27 @@ class MusicPipelinePlugin(BeetsPlugin):
         # Written first, so the store keeps the file's new mtime and beet update reads the tag back (homelab#2723).
         item.try_write()
         item.store()
+
+    def write_merged_isrcs(self, lib, paths=None):
+        """Write the ISRCs :meth:`handle_duplicates` merged into library items to their files (homelab#2726).
+
+        Fires from ``import``, once the import pipeline is done.  Not at the
+        merge: beets runs its stages in threads, and the duplicate can be an
+        item an earlier task of this run is still moving and writing in
+        ``manipulate_files``, so writing its file there could race beets' own
+        write.  Until then the item's stored mtime is 0, so an import cut short
+        (the scan's skip limit stops beet) leaves the next scan's ``beet
+        update`` to take the file's ISRCs back, as before.
+        """
+        for item_id in sorted(self._unwritten):
+            item = lib.get_item(item_id)
+            if item is None:  # removed since
+                continue
+            if not item.try_write():
+                self._log.warning("[SAME] item {}: the merged ISRCs couldn't be written to its file, "
+                                  "so the next scan's beet update takes the file's back", item_id)
+            item.store()
+        self._unwritten.clear()
 
     @staticmethod
     def _apply_spotdl_tags(item, tags: SpotdlTags) -> None:
@@ -873,7 +910,10 @@ class MusicPipelinePlugin(BeetsPlugin):
                     changed = add_to_list(dup, "spotify_ids", incoming.spotify_id) or changed
                 if same:
                     # Same recording by identity: keep both sides' ISRCs.
-                    changed = add_isrcs(dup, sorted(incoming.isrcs)) or changed
+                    if add_isrcs(dup, sorted(incoming.isrcs)):
+                        changed = True
+                        # The file takes them once the import is done (write_merged_isrcs).
+                        self._unwritten.add(dup.id)
                     # Warning, like [SPLIT]/[APART]: beets drops plugin debug lines (#191).
                     self._log.warning(
                         "[SAME] {} — {}: same recording as {}; merged (playlist {})",

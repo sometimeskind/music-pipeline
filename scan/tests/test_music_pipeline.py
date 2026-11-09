@@ -32,6 +32,7 @@ def _make_plugin() -> MusicPipelinePlugin:
     plugin._file_tags = {}
     plugin._retitled = {}
     plugin._beside = {}
+    plugin._unwritten = set()
     return plugin
 
 
