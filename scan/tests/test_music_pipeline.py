@@ -771,8 +771,8 @@ def test_fingerprint_if_missing_fingerprints_an_item_without_one() -> None:
         plugin.fingerprint_if_missing(lib=MagicMock(), item=item)
     fp.assert_called_once_with("/root/Music/library/A/B/01 - T.m4a")
     assert item.get("acoustid_fingerprint") == "FP"
-    item.store.assert_called_once()
-    item.write.assert_not_called()
+    # The tag first, then the store keeps the file's new mtime (homelab#2723).
+    assert [c[0] for c in item.method_calls if c[0] in ("try_write", "store")] == ["try_write", "store"]
 
 
 def test_fingerprint_if_missing_leaves_chromas_fingerprint() -> None:

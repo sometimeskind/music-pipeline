@@ -116,7 +116,19 @@ Responsibilities
    ``import_task_start``, which ASIS mode never sends (see the note), so asis
    imports would carry no ``acoustid_fingerprint`` for the duplicate audit
    (#210).  An item stored without one is fingerprinted from its library file
-   (locally, no AcoustID lookup) and stored; the file is left alone.
+   (locally, no AcoustID lookup), and the tag is written to the file before
+   the store (homelab#2723).  Setting a tag field resets the item's stored
+   mtime to 0, so the next scan's ``beet update`` re-reads every file whose
+   item changed in the database alone and takes the file's tags back: a
+   database-only fingerprint went back to the file's empty tag.
+
+4. **keeps_suffixed_name** (patched into ``Item.move_file`` at plugin load):
+   an item whose destination another file holds sits at the name beets'
+   ``unique_path`` gave it (``01 - Title.1.m4a``).  beets doesn't count that
+   name as already unique, so every move of the item, such as ``beet update``
+   after a tag changed, took the next free one, and the name flipped between
+   ``.1`` and ``.2`` (homelab#2723).  A move onto a taken destination now
+   leaves an item already at one of its suffixed names where it is.
 
 Note
 ----
@@ -142,6 +154,7 @@ from typing import NamedTuple
 
 from beets import importer as beets_importer
 from beets import library as beets_library
+from beets import util as beets_util
 from beets.plugins import BeetsPlugin
 
 from music_fetch import events
@@ -305,6 +318,35 @@ class Pending(NamedTuple):
     tags: SpotdlTags
 
 
+def keeps_suffixed_name(current: bytes, dest: bytes) -> bool:
+    """True when *dest* is held by another file and *current* is one of the
+    names ``beets.util.unique_path`` picks for it (``<stem>.<n><ext>``), so a
+    move should leave the item where it is (homelab#2723)."""
+    if not os.path.exists(beets_util.syspath(dest)) or beets_util.samefile(current, dest):
+        return False
+    base, ext = os.path.splitext(os.fsencode(dest))
+    base = re.sub(rb"\.\d+$", b"", base)  # unique_path counts on from a suffix dest already has
+    name, current_ext = os.path.splitext(os.fsencode(current))
+    return current_ext == ext and re.fullmatch(re.escape(base) + rb"\.\d+", name) is not None
+
+
+def _patch_move_file() -> None:
+    """Make ``Item.move_file`` keep an item at its suffixed name while its
+    destination is taken (:func:`keeps_suffixed_name`).  Idempotent."""
+    move_file = beets_library.Item.move_file
+    if getattr(move_file, "_keeps_suffixed_name", False):
+        return
+
+    def keeping_suffixed_name(self, dest, operation=beets_util.MoveOperation.MOVE):
+        if operation == beets_util.MoveOperation.MOVE and keeps_suffixed_name(self.path, dest):
+            return  # already at a unique name for dest: moving would only take the next one
+        return move_file(self, dest, operation)
+
+    keeping_suffixed_name._keeps_suffixed_name = True
+    keeping_suffixed_name.__wrapped__ = move_file
+    beets_library.Item.move_file = keeping_suffixed_name
+
+
 def _read_spotdl_tags(path: str | bytes) -> SpotdlTags:
     """Return the Spotify URL and ISRC spotdl embedded in an M4A file.
 
@@ -456,6 +498,7 @@ class MusicPipelinePlugin(BeetsPlugin):
                 _chroma.API_KEY = key
             except Exception:
                 pass
+        _patch_move_file()
         # id(item) → its playlist, via, job and spotdl tags, from import_task_created to item_imported.
         self._pending: dict[int, Pending] = {}
         # id(item) → a Usenet item's own tags, from import_task_created to import_task_apply.
@@ -675,6 +718,8 @@ class MusicPipelinePlugin(BeetsPlugin):
         except Exception as exc:  # noqa: BLE001 — the import must not fail over a fingerprint
             self._log.warning("fingerprinting {} failed: {}", item.path, exc)
             return
+        # Written first, so the store keeps the file's new mtime and beet update reads the tag back (homelab#2723).
+        item.try_write()
         item.store()
 
     @staticmethod
