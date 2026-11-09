@@ -6,7 +6,7 @@ from datetime import datetime, timedelta, timezone
 from prefect.client.schemas.actions import DeploymentScheduleCreate
 from prefect.server.schemas.schedules import IntervalSchedule
 
-from music_service.cli import FIRST_ALBUM_TICK_SECONDS, album_schedule
+from music_service.cli import FIRST_ALBUM_TICK_SECONDS, interval_schedule
 
 START = datetime(2026, 11, 2, 11, 50, 35, tzinfo=timezone.utc)
 
@@ -20,7 +20,7 @@ def _server_dates(schedule, start, n=3):
 
 def test_first_album_tick_runs_a_minute_after_start_not_an_interval():
     # The server schedules a deployment a few seconds after serve() upserts it.
-    dates = _server_dates(album_schedule(1800, now=START), START + timedelta(seconds=5))
+    dates = _server_dates(interval_schedule(1800, now=START), START + timedelta(seconds=5))
 
     assert dates[0] == START + timedelta(seconds=FIRST_ALBUM_TICK_SECONDS)
     assert dates[1] - dates[0] == timedelta(seconds=1800)

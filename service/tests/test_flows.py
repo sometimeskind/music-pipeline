@@ -956,3 +956,27 @@ def test_hold_waits_for_a_held_limit_then_takes_it():
     waited = waiter()
     thread.join(30)
     assert waited >= flows.SKIP_IF_BUSY_SECONDS
+
+
+# ---------------------------------------------------------------------------
+# Two-way playlist sync (homelab#2361)
+# ---------------------------------------------------------------------------
+
+
+def test_playlist_sync_flow_runs_a_cycle_with_the_pipeline_probe():
+    from music_service.flows import _pipeline_free, playlist_sync_flow
+    with patch("music_scan.playlist_sync_cycle.run") as run:
+        playlist_sync_flow()
+    run.assert_called_once_with(_pipeline_free)
+
+
+def test_the_pipeline_probe_takes_the_slot_and_lets_it_go():
+    from music_service.flows import SKIP_IF_BUSY_SECONDS, _pipeline_free
+    with patch("music_service.flows.concurrency") as slot:
+        slot.return_value.__exit__.return_value = False
+        assert _pipeline_free() is True
+    slot.assert_called_once_with("pipeline", occupy=1, timeout_seconds=SKIP_IF_BUSY_SECONDS)
+    slot.return_value.__exit__.assert_called_once()
+    with patch("music_service.flows.concurrency") as slot:
+        slot.return_value.__enter__.side_effect = TimeoutError
+        assert _pipeline_free() is False

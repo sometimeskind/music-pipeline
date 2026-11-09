@@ -886,3 +886,31 @@ def album_import_flow(nzo_id: str, ok: bool, path: str = "", fail_message: str =
     if status is not None and not ok:
         albums.forget_failed(Sabnzbd(), [nzo_id])
     logger.info("Album import for %s: %s", nzo_id, status or "not an album-mode job")
+
+
+# ---------------------------------------------------------------------------
+# Two-way playlist sync (homelab#2361)
+# ---------------------------------------------------------------------------
+
+
+def _pipeline_free() -> bool:
+    """Whether the ``pipeline`` slot is free: taken within ``SKIP_IF_BUSY_SECONDS``
+    and let go at once.  The sync probes it and doesn't hold it: a scan that
+    found it held would skip, and its inbox wait for the next trigger."""
+    try:
+        with concurrency("pipeline", occupy=1, timeout_seconds=SKIP_IF_BUSY_SECONDS):
+            return True
+    except TimeoutError:
+        return False
+
+
+@flow(name="music-playlist-sync", log_prints=True)
+def playlist_sync_flow() -> None:
+    """One two-way playlist sync cycle (``PLAYLIST_SYNC``; dry-run only so far).
+
+    A failed cycle is the ``error`` outcome on the Pushgateway, not a failed
+    flow run: ``MusicPlaylistSyncFailing`` judges the rate, and a failed run
+    every few hours would page through ``PrefectDeploymentFailing``."""
+    from music_scan import playlist_sync_cycle  # noqa: PLC0415
+
+    playlist_sync_cycle.run(_pipeline_free)

@@ -45,6 +45,14 @@ def test_playlist_fields():
         assert isinstance(pls["ownerName"], str)
 
 
+def test_updated_at_is_an_rfc3339_time():
+    """The sync skips a playlist whose .m3u is newer than its import (homelab#2361)."""
+    from music_scan import playlist_sync_cycle
+
+    for pls in _load("playlists-0.64.2.json"):
+        assert playlist_sync_cycle.parse_time(pls["updatedAt"]).tzinfo is not None
+
+
 def test_an_imported_playlist_is_found_by_its_m3u_path():
     with mock.patch("music_scan.navidrome.requests.get", return_value=_resp(_load("playlists-0.64.2.json"))):
         found = navidrome.list_playlists(URL, HEADERS)
