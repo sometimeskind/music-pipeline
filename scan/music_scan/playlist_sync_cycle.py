@@ -22,6 +22,12 @@ path, never by name; of two imported from one file, the first with sync on,
 with a warning), read through the native API.  A track's song is its row's
 ``mediaFileId``, never its ``id`` (the row's position), and its item the beets
 item at its path, Navidrome's music folder swapped for the pipeline's.
+Paths are compared the way Navidrome matches a ``.m3u`` line to its files
+(:func:`fold`: NFC, ASCII letters lowercased; homelab#2742), since an import
+links either of two files whose paths differ only in case.  Of several items
+on one folded path, the track is the one the store's view holds, else the
+snapshot's; when neither decides, it is *ambiguous* and maps to no item, so it
+never reads as a local add.
 
 **Skips.**  A cycle is skipped (``busy``) when the ``pipeline`` slot is taken
 (a fetch or a scan: the probe is the flow's), and (``scanning``) while
@@ -55,7 +61,9 @@ and add.  One ``[SYNC]`` line per cycle.  On the Pushgateway, job
 ``music_playlist_sync_ok`` (an ``ok`` cycle only, so a skip leaves the last
 plan's numbers in place): ``music_playlist_sync_last_ok_timestamp_seconds``,
 ``music_playlist_sync_duration_seconds`` (wall time),
-``music_playlist_sync_pending{playlist,kind}`` (compared playlists only),
+``music_playlist_sync_pending{playlist,kind}`` (compared playlists only;
+:meth:`Plan.pending`'s kinds plus ``ambiguous``, the tracks :func:`pick`
+couldn't decide),
 ``music_playlist_sync_would_trip{playlist,rule}`` and
 ``music_playlist_sync_skipped{playlist,reason}``.  A skipped playlist has no
 pending series that cycle, so it never reads as zero pending.
@@ -68,6 +76,7 @@ import logging
 import os
 import re
 import time
+import unicodedata
 from collections import Counter
 from collections.abc import Callable, Collection, Mapping, Sequence
 from datetime import datetime
@@ -125,6 +134,7 @@ class Result:
     skipped: str | None = None
     view: int = 0
     tracks: int = 0
+    ambiguous: int = 0
     owner: str = ""
 
 
@@ -202,13 +212,61 @@ def entries_of(name: str, playlist: store.Store, library: ItemIndex, by_album, s
     return out
 
 
-def to_track(row: Mapping, nd_music: PurePosixPath, by_path: Mapping) -> Track:
-    """A Navidrome playlist track row for the merge core: its song is the
-    row's ``mediaFileId`` (KeyError without one: the contract broke)."""
+_ASCII_LOWER = str.maketrans("ABCDEFGHIJKLMNOPQRSTUVWXYZ", "abcdefghijklmnopqrstuvwxyz")
+
+
+def fold(path) -> str:
+    """*path* as Navidrome matches a ``.m3u`` line to a file (v0.64.2,
+    ``core/playlists/parse_m3u.go``): Unicode-normalized, compared with SQLite's
+    ``NOCASE``, which folds ASCII letters only."""
+    return unicodedata.normalize("NFC", str(path)).translate(_ASCII_LOWER)
+
+
+def by_fold(items) -> dict[str, list]:
+    """The library *items* by :func:`fold` of their path."""
+    out: dict[str, list] = {}
+    for item in items:
+        out.setdefault(fold(scan._item_path(item)), []).append(item)
+    return out
+
+
+AMBIGUOUS = object()
+
+
+def pick(candidates: Sequence, exact, prefer: Sequence[Collection[int]]):
+    """The item a track on one folded path stands for: the only candidate;
+    else, by the first of *prefer* (the view's items, then the snapshot's) that
+    holds any, the *exact*-path candidate if it is among them, else the one
+    candidate it holds.  :data:`AMBIGUOUS` when none decides; None without a
+    candidate."""
+    if len(candidates) <= 1:
+        return candidates[0] if candidates else None
+    for group in prefer:
+        hits = [c for c in candidates if c.id in group]
+        if exact is not None and exact in hits:
+            return exact
+        if len(hits) == 1:
+            return hits[0]
+        if hits:
+            break
+    return AMBIGUOUS
+
+
+def to_track(row: Mapping, nd_music: PurePosixPath, folded: Mapping[str, list],
+             prefer: Sequence[Collection[int]] = ()) -> tuple[Track, bool]:
+    """A Navidrome playlist track row for the merge core, and whether its
+    path was ambiguous: its song is the row's ``mediaFileId`` (KeyError
+    without one: the contract broke), its item the one :func:`pick` takes of
+    the items on its folded path."""
     path = playlist_shadow.pipeline_path(row, nd_music, scan.LIBRARY.parent)
-    item = by_path.get(path) if path is not None else None
+    candidates = folded.get(fold(path), []) if path is not None else []
+    exact = next((c for c in candidates if scan._item_path(c) == path), None)
+    item = pick(candidates, exact, prefer)
+    ambiguous = item is AMBIGUOUS
+    if ambiguous:
+        item = None
     return Track(row["mediaFileId"], None if item is None else item.id, bool(row.get("missing")),
-                 promotable=item is not None and bool(item_spotify_ids(item) or item_isrcs(item)))
+                 promotable=item is not None and bool(item_spotify_ids(item) or item_isrcs(item))), ambiguous
 
 
 def halted(plan: Plan) -> bool:
@@ -245,7 +303,7 @@ def read() -> Cycle:
         library = ItemIndex(all_items)
         by_album = playlists.by_album_id(all_items)
         stamps = playlists.record_stamps(scan._album_records())
-        by_path = {scan._item_path(item): item for item in all_items}
+        folded = by_fold(all_items)
         items = {item.id for item in all_items}
         labels = {item.id: _label(item) for item in all_items}
         for name in covered:
@@ -259,7 +317,11 @@ def read() -> Cycle:
             try:
                 playlist = store.load(name)
                 entries = None if playlist is None else entries_of(name, playlist, library, by_album, stamps, items)
-                tracks = [to_track(r, nd_music, by_path) for r in navidrome.playlist_tracks(url, headers, pls["id"])]
+                held = snapshots.get(name)
+                prefer = (set(playlist_sync.view_of(entries or [])), {item for item, _ in held or ()})
+                read_tracks = [to_track(r, nd_music, folded, prefer)
+                               for r in navidrome.playlist_tracks(url, headers, pls["id"])]
+                tracks = [t for t, _ in read_tracks]
                 # After the read: a .m3u written meanwhile is newer than the listing's updatedAt too.
                 if m3u_newer(name, pls):
                     results.append(Result(name, skipped=M3U_NEWER))
@@ -268,10 +330,10 @@ def read() -> Cycle:
                 logger.error("[SYNC-DRY] %s: could not be read; skipped this cycle", name, exc_info=True)
                 results.append(Result(name, skipped=FAILED))
                 continue
-            held = snapshots.get(name)
             snapshot = None if held is None else [Held(item, song) for item, song in held]
             results.append(Result(name, plan=playlist_sync.plan(entries, snapshot, tracks, items),
                                   view=len(playlist_sync.view_of(entries or [])), tracks=len(tracks),
+                                  ambiguous=sum(a for _, a in read_tracks),
                                   owner=pls.get("ownerName") or ""))
     return Cycle(results, orphans, user, labels)
 
@@ -317,7 +379,7 @@ def report(cycle: Cycle, elapsed: float) -> None:
                 logger.warning("[SYNC-DRY] %s: the Navidrome playlist belongs to %s, not %s, whom the sync logs in as",
                                r.name, r.owner, cycle.user)
             continue
-        pending = p.pending()
+        pending = {**p.pending(), "ambiguous": r.ambiguous}
         totals.update(pending)
         trips += bool(p.trips)
         loud = bool(p.trips) or any(pending[k] for k in FAILING)
@@ -361,7 +423,8 @@ def push_plans(cycle: Cycle, elapsed: float) -> None:
         assert r.plan is not None
         trips += [({"playlist": r.name, "rule": rule}, int(rule in r.plan.trips)) for rule in RULES]
         if not halted(r.plan):
-            pending += [({"playlist": r.name, "kind": k}, n) for k, n in r.plan.pending().items()]
+            pending += [({"playlist": r.name, "kind": k}, n)
+                        for k, n in {**r.plan.pending(), "ambiguous": r.ambiguous}.items()]
     lines = _family("music_playlist_sync_last_ok_timestamp_seconds", [({}, int(time.time()))])
     lines += _family("music_playlist_sync_duration_seconds", [({}, round(elapsed, 3))])
     for name, samples in (("music_playlist_sync_pending", pending), ("music_playlist_sync_would_trip", trips),

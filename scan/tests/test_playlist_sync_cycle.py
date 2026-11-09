@@ -88,6 +88,8 @@ def env(tmp_path: Path, monkeypatch):
 
     nd = mock.MagicMock()
     nd.tmp = tmp_path
+    nd.items = items  # the library: a test may add to it
+    nd.lib_root = lib_root
     nd.scanning.return_value = False
     nd.list_playlists.return_value = [_pls("imp", "pl")]
     nd.tracks = {"imp": [_row("library/one.m4a", "s1"), _row("library/two.m4a", "s2"),
@@ -214,18 +216,41 @@ def test_entries_refuse_slots_that_dont_line_up(env, monkeypatch):
 
 
 def test_a_track_is_its_media_file_and_the_item_at_its_path(env):
-    from music_scan import scan
-
-    items = cycle.MusicLibrary(scan.LIBRARY_DB).all_items()
-    by_path = {scan._item_path(i): i for i in items}
+    folded = cycle.by_fold(env.items)
     nd_music = cycle.PurePosixPath("/music")
-    one = cycle.to_track(_row("library/one.m4a", "mf1"), nd_music, by_path)
-    assert (one.song, one.item, one.missing, one.promotable) == ("mf1", 1, False, True)
-    three = cycle.to_track(_row("library/three.m4a", "mf3", missing=True), nd_music, by_path)
+    one, ambiguous = cycle.to_track(_row("library/one.m4a", "mf1"), nd_music, folded)
+    assert (one.song, one.item, one.missing, one.promotable, ambiguous) == ("mf1", 1, False, True, False)
+    three, _ = cycle.to_track(_row("library/three.m4a", "mf3", missing=True), nd_music, folded)
     assert (three.item, three.missing, three.promotable, three.mapped) == (3, True, False, None)
-    assert cycle.to_track(_row("elsewhere.m4a", "mfx"), nd_music, by_path).item is None
+    assert cycle.to_track(_row("elsewhere.m4a", "mfx"), nd_music, folded)[0].item is None
     with pytest.raises(KeyError):
-        cycle.to_track({"path": "library/one.m4a", "libraryPath": "/music", "id": "1"}, nd_music, by_path)
+        cycle.to_track({"path": "library/one.m4a", "libraryPath": "/music", "id": "1"}, nd_music, folded)
+
+
+def test_fold_matches_paths_as_navidrome_does():
+    """SQLite NOCASE folds ASCII letters only; Unicode forms are one path."""
+    assert cycle.fold("Hot Chip/04 - Look At Where We Are.m4a") == cycle.fold("hot chip/04 - Look at where we are.m4a")
+    assert cycle.fold("Beyonce\u0301/x.m4a") == cycle.fold("Beyonc\u00e9/x.m4a")
+    assert cycle.fold("\u00c9tude/x.m4a") != cycle.fold("\u00e9tude/x.m4a")
+
+
+@pytest.mark.parametrize("candidates, exact, prefer, expected", [
+    ([], None, [], None),
+    (["A"], "A", [], "A"),
+    (["A", "B"], "B", [{1}], "A"),           # the view's twin, though Navidrome linked B
+    (["A", "B"], "B", [set(), {2}], "B"),    # else the snapshot's
+    (["A", "B"], "A", [{1, 2}], "A"),        # both in the view: the exact one
+    (["A", "B"], "B", [{1, 2}], "B"),
+    (["A", "B", "C"], "C", [{1, 2}], "ambiguous"),  # two in the view, neither exact
+    (["A", "B"], "A", [set(), set()], "ambiguous"),  # neither on the playlist
+])
+def test_pick_decides_between_case_twins(candidates, exact, prefer, expected):
+    items = {"A": mock.Mock(id=1), "B": mock.Mock(id=2), "C": mock.Mock(id=3)}
+    got = cycle.pick([items[c] for c in candidates], items.get(exact), prefer)
+    if expected == "ambiguous":
+        assert got is cycle.AMBIGUOUS
+    else:
+        assert got is (None if expected is None else items[expected])
 
 
 # --- the cycle ------------------------------------------------------------------------------
@@ -270,6 +295,33 @@ def test_a_dry_run_reports_a_local_delete_and_never_advances_the_snapshot(env, c
     plans = _series(env.pushed["music_playlist_sync_ok"])
     assert 'music_playlist_sync_pending{playlist="pl",kind="local_delete"} 1' in plans
     assert 'music_playlist_sync_pending{playlist="pl",kind="spotify_remove"} 1' in plans
+
+
+def test_a_case_twin_navidrome_linked_is_the_views_item(env):
+    """homelab#2742: the .m3u lists one.m4a, Navidrome linked One.m4a (another
+    item with its own Spotify ID).  It is the view's item, never an add or a promotion."""
+    env.items.append(_item("One", env.lib_root / "One.m4a", 4, spotify_ids="S1X"))
+    env.tracks["imp"][0] = _row("library/One.m4a", "s1x")
+    assert cycle.run(_free) == "ok"
+    assert _snapshots() == {"pl": [(1, "s1x"), (2, "s2"), (3, "s3")]}
+    assert cycle.run(_free) == "ok"
+    plans = _series(env.pushed["music_playlist_sync_ok"])
+    for kind in ("local_add", "promotion", "navidrome_add", "navidrome_remove", "ambiguous"):
+        assert f'music_playlist_sync_pending{{playlist="pl",kind="{kind}"}} 0' in plans
+
+
+def test_a_track_twins_decide_nothing_for_is_ambiguous_not_an_add(env, caplog):
+    env.items += [_item("X", env.lib_root / "x.m4a", 5, spotify_ids="SX"),
+                  _item("X", env.lib_root / "X.m4a", 6, spotify_ids="SX2")]
+    _seed("pl", [(1, "s1"), (2, "s2"), (3, "s3")])
+    env.tracks["imp"].append(_row("library/x.m4a", "sx"))
+    with caplog.at_level(logging.DEBUG, logger="music_scan.playlist_sync_cycle"):
+        assert cycle.run(_free) == "ok"
+    plans = _series(env.pushed["music_playlist_sync_ok"])
+    assert 'music_playlist_sync_pending{playlist="pl",kind="ambiguous"} 1' in plans
+    assert 'music_playlist_sync_pending{playlist="pl",kind="local_add"} 0' in plans
+    assert 'music_playlist_sync_pending{playlist="pl",kind="promotion"} 0' in plans
+    assert "ambiguous 1" in caplog.text
 
 
 def test_a_clean_playlist_logs_at_debug_only(env, caplog):
