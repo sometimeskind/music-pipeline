@@ -422,6 +422,38 @@ def remove_store(conn: psycopg.Connection, playlist: str) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Two-way playlist sync (homelab#2361, migration 24)
+# ---------------------------------------------------------------------------
+
+
+def load_snapshots(conn: psycopg.Connection) -> dict[str, list[tuple[int, str | None]]]:
+    """Every playlist's sync snapshot, by name: ``(item, song)`` pairs, by item.
+    A playlist with a row and no pairs has an empty snapshot; one without a row has none."""
+    out: dict[str, list[tuple[int, str | None]]] = {
+        playlist: [] for (playlist,) in conn.execute("SELECT playlist FROM playlist_sync ORDER BY playlist")}
+    for playlist, item, song in conn.execute(
+            "SELECT playlist, item, song FROM playlist_sync_snapshot ORDER BY playlist, item"):
+        out[playlist].append((item, song))
+    return out
+
+
+def save_snapshot(conn: psycopg.Connection, playlist: str, held: Iterable[tuple[int, str | None]]) -> None:
+    """Replace *playlist*'s sync snapshot with *held* (``(item, song)`` pairs), in one transaction."""
+    with conn.transaction():
+        conn.execute("INSERT INTO playlist_sync (playlist) VALUES (%s) "
+                     "ON CONFLICT (playlist) DO UPDATE SET snapshot_at = now()", (playlist,))
+        conn.execute("DELETE FROM playlist_sync_snapshot WHERE playlist = %s", (playlist,))
+        with conn.cursor() as cur:
+            cur.executemany("INSERT INTO playlist_sync_snapshot (playlist, item, song) VALUES (%s, %s, %s)",
+                            [(playlist, item, song) for item, song in held])
+
+
+def drop_snapshots(conn: psycopg.Connection, playlists: Iterable[str]) -> None:
+    """Delete the sync state of *playlists*, their snapshot rows with it."""
+    conn.execute("DELETE FROM playlist_sync WHERE playlist = ANY(%s)", (list(playlists),))
+
+
+# ---------------------------------------------------------------------------
 # spotdl backoff
 # ---------------------------------------------------------------------------
 

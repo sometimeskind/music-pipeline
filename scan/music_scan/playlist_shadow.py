@@ -154,9 +154,10 @@ def local_tail(name: str, paths: list[Path], library: ItemIndex) -> list[Path]:
     return out
 
 
-def _nd_playlists(found: list[dict], nd_dir: PurePosixPath) -> dict[str, dict]:
+def _nd_playlists(found: list[dict], nd_dir: PurePosixPath, tag: str = "SHADOW") -> dict[str, dict]:
     """The Navidrome playlists imported from a file in *nd_dir*, by that file's
-    stem; of several from one file, the first with sync on."""
+    stem; of several from one file, the first with sync on, with a warning
+    tagged *tag*."""
     by_stem: dict[str, list[dict]] = {}
     for pls in found:
         if pls.get("path") and PurePosixPath(pls["path"]).parent == nd_dir:
@@ -164,8 +165,8 @@ def _nd_playlists(found: list[dict], nd_dir: PurePosixPath) -> dict[str, dict]:
     out = {}
     for stem, candidates in by_stem.items():
         if len(candidates) > 1:
-            logger.warning("[SHADOW] %s: %d Navidrome playlists are imported from %s.m3u; compared with the first "
-                           "with sync on", stem, len(candidates), stem)
+            logger.warning("[%s] %s: %d Navidrome playlists are imported from %s.m3u; compared with the first "
+                           "with sync on", tag, stem, len(candidates), stem)
         out[stem] = next((p for p in candidates if p.get("sync")), candidates[0])
     return out
 

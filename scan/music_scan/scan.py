@@ -292,14 +292,17 @@ def playlist_paths(slots: list[Slot]) -> list[Path]:
 
 
 def store_view(name: str, library: ItemIndex, by_album,
-               stamps: dict[str, str] | None = None) -> tuple[list[Path], list[Slot]] | None:
+               stamps: dict[str, str] | None = None,
+               playlist: store.Store | None = None) -> tuple[list[Path], list[Slot]] | None:
     """The ``.m3u`` paths playlist *name* gets from its store (homelab#1914),
     and the slots behind them: its entries resolved by Spotify ID or ISRC only,
     against the whole library, each file once and in store order; an ``album``
     playlist through :func:`playlists.album_paths` on the same entries.  Local
     entries are not in the view (:func:`_local_tail`).  None when its store
-    can't be read: *name* comes from :func:`store.names`, so the file exists."""
-    playlist = store.load(name)
+    can't be read: *name* comes from :func:`store.names`, so the file exists.
+    *playlist*: the store, already loaded (the two-way sync reads it once)."""
+    if playlist is None:
+        playlist = store.load(name)
     if playlist is None:
         logger.error("  [STORE] %s: its store can't be read — its .m3u is left as it was", name)
         return None

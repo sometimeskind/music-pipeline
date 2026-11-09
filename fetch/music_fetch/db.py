@@ -455,6 +455,24 @@ MIGRATIONS: list[str] = [
     """
     ALTER TABLE events DROP CONSTRAINT events_kind_check;
     """,
+    # 24: the two-way playlist sync's state (homelab#2361), read and written through
+    # music_fetch.state.  One playlist_sync row per playlist the sync holds a snapshot of,
+    # and the snapshot itself: what its Navidrome playlist held at the end of the last
+    # applied cycle, one row per beets item with the Navidrome song (media file ID) that
+    # held it (null for an item the cycle's own write adds).  A set: an item is in it
+    # once.  Phases 4 and 5 add the binding and breaker columns to playlist_sync.
+    """
+    CREATE TABLE playlist_sync (
+        playlist    text PRIMARY KEY,
+        snapshot_at timestamptz NOT NULL DEFAULT now()
+    );
+    CREATE TABLE playlist_sync_snapshot (
+        playlist text NOT NULL REFERENCES playlist_sync (playlist) ON DELETE CASCADE,
+        item     integer NOT NULL,
+        song     text,
+        PRIMARY KEY (playlist, item)
+    );
+    """,
 ]
 
 

@@ -44,14 +44,16 @@ def _start_file_watcher(on_audio_created):
     return observer
 
 
-# How long after the runner starts the first album tick runs.  Leaves the
-# server's recent-deployments scheduler (every 5 s) time to schedule it.
+# How long after the runner starts the first album tick (or sync cycle) runs.
+# Leaves the server's recent-deployments scheduler (every 5 s) time to schedule it.
 FIRST_ALBUM_TICK_SECONDS = 60
+# The two-way playlist sync's cycle (homelab#2361).
+PLAYLIST_SYNC_SECONDS = 300
 
 
-def album_schedule(interval: int, now: datetime | None = None):
-    """The ``music-albums`` schedule: every *interval* seconds, the first a
-    minute after *now* (homelab#2596).
+def interval_schedule(interval: int, now: datetime | None = None):
+    """An interval schedule (``music-albums``, ``music-playlist-sync``): every
+    *interval* seconds, the first a minute after *now* (homelab#2596).
 
     ``serve()`` upserts the deployment at every pod start; the server then drops
     its pending scheduled runs, and an ``interval=`` schedule is anchored at that
@@ -93,7 +95,13 @@ def main() -> None:
     from music_fetch.albums import park_interrupted_imports
     from music_service.api import create_app
     from music_service.debounce import Debouncer
-    from music_service.flows import album_import_flow, albums_flow, fetch_and_scan_flow, scan_flow
+    from music_service.flows import (
+        album_import_flow,
+        albums_flow,
+        fetch_and_scan_flow,
+        playlist_sync_flow,
+        scan_flow,
+    )
     from music_service.mcp_jobs import JobQueue
     from music_service.prefect_client import ensure_concurrency_limits, trigger_scan
 
@@ -124,7 +132,15 @@ def main() -> None:
     # Album mode polls Spotify snapshot ids; the flow is a no-op while ALBUM_MODE=off.
     albums_deployment = albums_flow.to_deployment(
         name="music-albums",
-        schedule=album_schedule(int(os.environ.get("ALBUM_POLL_SECONDS", "") or 1800)),
+        schedule=interval_schedule(int(os.environ.get("ALBUM_POLL_SECONDS", "") or 1800)),
+    )
+    # The two-way playlist sync (homelab#2361).  Unscheduled while PLAYLIST_SYNC is off: serve()
+    # replaces a deployment's schedules, so turning it off stops the cycles.  Any other value is
+    # scheduled, and a value the cycle doesn't know is its error outcome, which alerts.
+    sync_off = (os.environ.get("PLAYLIST_SYNC") or "off").strip().lower() == "off"
+    playlist_sync_deployment = playlist_sync_flow.to_deployment(
+        name="music-playlist-sync",
+        schedule=None if sync_off else interval_schedule(PLAYLIST_SYNC_SECONDS),
     )
     # Run by /trigger-album-import when SABnzbd finishes an album job.
     album_import_deployment = album_import_flow.to_deployment(name="music-album-import")
@@ -133,7 +149,8 @@ def main() -> None:
 
     logger.info("Starting Prefect runner (FETCH_CRON=%s)", fetch_cron)
     try:
-        prefect_serve(fetch_deployment, scan_deployment, albums_deployment, album_import_deployment)
+        prefect_serve(fetch_deployment, scan_deployment, albums_deployment, album_import_deployment,
+                      playlist_sync_deployment)
     finally:
         debouncer.cancel()
         observer.stop()
