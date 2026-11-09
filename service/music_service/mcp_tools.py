@@ -595,7 +595,7 @@ TOOLS: dict[str, Tool] = {t.name: t for t in [
     Tool("unlink_spotify_id", WRITE, _unlink,
          lambda a, apply: [_apply(["music-audit-dupes", "--unlink", str(a["id"]), a["track"]], apply)],
          ("pipeline",)),
-    # Given items' fingerprints (homelab#2653): the database only, but every scan's retire_held
+    # Given items' fingerprints (homelab#2653), into their tags (homelab#2723): every scan's retire_held
     # merges on them, so a write. The IDs are integers, never flags.
     Tool("fingerprint_items", WRITE, _fingerprint_items,
          lambda a, apply: [_apply(["music-audit-dupes", "--fingerprint", *map(str, a["ids"])], apply)],

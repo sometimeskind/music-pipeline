@@ -70,8 +70,11 @@ each playlist entry with the ID resolves before and after.  The apply records a
 ``wrong_version`` event, regenerates the ``.m3u`` files and rescans Navidrome.
 
 ``--fingerprint`` fingerprints items that have no ``acoustid_fingerprint`` (dry
-run counts them; with ``--apply`` it computes and stores them in the database
-only, leaving the files alone).  Run it before the first audit.  New asis
+run counts them; with ``--apply`` it computes them, writes them to the files'
+tags and stores them).  The file needs the tag: setting a media field resets
+the item's stored mtime, so the scan's ``beet update`` re-reads the file and a
+fingerprint only the database held went back to the file's empty tag
+(homelab#2723).  Run it before the first audit.  New asis
 imports are fingerprinted by the plugin and ``music-audit-lengths --replace``
 refingerprints, but items replaced before that carry the old audio's
 fingerprint: ``--fingerprint ITEM_ID...`` recomputes those, and clears their
@@ -777,7 +780,12 @@ def fingerprint_missing(items: list, apply: bool, ids: list[int] | None = None) 
             logger.info("  %d/%d", n, len(todo))
     with pipeline_lock():
         for item in done:
-            item.store()  # the database only: the files are left alone
+            # Written first: write() takes the file's new mtime, which the store keeps, so the
+            # scan's beet update reads the same fingerprint back (homelab#2723).
+            if not item.try_write():
+                logger.warning("  item %s (%s): the tags couldn't be written, so the next scan's beet update "
+                               "clears the fingerprint", item.id, _rel(item))
+            item.store()
     logger.info("Stored %d fingerprint(s); %d failed", len(done), len(todo) - len(done))
     return len(done)
 
