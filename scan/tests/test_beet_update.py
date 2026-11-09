@@ -327,6 +327,36 @@ def test_a_backfilled_isrc_survives_beet_update(lib, add, monkeypatch) -> None:
     _survives(lib, item.id, isrc=f"{ISRC_MB};{ISRC_SPOTDL}", spotify_ids="abc123")
 
 
+def test_a_backfilled_words_match_stores_words_ids_alone(lib, add, monkeypatch) -> None:
+    """homelab#2731: an entry matched by title+artist only records its ID in
+    ``words_ids``, a flex field: no ISRC, no ``spotify_ids``, the stored mtime
+    kept and the file left as it was."""
+    from unittest.mock import MagicMock, patch
+
+    from music_scan import audit, backfill
+
+    monkeypatch.setattr(audit, "pipeline_lock", contextlib.nullcontext)
+    item = add(sources="made-up-playlist")
+    mtime, file_mtime = item.mtime, item.current_mtime()
+    song = {"name": "Made Up Song", "artists": ["Made Up Artist"], "url": "https://open.spotify.com/track/def456",
+            "song_id": "def456", "isrc": ISRC_SPOTDL}
+    library = MagicMock()
+    library.__enter__.return_value = library
+    library.all_items.return_value = list(lib.items())
+    playlist = MagicMock(url="made-up-playlist")
+    playlist.name = "made-up-playlist"
+    with patch("music_scan.library.MusicLibrary", return_value=library), \
+         patch("music_fetch.config.load_playlists", return_value=[playlist]), \
+         patch("music_fetch.spotdl_ops.SpotifyPlaylists") as reader:
+        reader.return_value.songs.return_value = [song]
+        plan = backfill.run(apply=True)
+    assert (plan.by_words, plan.ids_added, plan.isrcs_added, list(plan.changed)) == (1, 0, 0, [item.id])
+    stored = lib.get_item(item.id)
+    assert (stored.mtime, stored.current_mtime()) == (mtime, file_mtime)
+    assert (stored.isrc, stored.get("spotify_ids")) == ("", None)
+    _survives(lib, item.id, isrc="", words_ids="def456", spotify_ids=None)
+
+
 def test_isrc_drift_counts_an_isrc_the_database_alone_holds(lib, add) -> None:
     from music_scan.isrc_drift import drift
 

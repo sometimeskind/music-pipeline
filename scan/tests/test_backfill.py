@@ -10,6 +10,7 @@ from music_scan.backfill import (
     mb_recordings,
     plan_album_ids,
     plan_backfill,
+    report,
     report_albums,
     run,
     run_albums,
@@ -143,9 +144,47 @@ def test_words_match_without_isrcs_is_recorded_and_missing_is_counted(caplog) ->
     old = _item(1, "Song", "a")
     with caplog.at_level("INFO", logger="music_scan.backfill"):
         plan = plan_backfill([old], {"a": [_song("S"), _song("N", "Not Here")]})
-    assert old.data["spotify_ids"] == "S"
+    assert old.data["words_ids"] == "S"
+    assert "spotify_ids" not in old.data
     assert (plan.by_words, plan.missing) == (1, 1)
+    assert plan.changed == {1: old}
     assert "[WORDS]" in caplog.text
+
+
+def test_words_match_is_a_weak_link_only_and_a_second_run_changes_nothing(caplog) -> None:
+    """homelab#2731: title+artist is no identity, so the entry's ID goes in
+    ``words_ids`` alone: no ``spotify_ids``, no ISRC (which goes to the file).
+    An item with an ID of its own is reached too, and keeps it."""
+    bare = _item(1, "Song", "a")
+    owned = _item(2, "Other", "a", spotify_url=URL + "OWN")
+    songs = {"a": [_song("OWN", "Other"), _song("W1", isrc="XXWORDS0001"), _song("W2", "Other")]}
+    with caplog.at_level("INFO", logger="music_scan.backfill"):
+        plan = plan_backfill([bare, owned], songs)
+        report(plan)
+    assert bare.data == {"sources": "a", "words_ids": "W1"}
+    assert owned.data["spotify_ids"] == "OWN"
+    assert owned.data["words_ids"] == "W2"
+    assert "isrc" not in owned.data
+    assert (plan.ids_added, plan.isrcs_added, plan.by_words) == (0, 0, 2)
+    assert set(plan.changed) == {1, 2}
+    assert plan.wrong == []
+    assert "2 by title+artist only" in caplog.text
+
+    before = {1: dict(bare.data), 2: dict(owned.data)}
+    again = plan_backfill([bare, owned], songs)
+    assert again.changed == {}
+    assert (again.ids_from_url, again.ids_added, again.isrcs_added, again.by_words) == (0, 0, 0, 2)
+    assert {1: bare.data, 2: owned.data} == before
+
+
+def test_an_id_match_on_a_weakly_linked_item_still_gets_its_id_and_isrc() -> None:
+    """A words link doesn't stand in for an ID: the entry that holds the item
+    by ISRC still records its Spotify ID there."""
+    item = _item(1, "Song", "a", isrc="XXSTRONG001", words_ids="W1")
+    plan = plan_backfill([item], {"a": [_song("S", "Another Title", isrc="XXSTRONG001")]})
+    assert item.data["spotify_ids"] == "S"
+    assert item.data["words_ids"] == "W1"
+    assert (plan.ids_added, plan.by_words) == (1, 0)
 
 
 def _run(items, songs, apply=False, redownload=0, downloaded=True):
