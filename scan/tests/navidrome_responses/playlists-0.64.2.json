@@ -1,0 +1,38 @@
+[
+  {
+    "id": "3f2c9a51-0d4e-4c1b-9f3e-6a1b2c3d4e5f",
+    "name": "aaaaaaah",
+    "comment": "",
+    "duration": 1234.5,
+    "size": 98765432,
+    "songCount": 3,
+    "ownerName": "tom",
+    "ownerId": "b1c2d3e4-f5a6-4b7c-8d9e-0f1a2b3c4d5e",
+    "public": false,
+    "path": "/music/playlists/aaaaaaah.m3u",
+    "sync": true,
+    "uploadedImage": "",
+    "createdAt": "2026-10-01T03:12:44.123456789Z",
+    "updatedAt": "2026-11-09T03:41:07.987654321Z",
+    "rules": null,
+    "evaluatedAt": null
+  },
+  {
+    "id": "7a8b9c0d-1e2f-4a3b-8c4d-5e6f7a8b9c0d",
+    "name": "Made in Symfonium",
+    "comment": "",
+    "duration": 0,
+    "size": 0,
+    "songCount": 0,
+    "ownerName": "tom",
+    "ownerId": "b1c2d3e4-f5a6-4b7c-8d9e-0f1a2b3c4d5e",
+    "public": false,
+    "path": "",
+    "sync": false,
+    "uploadedImage": "",
+    "createdAt": "2026-11-02T18:00:00Z",
+    "updatedAt": "2026-11-02T18:00:00Z",
+    "rules": null,
+    "evaluatedAt": null
+  }
+]
