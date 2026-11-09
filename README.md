@@ -13,6 +13,8 @@ A single long-running service container orchestrates everything via Prefect. Two
 | `music-fetch` | Daily 03:00 UTC (`FETCH_CRON`) | Spotify/YouTube sync — downloads new tracks, queues removals |
 | `music-scan` | On demand (file watcher or HTTP API) | Import inbox → beets, refresh metadata, regenerate .m3u |
 
+A scan that finds the `pipeline` lock held (a fetch, another scan or an album import) skips after 5 seconds. When the inbox still holds audio files it would import, it schedules one more `music-scan` run 5 minutes on (`Scan skipped — pipeline busy; retrying in 5 min (N file(s) waiting)`), unless a scan is already scheduled or pending; a retry that skips does the same, so the inbox always ends with a scan that ran (homelab#2751). Files still copying under a temporary name (`.partial`) don't count.
+
 ---
 
 ## Pipeline internals

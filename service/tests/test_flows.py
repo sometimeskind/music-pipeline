@@ -320,11 +320,97 @@ def test_scan_flow_skips_when_pipeline_busy():
     """Scan exits immediately if the pipeline concurrency slot is taken."""
     from music_service.flows import scan_flow
     with patch("music_service.flows.concurrency") as mock_concurrency, \
+         patch("music_fetch.state.check"), \
+         patch("music_service.flows.scan.inbox_audio_count", return_value=0), \
+         patch("music_service.prefect_client.schedule_scan_retry") as retry, \
          patch("music_service.flows._run_scan_tasks") as run_scan:
         mock_concurrency.return_value.__enter__.side_effect = TimeoutError
         mock_concurrency.return_value.__exit__.return_value = False
         scan_flow()
         run_scan.assert_not_called()
+        retry.assert_not_called()
+
+
+@pytest.fixture
+def scan_deployment():
+    """The ``music-scan`` deployment on the test server, with no runs: the
+    busy scan's retry is a run of it (homelab#2751)."""
+    from prefect.client.orchestration import get_client
+    from prefect.client.schemas.filters import FlowRunFilter, FlowRunFilterDeploymentId
+
+    from music_service import prefect_client
+
+    with get_client(sync_client=True) as client:
+        flow_id = client.create_flow_from_name("music-scan")
+        deployment_id = client.create_deployment(flow_id, "music-scan")
+        for run in client.read_flow_runs(flow_run_filter=FlowRunFilter(
+                deployment_id=FlowRunFilterDeploymentId(any_=[deployment_id]))):
+            client.delete_flow_run(run.id)
+    assert prefect_client.SCAN_DEPLOYMENT == "music-scan/music-scan"
+    return deployment_id
+
+
+def _scheduled_scans(deployment_id) -> list:
+    from prefect.client.orchestration import get_client
+    from prefect.client.schemas.filters import (
+        FlowRunFilter, FlowRunFilterDeploymentId, FlowRunFilterState, FlowRunFilterStateType)
+    from prefect.client.schemas.objects import StateType
+
+    with get_client(sync_client=True) as client:
+        return client.read_flow_runs(flow_run_filter=FlowRunFilter(
+            deployment_id=FlowRunFilterDeploymentId(any_=[deployment_id]),
+            state=FlowRunFilterState(type=FlowRunFilterStateType(any_=[StateType.SCHEDULED]))))
+
+
+def _busy_scan(inbox) -> list[str]:
+    """Run the scan flow with the pipeline held and *inbox* as the inbox; returns what it logged."""
+    from music_service import flows
+
+    with patch.object(flows, "concurrency", side_effect=TimeoutError), \
+         patch("music_fetch.state.check"), \
+         patch.object(flows.scan, "INBOX", inbox), \
+         patch.object(flows, "get_run_logger") as logger, \
+         patch.object(flows, "_run_scan_tasks") as run_scan:
+        flows.scan_flow()
+    run_scan.assert_not_called()
+    logger.return_value.exception.assert_not_called()
+    return [c.args[0] % c.args[1:] for c in logger.return_value.info.call_args_list]
+
+
+def test_a_busy_scan_with_files_waiting_schedules_one_retry(tmp_path, scan_deployment):
+    """homelab#2751: nothing else retries a skipped scan, so it schedules one,
+    SCAN_RETRY_SECONDS on; a second skip while it waits adds none."""
+    from datetime import datetime, timedelta, timezone
+
+    from music_service import prefect_client
+
+    batch = tmp_path / "inbox" / "spotdl" / "mix"
+    batch.mkdir(parents=True)
+    for name in ("a.m4a", "b.m4a", "c.m4a.x1.partial", "cover.jpg"):
+        (batch / name).write_bytes(b"x")
+
+    logged = _busy_scan(tmp_path / "inbox")
+    (retry,) = _scheduled_scans(scan_deployment)
+    due = datetime.now(timezone.utc) + timedelta(seconds=prefect_client.SCAN_RETRY_SECONDS)
+    assert abs((retry.expected_start_time - due).total_seconds()) < 60
+    # The scan's own count: the file still copying and the cover aren't waiting.
+    assert logged == ["Scan skipped — pipeline busy; retrying in 5 min (2 file(s) waiting)"]
+
+    logged = _busy_scan(tmp_path / "inbox")
+    assert [r.id for r in _scheduled_scans(scan_deployment)] == [retry.id]
+    assert logged == ["Scan skipped — pipeline busy; a scan is already waiting to run (2 file(s) waiting)"]
+
+
+def test_a_busy_scan_with_an_empty_inbox_schedules_no_retry(tmp_path, scan_deployment):
+    """homelab#2751: with nothing the scan would import (a file still copying
+    under its temporary name doesn't count), no retry."""
+    batch = tmp_path / "inbox" / "spotdl" / "mix"
+    batch.mkdir(parents=True)
+    (batch / "a.m4a.x1.partial").write_bytes(b"x")
+
+    assert _busy_scan(tmp_path / "inbox") == [
+        "Scan skipped — pipeline busy (fetch or scan already running); the inbox is empty"]
+    assert _scheduled_scans(scan_deployment) == []
 
 
 # ---------------------------------------------------------------------------

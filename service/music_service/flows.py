@@ -521,11 +521,45 @@ def scan_flow() -> None:
         # the inbox waits for the next scan rather than import against no state.
         logger.warning("[DB-DOWN] Scan skipped — the music database is down: %s", exc)
         return
+    with contextlib.ExitStack() as stack:
+        try:
+            stack.enter_context(concurrency("pipeline", occupy=1, timeout_seconds=SKIP_IF_BUSY_SECONDS))
+        except TimeoutError:
+            _retry_busy_scan()
+            return
+        _run_scan_tasks()
+
+
+def _retry_busy_scan() -> None:
+    """A scan that skipped as busy schedules another, ``SCAN_RETRY_SECONDS`` on,
+    when the inbox still holds files it would import (homelab#2751).  Nothing else
+    retries a skipped scan: ``music-scan`` has no schedule, the file watcher fires
+    only on new files, and album imports no longer import the whole inbox.  A
+    retry that skips too schedules the next, so the inbox always ends with a scan
+    that ran; at most one waits (:func:`prefect_client.schedule_scan_retry`)."""
+    from music_service import prefect_client  # noqa: PLC0415
+
+    logger = get_run_logger()
     try:
-        with concurrency("pipeline", occupy=1, timeout_seconds=SKIP_IF_BUSY_SECONDS):
-            _run_scan_tasks()
-    except TimeoutError:
-        logger.info("Scan skipped — pipeline busy (fetch or scan already running)")
+        waiting: int | None = scan.inbox_audio_count()
+    except OSError:
+        logger.warning("Could not count the inbox's files; retrying the scan anyway", exc_info=True)
+        waiting = None
+    if waiting == 0:
+        logger.info("Scan skipped — pipeline busy (fetch or scan already running); the inbox is empty")
+        return
+    count = "?" if waiting is None else str(waiting)
+    minutes = prefect_client.SCAN_RETRY_SECONDS // 60
+    try:
+        scheduled = prefect_client.schedule_scan_retry()
+    except Exception:
+        logger.exception("Scan skipped — pipeline busy; scheduling the retry failed (%s file(s) waiting for the "
+                         "next trigger)", count)
+        return
+    if scheduled:
+        logger.info("Scan skipped — pipeline busy; retrying in %d min (%s file(s) waiting)", minutes, count)
+    else:
+        logger.info("Scan skipped — pipeline busy; a scan is already waiting to run (%s file(s) waiting)", count)
 
 
 # ---------------------------------------------------------------------------

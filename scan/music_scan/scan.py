@@ -61,6 +61,14 @@ def _snapshot_inbox(inbox: Path) -> list[Path]:
     )
 
 
+def inbox_audio_count() -> int:
+    """The audio files waiting in the inbox, counted as the import's snapshot
+    finds them (homelab#2751): what the scan ignores doesn't count, such as a
+    file still copying under its temporary name (rclone's ``.partial``), a cover
+    or an nfo."""
+    return len(_snapshot_inbox(INBOX)) if INBOX.is_dir() else 0
+
+
 def _check_import_names(inbox_stems: list[str], imported: list[tuple[str, str]]) -> None:
     """Compare imported track names against the pre-import inbox snapshot.
 
