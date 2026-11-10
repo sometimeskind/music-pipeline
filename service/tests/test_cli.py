@@ -33,3 +33,31 @@ def test_without_an_anchor_the_first_tick_is_a_whole_interval_away():
     dates = _server_dates(Interval(1800, anchor_date=START), START + timedelta(seconds=5), n=1)
 
     assert dates[0] == START + timedelta(seconds=1800)
+
+
+def test_startup_scan_runs_after_resume_and_the_watcher_before_serve(monkeypatch):
+    """homelab#2751: the startup scan counts the inbox only once an interrupted
+    album import is parked back (#344) and the watcher runs, and before serve() blocks."""
+    from unittest.mock import MagicMock, patch
+
+    from music_service import cli
+
+    for var in ("SPOTIFY_CLIENT_ID", "SPOTIFY_CLIENT_SECRET", "API_BEARER_TOKEN"):
+        monkeypatch.setenv(var, "x")
+    monkeypatch.delenv("MUSIC_LOCKS_HELD", raising=False)
+    order: list[str] = []
+
+    def step(name):
+        return lambda *a, **k: order.append(name) or MagicMock()
+
+    with patch("music_fetch.albums.park_interrupted_imports", side_effect=step("resume")), \
+         patch("music_service.api.create_app"), \
+         patch("music_service.mcp_jobs.JobQueue"), \
+         patch.object(cli, "make_api_server"), \
+         patch.object(cli, "_start_file_watcher", side_effect=step("watcher")), \
+         patch("music_service.prefect_client.ensure_concurrency_limits"), \
+         patch.object(cli, "schedule_startup_scan", side_effect=step("startup-scan")), \
+         patch("prefect.serve", side_effect=step("serve")):
+        cli.main()
+
+    assert order == ["resume", "watcher", "startup-scan", "serve"]
