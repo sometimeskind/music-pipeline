@@ -465,7 +465,7 @@ def test_a_busy_scan_whose_wait_runs_out_schedules_one_retry(tmp_path, scan_depl
     assert abs((retry.expected_start_time - due).total_seconds()) < 60
     # The scan's own count: the file still copying and the cover aren't waiting.
     assert logged == ["[WAIT] The pipeline slot is held by another run; waiting for it",
-                      "[WAIT] The pipeline slot was still held after 20 min",
+                      "[WAIT] The pipeline slot was still held after 30 min",
                       "Scan skipped — pipeline busy; retrying in 5 min (2 file(s) waiting)"]
 
     logged = _busy_scan(_inbox_batch(tmp_path / "again"))
