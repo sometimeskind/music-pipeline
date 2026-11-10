@@ -261,14 +261,14 @@ def test_on_grabs_up_to_max_in_flight() -> None:
     state = wanted_state(5)
     state.albums["a0"]["status"] = albums.GRABBED
     prowlarr, sab = fakes()
-    # Each album its own release: one another album has in flight waits (#243).
-    prowlarr.search.side_effect = [[release(f"r{i}")] for i in range(1, 5)]
+    # Each album its own release, by title too: one another album has in flight waits (#243, homelab#2757).
+    prowlarr.search.side_effect = [[release(f"r{i}", f"Artist-Album-WEB-FLAC-2020-GRP{i}")] for i in range(1, 5)]
     result = albums.TickResult()
     top_up(state, Settings(mode="on", max_in_flight=3), prowlarr, sab, never_have, result, now=lambda: NOW)
     assert result.grabbed == 2
     assert state.in_flight() == 3
     assert state.albums["a1"]["nzo_id"] == "SABnzbd_nzo_1"
-    sab.add_url.assert_called_with("https://indexer/getnzb?id=1", "Artist-Album-WEB-FLAC-2020")
+    sab.add_url.assert_called_with("https://indexer/getnzb?id=1", "Artist-Album-WEB-FLAC-2020-GRP2")
 
 
 def test_on_re_searches_dry_run_picks() -> None:
@@ -378,7 +378,7 @@ def test_empty_result_from_an_indexer_in_backoff_is_not_a_miss(caplog) -> None:
 def test_indexer_status_is_checked_once_while_searches_find_releases() -> None:
     state = wanted_state(3)
     prowlarr, sab = fakes()
-    prowlarr.search.side_effect = [[release(f"r{i}")] for i in range(3)]
+    prowlarr.search.side_effect = [[release(f"r{i}", f"Artist-Album-WEB-FLAC-2020-GRP{i}")] for i in range(3)]
     top_up(state, Settings(mode="on"), prowlarr, sab, never_have, albums.TickResult(), now=lambda: NOW)
     assert prowlarr.blocked.call_count == 1 and sab.add_url.call_count == 3
 
@@ -1394,6 +1394,105 @@ def test_release_a_failed_album_held_is_grabbed() -> None:
     top_up(state, Settings(mode="on"), prowlarr, sab, never_have, albums.TickResult(), now=lambda: NOW)
     assert state.albums["a0"]["candidate"]["guid"] == "r1"
 
+
+# ---------------------------------------------------------------------------
+# One release from two indexers (homelab#2757): NinjaCentral (1), NZBNest (2)
+# ---------------------------------------------------------------------------
+
+TITLE = "Artist-Album-WEB-FLAC-2020-GRP"
+OTHER = "Artist-Album-WEB-FLAC-2020-OTHERGRP"
+WRONG = "another album: 0 of the album's 2 titles in it"
+ABORTED = "Aborted, cannot be completed - https://sabnzbd.org/not-complete"
+
+
+def on(indexer_id: int, guid: str, title: str = TITLE) -> Release:
+    """A copy on indexer *indexer_id*; another release (OTHER) has fewer grabs, so it ranks last."""
+    return Release(guid=guid, title=title, size=60 * MB, indexer_id=indexer_id,
+                   download_url=f"http://prowlarr/{indexer_id}/download?id={guid}", categories=[3040],
+                   grabs=0 if title == OTHER else 5)
+
+
+def blocklisted(monkeypatch, record: dict, *failed: tuple[str, str, str]) -> None:
+    """*record*'s blocklist the (GUID, title, reason) of each grab that failed, as the event store says."""
+    record["blocklist"] = [guid for guid, _, _ in failed]
+    rows = [row for i, (guid, title, reason) in enumerate(failed) for row in (
+        (NOW + timedelta(minutes=2 * i), "grab", {"guid": guid, "release": title, "size": 60 * MB}),
+        (NOW + timedelta(minutes=2 * i + 1), "failure", {"guid": guid, "reason": reason}))]
+    monkeypatch.setattr(albums, "blocklist_entries", lambda key, r: albums.blocklist.entries(r, rows))
+
+
+def test_a_wrong_release_is_refused_from_every_indexer(monkeypatch) -> None:
+    state = wanted_state()
+    record = state.albums["a0"]
+    blocklisted(monkeypatch, record, ("ninja/1", TITLE, WRONG))
+    prowlarr, sab = fakes([on(2, "nest/1"), on(2, "nest/2", f"{TITLE}-1"), on(1, "ninja/2", OTHER)])
+    top_up(state, Settings(mode="on"), prowlarr, sab, never_have, albums.TickResult(), now=lambda: NOW)
+    assert record["candidate"]["guid"] == "ninja/2"
+
+
+def test_a_dead_download_lets_another_indexers_copy_be_tried_once(monkeypatch) -> None:
+    state = wanted_state()
+    record = state.albums["a0"]
+    blocklisted(monkeypatch, record, ("ninja/1", TITLE, ABORTED))
+    results = [on(1, "ninja/1"), on(2, "nest/1"), on(2, "nest/2", f"{TITLE}-1"), on(1, "ninja/2", OTHER)]
+    prowlarr, sab = fakes(results)
+    top_up(state, Settings(mode="on"), prowlarr, sab, never_have, albums.TickResult(), now=lambda: NOW)
+    assert record["candidate"]["guid"] == "nest/1"
+
+    # NZBNest's copy died too: a second dead copy of the title blocks the rest of them.
+    state = wanted_state()
+    record = state.albums["a0"]
+    blocklisted(monkeypatch, record, ("ninja/1", TITLE, ABORTED), ("nest/1", TITLE, ABORTED))
+    prowlarr, sab = fakes(results)
+    top_up(state, Settings(mode="on"), prowlarr, sab, never_have, albums.TickResult(), now=lambda: NOW)
+    assert record["candidate"]["guid"] == "ninja/2"
+
+
+def test_an_entry_whose_reason_is_unknown_blocks_only_its_guid(monkeypatch) -> None:
+    state = wanted_state()
+    record = state.albums["a0"]
+    record.update(blocklist=["ninja/1"], candidate={"guid": "ninja/1", "title": TITLE})
+    monkeypatch.setattr(albums, "blocklist_entries", lambda key, r: albums.blocklist.entries(r, None))
+    prowlarr, sab = fakes([on(1, "ninja/1"), on(2, "nest/1")])
+    top_up(state, Settings(mode="on"), prowlarr, sab, never_have, albums.TickResult(), now=lambda: NOW)
+    assert record["candidate"]["guid"] == "nest/1"
+
+
+def test_a_release_another_album_imported_is_taken_on_every_indexer() -> None:
+    state = wanted_state()
+    state.albums["orig"] = _holder(albums.IMPORTED, "ninja/1", candidate={"guid": "ninja/1", "title": TITLE})
+    flight, done = albums._taken(state, "a0")
+    assert on(2, "nest/1") in done and on(2, "nest/2", f"{TITLE}-1") in done and on(2, "nest/3", OTHER) not in done
+    assert on(2, "nest/1") not in flight
+    prowlarr, sab = fakes([on(2, "nest/1"), on(1, "ninja/2", OTHER)])
+    top_up(state, Settings(mode="on"), prowlarr, sab, never_have, albums.TickResult(), now=lambda: NOW)
+    assert state.albums["a0"]["candidate"]["guid"] == "ninja/2"
+
+
+def test_a_kept_copy_is_taken_on_every_indexer() -> None:
+    state = wanted_state()
+    state.albums["orig"] = _holder(albums.WANTED, "x", best_copy={"guid": "ninja/1", "title": TITLE, "missing": 1})
+    assert on(2, "nest/1") in albums._taken(state, "a0")[1]
+
+
+def test_a_release_in_flight_for_another_album_waits_on_every_indexer() -> None:
+    state = wanted_state()
+    state.albums["orig"] = _holder(albums.GRABBED, "ninja/1", candidate={"guid": "ninja/1", "title": TITLE})
+    assert on(2, "nest/1") in albums._taken(state, "a0")[0]
+    prowlarr, sab = fakes([on(2, "nest/1")])
+    top_up(state, Settings(mode="on"), prowlarr, sab, never_have, albums.TickResult(), now=lambda: NOW)
+    assert state.albums["a0"]["status"] == albums.WANTED
+    assert "candidate" not in state.albums["a0"]
+    sab.add_url.assert_not_called()
+
+
+def test_one_release_from_both_indexers_grabs_ninjacentrals_copy() -> None:
+    state = wanted_state()
+    nest, ninja = on(2, "nest/1"), on(1, "ninja/1")
+    nest.grabs = 40  # NZBNest's own count: it doesn't compare with NinjaCentral's
+    prowlarr, sab = fakes([nest, ninja])
+    top_up(state, Settings(mode="on"), prowlarr, sab, never_have, albums.TickResult(), now=lambda: NOW)
+    assert state.albums["a0"]["candidate"]["guid"] == "ninja/1"
 
 
 def judged_blocklist(monkeypatch) -> None:

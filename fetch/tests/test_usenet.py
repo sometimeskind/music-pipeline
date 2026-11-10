@@ -1,13 +1,14 @@
 """Tests for music_fetch.usenet — release matching, ranking and the grab redirect."""
 
+import dataclasses
 from unittest.mock import MagicMock, patch
 
 import pytest
 import requests
 
 from music_fetch.usenet import (
-    Prowlarr, Release, Sabnzbd, clean_album, leftover, matches, normalise, rank, readable, rejection, search_title,
-    subtitle, tier, why_none,
+    Copies, Prowlarr, Release, Sabnzbd, clean_album, leftover, matches, normalise, rank, readable, rejection,
+    search_title, subtitle, tier, why_none,
 )
 
 MB = 1_000_000
@@ -554,6 +555,44 @@ def test_repost_name_drops_only_an_indexer_suffix() -> None:
     assert repost_name("Artist-Album-WEB-FLAC-2020") == "artist-album-web-flac-2020"
     assert repost_name("Artist-Album-REPACK-FLAC-PERFECT") != repost_name("Artist-Album-FLAC-PERFECT")
     assert repost_name("Artist-Album-FLAC-PERFECT-1-1") == "artist-album-flac-perfect-1"
+
+
+# ---------------------------------------------------------------------------
+# One release from two indexers (homelab#2757)
+# ---------------------------------------------------------------------------
+
+
+def copy_on(indexer_id: int, guid: str, title: str = "Artist-Album-FLAC-PERFECT", grabs: int = 0) -> Release:
+    return dataclasses.replace(rel(title, guid=guid, grabs=grabs), indexer_id=indexer_id)
+
+
+def test_copies_are_one_release_by_guid_or_repost_name() -> None:
+    copies = Copies()
+    copies.add("ninja/1", "Artist-Album-FLAC-PERFECT")
+    copies.add("ninja/2")
+    assert copy_on(2, "nest/1") in copies
+    assert copy_on(2, "nest/2", "Artist-Album-FLAC-PERFECT-1") in copies
+    assert copy_on(1, "ninja/2", "Artist-Album-FLAC-OTHER") in copies
+    assert copy_on(2, "nest/3", "Artist-Album-FLAC-OTHER") not in copies
+    assert copy_on(2, "nest/4", "") not in copies
+    assert "ninja/1" not in copies  # a Release, not its GUID
+
+
+def test_copies_of_one_release_rank_by_indexer_order_whatever_their_grabs() -> None:
+    """NZBNest's copy has more grabs and comes back first; NinjaCentral's, indexer 1, is picked."""
+    nest = copy_on(2, "nest", grabs=40)
+    ninja = copy_on(1, "ninja", grabs=3)
+    other = rel("Artist-Album-FLAC-OTHER", guid="other", grabs=10)
+    for releases in ([nest, ninja, other], [other, ninja, nest]):
+        assert [r.guid for r in rank(releases, "Artist", "Album", 10, set())] == ["ninja", "nest", "other"]
+
+
+def test_full_ties_break_by_indexer_then_guid() -> None:
+    b = copy_on(2, "b", "Artist-Album-FLAC-X")
+    c = copy_on(1, "c", "Artist-Album-FLAC-Y")
+    a = copy_on(1, "a", "Artist-Album-FLAC-Z")
+    for releases in ([b, c, a], [a, c, b]):
+        assert [r.guid for r in rank(releases, "Artist", "Album", 10, set())] == ["a", "c", "b"]
 
 
 # ---------------------------------------------------------------------------

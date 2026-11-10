@@ -307,7 +307,8 @@ def test_a_missing_or_failed_wants_record_queues_no_fallback(status) -> None:
 
 
 def release(guid: str = "r1") -> Release:
-    return Release(guid=guid, title="Artist-Album-WEB-FLAC-2020", size=60 * MB, indexer_id=1,
+    # A title of its own: one title is one release, whatever its GUID (homelab#2757).
+    return Release(guid=guid, title=f"Artist-Album-WEB-FLAC-2020-{guid}", size=60 * MB, indexer_id=1,
                    download_url=f"http://prowlarr/1/download?id={guid}", categories=[3040])
 
 

@@ -114,8 +114,9 @@ def log_check(c: Check) -> None:
     if c.record.get("edition") is not None:
         logger.info("Edition: an incomplete copy is in the library, so the tick takes only its edition (%s); this "
                     "title's is (%s)", " ".join(c.record["edition"]) or "plain", " ".join(sorted(edition(c.title))) or "plain")
-    logger.info("Not covered: the blocklist and releases other albums took (they go by GUID), and whether the indexer "
-                "has this release. An accepted release still has to outrank the others")
+    logger.info("Not covered: the blocklist and releases other albums took (they go by GUID, or by the title a grab "
+                "recorded), and whether the indexer has this release. An accepted release still has to outrank the "
+                "others")
 
 
 def run(album: str, title: str, size: int | None = None, words: str = "") -> Check:
