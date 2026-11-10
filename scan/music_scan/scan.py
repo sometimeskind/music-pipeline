@@ -10,10 +10,11 @@ from __future__ import annotations
 import logging
 import os
 import shutil
+import subprocess
 import tempfile
 import time
 from collections import Counter
-from contextlib import contextmanager
+from contextlib import contextmanager, suppress
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable, Iterator
@@ -34,7 +35,7 @@ from music_scan.library import MusicLibrary
 from music_scan.metrics import ScanMetrics
 from music_scan.navidrome import trigger_scan
 from music_scan.playlists import Entry, Slot
-from music_scan.process import run_beet_import, run_beet_update
+from music_scan.process import ImportInterrupted, run_beet_import, run_beet_update, shutdown_requested
 
 logger = logging.getLogger(__name__)
 
@@ -51,6 +52,8 @@ LIBRARY_DB = Path("/root/.config/beets/library.db")
 # The last scan's empty playlist slots are the state's empty-slots document: the
 # Music MCP's digest_summary reports them (homelab#2413), the first of each listed.
 EMPTY_SLOTS_LISTED = 25
+# The scan's failure reason when a shutdown cut it short (homelab#2763).
+INTERRUPTED = "interrupted"
 
 
 def _snapshot_inbox(inbox: Path) -> list[Path]:
@@ -123,7 +126,13 @@ def run_inbox_import(skip_limit: int | None = None, folder: Path | None = None) 
     MusicBrainz was unreachable and left inbox files behind: what it imported
     stays imported, the rest stays in the inbox.  When it left none (beets
     runs several searches per singleton, so one 503 rarely costs a match), the
-    errors are only a warning: there is nothing to retry (music-pipeline#286)."""
+    errors are only a warning: there is nothing to retry (music-pipeline#286).
+
+    An import cut short raises too (homelab#2763): ``ImportInterrupted`` when
+    the process is shutting down, ``CalledProcessError`` when beets exited
+    non-zero or was killed by a signal.  The files beets didn't reach stay in
+    the inbox, for the scan after the restart (homelab#2751) or the next one:
+    a caller never quarantines them."""
     if skip_limit is None:
         skip_limit_env = os.environ.get("BEET_SKIP_LIMIT")
         skip_limit = int(skip_limit_env) if skip_limit_env else None
@@ -133,7 +142,13 @@ def run_inbox_import(skip_limit: int | None = None, folder: Path | None = None) 
     inbox_snapshot = _snapshot_inbox(root)
     logger.info("Inbox snapshot : %d audio file(s) queued for import", len(inbox_snapshot))
     import_start = time.time()
-    mb_errors = run_beet_import(root, skip_limit=skip_limit)
+    try:
+        mb_errors = run_beet_import(root, skip_limit=skip_limit)
+    except (ImportInterrupted, subprocess.CalledProcessError):
+        left = sum(1 for f in inbox_snapshot if f.exists())
+        logger.warning("[INTERRUPTED] beet import cut short: %d of %d inbox file(s) stay in the inbox for the "
+                       "next scan, none quarantined", left, len(inbox_snapshot))
+        raise
     with MusicLibrary(LIBRARY_DB) as lib:
         imported = lib.items_added_since(import_start)
     logger.info("Newly imported : %d track(s)", len(imported))
@@ -187,7 +202,13 @@ def quarantine_inbox_leftovers(folder: Path | None = None) -> int:
     from.  *folder*, a folder inside the inbox, confines the move to it, as
     :func:`run_inbox_import` confined the import (homelab#2751).  Returns the
     count of files moved.
+
+    Never while the process is shutting down (homelab#2763): the files are
+    then the ones beets never reached, not the ones it couldn't match, and
+    it raises ``ImportInterrupted`` instead.
     """
+    if shutdown_requested():
+        raise ImportInterrupted("the service is shutting down; the inbox is not quarantined")
     QUARANTINE.mkdir(parents=True, exist_ok=True)
     moved = 0
     for f in (INBOX if folder is None else folder).rglob("*"):
@@ -207,6 +228,21 @@ _ASIS_SUBTREES = ("spotdl",)
 # A duplicate stays in quarantine instead, unless it is another recording
 # (music_scan.asis_apart, homelab#2698).
 _ASIS_CONFIG = "import:\n  duplicate_action: skip\n"
+# Where the as-is pass stages its files, beside quarantine/ on its volume
+# (homelab#2763): moving files there is a rename, and a pod killed mid-pass
+# leaves them on the volume, for restore_asis_staging() at the next start.
+# They were in tempfile.TemporaryDirectory()s in the container's /tmp, and 68
+# files went with a container.  Not inside quarantine/, which the purge, the
+# audits and list_quarantine walk.  The beets plugin finds a staged file's
+# playlist under these names (music_pipeline.ASIS_STAGING_ROOTS).
+ASIS_STAGING_NAME = "asis-staging"
+ASIS_APART_NAME = "asis-apart"
+
+
+def asis_dirs() -> tuple[Path, Path]:
+    """The as-is pass's staging dir and its apart dir (:mod:`music_scan.asis_apart`):
+    ``asis-staging/`` and ``asis-apart/`` beside :data:`QUARANTINE`."""
+    return QUARANTINE.parent / ASIS_STAGING_NAME, QUARANTINE.parent / ASIS_APART_NAME
 
 
 def _move_asis_eligible(quarantine: Path, staging: Path) -> int:
@@ -227,30 +263,78 @@ def _move_asis_eligible(quarantine: Path, staging: Path) -> int:
     return moved
 
 
-def _return_to_quarantine(staging: Path) -> None:
-    """Move the files beets left in *staging* back to their quarantine paths."""
-    for remaining in staging.rglob("*"):
+def _free_path(dest: Path) -> Path:
+    """*dest*, or when a file is there already, the first free
+    ``<stem> (restored N)<suffix>`` beside it."""
+    n = 1
+    free = dest
+    while free.exists():
+        free = dest.with_name(f"{dest.stem} (restored{'' if n == 1 else f' {n}'}){dest.suffix}")
+        n += 1
+    return free
+
+
+def _return_to_quarantine(staging: Path) -> tuple[int, int]:
+    """Move the files beets left in *staging* back to their quarantine paths,
+    and remove the emptied directories under it.  Returns ``(moved, kept)``:
+    *kept* of them found a file at their quarantine path, and went beside it
+    under a ``(restored)`` name instead of over it (homelab#2763).  Idempotent:
+    a *staging* that is empty or missing moves nothing."""
+    if not staging.is_dir():
+        return 0, 0
+    moved = kept = 0
+    for remaining in sorted(staging.rglob("*")):
         if remaining.is_file() and remaining.suffix.lower() in AUDIO_EXTS:
             dest = QUARANTINE / remaining.relative_to(staging)
             dest.parent.mkdir(parents=True, exist_ok=True)
-            shutil.move(str(remaining), dest)
+            free = _free_path(dest)
+            kept += free != dest
+            shutil.move(str(remaining), free)
+            moved += 1
+    for d in sorted((d for d in staging.rglob("*") if d.is_dir()), key=lambda d: len(d.parts), reverse=True):
+        with suppress(OSError):
+            d.rmdir()  # only when empty: anything else stays for a look
+    return moved, kept
+
+
+def restore_asis_staging() -> tuple[int, int]:
+    """Move every file left in the as-is staging and apart dirs (:func:`asis_dirs`)
+    back to its quarantine path (homelab#2763), as :func:`_return_to_quarantine`
+    does.  The service calls it at start, before anything can scan; the as-is
+    pass calls it first too.  Returns ``(moved, kept)`` over both dirs."""
+    moved = kept = 0
+    for d in asis_dirs():
+        m, k = _return_to_quarantine(d)
+        moved, kept = moved + m, kept + k
+    return moved, kept
 
 
 def import_asis_from_quarantine() -> int:
     """Import quarantine files that have sufficient existing tags (--asis).
 
-    Moves eligible files to a temp staging dir, runs ``beet import --asis``,
-    and returns any beet-skipped files back to quarantine.  A file that is
-    another recording than its artist-and-title duplicates is imported in a
-    second run that keeps both (:mod:`music_scan.asis_apart`).  Returns the
-    count of tracks imported.
+    Moves eligible files to the staging dir (:func:`asis_dirs`), runs ``beet
+    import --asis``, and returns any beet-skipped files back to quarantine,
+    whatever the import did: a failure or a shutdown returns them too, and a
+    kill that skips that leaves them on the volume for
+    :func:`restore_asis_staging` (homelab#2763).  A file that is another
+    recording than its artist-and-title duplicates is imported in a second
+    run that keeps both (:mod:`music_scan.asis_apart`).  Never starts while
+    the process is shutting down (``ImportInterrupted``).  Returns the count
+    of tracks imported.
     """
     from music_scan import asis_apart  # noqa: PLC0415
 
+    if shutdown_requested():
+        raise ImportInterrupted("the service is shutting down; the as-is pass is not started")
+    restored, kept = restore_asis_staging()
+    if restored:
+        logger.warning("[RESUME] %d as-is file(s) left staged went back to quarantine first (%d beside a file "
+                       "of the same name)", restored, kept)
     asis_start = time.time()
-    with tempfile.TemporaryDirectory(prefix="asis-staging-") as staging_str, \
-            tempfile.TemporaryDirectory(prefix="asis-apart-") as apart_str:
-        staging, apart = Path(staging_str), Path(apart_str)
+    staging, apart = asis_dirs()
+    staging.mkdir(parents=True, exist_ok=True)
+    apart.mkdir(parents=True, exist_ok=True)
+    try:
         staged = _move_asis_eligible(QUARANTINE, staging)
         logger.info("Asis eligible : %d file(s) with sufficient tags", staged)
         if staged:
@@ -277,8 +361,11 @@ def import_asis_from_quarantine() -> int:
                         asis_apart.record_kept(lib._lib, moved, keep_start)
                 except Exception:
                     logger.warning("Could not record the kept_apart events", exc_info=True)
-            _return_to_quarantine(staging)
-            _return_to_quarantine(apart)
+    finally:
+        _, kept = restore_asis_staging()
+        if kept:
+            logger.warning("Asis pass     : %d skipped file(s) went back to quarantine beside a file of the same "
+                           "name", kept)
     with MusicLibrary(LIBRARY_DB) as lib:
         asis_imported = lib.items_added_since(asis_start)
     logger.info("Asis pass     : %d track(s) imported from quarantine", len(asis_imported))
@@ -847,6 +934,13 @@ def run() -> None:
         metrics.success = False
         metrics.failure_reason = "unexpected_error"
         logger.exception("music-scan failed")
+        raise
+    except BaseException:
+        # A shutdown (ImportInterrupted, a signal, Ctrl-C) cut the scan short
+        # (homelab#2763): what it didn't reach waits for the next one.
+        metrics.success = False
+        metrics.failure_reason = INTERRUPTED
+        logger.warning("music-scan interrupted — what it didn't reach waits for the next scan")
         raise
     else:
         try:

@@ -873,6 +873,90 @@ def test_album_import_defers_on_a_musicbrainz_outage(tmp_path):
     quarantine.assert_not_called()
 
 
+def test_a_scan_whose_import_is_interrupted_stops_before_quarantine_and_the_as_is_pass():
+    """homelab#2763: a shutdown during the import crashes the run there; the files
+    beets didn't reach stay in the inbox for the startup scan, and the scan is
+    pushed as failed (interrupted)."""
+    from music_scan.process import ImportInterrupted
+    from music_scan.scan import INTERRUPTED
+    from music_service.flows import _run_scan_tasks
+    pushed: list = []
+
+    with patch("music_service.flows.ingest") as mock_ingest, \
+         patch("music_service.flows.scan") as mock_scan, \
+         patch("music_service.flows.concurrency"), \
+         patch("music_scan.process.run_beet_update") as update, \
+         patch("music_scan.navidrome.trigger_scan") as rescan, \
+         patch("music_scan.metrics.ScanMetrics.push", autospec=True, side_effect=pushed.append):
+        _scan_mocks(mock_scan, mock_ingest)
+        mock_scan.run_inbox_import.side_effect = ImportInterrupted("beet import stopped by a shutdown signal")
+        with pytest.raises(ImportInterrupted):
+            _run_scan_tasks()
+
+    mock_scan.quarantine_inbox_leftovers.assert_not_called()
+    mock_scan.import_asis_from_quarantine.assert_not_called()
+    mock_scan.regen_playlists.assert_not_called()
+    update.assert_not_called()
+    rescan.assert_not_called()
+    (m,) = pushed
+    assert not m.success and m.failure_reason == INTERRUPTED
+
+
+def test_a_scan_whose_beets_was_killed_stops_before_quarantine_and_the_as_is_pass():
+    import subprocess
+
+    from music_service.flows import _run_scan_tasks
+    pushed: list = []
+
+    with patch("music_service.flows.ingest") as mock_ingest, \
+         patch("music_service.flows.scan") as mock_scan, \
+         patch("music_service.flows.concurrency"), \
+         patch("music_scan.metrics.ScanMetrics.push", autospec=True, side_effect=pushed.append):
+        _scan_mocks(mock_scan, mock_ingest)
+        mock_scan.run_inbox_import.side_effect = subprocess.CalledProcessError(-9, ["beet", "import"])
+        with pytest.raises(subprocess.CalledProcessError):
+            _run_scan_tasks()
+
+    mock_scan.quarantine_inbox_leftovers.assert_not_called()
+    mock_scan.import_asis_from_quarantine.assert_not_called()
+    (m,) = pushed
+    assert not m.success and m.failure_reason == "unexpected_error"
+
+
+def test_an_album_import_interrupted_by_a_shutdown_quarantines_nothing_and_isnt_retried_as_an_error(tmp_path):
+    """homelab#2763: the release folder stays in the inbox, where [RESUME]
+    (park_interrupted, #344) moves it back at the next start.  ImportInterrupted
+    is no Exception, so albums.complete's retry doesn't count it as a crash."""
+    import music_fetch.albums as albums
+    from music_scan.process import ImportInterrupted
+    from music_service import flows
+
+    folder = tmp_path / "inbox" / "usenet" / "later" / "job"
+    folder.mkdir(parents=True)
+    (folder / "02.flac").write_bytes(b"x")
+
+    def fake_complete(state, completion, import_inbox, *args, **kw):
+        try:
+            import_inbox(folder)
+        except Exception:  # what albums.complete does with an import crash
+            return albums.GRABBED
+        return albums.IMPORTED
+
+    with patch.object(albums, "complete", side_effect=fake_complete), \
+         patch.object(flows.scan, "run_inbox_import", side_effect=ImportInterrupted("stopped")), \
+         patch.object(flows.scan, "quarantine_inbox_leftovers") as quarantine, \
+         patch.object(flows.scan, "regen_playlists"), \
+         patch("music_scan.navidrome.trigger_scan"), \
+         patch.object(flows, "concurrency"):
+        _, _, complete = flows._album_library_hooks(MagicMock())
+        with pytest.raises(ImportInterrupted):
+            complete(albums.State(albums={}), albums.Completion(nzo_id="nzo_1", ok=True, path="x"))
+
+    quarantine.assert_not_called()
+    assert (folder / "02.flac").exists()
+    assert not issubclass(ImportInterrupted, Exception)
+
+
 def _inbox_with_a_release_and_a_batch(tmp_path, monkeypatch):
     """An inbox holding an album job's release folder and an unrelated spotdl batch,
     with a beets stand-in that imports (moves to the library) every audio file

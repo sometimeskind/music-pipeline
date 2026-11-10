@@ -15,6 +15,8 @@ A single long-running service container orchestrates everything via Prefect. Two
 
 A scan that finds the `pipeline` lock held (a fetch, another scan or an album import) with an empty inbox skips after 5 seconds. When the inbox holds audio files it would import, it waits for the lock, up to 30 minutes (`[WAIT] Got the pipeline slot after Ns`), the way an album import does, so a stretch of chained album imports delays the inbox by about one import rather than until the stretch ends (homelab#2761). At most one scan waits: the waiter holds the one-slot `scan-wait` limit until it has `pipeline`, and a busy scan that finds `scan-wait` held exits (`Scan skipped — pipeline busy; another scan is already waiting for the slot (N file(s) waiting)`), since the waiter imports its files too. When the wait runs out, or `scan-wait` can't be taken, the scan schedules one more `music-scan` run 5 minutes on (`Scan skipped — pipeline busy; retrying in 5 min (N file(s) waiting)`), unless a scan is already scheduled or pending; the retry waits and falls back the same way, so the inbox always ends with a scan that ran (homelab#2751). Files still copying under a temporary name (`.partial`) don't count. Files already in the inbox when the service starts get the same treatment: once the file watcher runs, and after an interrupted album import has been moved back to SABnzbd's complete dir (`[RESUME]`), the service schedules one `music-scan` run 30 seconds on (`Startup: N file(s) waiting in the inbox; scheduled a scan`), unless a scan is already scheduled or pending. A Prefect server it can't reach then is logged, and the service starts anyway.
 
+**A restart never loses an inbox or quarantine file (homelab#2763).** The SIGTERM that stops the pod reaches a running `beet import`, which stops early. The scan then ends there, as a crashed run pushed with `music_scan_last_failure_reason{reason="interrupted"}`: it logs `[INTERRUPTED] beet import cut short: N of M inbox file(s) stay in the inbox for the next scan, none quarantined`, and neither quarantines the inbox's leftovers nor starts the as-is pass, so the startup scan after the restart imports them. Before, beets stopping read as a finished import: the scan quarantined every file beets never reached and staged them for the as-is pass in the container's `/tmp`, and a restart lost 68 files. A `beet import` killed by any other signal, or exiting non-zero, fails the scan the same way, before the quarantine. An album import cut short leaves its job folder in the inbox, and the next start moves it back (`[RESUME]`, #344). The as-is pass stages in `asis-staging/` and `asis-apart/` beside `quarantine/`, on its volume, so a kill mid-pass leaves its files there; at start, before anything can scan, the service moves them back to quarantine (`[RESUME] N as-is file(s) back to quarantine`), and a file whose quarantine path has been taken meanwhile goes beside it as `<name> (restored).<ext>`.
+
 ---
 
 ## Pipeline internals
@@ -56,7 +58,10 @@ A full sync cycle (`music-ingest` followed by `music-scan`) runs 8 discrete step
 │  [5] Quarantine + asis pass                                            │
 │        Moves unmatched inbox leftovers to quarantine/. Then attempts   │
 │        a second beet import --asis for quarantine files that already   │
-│        have sufficient embedded tags (title, artist, album, track#).   │
+│        have sufficient embedded tags (title, artist, album, track#),   │
+│        staged in asis-staging/ beside quarantine/ (homelab#2763).      │
+│        Skipped when the import was cut short: its files stay in the    │
+│        inbox.                                                          │
 │        │                                                               │
 │        ▼                                                               │
 │  [6] Library metadata refresh                                          │
@@ -287,6 +292,8 @@ A `justfile` lives in the repo root. Run these from the repo directory.
       <name>/            ← spotdl downloads (cleared after beet import)
   library/               ← beets-managed: $albumartist/$album/$track - $title.m4a
   quarantine/            ← low-confidence MusicBrainz matches, review manually
+  asis-staging/          ← the as-is pass's files while it runs; back to quarantine/ at start (homelab#2763)
+  asis-apart/            ← its other recordings, likewise
   playlists/             ← generated .m3u files (relative paths for Navidrome)
 /root/.config/beets/
   library.db             ← SQLite database — back this up
@@ -317,7 +324,7 @@ Without `PREFECT_API_URL` set, the service runs in direct mode: flows execute in
 
 | PVC name | Contents | Notes |
 |---|---|---|
-| `music-data` | `inbox/`, `library/`, `quarantine/`, `playlists/` | Full music volume; back up `library/` |
+| `music-data` | `inbox/`, `library/`, `quarantine/`, `asis-staging/`, `asis-apart/`, `playlists/` | Full music volume; back up `library/`. The as-is staging dirs must be on quarantine's volume (homelab#2763) |
 | `beets-data` | `library.db`, `import.log` | Small SQLite DB; back this up |
 
 ### ConfigMaps

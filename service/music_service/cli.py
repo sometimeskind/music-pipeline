@@ -86,6 +86,27 @@ def schedule_startup_scan() -> None:
         logger.info("Startup: %s file(s) waiting in the inbox; a scan is already waiting to run", count)
 
 
+def resume_asis_staging() -> int:
+    """Move what a restart left in the as-is pass's staging dirs back to
+    quarantine (homelab#2763), before anything can scan.  A pod killed during
+    the pass leaves the files it staged there, on the quarantine volume, and
+    they are in no other place.  A file whose quarantine path has a file
+    again goes beside it, under a ``(restored)`` name.  Logs counts only.
+    Returns how many files moved; never raises."""
+    from music_scan import scan
+
+    try:
+        moved, kept = scan.restore_asis_staging()
+    except Exception:
+        logger.exception("[RESUME] Moving the as-is pass's staged files back to quarantine failed; they stay staged, "
+                         "and the next as-is pass tries again")
+        return 0
+    if moved:
+        logger.warning("[RESUME] %d as-is file(s) back to quarantine; a restart cut the as-is pass short%s", moved,
+                       f" ({kept} kept beside a file of the same name)" if kept else "")
+    return moved
+
+
 # How long after the runner starts the first album tick (or sync cycle) runs.
 # Leaves the server's recent-deployments scheduler (every 5 s) time to schedule it.
 FIRST_ALBUM_TICK_SECONDS = 60
@@ -152,6 +173,8 @@ def main() -> None:
     # Before anything can scan the inbox: an album import the restart cut short
     # goes back to SABnzbd's complete dir, not into the library loose (#344).
     park_interrupted_imports()
+    # And the files an as-is pass the restart cut short had staged (homelab#2763).
+    resume_asis_staging()
 
     debouncer = Debouncer(delay=SCAN_DEBOUNCE_SECONDS, callback=trigger_scan)
 

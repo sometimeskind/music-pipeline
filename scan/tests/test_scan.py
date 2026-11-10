@@ -122,7 +122,7 @@ def test_run_trigger_scan_failure_sets_success_false(tmp_path: Path) -> None:
          mock.patch("music_scan.scan._move_asis_eligible", return_value=0), \
          mock.patch("music_scan.scan.INBOX", tmp_path), \
          mock.patch("music_scan.scan.SPOTDL_DIR", tmp_path), \
-         mock.patch("music_scan.scan.QUARANTINE", tmp_path), \
+         mock.patch("music_scan.scan.QUARANTINE", tmp_path / "quarantine"), \
          mock.patch("music_scan.scan.PLAYLISTS", tmp_path), \
          mock.patch("music_scan.scan.ScanMetrics", FakeMetrics), \
          mock.patch("music_scan.scan.trigger_scan", side_effect=RuntimeError("connection refused")):
@@ -483,6 +483,7 @@ def test_asis_import_skips_duplicates(tmp_path: Path) -> None:
         seen["asis"], seen["config"] = asis, config.read_text()
 
     with mock.patch.object(scan, "_move_asis_eligible", return_value=1), \
+         mock.patch.object(scan, "QUARANTINE", tmp_path / "quarantine"), \
          mock.patch.object(scan, "run_beet_import", side_effect=fake_import), \
          mock.patch.object(scan, "MusicLibrary", return_value=_make_mock_lib()):
         scan.import_asis_from_quarantine()
