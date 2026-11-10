@@ -413,6 +413,81 @@ def test_a_busy_scan_with_an_empty_inbox_schedules_no_retry(tmp_path, scan_deplo
     assert _scheduled_scans(scan_deployment) == []
 
 
+# The startup scan (homelab#2751) is the service entry point's, tested here
+# against the same test server and ``music-scan`` deployment as the retry.
+
+
+def _startup_scan(inbox):
+    """Run the service's startup check with *inbox* as the inbox; returns its logger."""
+    from music_service import cli, prefect_client
+
+    with patch.object(prefect_client, "_has_server", return_value=True), \
+         patch("music_scan.scan.INBOX", inbox), \
+         patch.object(cli, "logger") as logger:
+        cli.schedule_startup_scan()
+    return logger
+
+
+def _logged(method) -> list[str]:
+    return [c.args[0] % c.args[1:] for c in method.call_args_list]
+
+
+def _inbox_batch(tmp_path):
+    batch = tmp_path / "inbox" / "spotdl" / "mix"
+    batch.mkdir(parents=True)
+    for name in ("a.m4a", "b.m4a", "c.m4a.x1.partial", "cover.jpg"):
+        (batch / name).write_bytes(b"x")
+    return tmp_path / "inbox"
+
+
+def test_startup_with_files_waiting_schedules_one_scan(tmp_path, scan_deployment):
+    """homelab#2751: files already in the inbox at start trigger nothing else."""
+    from datetime import datetime, timedelta, timezone
+
+    from music_service import cli
+
+    logger = _startup_scan(_inbox_batch(tmp_path))
+    (run,) = _scheduled_scans(scan_deployment)
+    due = datetime.now(timezone.utc) + timedelta(seconds=cli.SCAN_DEBOUNCE_SECONDS)
+    assert abs((run.expected_start_time - due).total_seconds()) < 30
+    # The scan's own count: the file still copying and the cover aren't waiting.
+    assert _logged(logger.info) == ["Startup: 2 file(s) waiting in the inbox; scheduled a scan"]
+    logger.warning.assert_not_called()
+
+
+def test_startup_with_an_empty_inbox_schedules_no_scan(tmp_path, scan_deployment):
+    batch = tmp_path / "inbox" / "spotdl" / "mix"
+    batch.mkdir(parents=True)
+    (batch / "a.m4a.x1.partial").write_bytes(b"x")
+
+    logger = _startup_scan(tmp_path / "inbox")
+    assert _scheduled_scans(scan_deployment) == []
+    assert _logged(logger.info) == ["Startup: no files waiting in the inbox"]
+
+
+def test_startup_while_a_scan_is_scheduled_adds_none(tmp_path, scan_deployment):
+    from music_service import prefect_client
+
+    assert prefect_client.schedule_scan_retry()
+    (retry,) = _scheduled_scans(scan_deployment)
+
+    logger = _startup_scan(_inbox_batch(tmp_path))
+    assert [r.id for r in _scheduled_scans(scan_deployment)] == [retry.id]
+    assert _logged(logger.info) == ["Startup: 2 file(s) waiting in the inbox; a scan is already waiting to run"]
+
+
+def test_startup_with_the_prefect_server_unreachable_only_logs(tmp_path, scan_deployment):
+    """The service starts anyway; the files wait for the next trigger."""
+    from prefect.settings import PREFECT_API_URL, temporary_settings
+
+    with temporary_settings({PREFECT_API_URL: "http://127.0.0.1:9/api"}):
+        logger = _startup_scan(_inbox_batch(tmp_path))
+    assert _scheduled_scans(scan_deployment) == []
+    logger.info.assert_not_called()
+    (warning,) = _logged(logger.warning)
+    assert warning.startswith("Startup: 2 file(s) waiting in the inbox; could not schedule a scan")
+
+
 # ---------------------------------------------------------------------------
 # Scan metrics (music-pipeline#173)
 # ---------------------------------------------------------------------------

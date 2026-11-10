@@ -44,6 +44,48 @@ def _start_file_watcher(on_audio_created):
     return observer
 
 
+# The quiet period after a new inbox file before its scan is submitted.
+SCAN_DEBOUNCE_SECONDS = 30
+
+
+def schedule_startup_scan() -> None:
+    """Schedule a scan when the inbox already holds files at start (homelab#2751).
+
+    The watcher sees only files that arrive while it runs, and nothing else
+    scans on its own before the nightly fetch, so a batch that landed while the
+    pod was down or starting would wait for it.  Same rules as a busy scan's
+    retry: the waiting files are what the import's snapshot counts (no
+    ``.partial``, covers or nfo files), and no run is added while a scan is
+    already scheduled or pending.  The run starts after the watcher's own quiet
+    period, so a batch still landing settles first, and serve() is up to run
+    it.  Without a Prefect server (direct mode) it does nothing.  Never raises:
+    a server that can't be reached is logged and the service starts anyway."""
+    from music_scan import scan
+    from music_service import prefect_client
+
+    if not prefect_client._has_server():
+        return
+    try:
+        waiting: int | None = scan.inbox_audio_count()
+    except OSError:
+        logger.warning("Startup: could not count the inbox's files; scheduling a scan anyway", exc_info=True)
+        waiting = None
+    if waiting == 0:
+        logger.info("Startup: no files waiting in the inbox")
+        return
+    count = "?" if waiting is None else str(waiting)
+    try:
+        scheduled = prefect_client.schedule_scan(SCAN_DEBOUNCE_SECONDS)
+    except Exception as exc:
+        logger.warning("Startup: %s file(s) waiting in the inbox; could not schedule a scan, they wait for the "
+                       "next trigger: %s", count, exc)
+        return
+    if scheduled:
+        logger.info("Startup: %s file(s) waiting in the inbox; scheduled a scan", count)
+    else:
+        logger.info("Startup: %s file(s) waiting in the inbox; a scan is already waiting to run", count)
+
+
 # How long after the runner starts the first album tick (or sync cycle) runs.
 # Leaves the server's recent-deployments scheduler (every 5 s) time to schedule it.
 FIRST_ALBUM_TICK_SECONDS = 60
@@ -111,7 +153,7 @@ def main() -> None:
     # goes back to SABnzbd's complete dir, not into the library loose (#344).
     park_interrupted_imports()
 
-    debouncer = Debouncer(delay=30.0, callback=trigger_scan)
+    debouncer = Debouncer(delay=SCAN_DEBOUNCE_SECONDS, callback=trigger_scan)
 
     # Flask API in a background daemon thread.
     # Loading the job records marks jobs a restart cut short as interrupted.
@@ -146,6 +188,16 @@ def main() -> None:
     album_import_deployment = album_import_flow.to_deployment(name="music-album-import")
 
     ensure_concurrency_limits()
+
+    # Files already in the inbox get a scan of their own (homelab#2751).  Only
+    # now: park_interrupted_imports() above has moved any album job a restart
+    # cut short out of the inbox, so this never counts (or schedules a scan
+    # of) a half-imported release.  And after the watcher started: a file that
+    # lands before this count is in it, and one that lands later fires the
+    # watcher, so none falls in a gap between the two.  Once, before serve()
+    # blocks; serve()'s deployment upsert drops only auto-scheduled runs, so it
+    # keeps this one and runs it like any other.
+    schedule_startup_scan()
 
     logger.info("Starting Prefect runner (FETCH_CRON=%s)", fetch_cron)
     try:

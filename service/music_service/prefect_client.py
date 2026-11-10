@@ -118,14 +118,12 @@ ALBUMS_DEPLOYMENT = "music-albums/music-albums"
 SCAN_RETRY_SECONDS = 5 * 60
 
 
-def schedule_scan_retry(delay: int = SCAN_RETRY_SECONDS) -> bool:
+def schedule_scan(delay: int, idempotency_key: str | None = None) -> bool:
     """Schedule a ``music-scan`` run *delay* seconds from now, unless one is
     already waiting: a run scheduled or pending (a retry, or a trigger yet to
     start) tries the pipeline itself and schedules the next if it is still busy,
-    so at most one waits (homelab#2751).  The idempotency key, one per *delay*
-    window, keeps two scans that skip at once from both adding one.  Returns
-    whether a retry is now scheduled by this call.  Called from inside the scan
-    flow, which runs only against a Prefect server; raises when it can't be reached."""
+    so at most one waits (homelab#2751).  Returns whether this call scheduled
+    one.  Needs a Prefect server, and raises when it can't be reached."""
     from datetime import datetime, timedelta, timezone  # noqa: PLC0415
 
     from prefect import get_client  # noqa: PLC0415
@@ -149,9 +147,20 @@ def schedule_scan_retry(delay: int = SCAN_RETRY_SECONDS) -> bool:
             return False
         client.create_flow_run_from_deployment(
             deployment.id, state=Scheduled(scheduled_time=now + timedelta(seconds=delay)),
-            idempotency_key=f"scan-retry-{int(now.timestamp()) // delay}",
+            idempotency_key=idempotency_key,
         )
     return True
+
+
+def schedule_scan_retry(delay: int = SCAN_RETRY_SECONDS) -> bool:
+    """A busy scan's retry (homelab#2751): :func:`schedule_scan`, *delay*
+    seconds on.  The idempotency key, one per *delay* window, keeps two scans
+    that skip at once from both adding one.  Called from inside the scan flow,
+    which runs only against a Prefect server."""
+    import time  # noqa: PLC0415
+
+    return schedule_scan(delay, idempotency_key=f"scan-retry-{int(time.time()) // delay}")
+
 
 _album_tick_lock = threading.Lock()
 
