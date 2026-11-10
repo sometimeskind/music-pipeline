@@ -114,7 +114,8 @@ def trigger_scan() -> bool:
 SCAN_DEPLOYMENT = "music-scan/music-scan"
 ALBUMS_DEPLOYMENT = "music-albums/music-albums"
 
-# How long after a scan that skipped as busy, with files waiting, the retry runs (homelab#2751).
+# How long after a busy scan with files waiting that could not wait for the pipeline
+# (homelab#2761) the retry runs (homelab#2751).
 SCAN_RETRY_SECONDS = 5 * 60
 
 
@@ -122,8 +123,10 @@ def schedule_scan(delay: int, idempotency_key: str | None = None) -> bool:
     """Schedule a ``music-scan`` run *delay* seconds from now, unless one is
     already waiting: a run scheduled or pending (a retry, or a trigger yet to
     start) tries the pipeline itself and schedules the next if it is still busy,
-    so at most one waits (homelab#2751).  Returns whether this call scheduled
-    one.  Needs a Prefect server, and raises when it can't be reached."""
+    so at most one waits (homelab#2751).  A running scan waiting for the
+    pipeline isn't counted here: ``flows.SCAN_WAITER_SLOT`` keeps those to one
+    (homelab#2761).  Returns whether this call scheduled one.  Needs a
+    Prefect server, and raises when it can't be reached."""
     from datetime import datetime, timedelta, timezone  # noqa: PLC0415
 
     from prefect import get_client  # noqa: PLC0415
@@ -255,6 +258,11 @@ async def _upsert_limits() -> None:
             name="albums",
             limit=1,
         )
+        # The busy scan's waiter (homelab#2761, flows.SCAN_WAITER_SLOT): at most one waits.
+        await client.upsert_global_concurrency_limit_by_name(
+            name="scan-wait",
+            limit=1,
+        )
 
 
 def ensure_concurrency_limits() -> None:
@@ -267,6 +275,6 @@ def ensure_concurrency_limits() -> None:
         return
     try:
         asyncio.run(_upsert_limits())
-        logger.info("Prefect concurrency limits ensured: beet-import=1, pipeline=1, albums=1")
+        logger.info("Prefect concurrency limits ensured: beet-import=1, pipeline=1, albums=1, scan-wait=1")
     except Exception as exc:
         logger.warning("Could not upsert Prefect concurrency limit: %s", exc)

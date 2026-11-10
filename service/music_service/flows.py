@@ -453,6 +453,22 @@ SKIP_IF_BUSY_SECONDS = 5
 # 30-min tick interval, so two ticks never wait at once.
 ALBUM_TICK_WAIT_SECONDS = 20 * 60
 
+# How long a busy scan with files in the inbox waits for the pipeline slot
+# (homelab#2761).  Album imports wait for the slot without a bound and take it
+# back to back, so a scan that tried for SKIP_IF_BUSY_SECONDS and retried 5 min
+# later lost to every one of them, and the inbox waited out the whole stretch
+# of imports.  As with the album tick, a waiting scan takes one of the gaps
+# between chained imports.  Bounded, so a slot that stays held (a long fetch)
+# ends in the retry rather than a scan run that never ends: 20 min is a few
+# album imports of 3-8 min each.
+SCAN_WAIT_SECONDS = 20 * 60
+
+# The slot a busy scan holds while it waits for ``pipeline`` (homelab#2761), so
+# at most one scan waits, RUNNING included: each batch the file watcher sees
+# triggers a scan, and every one would otherwise wait too.  One slot, created
+# in ``prefect_client.ensure_concurrency_limits``.
+SCAN_WAITER_SLOT = "scan-wait"
+
 
 class Busy(Exception):
     """:func:`hold` waited its bound and another run still holds the slot.
@@ -525,30 +541,69 @@ def scan_flow() -> None:
         try:
             stack.enter_context(concurrency("pipeline", occupy=1, timeout_seconds=SKIP_IF_BUSY_SECONDS))
         except TimeoutError:
-            _retry_busy_scan()
-            return
+            if not _wait_busy_scan(stack):
+                return
         _run_scan_tasks()
 
 
-def _retry_busy_scan() -> None:
-    """A scan that skipped as busy schedules another, ``SCAN_RETRY_SECONDS`` on,
-    when the inbox still holds files it would import (homelab#2751).  Nothing else
-    retries a skipped scan: ``music-scan`` has no schedule, the file watcher fires
-    only on new files, and album imports no longer import the whole inbox.  A
-    retry that skips too schedules the next, so the inbox always ends with a scan
-    that ran; at most one waits (:func:`prefect_client.schedule_scan_retry`)."""
-    from music_service import prefect_client  # noqa: PLC0415
+def _wait_busy_scan(stack: contextlib.ExitStack) -> bool:
+    """A scan that found ``pipeline`` busy with files in the inbox waits for it,
+    up to ``SCAN_WAIT_SECONDS`` (homelab#2761), and returns whether it got it:
+    the slot is then held on *stack*.  Album imports wait for ``pipeline``
+    without a bound, so a scan that only retried later lost the slot to each
+    of them in turn.
 
+    At most one scan waits: the waiter holds ``SCAN_WAITER_SLOT``, and a busy
+    scan that finds it held exits, since the waiter's import takes its files
+    too.  The waiter lets it go as soon as it has ``pipeline`` and before it
+    imports, so a file landing during the import queues the next waiter.
+    Prefect renews the waiter slot's lease while it is held, so a long wait
+    keeps it.  When the wait runs out, or the waiter slot can't be taken, the
+    scan falls back to :func:`_retry_busy_scan`.  An empty inbox skips."""
     logger = get_run_logger()
     try:
         waiting: int | None = scan.inbox_audio_count()
     except OSError:
-        logger.warning("Could not count the inbox's files; retrying the scan anyway", exc_info=True)
+        logger.warning("Could not count the inbox's files; waiting for the pipeline slot anyway", exc_info=True)
         waiting = None
     if waiting == 0:
         logger.info("Scan skipped — pipeline busy (fetch or scan already running); the inbox is empty")
-        return
+        return False
     count = "?" if waiting is None else str(waiting)
+    with contextlib.ExitStack() as waiter:
+        try:
+            # strict: a missing limit raises rather than letting every scan wait.
+            waiter.enter_context(concurrency(SCAN_WAITER_SLOT, occupy=1, timeout_seconds=SKIP_IF_BUSY_SECONDS,
+                                             strict=True, raise_on_lease_renewal_failure=False))
+        except TimeoutError:
+            logger.info("Scan skipped — pipeline busy; another scan is already waiting for the slot "
+                        "(%s file(s) waiting)", count)
+            return False
+        except Exception:
+            logger.warning("Could not take the %s slot; scheduling a retry instead of waiting",
+                           SCAN_WAITER_SLOT, exc_info=True)
+            _retry_busy_scan(count)
+            return False
+        try:
+            stack.enter_context(hold("pipeline", wait=SCAN_WAIT_SECONDS))
+        except Busy:
+            logger.info("[WAIT] The pipeline slot was still held after %d min", SCAN_WAIT_SECONDS // 60)
+            _retry_busy_scan(count)
+            return False
+    return True
+
+
+def _retry_busy_scan(count: str) -> None:
+    """A busy scan that could not wait for ``pipeline`` (:func:`_wait_busy_scan`)
+    schedules another, ``SCAN_RETRY_SECONDS`` on, for the *count* files in the
+    inbox (homelab#2751).  Nothing else retries a skipped scan: ``music-scan``
+    has no schedule, the file watcher fires only on new files, and album imports
+    no longer import the whole inbox.  A retry that can't get the slot either
+    schedules the next, so the inbox always ends with a scan that ran; at most
+    one is scheduled (:func:`prefect_client.schedule_scan_retry`)."""
+    from music_service import prefect_client  # noqa: PLC0415
+
+    logger = get_run_logger()
     minutes = prefect_client.SCAN_RETRY_SECONDS // 60
     try:
         scheduled = prefect_client.schedule_scan_retry()
