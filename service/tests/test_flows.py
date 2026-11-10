@@ -578,9 +578,11 @@ def test_a_busy_scan_waits_on_the_test_server_and_a_second_does_not(tmp_path, se
     assert active("pipeline") == 0
 
 
-def test_the_scan_wait_is_bounded_like_the_album_tick():
+def test_the_scan_wait_is_bounded_and_outlasts_a_full_batch():
+    """Bounded, and longer than another scan importing a full 60-file batch
+    holds the slot (about 21 min, homelab#2761)."""
     from music_service import flows
-    assert flows.SKIP_IF_BUSY_SECONDS < flows.SCAN_WAIT_SECONDS <= flows.ALBUM_TICK_WAIT_SECONDS
+    assert flows.SKIP_IF_BUSY_SECONDS < 25 * 60 <= flows.SCAN_WAIT_SECONDS <= 60 * 60
 
 
 def test_a_busy_scan_with_an_empty_inbox_schedules_no_retry(tmp_path, scan_deployment):
