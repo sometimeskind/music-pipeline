@@ -218,13 +218,31 @@ def _drop_group(title: str) -> str:
     return "-".join(segments[:-1]) if len(segments) >= 3 else title
 
 
+def joined(album: str) -> str:
+    """The album's name with its words run together, as a scene title may write
+    it (homelab#2754): ``Getz/Gilberto`` → ``getzgilberto``.  The words are the
+    album-name check's, in order and without articles; empty for a name of one
+    word, which has nothing to join."""
+    name = [w for w in words(search_title(album)) if w not in _ARTICLES]
+    return "".join(name) if len(name) >= 2 else ""
+
+
+def _names_joined(title_words: list[str], artist: str, album: str) -> bool:
+    """True when the title writes the album's name as one word (:func:`joined`)
+    that isn't the artist's: ``Stan Getz-GetzGilberto-…``.  A word the artist's
+    name holds names the artist, not the album (homelab#2656)."""
+    one = joined(album)
+    return bool(one) and one in title_words and one not in words(artist)
+
+
 def leftover(release: Release, artist: str, album: str) -> list[str]:
     """Title words that are not artist, album, a year or number, or a known tag.
 
     A word with a digit counts in the leading (artist) segment, where it is a
-    name, not a year or catalogue number: ``Elvis27-Electronic-…`` (#200).
+    name, not a year or catalogue number: ``Elvis27-Electronic-…`` (#200).  The
+    album's words run together are its name, not a leftover (homelab#2754).
     """
-    known = set(words(artist)) | set(words(album)) | _TAG_WORDS
+    known = set(words(artist)) | set(words(album)) | {joined(album)} | _TAG_WORDS
     title = _drop_group(release.title)
     segments = re.split(r"(?<! )-(?! )", title)
     lead = set(words(segments[0])) if len(segments) >= 2 else set()
@@ -306,7 +324,9 @@ def named_by_artist(release: Release, artist: str, album: str) -> str:
     self-titled album, the title must then carry nothing else.  The artist's
     name is Spotify's, read off the title's start, so more people named there
     (``Stan Getz and Joao Gilberto-Getz Gilberto-…``) and titles with no hyphen
-    work alike.  A self-titled album has its own rule, and an override no artist.
+    work alike, and so does the album's name with its words run together
+    (``…-GetzGilberto-…``, homelab#2754).  A self-titled album has its own
+    rule, and an override no artist.
     """
     names = [w for w in words(artist) if w not in _ARTICLES]
     album_words = [w for w in words(search_title(album)) if w not in _ARTICLES]
@@ -314,6 +334,8 @@ def named_by_artist(release: Release, artist: str, album: str) -> str:
     if not names or set(album_words) <= set(names) or set(lead[:len(names)]) != set(names):
         return ""
     rest = lead[len(names):]
+    if _names_joined(rest, artist, album):
+        return ""
     only = [w for w in dict.fromkeys(album_words) if w in names and w not in rest]
     extra = [w for w in leftover(release, artist, album) if w not in _COLLECTION_WORDS]
     return f"{' '.join(only)}, beside {' '.join(extra)}" if only and extra else ""
@@ -403,7 +425,8 @@ def rejection(
         if not album_words:
             return Rejection(0, "album words", "the album has none")
         lacking = [w for w in dict.fromkeys(album_words) if w not in title]
-        if lacking:
+        # The name run together holds every word (homelab#2754).
+        if lacking and not _names_joined(title_words, artist, album):
             return Rejection(0, "album words", "lacks " + " ".join(lacking), distance=len(lacking))
     artist_words = [w for w in words(artist) if w not in _ARTICLES]
     if not _leads_with_artist(title_words, artist, album):

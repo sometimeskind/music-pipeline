@@ -716,6 +716,41 @@ def test_keeps_matching_the_album_itself(artist: str, album: str, title: str) ->
     assert rejection(rel(title), artist, album, 12, album_type="album") is None
 
 
+OBZEN = "Stan Getz And Joao Gilberto-GetzGilberto-24-192-WEB-FLAC-REMASTERED-2020-OBZEN"
+
+
+@pytest.mark.parametrize(
+    "title",
+    [
+        # Album 1583's release, refused as "getz, beside joao getzgilberto" (homelab#2754).
+        OBZEN,
+        # The name run together is the only place the title holds "gilberto".
+        "Stan Getz-GetzGilberto-24-192-WEB-FLAC-REMASTERED-2020-OBZEN",
+    ],
+)
+def test_matches_the_album_name_written_as_one_word(title: str) -> None:
+    assert rejection(rel(title), *GETZ, 18, album_type="album") is None
+
+
+def test_the_album_name_as_one_word_is_not_a_leftover() -> None:
+    assert leftover(rel(OBZEN), *GETZ) == ["joao"]
+
+
+@pytest.mark.parametrize(
+    "artist, album, title, detail",
+    [
+        # Only the album's words, in order, run together name it.
+        (*GETZ, "Stan Getz-GilbertoGetz-WEB-FLAC-2020-GRP", "lacks gilberto"),
+        (*GETZ, "Stan Getz-GetzGilbertoLive-WEB-FLAC-2020-GRP", "lacks gilberto"),
+        # Run together in the artist's name, it names the artist (homelab#2656).
+        ("RunDMC", "Run DMC Live", "RunDMC-Live-WEB-FLAC-1988-GRP", "lacks run dmc"),
+    ],
+)
+def test_the_album_name_as_one_word_stays_narrow(artist: str, album: str, title: str, detail: str) -> None:
+    why = rejection(rel(title), artist, album, 12, album_type="album")
+    assert why is not None and why.rule == "album words" and why.detail == detail
+
+
 def test_any_album_and_an_override_have_no_artist_part_to_check() -> None:
     assert matches(rel(CURTIS_EUROPE), "Curtis Mayfield", "★★★", 18, album_type="album", any_album=True)
     assert matches(rel(CURTIS_EUROPE), "", "curtis mayfield live", 18, album_type="album")
