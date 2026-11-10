@@ -459,9 +459,12 @@ ALBUM_TICK_WAIT_SECONDS = 20 * 60
 # later lost to every one of them, and the inbox waited out the whole stretch
 # of imports.  As with the album tick, a waiting scan takes one of the gaps
 # between chained imports.  Bounded, so a slot that stays held (a long fetch)
-# ends in the retry rather than a scan run that never ends: 20 min is a few
-# album imports of 3-8 min each.
-SCAN_WAIT_SECONDS = 20 * 60
+# ends in the retry rather than a scan run that never ends.  30 min outlasts
+# what usually holds the slot: a few album imports of 3-8 min each, or another
+# scan importing a full Soulseek batch (60 files at about 17 s each, then the
+# library-wide steps: about 21 min).  At 20 min, a scan queued behind such a
+# batch gave up a minute before the slot came free.
+SCAN_WAIT_SECONDS = 30 * 60
 
 # The slot a busy scan holds while it waits for ``pipeline`` (homelab#2761), so
 # at most one scan waits, RUNNING included: each batch the file watcher sees
