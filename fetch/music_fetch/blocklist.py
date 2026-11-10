@@ -12,17 +12,41 @@ one belongs to the grab before it.
 Events began on 2026-10-29 and are pruned (:data:`events.KEEP_DAYS`), so an
 older entry answers :data:`UNKNOWN`.  So does an ``[ERR]`` grab from before
 homelab#2661: its event holds the title but not the GUID.
+
+The reason sorts an entry into one of two kinds (:func:`kind`, homelab#2757),
+which say how far it reaches now that two indexers can return one release
+under two GUIDs (:class:`usenet.Copies`).  A :data:`WRONG_RELEASE` is a verdict
+on what the release held, another album or an incomplete copy: every copy of
+it, on any indexer, holds the same, so it blocks them all.  A
+:data:`DEAD_DOWNLOAD` is any other failure, a broken download above all: it
+blocks only its own GUID, as another indexer's copy may be another post, and
+complete, so that copy may be tried once; a second dead copy of the title
+blocks the rest.  An entry whose reason isn't known blocks only its GUID, as
+every entry did before.  The record stores no kind, so the records written
+before homelab#2757 read the same way.  A later "blocklist this release" tool
+(homelab#2750) adds a wrong release by appending its GUID and recording a
+``failure`` event with that GUID, the release's title and a reason that begins
+with one of :data:`VERDICTS`.
 """
 
 from __future__ import annotations
 
+from collections import Counter
 from datetime import datetime, timezone
+
+from music_fetch.usenet import Copies, repost_name
 
 UNKNOWN = "unknown"
 UNREADABLE = "unknown: the event store can't be read"
-# How the two verdicts on what a release held begin (:func:`stays`).
+# How the two verdicts on what a release held begin (:func:`kind`).
 ANOTHER_ALBUM = "another album: "
 LACKS = "lacks "
+VERDICTS = (ANOTHER_ALBUM, LACKS)
+# The kinds of entry (:func:`kind`).
+WRONG_RELEASE = "wrong release"
+DEAD_DOWNLOAD = "dead download"
+# A dead download blocks every copy of its title from this many dead copies on.
+DEAD_COPIES = 2
 
 # Only the album tick's: spotdl's own failures carry the album's Spotify ID too.
 _EVENTS = """
@@ -73,32 +97,80 @@ def outcomes(rows: list[tuple[datetime, str, dict]]) -> dict[str, dict]:
 
 def entries(record: dict, rows: list[tuple[datetime, str, dict]] | None) -> list[dict]:
     """The record's blocklist, in its order, each entry its ``guid``, ``title``,
-    ``size``, ``reason`` and ``at``.  What the events lack stays None and the
-    reason :data:`UNKNOWN`, but the record's last candidate and kept copy name
-    themselves.  *rows* None: the event store couldn't be read."""
+    ``size``, ``reason`` and ``at``, its :func:`kind` and ``every_copy``,
+    whether it blocks every copy of its title (:func:`blocked`).  What the
+    events lack stays None and the reason :data:`UNKNOWN`, but the record's
+    last candidate and kept copy name themselves.  *rows* None: the event store
+    couldn't be read."""
     found = {} if rows is None else outcomes(rows)
     held = {c["guid"]: c for c in (record.get("best_copy"), record.get("candidate")) if c and c.get("guid")}
     out = []
     for guid in record.get("blocklist") or ():
         known, copy = found.get(guid, {}), held.get(guid, {})
-        out.append({"guid": guid, "title": known.get("title") or copy.get("title"),
-                    "size": known.get("size") or copy.get("size"),
-                    "reason": known.get("reason") or (UNREADABLE if rows is None else UNKNOWN),
-                    "at": known.get("at")})
+        entry = {"guid": guid, "title": known.get("title") or copy.get("title"),
+                 "size": known.get("size") or copy.get("size"),
+                 "reason": known.get("reason") or (UNREADABLE if rows is None else UNKNOWN),
+                 "at": known.get("at")}
+        entry["kind"] = kind(entry)
+        out.append(entry)
+    dead = Counter(_name(e) for e in out if e["kind"] == DEAD_DOWNLOAD and _name(e))
+    for e in out:
+        e["every_copy"] = bool(_name(e)) and (
+            e["kind"] == WRONG_RELEASE or e["kind"] == DEAD_DOWNLOAD and dead[_name(e)] >= DEAD_COPIES)
     return out
+
+
+def _name(entry: dict) -> str:
+    return repost_name(entry["title"]) if entry["title"] else ""
+
+
+def kind(entry: dict) -> str | None:
+    """:data:`WRONG_RELEASE` when *entry*'s reason is a verdict on what the
+    release held (:data:`VERDICTS`), :data:`DEAD_DOWNLOAD` for any other
+    failure, and None when the reason isn't known."""
+    reason = entry["reason"]
+    if reason.startswith(VERDICTS):
+        return WRONG_RELEASE
+    if reason == UNKNOWN or reason.startswith(f"{UNKNOWN}:"):
+        return None
+    return DEAD_DOWNLOAD
+
+
+def blocked(listed: list[dict]) -> Copies:
+    """The releases the blocklist *listed* (:func:`entries`) keeps the tick from
+    grabbing: every entry's GUID, and every copy of the entries whose
+    ``every_copy`` is set (homelab#2757)."""
+    copies = Copies()
+    for e in listed:
+        copies.add(e["guid"], e.get("title") if e.get("every_copy") else None)
+    return copies
 
 
 def stays(entry: dict) -> bool:
     """Whether a reset leaves *entry* on the blocklist (homelab#2661).  Only a
-    verdict on what a release held comes off, another album or an incomplete
-    copy, as such a release can be wanted after all.  Any other failure stays,
-    a broken download above all: it would fail the same way, an attempt each
-    time, and the album is better missing than broken.  So does an entry whose
-    reason isn't known."""
-    return not entry["reason"].startswith((ANOTHER_ALBUM, LACKS))
+    :data:`WRONG_RELEASE` comes off, another album or an incomplete copy, as
+    such a release can be wanted after all.  Any other failure stays, a broken
+    download above all: it would fail the same way, an attempt each time, and
+    the album is better missing than broken.  So does an entry whose reason
+    isn't known."""
+    return kind(entry) != WRONG_RELEASE
+
+
+def reach(entry: dict) -> str:
+    """What *entry* blocks, in words: its kind, and which copies."""
+    if entry.get("kind") is None:
+        return "why isn't known, so only this copy"
+    if entry["every_copy"]:
+        if entry["kind"] == WRONG_RELEASE:
+            return "a wrong release, so every copy of it, on any indexer"
+        return "a dead download, a second dead copy of its title, so every copy of it"
+    if entry["kind"] == WRONG_RELEASE:
+        return "a wrong release, but only this copy: its title isn't recorded"
+    return "a dead download, so only this copy: another indexer's copy may be tried once"
 
 
 def describe(entry: dict) -> str:
-    """One entry as a dry run lists it: what it is, and why it was blocklisted."""
+    """One entry as a dry run lists it: what it is, why it was blocklisted, and
+    what it blocks (:func:`reach`)."""
     size = f" ({entry['size'] / 1e6:.0f} MB)" if entry["size"] else ""
-    return f"{entry['title'] or entry['guid']}{size}: {entry['reason']}"
+    return f"{entry['title'] or entry['guid']}{size}: {entry['reason']} ({reach(entry)})"

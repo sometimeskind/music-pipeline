@@ -100,7 +100,8 @@ from music_fetch import state as statedb
 from music_fetch.ids import spotify_key
 from music_fetch.metrics import _gauge, _push
 from music_fetch.usenet import (
-    Release, clean_album, edition, normalise, rank, readable, rejection, repost_name, search_title, why_none, words,
+    Copies, Release, clean_album, edition, normalise, rank, readable, rejection, repost_name, search_title, why_none,
+    words,
 )
 
 logger = logging.getLogger(__name__)
@@ -963,24 +964,26 @@ def _due(record: dict, now: datetime, mode: str, search: Plan) -> bool:
     return False
 
 
-def _taken(state: State, key: str) -> tuple[set[str], set[str]]:
-    """Releases other album records hold: (in flight, imported) GUIDs (#243).
+def _taken(state: State, key: str) -> tuple[Copies, Copies]:
+    """Releases other album records hold: (in flight, imported) (#243), each
+    by its GUID and title, so another indexer's copy is one of them too
+    (homelab#2757).
 
     An original edition and its remaster can both be on the playlists and
     match the same release.  One in flight is waited for, so the second record
     doesn't download it again; one imported holds nothing the library lacks,
     so it is never grabbed again."""
-    flight, done = set(), set()
+    flight, done = Copies(), Copies()
     for other_key, record in state.albums.items():
-        guid = (record.get("candidate") or {}).get("guid")
-        if other_key == key or not guid:
+        candidate = record.get("candidate") or {}
+        if other_key == key or not candidate.get("guid"):
             continue
         if record.get("status") == GRABBED:
-            flight.add(guid)
+            flight.add(candidate["guid"], candidate.get("title"))
         elif from_release(record):
-            done.add(guid)
+            done.add(candidate["guid"], candidate.get("title"))
         if record.get("best_copy"):
-            done.add(record["best_copy"]["guid"])
+            done.add(record["best_copy"]["guid"], record["best_copy"].get("title"))
     return flight, done
 
 
@@ -1084,7 +1087,13 @@ def top_up(
             break  # This album keeps its status; the next tick searches it first.
         tracks = track_count(record)
         in_flight, imported = _taken(state, key)
-        blocked = set(record["blocklist"]) | imported
+        # By GUID and title, so another indexer's copy of a release is that release (homelab#2757).
+        barred = blocklist.blocked(blocklist_entries(key, record)) | imported
+        # The kept copy's reposts are left to the edition filter below, which counts them.
+        kept = repost_name(record["best_copy"]["title"]) \
+            if record.get("edition") is not None and record.get("best_copy") else None
+        blocked = {r.guid for r in releases
+                   if r in barred and (r.guid in barred.guids or repost_name(r.title) != kept)}
         matching = match_args(record, search)
         ranked = rank(releases, search.artist, search.album, tracks, blocked, record.get("year"), **matching)
         other_edition = 0
@@ -1098,9 +1107,8 @@ def top_up(
             other_edition = len(ranked)
             ranked = [r for r in ranked if sorted(edition(r.title)) == record["edition"]]
             reposts = 0
-            if record.get("best_copy"):
-                # An indexer's repost of the kept copy is the same files (homelab#2593).
-                kept = repost_name(record["best_copy"]["title"])
+            if kept is not None:
+                # An indexer's repost of the kept copy is the same files (homelab#2593), as is another indexer's copy.
                 reposts = sum(repost_name(r.title) == kept for r in ranked)
                 ranked = [r for r in ranked if repost_name(r.title) != kept]
             if not ranked and record.get("best_copy"):
@@ -1146,7 +1154,7 @@ def top_up(
             continue
 
         best: Release = ranked[0]
-        if settings.mode == "on" and best.guid in in_flight:
+        if settings.mode == "on" and best in in_flight:
             logger.info("[WAIT] %s: %s is in flight for another album — searching again after its import",
                         label, best.title)
             continue
@@ -2289,10 +2297,12 @@ def blocklist_entries(key: str, record: dict) -> list[dict]:
     return blocklist.entries(record, rows)
 
 
-def _verdict(entry: dict, record: dict, search: Plan, imported: set[str]) -> tuple[bool | None, str]:
+def _verdict(entry: dict, record: dict, search: Plan, imported: Copies, kept: Copies) -> tuple[bool | None, str]:
     """Whether the tick could grab a blocklisted *entry* once it is cleared, and
     that in words: the matcher's own answer on the title and size its grab
-    recorded (None when they aren't), as the tick would ask it."""
+    recorded (None when they aren't), as the tick would ask it.  *imported*
+    and *kept*: the releases other albums hold and the entries left on the
+    blocklist block (homelab#2757)."""
     if not entry["title"] or not entry["size"]:
         return None, "the matcher can't be asked: its title or size isn't recorded"
     release = Release(guid=entry["guid"], title=entry["title"], size=entry["size"], indexer_id=0, download_url="",
@@ -2300,8 +2310,10 @@ def _verdict(entry: dict, record: dict, search: Plan, imported: set[str]) -> tup
     why = rejection(release, search.artist, search.album, track_count(record), **match_args(record, search))
     if why is not None:
         return False, f"the matcher refuses it ({why})"
-    if entry["guid"] in imported:
+    if release in imported:
         return False, "the matcher accepts it, but another album holds it, so it isn't grabbed"
+    if release in kept:
+        return False, "the matcher accepts it, but an entry that stays blocks every copy of it, so it isn't grabbed"
     return True, "the matcher accepts it again"
 
 
@@ -2325,7 +2337,8 @@ def reset_notes(state: State, key: str, before: dict, after: dict) -> list[str]:
         lines.append("Clears nothing from the blocklist")
     else:
         lines.append("The blocklist is empty: nothing to clear")
-    verdicts = [_verdict(e, after, search, imported) for e in cleared]
+    still = blocklist.blocked(kept)
+    verdicts = [_verdict(e, after, search, imported, still) for e in cleared]
     lines += [f"  {blocklist.describe(e)}; {note}" for e, (_, note) in zip(cleared, verdicts)]
     if kept:
         lines.append("Stays on the blocklist (a reset clears only another album or an incomplete copy, and only "

@@ -6,6 +6,7 @@ another album imported."""
 from __future__ import annotations
 
 import logging
+import os
 from datetime import datetime, timedelta, timezone
 
 import psycopg
@@ -15,10 +16,15 @@ from music_fetch import albums, blocklist, events, overrides_cli, state
 from music_fetch.albums import State
 from music_fetch.usenet import Release, exclusion, leading_word, rejection
 
+needs_pg = pytest.mark.skipif(not os.environ.get("MUSIC_TEST_DATABASE_URL"),
+                              reason="MUSIC_TEST_DATABASE_URL is unset")
+
 SID = "3EfpOFKjotrMQTFTnxrXaB"
 WALKMAN = "https://indexer/details/walkman"
 JAPANESE = "https://indexer/details/japanese"
 SON = "https://indexer/details/son"
+# NZBNest's copy of the WALKMAN upload (homelab#2757): a GUID of its own, the same title.
+NEST = "https://nzbnest/details/walkman"
 WALKMAN_TITLE = "Harry.Nilsson-Nilsson.Schmilsson-16BIT-44-KHZ-WEB-FLAC-1971-WALKMAN"
 JAPANESE_TITLE = "Harry Nilsson  1971 - Nilsson Schmilsson (Japanese issue)"
 SON_TITLE = "Harry Nilsson - Son of Schmilsson - NMR"
@@ -37,6 +43,10 @@ OLD_ITEMS = ("Nothing is deleted now: the album's old items stay until an import
              "album playlist's slot stays empty.")
 STAYS = ("Stays on the blocklist (a reset clears only another album or an incomplete copy, and only reimport=true "
          "more than the last candidate):")
+# What each kind of entry blocks, as the dry run says (homelab#2757).
+ONE_DEAD = " (a dead download, so only this copy: another indexer's copy may be tried once)"
+EVERY_WRONG = " (a wrong release, so every copy of it, on any indexer)"
+UNTITLED_WRONG = " (a wrong release, but only this copy: its title isn't recorded)"
 PLAIN_OLD_ITEMS = ("Nothing is deleted now: the album's old items stay until an import. That import retires only the "
                    "ones whose recording the new release also holds; the rest stay on the album as local extras, "
                    "which retire_item takes off.")
@@ -75,7 +85,7 @@ JUDGED = [grab(0, WALKMAN, WALKMAN_TITLE, 420043632), row(1, "failure", reason=W
 def test_a_failure_with_no_guid_is_the_grab_before_it():
     walkman, japanese = blocklist.entries(nilsson(), ROWS)
     assert walkman == {"guid": WALKMAN, "title": WALKMAN_TITLE, "size": 420043632, "reason": ENCRYPTED,
-                       "at": "2026-11-03T09:53:00Z"}
+                       "at": "2026-11-03T09:53:00Z", "kind": blocklist.DEAD_DOWNLOAD, "every_copy": False}
     assert (japanese["title"], japanese["reason"]) == (JAPANESE_TITLE, REPAIR)
 
 
@@ -122,7 +132,8 @@ def test_the_latest_outcome_of_a_release_grabbed_twice_stands():
 
 def test_an_entry_older_than_the_events_is_unknown():
     assert blocklist.entries(nilsson(blocklist=["https://indexer/details/old"]), ROWS) == [
-        {"guid": "https://indexer/details/old", "title": None, "size": None, "reason": "unknown", "at": None}]
+        {"guid": "https://indexer/details/old", "title": None, "size": None, "reason": "unknown", "at": None,
+         "kind": None, "every_copy": False}]
 
 
 def test_the_records_own_copies_name_themselves():
@@ -146,6 +157,7 @@ def record_events(rows: list[tuple] = ROWS) -> None:
                          data={"reason": "LookupError: No results found"})
 
 
+@needs_pg
 def test_blocklist_entries_read_the_event_store():
     record_events()
     assert [(e["title"], e["reason"]) for e in albums.blocklist_entries("1274", nilsson())] == [
@@ -175,8 +187,8 @@ def test_a_reimport_reset_lists_what_it_frees_and_what_that_costs(monkeypatch, c
     seed_nilsson(JUDGED)
     lines = run_reset(monkeypatch, caplog, "--reimport")
     assert "Clears from the blocklist (2 of 2):" in lines
-    assert (f"  {WALKMAN_TITLE} (420 MB): {WRONG}; the matcher accepts it again") in lines
-    assert (f"  {JAPANESE_TITLE} (50 MB): {LACKS}; the matcher accepts it again") in lines
+    assert (f"  {WALKMAN_TITLE} (420 MB): {WRONG}{EVERY_WRONG}; the matcher accepts it again") in lines
+    assert (f"  {JAPANESE_TITLE} (50 MB): {LACKS}{EVERY_WRONG}; the matcher accepts it again") in lines
     assert ("The tick may grab 2 cleared release(s) again. Each that fails the same way costs an attempt: "
             "up to 2 of the 3 the album then has.") in lines
     assert any(line.startswith("The next tick with a free slot grabs the best release") for line in lines)
@@ -190,7 +202,7 @@ def test_a_plain_reset_clears_only_the_last_candidate(monkeypatch, caplog):
     lines = run_reset(monkeypatch, caplog)
     assert "Clears nothing from the blocklist" in lines
     assert STAYS in lines
-    assert f"  {WALKMAN_TITLE} (420 MB): {ENCRYPTED}" in lines
+    assert f"  {WALKMAN_TITLE} (420 MB): {ENCRYPTED}{ONE_DEAD}" in lines
     assert not any(line.startswith("The tick may grab") for line in lines)
     assert any("turns have and nothing is grabbed" in line for line in lines)
     assert PLAIN_OLD_ITEMS in lines
@@ -200,8 +212,8 @@ def test_a_plain_reset_of_a_blocklisted_candidate_frees_that_one(monkeypatch, ca
     seed_nilsson(JUDGED, candidate={"guid": JAPANESE, "title": JAPANESE_TITLE, "size": 49799414}, status=albums.FAILED)
     lines = run_reset(monkeypatch, caplog)
     assert "Clears from the blocklist (1 of 2):" in lines
-    assert f"  {JAPANESE_TITLE} (50 MB): {LACKS}; the matcher accepts it again" in lines
-    assert f"  {WALKMAN_TITLE} (420 MB): {WRONG}" in lines
+    assert f"  {JAPANESE_TITLE} (50 MB): {LACKS}{EVERY_WRONG}; the matcher accepts it again" in lines
+    assert f"  {WALKMAN_TITLE} (420 MB): {WRONG}{EVERY_WRONG}" in lines
     assert any("up to 1 of the 2 the album then has" in line for line in lines)
 
 
@@ -211,8 +223,8 @@ def test_a_reimport_keeps_a_release_that_failed_as_a_download(monkeypatch, caplo
     seed_nilsson()
     lines = run_reset(monkeypatch, caplog, "--reimport", "--apply")
     assert "Clears nothing from the blocklist" in lines and STAYS in lines
-    assert f"  {WALKMAN_TITLE} (420 MB): {ENCRYPTED}" in lines
-    assert f"  {JAPANESE_TITLE} (50 MB): {REPAIR}" in lines
+    assert f"  {WALKMAN_TITLE} (420 MB): {ENCRYPTED}{ONE_DEAD}" in lines
+    assert f"  {JAPANESE_TITLE} (50 MB): {REPAIR}{ONE_DEAD}" in lines
     assert not any(line.startswith("The tick may grab") for line in lines)
     record = stored()
     assert record["blocklist"] == [WALKMAN, JAPANESE]
@@ -235,7 +247,7 @@ def test_a_reimport_clears_what_was_judged_and_keeps_the_rest_in_order(monkeypat
     seed_nilsson(rows, blocklist=[other, JAPANESE, WALKMAN], candidate={})
     lines = run_reset(monkeypatch, caplog, "--reimport", "--apply")
     assert "Clears from the blocklist (1 of 3):" in lines
-    assert f"  {JAPANESE_TITLE} (50 MB): {WRONG}; the matcher accepts it again" in lines
+    assert f"  {JAPANESE_TITLE} (50 MB): {WRONG}{EVERY_WRONG}; the matcher accepts it again" in lines
     assert stored()["blocklist"] == [other, WALKMAN]
 
 
@@ -263,6 +275,74 @@ def test_only_a_verdict_on_what_a_release_held_leaves_the_blocklist(reason, stay
     assert blocklist.stays({"reason": reason}) is stays
 
 
+# ---------------------------------------------------------------------------
+# A wrong release or a dead download: what an entry blocks (homelab#2757)
+# ---------------------------------------------------------------------------
+
+
+def nest(title: str = WALKMAN_TITLE, guid: str = "https://nzbnest/details/other") -> Release:
+    return Release(guid=guid, title=title, size=420043632, indexer_id=2, download_url="d", categories=[])
+
+
+@pytest.mark.parametrize(("reason", "kind"), [
+    (WRONG, blocklist.WRONG_RELEASE), (LACKS, blocklist.WRONG_RELEASE), (ENCRYPTED, blocklist.DEAD_DOWNLOAD),
+    (REPAIR, blocklist.DEAD_DOWNLOAD), ("download failed", blocklist.DEAD_DOWNLOAD), ("404", blocklist.DEAD_DOWNLOAD),
+    ("beets imported none of its files", blocklist.DEAD_DOWNLOAD), (blocklist.UNKNOWN, None),
+    (blocklist.UNREADABLE, None)])
+def test_an_entry_is_a_wrong_release_or_a_dead_download(reason, kind):
+    assert blocklist.kind({"reason": reason}) == kind
+    # A reset takes off a wrong release only.
+    assert blocklist.stays({"reason": reason}) is (kind != blocklist.WRONG_RELEASE)
+
+
+def test_a_wrong_release_blocks_every_copy_of_its_title():
+    rows = [grab(0, WALKMAN, WALKMAN_TITLE, 420043632), row(1, "failure", reason=WRONG)]
+    (entry,) = listed = blocklist.entries(nilsson(blocklist=[WALKMAN]), rows)
+    assert entry["kind"] == blocklist.WRONG_RELEASE and entry["every_copy"]
+    copies = blocklist.blocked(listed)
+    assert nest() in copies and nest(f"{WALKMAN_TITLE}-1") in copies
+    assert nest(JAPANESE_TITLE) not in copies
+
+
+def test_a_wrong_release_with_no_title_blocks_only_its_guid():
+    (entry,) = listed = blocklist.entries(nilsson(blocklist=[WALKMAN], candidate={}),
+                                          [row(0, "failure", reason=WRONG, guid=WALKMAN)])
+    assert entry["kind"] == blocklist.WRONG_RELEASE and not entry["every_copy"]
+    assert blocklist.blocked(listed).guids == {WALKMAN} and not blocklist.blocked(listed).names
+
+
+def test_a_dead_download_blocks_only_its_guid_until_a_second_copy_dies():
+    (entry,) = listed = blocklist.entries(nilsson(blocklist=[WALKMAN]), ROWS[:2])
+    assert entry["kind"] == blocklist.DEAD_DOWNLOAD and not entry["every_copy"]
+    copies = blocklist.blocked(listed)
+    assert nest(guid=WALKMAN) in copies and nest(guid=NEST) not in copies
+
+    # NZBNest's copy, tried once, died too: the title is dead on Usenet.
+    rows = [*ROWS[:2], grab(5, NEST, WALKMAN_TITLE, 420043632), row(6, "failure", reason=REPAIR, guid=NEST)]
+    listed = blocklist.entries(nilsson(blocklist=[WALKMAN, NEST]), rows)
+    assert [(e["kind"], e["every_copy"]) for e in listed] == [(blocklist.DEAD_DOWNLOAD, True)] * 2
+    assert nest(f"{WALKMAN_TITLE}-1") in blocklist.blocked(listed)
+
+
+def test_a_reset_dry_run_says_what_each_entry_blocks(monkeypatch, caplog):
+    """WALKMAN died on both indexers; JAPANESE was incomplete; a repost of WALKMAN another album."""
+    repost = "https://indexer/details/walkman-1"
+    rows = [*ROWS[:2], grab(5, NEST, WALKMAN_TITLE, 420043632), row(6, "failure", reason=REPAIR, guid=NEST),
+            grab(7, JAPANESE, JAPANESE_TITLE, 49799414), row(8, "import_incomplete", release=JAPANESE_TITLE, missing=2),
+            grab(9, repost, f"{WALKMAN_TITLE}-1", 420043632), row(10, "failure", reason=WRONG, guid=repost)]
+    seed_nilsson(rows, blocklist=[WALKMAN, NEST, JAPANESE, repost], candidate={})
+    lines = run_reset(monkeypatch, caplog, "--reimport")
+    assert "Clears from the blocklist (2 of 4):" in lines
+    assert f"  {JAPANESE_TITLE} (50 MB): {LACKS}{EVERY_WRONG}; the matcher accepts it again" in lines
+    assert (f"  {WALKMAN_TITLE}-1 (420 MB): {WRONG}{EVERY_WRONG}; the matcher accepts it, but an entry that stays "
+            "blocks every copy of it, so it isn't grabbed") in lines
+    twice = " (a dead download, a second dead copy of its title, so every copy of it)"
+    assert f"  {WALKMAN_TITLE} (420 MB): {ENCRYPTED}{twice}" in lines
+    assert f"  {WALKMAN_TITLE} (420 MB): {REPAIR}{twice}" in lines
+    assert any("up to 1 of the 3 the album then has" in line for line in lines)
+    assert lines == run_reset(monkeypatch, caplog, "--reimport")
+
+
 def test_a_cleared_release_the_matcher_refuses_is_not_a_cost(monkeypatch, caplog):
     other = "https://indexer/details/other"
     seed_nilsson(blocklist=[other])
@@ -270,7 +350,7 @@ def test_a_cleared_release_the_matcher_refuses_is_not_a_cost(monkeypatch, caplog
                   data={"guid": other, "release": SON_TITLE, "size": 255225091})
     events.record("failure", "[FAIL]", source="albums", spotify_album_id=SID, data={"reason": WRONG})
     lines = run_reset(monkeypatch, caplog, "--reimport")
-    assert (f"  {SON_TITLE} (255 MB): {WRONG}; "
+    assert (f"  {SON_TITLE} (255 MB): {WRONG}{EVERY_WRONG}; "
             "the matcher refuses it (artist words: nilsson, beside son nmr)") in lines
     assert not any(line.startswith("The tick may grab") for line in lines)
 
@@ -290,7 +370,7 @@ def test_an_entry_with_no_grab_recorded_cant_be_judged(monkeypatch, caplog):
     old = "https://indexer/details/old"
     seed_nilsson([row(0, "failure", reason=WRONG, guid=old)], blocklist=[old], candidate={})
     lines = run_reset(monkeypatch, caplog, "--reimport")
-    assert f"  {old}: {WRONG}; the matcher can't be asked: its title or size isn't recorded" in lines
+    assert f"  {old}: {WRONG}{UNTITLED_WRONG}; the matcher can't be asked: its title or size isn't recorded" in lines
     assert not any(line.startswith("The tick may grab") for line in lines)
 
 

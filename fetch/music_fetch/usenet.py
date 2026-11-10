@@ -281,6 +281,33 @@ def repost_name(title: str) -> str:
     return _REPOST_SUFFIX.sub("", title.strip()).lower()
 
 
+@dataclasses.dataclass
+class Copies:
+    """Releases known by GUID and, for some, by :func:`repost_name` of their
+    title (homelab#2757).  Each indexer gives a post its own GUID, and with two
+    indexers in Prowlarr one release comes back under two, so a release is one
+    of these when its GUID is or its repost name is, whichever indexer returned
+    it.  By title alone, not size: a release title names its group and source,
+    and the indexers needn't count a post's size alike."""
+    guids: set[str] = dataclasses.field(default_factory=set)
+    names: set[str] = dataclasses.field(default_factory=set)
+
+    def add(self, guid: str | None, title: str | None = None) -> None:
+        """Add a release by its *guid*, and with a *title* every copy of it."""
+        if guid:
+            self.guids.add(guid)
+        if title and (name := repost_name(title)):
+            self.names.add(name)
+
+    def __contains__(self, release: object) -> bool:
+        if not isinstance(release, Release):
+            return False
+        return release.guid in self.guids or bool(release.title) and repost_name(release.title) in self.names
+
+    def __or__(self, other: Copies) -> Copies:
+        return Copies(self.guids | other.guids, self.names | other.names)
+
+
 def edition_miss(release: Release, album: str) -> int:
     """How far the release's edition is from the Spotify album's: edition
     words one names and the other doesn't.  0 is the same edition."""
@@ -519,7 +546,15 @@ def rank(
     fewest leftover title words, then the Spotify year in the title (a remaster
     or reissue usually carries a different one), then grabs (a proxy for
     completion).  Another edition still matches: it is the album when Usenet
-    has no copy of Spotify's."""
+    has no copy of Spotify's.
+
+    The copies of one release (one :func:`repost_name`, homelab#2757) rank
+    together, where the best of them would, and among themselves by indexer
+    order first: the lowest Prowlarr indexer ID, the indexer added first
+    (NinjaCentral; homelab's configure-prowlarr adds NZBNest after it).  Each
+    indexer counts only its own grabs, so grabs don't compare across them.
+    The GUID breaks the last tie, so the order results arrive in decides
+    nothing."""
     candidates = [
         r for r in releases
         if r.guid not in blocklist and r.download_url
@@ -530,8 +565,12 @@ def rank(
     def other_year(r: Release) -> int:
         return 0 if year_word is None or year_word in words(r.title) else 1
 
-    return sorted(candidates, key=lambda r: (edition_miss(r, album), tier(r), len(leftover(r, artist, album)),
-                                             other_year(r), -r.grabs, r.size))
+    ranked = sorted(candidates, key=lambda r: (edition_miss(r, album), tier(r), len(leftover(r, artist, album)),
+                                               other_year(r), -r.grabs, r.size, r.indexer_id, r.guid))
+    first: dict[str, int] = {}
+    for i, r in enumerate(ranked):
+        first.setdefault(repost_name(r.title), i)
+    return sorted(ranked, key=lambda r: (first[repost_name(r.title)], r.indexer_id))
 
 
 class Prowlarr:
