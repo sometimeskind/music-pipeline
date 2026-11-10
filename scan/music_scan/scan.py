@@ -61,6 +61,14 @@ def _snapshot_inbox(inbox: Path) -> list[Path]:
     )
 
 
+def inbox_audio_count() -> int:
+    """The audio files waiting in the inbox, counted as the import's snapshot
+    finds them (homelab#2751): what the scan ignores doesn't count, such as a
+    file still copying under its temporary name (rclone's ``.partial``), a cover
+    or an nfo."""
+    return len(_snapshot_inbox(INBOX)) if INBOX.is_dir() else 0
+
+
 def _check_import_names(inbox_stems: list[str], imported: list[tuple[str, str]]) -> None:
     """Compare imported track names against the pre-import inbox snapshot.
 
@@ -105,8 +113,11 @@ class MusicBrainzUnavailable(RuntimeError):
         self.imported = imported or []
 
 
-def run_inbox_import(skip_limit: int | None = None) -> list[tuple[str, str]]:
+def run_inbox_import(skip_limit: int | None = None, folder: Path | None = None) -> list[tuple[str, str]]:
     """Snapshot inbox, run beet import, check names. Returns (title, artist) pairs.
+
+    *folder*, a folder inside the inbox, confines the import to it: an album
+    import's own release folder (homelab#2751).  The scan imports the whole inbox.
 
     Raises MusicBrainzUnavailable, after the import, when beets logged that
     MusicBrainz was unreachable and left inbox files behind: what it imported
@@ -118,10 +129,11 @@ def run_inbox_import(skip_limit: int | None = None) -> list[tuple[str, str]]:
         skip_limit = int(skip_limit_env) if skip_limit_env else None
     if skip_limit is not None:
         logger.info("Skip limit    : %d (early termination enabled)", skip_limit)
-    inbox_snapshot = _snapshot_inbox(INBOX)
+    root = INBOX if folder is None else folder
+    inbox_snapshot = _snapshot_inbox(root)
     logger.info("Inbox snapshot : %d audio file(s) queued for import", len(inbox_snapshot))
     import_start = time.time()
-    mb_errors = run_beet_import(INBOX, skip_limit=skip_limit)
+    mb_errors = run_beet_import(root, skip_limit=skip_limit)
     with MusicLibrary(LIBRARY_DB) as lib:
         imported = lib.items_added_since(import_start)
     logger.info("Newly imported : %d track(s)", len(imported))
@@ -166,17 +178,19 @@ def count_lossless_items() -> int | None:
         return None
 
 
-def quarantine_inbox_leftovers() -> int:
+def quarantine_inbox_leftovers(folder: Path | None = None) -> int:
     """Move any audio files still anywhere in the inbox tree to quarantine.
 
     After ``beet import`` has processed everything it can, un-matched audio
     files remain in the inbox.  We move them to quarantine for manual review,
     preserving the relative path so it's clear which playlist/album they came
-    from.  Returns the count of files moved.
+    from.  *folder*, a folder inside the inbox, confines the move to it, as
+    :func:`run_inbox_import` confined the import (homelab#2751).  Returns the
+    count of files moved.
     """
     QUARANTINE.mkdir(parents=True, exist_ok=True)
     moved = 0
-    for f in INBOX.rglob("*"):
+    for f in (INBOX if folder is None else folder).rglob("*"):
         if f.is_file() and f.suffix.lower() in AUDIO_EXTS:
             dest = QUARANTINE / f.relative_to(INBOX)
             dest.parent.mkdir(parents=True, exist_ok=True)

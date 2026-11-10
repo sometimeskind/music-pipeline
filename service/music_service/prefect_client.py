@@ -114,6 +114,45 @@ def trigger_scan() -> bool:
 SCAN_DEPLOYMENT = "music-scan/music-scan"
 ALBUMS_DEPLOYMENT = "music-albums/music-albums"
 
+# How long after a scan that skipped as busy, with files waiting, the retry runs (homelab#2751).
+SCAN_RETRY_SECONDS = 5 * 60
+
+
+def schedule_scan_retry(delay: int = SCAN_RETRY_SECONDS) -> bool:
+    """Schedule a ``music-scan`` run *delay* seconds from now, unless one is
+    already waiting: a run scheduled or pending (a retry, or a trigger yet to
+    start) tries the pipeline itself and schedules the next if it is still busy,
+    so at most one waits (homelab#2751).  The idempotency key, one per *delay*
+    window, keeps two scans that skip at once from both adding one.  Returns
+    whether a retry is now scheduled by this call.  Called from inside the scan
+    flow, which runs only against a Prefect server; raises when it can't be reached."""
+    from datetime import datetime, timedelta, timezone  # noqa: PLC0415
+
+    from prefect import get_client  # noqa: PLC0415
+    from prefect.client.schemas.filters import (  # noqa: PLC0415
+        FlowRunFilter, FlowRunFilterDeploymentId, FlowRunFilterState, FlowRunFilterStateType)
+    from prefect.client.schemas.objects import StateType  # noqa: PLC0415
+    from prefect.states import Scheduled  # noqa: PLC0415
+
+    now = datetime.now(timezone.utc)
+    with get_client(sync_client=True) as client:
+        deployment = client.read_deployment_by_name(SCAN_DEPLOYMENT)
+        waiting = client.read_flow_runs(
+            flow_run_filter=FlowRunFilter(
+                deployment_id=FlowRunFilterDeploymentId(any_=[deployment.id]),
+                state=FlowRunFilterState(type=FlowRunFilterStateType(
+                    any_=[StateType.SCHEDULED, StateType.PENDING])),
+            ),
+            limit=1,
+        )
+        if waiting:
+            return False
+        client.create_flow_run_from_deployment(
+            deployment.id, state=Scheduled(scheduled_time=now + timedelta(seconds=delay)),
+            idempotency_key=f"scan-retry-{int(now.timestamp()) // delay}",
+        )
+    return True
+
 _album_tick_lock = threading.Lock()
 
 
