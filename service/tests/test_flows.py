@@ -362,54 +362,240 @@ def _scheduled_scans(deployment_id) -> list:
             state=FlowRunFilterState(type=FlowRunFilterStateType(any_=[StateType.SCHEDULED]))))
 
 
-def _busy_scan(inbox) -> list[str]:
-    """Run the scan flow with the pipeline held and *inbox* as the inbox; returns what it logged."""
+def _slots(events: list, **held):
+    """A stand-in for ``concurrency``: a name in *held* raises its value on entry
+    (or, when callable, what it returns for the call's ``timeout_seconds``, None
+    taking the slot); any other name is free.  Takes and releases go to *events*."""
+    import contextlib
+
+    @contextlib.contextmanager
+    def slot(name, occupy=1, timeout_seconds=None, **kwargs):
+        outcome = held.get(name)
+        if callable(outcome):
+            outcome = outcome(timeout_seconds)
+        if outcome is not None:
+            events.append(("busy", name, timeout_seconds))
+            raise outcome
+        events.append(("take", name, timeout_seconds))
+        try:
+            yield
+        finally:
+            events.append(("release", name))
+
+    return slot
+
+
+def _busy_scan(inbox, events: list | None = None, **held) -> list[str]:
+    """Run the scan flow with *inbox* as the inbox and the slots as :func:`_slots`
+    has them, ``pipeline`` held throughout unless *held* says otherwise; returns
+    what it logged.  *events* gets the slot takes and releases, and ``scan`` for
+    the scan's steps."""
     from music_service import flows
 
-    with patch.object(flows, "concurrency", side_effect=TimeoutError), \
+    events = [] if events is None else events
+    held.setdefault("pipeline", TimeoutError())
+    with patch.object(flows, "concurrency", side_effect=_slots(events, **held)), \
          patch("music_fetch.state.check"), \
          patch.object(flows.scan, "INBOX", inbox), \
          patch.object(flows, "get_run_logger") as logger, \
-         patch.object(flows, "_run_scan_tasks") as run_scan:
+         patch.object(flows, "_run_scan_tasks", side_effect=lambda: events.append("scan")):
         flows.scan_flow()
-    run_scan.assert_not_called()
     logger.return_value.exception.assert_not_called()
     return [c.args[0] % c.args[1:] for c in logger.return_value.info.call_args_list]
 
 
-def test_a_busy_scan_with_files_waiting_schedules_one_retry(tmp_path, scan_deployment):
-    """homelab#2751: nothing else retries a skipped scan, so it schedules one,
-    SCAN_RETRY_SECONDS on; a second skip while it waits adds none."""
+def _freed_after_a_wait(timeout_seconds):
+    """``pipeline`` as a chained album import holds it: busy for the probes,
+    taken by a bounded wait (homelab#2761)."""
+    from music_service import flows
+
+    return None if timeout_seconds == flows.SCAN_WAIT_SECONDS else TimeoutError()
+
+
+def test_a_busy_scan_with_files_waits_for_the_pipeline_then_runs(tmp_path, scan_deployment):
+    """homelab#2761: album imports wait for the pipeline without a bound, so a
+    scan that only retried later lost to each; it waits too, holding the waiter
+    slot until it has the pipeline and letting it go before it imports."""
+    from music_service import flows
+
+    events: list = []
+    logged = _busy_scan(_inbox_batch(tmp_path), events, pipeline=_freed_after_a_wait)
+    assert events == [
+        ("busy", "pipeline", flows.SKIP_IF_BUSY_SECONDS),
+        ("take", flows.SCAN_WAITER_SLOT, flows.SKIP_IF_BUSY_SECONDS),
+        ("busy", "pipeline", flows.SKIP_IF_BUSY_SECONDS),
+        ("take", "pipeline", flows.SCAN_WAIT_SECONDS),
+        ("release", flows.SCAN_WAITER_SLOT),  # a file landing during the import queues the next waiter
+        "scan",
+        ("release", "pipeline"),
+    ]
+    assert logged[0] == "[WAIT] The pipeline slot is held by another run; waiting for it"
+    assert logged[1].startswith("[WAIT] Got the pipeline slot after ")
+    assert len(logged) == 2
+    assert _scheduled_scans(scan_deployment) == []
+
+
+def test_a_busy_scan_while_another_waits_exits_without_waiting(tmp_path, scan_deployment):
+    """homelab#2761: at most one scan waits, the waiter RUNNING included; its import takes these files too."""
+    from music_service import flows
+
+    events: list = []
+    logged = _busy_scan(_inbox_batch(tmp_path), events, **{flows.SCAN_WAITER_SLOT: TimeoutError()})
+    assert events == [("busy", "pipeline", flows.SKIP_IF_BUSY_SECONDS),
+                      ("busy", flows.SCAN_WAITER_SLOT, flows.SKIP_IF_BUSY_SECONDS)]
+    assert logged == ["Scan skipped — pipeline busy; another scan is already waiting for the slot "
+                      "(2 file(s) waiting)"]
+    assert _scheduled_scans(scan_deployment) == []
+
+
+def test_a_busy_scan_whose_wait_runs_out_schedules_one_retry(tmp_path, scan_deployment):
+    """homelab#2751, homelab#2761: a scan that waited its bound schedules one
+    more, SCAN_RETRY_SECONDS on, so the inbox still ends with a scan that ran;
+    a second whose wait runs out while it is scheduled adds none."""
     from datetime import datetime, timedelta, timezone
 
-    from music_service import prefect_client
+    from music_service import flows, prefect_client
 
-    batch = tmp_path / "inbox" / "spotdl" / "mix"
-    batch.mkdir(parents=True)
-    for name in ("a.m4a", "b.m4a", "c.m4a.x1.partial", "cover.jpg"):
-        (batch / name).write_bytes(b"x")
-
-    logged = _busy_scan(tmp_path / "inbox")
+    events: list = []
+    logged = _busy_scan(_inbox_batch(tmp_path), events)
+    assert "scan" not in events
+    assert ("release", flows.SCAN_WAITER_SLOT) in events
     (retry,) = _scheduled_scans(scan_deployment)
     due = datetime.now(timezone.utc) + timedelta(seconds=prefect_client.SCAN_RETRY_SECONDS)
     assert abs((retry.expected_start_time - due).total_seconds()) < 60
     # The scan's own count: the file still copying and the cover aren't waiting.
+    assert logged == ["[WAIT] The pipeline slot is held by another run; waiting for it",
+                      "[WAIT] The pipeline slot was still held after 20 min",
+                      "Scan skipped — pipeline busy; retrying in 5 min (2 file(s) waiting)"]
+
+    logged = _busy_scan(_inbox_batch(tmp_path / "again"))
+    assert [r.id for r in _scheduled_scans(scan_deployment)] == [retry.id]
+    assert logged[-1] == "Scan skipped — pipeline busy; a scan is already waiting to run (2 file(s) waiting)"
+
+
+def test_a_busy_scan_that_cannot_take_the_waiter_slot_schedules_a_retry(tmp_path, scan_deployment):
+    """homelab#2761: the waiter slot missing (strict) or the server failing is
+    no reason to leave the inbox: the scan falls back to the retry."""
+    from music_service import flows
+
+    events: list = []
+    logged = _busy_scan(_inbox_batch(tmp_path), events,
+                        **{flows.SCAN_WAITER_SLOT: RuntimeError("no such limit")})
+    assert ("take", "pipeline", flows.SCAN_WAIT_SECONDS) not in events
+    assert len(_scheduled_scans(scan_deployment)) == 1
     assert logged == ["Scan skipped — pipeline busy; retrying in 5 min (2 file(s) waiting)"]
 
-    logged = _busy_scan(tmp_path / "inbox")
-    assert [r.id for r in _scheduled_scans(scan_deployment)] == [retry.id]
-    assert logged == ["Scan skipped — pipeline busy; a scan is already waiting to run (2 file(s) waiting)"]
+
+def test_the_waiter_slot_is_strict():
+    """A missing ``scan-wait`` limit must not let every busy scan wait: Prefect
+    ignores a missing limit unless strict, and then the waiter would be no limit."""
+    import contextlib
+
+    from music_service import flows
+
+    events: list = []
+    with patch.object(flows, "concurrency", side_effect=_slots(events)) as slot, \
+         patch.object(flows.scan, "inbox_audio_count", return_value=1), \
+         patch.object(flows, "get_run_logger"), \
+         patch.object(flows, "hold", side_effect=flows.Busy("pipeline")), \
+         patch.object(flows, "_retry_busy_scan"), \
+         contextlib.ExitStack() as stack:
+        assert flows._wait_busy_scan(stack) is False
+    (call,) = slot.call_args_list
+    assert call.args == (flows.SCAN_WAITER_SLOT,)
+    assert call.kwargs["strict"] is True
+    assert call.kwargs["raise_on_lease_renewal_failure"] is False
+
+
+@pytest.fixture
+def service_limits():
+    """The service's own concurrency limits on the test server
+    (``prefect_client._upsert_limits``), removed afterwards so the other tests
+    keep running without them."""
+    import asyncio
+
+    from prefect.client.orchestration import get_client
+
+    from music_service import prefect_client
+
+    asyncio.run(prefect_client._upsert_limits())
+    yield
+    with get_client(sync_client=True) as client:
+        for limit in client.read_global_concurrency_limits():
+            if limit.name in ("beet-import", "pipeline", "albums", "scan-wait"):
+                client.delete_global_concurrency_limit_by_name(limit.name)
+
+
+def test_a_busy_scan_waits_on_the_test_server_and_a_second_does_not(tmp_path, service_limits):
+    """homelab#2761, against the real limits: while an album import holds the
+    pipeline, one scan waits (holding the waiter slot), a second exits, and the
+    first runs once the pipeline is let go."""
+    import threading
+    import time
+
+    from prefect.client.orchestration import get_client
+    from prefect.concurrency.sync import concurrency
+
+    from music_service import flows
+
+    taken, release = threading.Event(), threading.Event()
+
+    def album_import():
+        with concurrency("pipeline", occupy=1):
+            taken.set()
+            release.wait(120)
+
+    def active(name: str) -> int:
+        with get_client(sync_client=True) as client:
+            return client.read_global_concurrency_limit_by_name(name).active_slots
+
+    inbox = _inbox_batch(tmp_path)
+    ran: list[str] = []
+    with patch("music_fetch.state.check"), \
+         patch.object(flows.scan, "INBOX", inbox), \
+         patch.object(flows, "get_run_logger") as logger, \
+         patch.object(flows, "_run_scan_tasks", side_effect=lambda: ran.append(active(flows.SCAN_WAITER_SLOT))):
+        holder = threading.Thread(target=album_import)
+        holder.start()
+        assert taken.wait(30)
+        first = threading.Thread(target=flows.scan_flow.fn)
+        first.start()
+        deadline = time.monotonic() + 60
+        while active(flows.SCAN_WAITER_SLOT) == 0 and time.monotonic() < deadline:
+            time.sleep(0.5)
+        assert active(flows.SCAN_WAITER_SLOT) == 1
+
+        flows.scan_flow.fn()
+        assert ran == []
+        release.set()
+        holder.join(30)
+        first.join(90)
+    assert ran == [0]  # the waiter slot let go before the import
+    lines = [c.args[0] % c.args[1:] for c in logger.return_value.info.call_args_list]
+    assert ("Scan skipped — pipeline busy; another scan is already waiting for the slot "
+            "(2 file(s) waiting)") in lines
+    assert any(line.startswith("[WAIT] Got the pipeline slot after ") for line in lines)
+    assert active("pipeline") == 0
+
+
+def test_the_scan_wait_is_bounded_like_the_album_tick():
+    from music_service import flows
+    assert flows.SKIP_IF_BUSY_SECONDS < flows.SCAN_WAIT_SECONDS <= flows.ALBUM_TICK_WAIT_SECONDS
 
 
 def test_a_busy_scan_with_an_empty_inbox_schedules_no_retry(tmp_path, scan_deployment):
     """homelab#2751: with nothing the scan would import (a file still copying
-    under its temporary name doesn't count), no retry."""
+    under its temporary name doesn't count), no retry, and no wait (homelab#2761)."""
+    from music_service import flows
+
     batch = tmp_path / "inbox" / "spotdl" / "mix"
     batch.mkdir(parents=True)
     (batch / "a.m4a.x1.partial").write_bytes(b"x")
 
-    assert _busy_scan(tmp_path / "inbox") == [
+    events: list = []
+    assert _busy_scan(tmp_path / "inbox", events) == [
         "Scan skipped — pipeline busy (fetch or scan already running); the inbox is empty"]
+    assert events == [("busy", "pipeline", flows.SKIP_IF_BUSY_SECONDS)]
     assert _scheduled_scans(scan_deployment) == []
 
 
