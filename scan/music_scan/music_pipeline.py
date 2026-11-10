@@ -203,9 +203,11 @@ USENET_INBOX = Path("/root/Music/inbox/usenet")
 # another playlist's source tag; any other via is a manual import and protected.
 MANAGED_VIA = frozenset({"spotdl", "usenet"})
 # 2. ASIS staging: files that failed autotag are quarantined, then
-#    _move_asis_eligible() copies them into a per-run temp dir under /tmp/
-#    preserving the spotdl/<playlist>/ subdirectory structure.
-ASIS_STAGING_ROOT = Path("/tmp")
+#    _move_asis_eligible() moves them into the as-is staging dir (and
+#    asis_apart.move_apart() some on into the apart dir), beside quarantine/
+#    on its volume (homelab#2763, scan.asis_dirs()), preserving the
+#    spotdl/<playlist>/ subdirectory structure.
+ASIS_STAGING_ROOTS = (Path("/root/Music/asis-staging"), Path("/root/Music/asis-apart"))
 
 
 # The MusicBrainz recording an album request's fallback download was verified as (homelab#2478).
@@ -450,9 +452,8 @@ def _playlist_from_path(path: str | bytes) -> str | None:
 
     Checks two known locations in order:
       1. Main inbox:    /root/Music/inbox/spotdl/<playlist>/<file>
-      2. ASIS staging:  /tmp/asis-staging-X/spotdl/<playlist>/<file>
-         (the staging dir name is random, but spotdl/ is always the first
-         subdir of the playlist tree relative to ASIS_STAGING_ROOT)
+      2. ASIS staging:  /root/Music/asis-staging/spotdl/<playlist>/<file>
+         (or asis-apart/: :data:`ASIS_STAGING_ROOTS`, homelab#2763)
     """
     if isinstance(path, bytes):
         path = path.decode()
@@ -465,14 +466,15 @@ def _playlist_from_path(path: str | bytes) -> str | None:
         except (ValueError, IndexError):
             pass
 
-    # 2. ASIS staging — /tmp/<staging-dir>/spotdl/<playlist>/<file>
-    try:
-        after_tmp = p.relative_to(ASIS_STAGING_ROOT)
-        # after_tmp.parts: ('<staging-dir>', 'spotdl', '<playlist>', '<file>')
-        idx = after_tmp.parts.index("spotdl")
-        return after_tmp.parts[idx + 1]
-    except (ValueError, IndexError):
-        pass
+    # 2. ASIS staging — <staging-root>/spotdl/<playlist>/<file>
+    for root in ASIS_STAGING_ROOTS:
+        try:
+            parts = p.relative_to(root).parts
+        except ValueError:
+            continue
+        # parts: ('spotdl', '<playlist>', '<file>'); a loose file at the root has no playlist.
+        if len(parts) >= 3 and parts[0] == "spotdl":
+            return parts[1]
 
     return None
 

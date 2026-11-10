@@ -17,7 +17,7 @@ import music_fetch.ingest as ingest
 import music_scan.scan as scan
 from music_fetch.config import load_playlists
 from music_scan.metrics import ScanMetrics
-from music_scan.scan import PRE_IMPORT_STEPS, MusicBrainzUnavailable
+from music_scan.scan import INTERRUPTED, PRE_IMPORT_STEPS, MusicBrainzUnavailable
 
 # Prefect runs each flow run in a `python -m prefect.engine` subprocess where its own
 # logging dictConfig owns the root logger (level WARNING). music_fetch / music_scan
@@ -399,7 +399,13 @@ def navidrome_task() -> None:
 
 
 def _run_scan_tasks() -> None:
-    """Every scan pushes the music_scan job, failed or not, so its alerts see it."""
+    """Every scan pushes the music_scan job, failed or not, so its alerts see it.
+
+    An import cut short (``scan.ImportInterrupted`` at a shutdown, or beets
+    killed or failing, homelab#2763) ends the run there, before
+    ``quarantine-leftovers`` and the as-is pass: the files beets didn't reach
+    stay in the inbox for the next scan.  A MusicBrainz outage (#264) skips the
+    quarantine only, and the rest of the scan runs for what did import."""
     metrics = ScanMetrics()
     start = time.monotonic()
     try:
@@ -434,6 +440,13 @@ def _run_scan_tasks() -> None:
         metrics.success = False
         if not metrics.failure_reason:
             metrics.failure_reason = "unexpected_error"
+        raise
+    except BaseException:
+        # The pod is shutting down (homelab#2763): ImportInterrupted from a
+        # beets run, or Prefect's TerminationSignal between them.  Nothing
+        # after the step it stopped ran, so the inbox's files stay there.
+        metrics.success = False
+        metrics.failure_reason = INTERRUPTED
         raise
     finally:
         metrics.duration_seconds = int(time.monotonic() - start)

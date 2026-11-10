@@ -27,9 +27,44 @@ def musicbrainz_unavailable(line: str) -> bool:
     return bool(_MB_UNAVAILABLE.search(line))
 
 
+# Set once this process has had a SIGTERM while beets ran (homelab#2763): the
+# pod is shutting down, and nothing more is imported, quarantined or staged.
+_shutdown = threading.Event()
+
+
+class ImportInterrupted(BaseException):
+    """``beet import`` was stopped because the process is shutting down (homelab#2763).
+
+    The SIGTERM that stops a pod reaches the flow-run process while beets
+    runs, and :func:`_forward_sigterm` hands it to beets in place of Prefect's
+    handler.  beets then exits early, and before this, that read as a finished
+    import: the scan quarantined every inbox file beets never reached and
+    staged them for the as-is pass on the way out, and 68 files were lost with
+    the container.  Now what beets didn't reach stays where it is (the inbox,
+    or the as-is staging dir) for the scan after the restart.
+
+    A BaseException, as Prefect's own ``TerminationSignal`` and
+    ``KeyboardInterrupt`` are, so the steps that log an ``Exception`` and carry
+    on don't carry on, and an album import's retry (``albums.complete``)
+    doesn't count it against the release: the run crashes, and the job folder
+    goes back at the next start (``[RESUME]``, #344)."""
+
+
+def shutdown_requested() -> bool:
+    """True once this process has had a SIGTERM while beets ran (homelab#2763)."""
+    return _shutdown.is_set()
+
+
 @contextmanager
 def _forward_sigterm(proc: subprocess.Popen) -> Generator[None, None, None]:
-    """Context manager: while active, SIGTERM is forwarded to *proc*.
+    """Context manager: while active, SIGTERM is forwarded to *proc*, and
+    recorded (:func:`shutdown_requested`), so :func:`run_beet_import` raises
+    :class:`ImportInterrupted` once beets has exited (homelab#2763).
+
+    The handler replaces the one in place, Prefect's in a flow run, which
+    would raise ``TerminationSignal`` in the middle of ``proc.wait()`` and
+    leave beets running on its own; the run ends with ``ImportInterrupted``
+    instead.
 
     signal.signal() only works in the main thread. When called from a
     background thread (e.g. the orchestrator scan thread), we skip SIGTERM
@@ -37,6 +72,7 @@ def _forward_sigterm(proc: subprocess.Popen) -> Generator[None, None, None]:
     """
     def _handler(sig: int, frame: object) -> None:
         logger.info("Shutdown signal received — forwarding to child process (pid %d)", proc.pid)
+        _shutdown.set()
         proc.send_signal(signal.SIGTERM)
 
     try:
@@ -53,8 +89,9 @@ def _forward_sigterm(proc: subprocess.Popen) -> Generator[None, None, None]:
 
 
 def _watch_for_skips(log_path: Path, start_pos: int, skip_limit: int,
-                     proc: subprocess.Popen, stop: threading.Event) -> None:
-    """Poll the beets import log; SIGTERM *proc* after *skip_limit* new skips."""
+                     proc: subprocess.Popen, stop: threading.Event, fired: threading.Event | None = None) -> None:
+    """Poll the beets import log; SIGTERM *proc* after *skip_limit* new skips,
+    setting *fired* first."""
     skip_count = 0
     while not stop.is_set():
         try:
@@ -67,6 +104,8 @@ def _watch_for_skips(log_path: Path, start_pos: int, skip_limit: int,
                 logger.info("Skip count: %d / %d limit", skip_count, skip_limit)
             if skip_count >= skip_limit:
                 logger.warning("Skip limit %d reached — terminating beet import early", skip_limit)
+                if fired is not None:
+                    fired.set()
                 proc.terminate()
                 return
         except FileNotFoundError:
@@ -80,6 +119,13 @@ def run_beet_import(inbox_dir: Path, skip_limit: int | None = None, asis: bool =
 
     Returns how many stderr lines said MusicBrainz was unavailable (#264).
 
+    Raises :class:`ImportInterrupted` when the process had a SIGTERM while
+    beets ran, or before it started (homelab#2763), whatever beets' exit
+    code; and ``CalledProcessError`` when beets exited non-zero or was killed
+    by a signal, except by the skip limit's own SIGTERM.  Before, any SIGTERM
+    exit (``-15``) passed as the skip limit's, so a shutdown read as a
+    finished import.
+
     Args:
         skip_limit: If set, terminate beet after this many skipped tracks (for threshold
                     testing without waiting through a full library run).
@@ -91,6 +137,8 @@ def run_beet_import(inbox_dir: Path, skip_limit: int | None = None, asis: bool =
     if asis:
         cmd.append("-A")
     cmd.append(str(inbox_dir))
+    if _shutdown.is_set():
+        raise ImportInterrupted("the service is shutting down; beet import not started")
     logger.debug("Running: %s", " ".join(cmd))
 
     log_start = IMPORT_LOG.stat().st_size if IMPORT_LOG.exists() else 0
@@ -110,10 +158,11 @@ def run_beet_import(inbox_dir: Path, skip_limit: int | None = None, asis: bool =
     stderr_thread.start()
 
     stop = threading.Event()
+    skipped = threading.Event()
     if skip_limit is not None:
         t = threading.Thread(
             target=_watch_for_skips,
-            args=(IMPORT_LOG, log_start, skip_limit, proc, stop),
+            args=(IMPORT_LOG, log_start, skip_limit, proc, stop, skipped),
             daemon=True,
         )
         t.start()
@@ -123,8 +172,16 @@ def run_beet_import(inbox_dir: Path, skip_limit: int | None = None, asis: bool =
     stop.set()
     stderr_thread.join()
 
-    # rc=-15 (SIGTERM) is expected when skip_limit fires — not an error
-    if rc not in (0, -15):
+    if _shutdown.is_set():
+        logger.warning("[INTERRUPTED] beet import stopped by a shutdown signal (exit %d)", rc)
+        raise ImportInterrupted(f"beet import stopped by a shutdown signal (exit {rc})")
+    # rc=-15 (SIGTERM) is expected when skip_limit fires — not an error.  Any
+    # other signal, or a SIGTERM from anywhere else, is (homelab#2763).
+    if rc == -signal.SIGTERM and skipped.is_set():
+        return mb_errors
+    if rc != 0:
+        if rc < 0:
+            logger.warning("[INTERRUPTED] beet import was killed by signal %d", -rc)
         raise subprocess.CalledProcessError(rc, cmd)
     return mb_errors
 

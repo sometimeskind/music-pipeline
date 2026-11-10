@@ -104,9 +104,15 @@ def test_playlist_from_path_inbox_root() -> None:
     assert _playlist_from_path("/root/Music/inbox/spotdl") is None
 
 def test_playlist_from_path_asis_staging() -> None:
-    # ASIS temp-staging path: tracks quarantined then re-staged for --asis import
-    path = "/tmp/asis-staging-eqn4jd_u/spotdl/my-playlist/Artist - Title.m4a"
-    assert _playlist_from_path(path) == "my-playlist"
+    # ASIS staging path: tracks quarantined then re-staged for --asis import,
+    # beside quarantine/ on its volume (homelab#2763)
+    assert _playlist_from_path("/root/Music/asis-staging/spotdl/my-playlist/Artist - Title.m4a") == "my-playlist"
+    assert _playlist_from_path("/root/Music/asis-apart/spotdl/my-playlist/Artist - Title.m4a") == "my-playlist"
+
+
+def test_playlist_from_path_old_tmp_staging_is_not_staging() -> None:
+    # The as-is pass no longer stages in /tmp (homelab#2763).
+    assert _playlist_from_path("/tmp/asis-staging-eqn4jd_u/spotdl/my-playlist/Artist - Title.m4a") is None
 
 def test_playlist_from_path_arbitrary_spotdl_dir_rejected() -> None:
     # A 'spotdl' directory somewhere else (e.g. /var/) should not match
