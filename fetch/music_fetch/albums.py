@@ -356,7 +356,15 @@ def track_count(record: dict) -> int:
 
 def match_args(record: dict, search: Plan) -> dict:
     """The album's keywords for :func:`~music_fetch.usenet.rejection` and :func:`~music_fetch.usenet.rank`."""
-    return dict(album_type=record.get("album_type"), seconds=record.get("duration") or 0, any_album=search.any_album)
+    return dict(album_type=match_type(record), seconds=record.get("duration") or 0, any_album=search.any_album)
+
+
+def match_type(record: dict) -> str | None:
+    """The album's type as the matcher reads it: Spotify's ``album_type``, but
+    a requested MusicBrainz EP reads as Spotify types an EP, a single, so a
+    release tagged EP is it (homelab#2568).  The record keeps ``album``, which
+    canon reads."""
+    return "single" if record.get("primary_type") == "EP" else record.get("album_type")
 
 
 def by_status(counts: Mapping[str, int]) -> str:

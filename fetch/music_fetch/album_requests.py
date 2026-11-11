@@ -131,11 +131,12 @@ class Tracklist:
     duration: int = 0  # seconds
     how: str = ""  # "preferred", or how the release was chosen
     release_label: str = ""  # the release as the dry run names it
+    primary_type: str = ""  # MusicBrainz's: "Album", "EP", "Single"
 
     def fields(self) -> dict:
         """The album record's fields the request sets (album mode's names)."""
         return {"name": self.name, "artist": self.artist, "year": self.year, "tracks_count": len(self.tracks),
-                "album_type": self.album_type, "duration": self.duration}
+                "album_type": self.album_type, "duration": self.duration, "primary_type": self.primary_type}
 
 
 def _credit(credits: Iterable[dict] | None) -> str:
@@ -281,7 +282,8 @@ def tracklist(get: Get, group_id: str, preferred: str | None = None) -> Tracklis
         raise Refused(f"release {preferred} has no audio tracks on MusicBrainz")
     album_type = "single" if group.get("primary-type") == "Single" else "album"
     return Tracklist(group_id, preferred, artist, group.get("title") or release.get("title") or "", tracks,
-                     _year(group.get("first-release-date")), album_type, seconds, how, _release_label(release))
+                     _year(group.get("first-release-date")), album_type, seconds, how, _release_label(release),
+                     group.get("primary-type") or "")
 
 
 def recording_url(recording: str) -> str:
@@ -384,7 +386,7 @@ class Request:
         """The album record's fields the request sets."""
         return {"name": self.name, "artist": self.artist, "year": self.data.get("year"),
                 "tracks_count": len(self.tracks), "album_type": self.data.get("album_type") or "album",
-                "duration": self.data.get("duration") or 0}
+                "duration": self.data.get("duration") or 0, "primary_type": self.data.get("primary_type") or ""}
 
 
 def load(conn: psycopg.Connection) -> list[Request]:
@@ -410,7 +412,8 @@ def add(conn: psycopg.Connection, found: Tracklist, by: str, key: str | None = N
     group, if any.  *note* ends the event's message (an automatic request's
     reason, homelab#2535); *source* is the event's (``stranded`` for a
     stranded row's request, homelab#2602)."""
-    data = {"year": found.year, "album_type": found.album_type, "duration": found.duration}
+    data = {"year": found.year, "album_type": found.album_type, "duration": found.duration,
+            "primary_type": found.primary_type}
     preferred = found.release if found.how == "preferred" else None
     with conn.transaction():
         row = conn.execute(

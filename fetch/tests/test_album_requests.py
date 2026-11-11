@@ -14,7 +14,7 @@ import pytest
 
 from music_fetch import album_requests as req
 from music_fetch import album_requests_cli as cli
-from music_fetch import albums, resolve, state, store
+from music_fetch import albums, resolve, state, store, usenet
 from music_fetch.albums import Settings, State, tick
 
 sys.path.insert(0, str(Path(__file__).parent))  # importable however pytest imports this file
@@ -57,6 +57,25 @@ def test_without_a_preferred_release_the_most_common_official_count_wins():
     assert found.artist == "Band & Friend" and found.name == "The Album" and found.year == 1999
     assert found.album_type == "album" and found.duration == 12 * 200
     assert found.tracks[0] == ["Song 1", "Band & Friend", None, "GBAAA001001", 1, 1]
+
+
+def test_an_ep_request_takes_a_release_tagged_ep():
+    """A MusicBrainz EP's releases are tagged EP, which the matcher refused as
+    "the album isn't one" (homelab#2568).  The record's album_type stays
+    "album" (canon reads it); the matcher reads the EP as Spotify types one, a single."""
+    found = req.tracklist(FakeMB(group={**GROUP, "primary-type": "EP"}), RG)
+    record = found.fields()
+    assert record["album_type"] == "album" and record["primary_type"] == "EP"
+    args = albums.match_args(record, albums.plan(RG, record, {}))
+    assert args["album_type"] == "single"
+    title = "Band-The Album-EP-WEB-FLAC-2020-GRP"
+    assert usenet.matches(usenet.Release("g", title, 300_000_000, 1, "", [3000]), "Band", "The Album", 12, **args)
+    # A request row keeps it for the record the tick feeds.
+    row = req.Request(RG, R12, "Band", "The Album", [], {"album_type": "album", "primary_type": "EP"})
+    assert row.fields()["primary_type"] == "EP"
+    # An album's request still refuses one.
+    album = req.tracklist(FakeMB(), RG).fields()
+    assert albums.match_args(album, albums.plan(RG, album, {}))["album_type"] == "album"
 
 
 def test_a_tie_goes_to_the_count_of_the_earliest_release():

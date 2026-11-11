@@ -325,7 +325,25 @@ def _leads_with_artist(title_words: list[str], artist: str, album: str) -> bool:
     if artist.lower() == "various artists":
         return lead[:1] in (["va"], ["various"])
     names = [w for w in words(artist) if w not in _ARTICLES]
+    if "x" not in names:
+        # Spotify's "A × B" loses its ×; release names write an X (homelab#2568).
+        lead = [w for w in lead if w != "x"]
     return set(lead[:len(names)]) == set(names)
+
+
+# A year some posters put before the artist (``(2024).Artist.-.Album.[FLAC]``,
+# ``2021 .Artist.-.Album``), and the ``00-`` of a release's playlist name.
+_LEAD_NUMBER = re.compile(r"^[\s(\[]*(?:(?:19|20)\d\d|00(?=-))[\s.\-_)\]]+")
+
+
+def without_lead_number(title: str, artist: str) -> str:
+    """*title* without a year or ``00-`` before the artist (homelab#2568), which
+    the artist rule would read as another artist's name; kept when the artist's
+    name starts with it (a band called 2002)."""
+    found = _LEAD_NUMBER.match(title)
+    if not found or words(found[0]) == words(artist)[:1] or not title[found.end():].strip():
+        return title
+    return title[found.end():]
 
 
 def _album_follows_artist(title_words: list[str], artist: str, album: str) -> bool:
@@ -445,6 +463,9 @@ def rejection(
     *any_album* is for a title with no readable words (#197): any release by
     the artist matches on size and type alone, and the pick is logged as such.
     """
+    bare = without_lead_number(release.title, artist)
+    if bare != release.title:
+        release = dataclasses.replace(release, title=bare)
     title_words = words(release.title)
     title = set(title_words)
     album_words = [w for w in words(search_title(album)) if w not in _ARTICLES]
