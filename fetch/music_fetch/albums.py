@@ -897,6 +897,8 @@ def feed_requests(state: State, requests: list[album_requests.Request],
                 on.setdefault(album_requests.SOURCE, tracks)
                 record.setdefault("origin", REQUEST)
         record["requested"] = True
+        # Whichever way the record came: what the matcher reads an EP request by (homelab#2568).
+        record["primary_type"] = request.fields()["primary_type"]
         if album_requests.SOURCE in record.get("playlists", {}):
             # The release the tracks were read from: the fallback reads it again for its songs.
             record["tracklist_release"] = request.tracklist_release
@@ -1617,6 +1619,8 @@ def tick(
         # After Later's (which owns its stranded rows), before the requests are read (homelab#2602).
         album_playlists = [name for name, _ in playlists]
         stranded.tick(state, album_playlists, later_get, stranded_lookup, apply=settings.mode == "on")
+        # The older requests' MusicBrainz types, so an EP request takes a release tagged EP (homelab#2568).
+        album_requests.backfill_tick(later_get, apply=settings.mode == "on")
         requests = album_requests.album_requests()
     except statedb.Unavailable as exc:
         # Never run without the state (homelab#2410): skip, and let
