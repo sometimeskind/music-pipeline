@@ -135,6 +135,24 @@ def test_track_without_spotify_id_borrows_its_albums_cover(tmp_path, ffmpeg, lib
     assert _images(tmp_path / "c.m4a") == []
 
 
+def test_an_embedded_cover_is_a_cover_embedded_event(tmp_path, ffmpeg, lib, monkeypatch) -> None:
+    """homelab#2590: one event per album, naming its items; a dry run records none."""
+    from music_scan import cover
+
+    recorded = []
+    monkeypatch.setattr(cover.events, "record", lambda kind, message, **kw: recorded.append((kind, message, kw)))
+    art = _jpeg(tmp_path / "c.jpg")
+    items = [_item(lib, _m4a(tmp_path / f"{n}.m4a"), spotify_ids=n) for n in ("T1", "T2")]
+    assert cover.embed_covers(items, {"T1": COVER_URL, "T2": COVER_URL}, apply=False,
+                              fetch=lambda url: art) == 2
+    assert recorded == []
+    assert cover.embed_covers(items, {"T1": COVER_URL, "T2": COVER_URL}, fetch=lambda url: art) == 2
+    (kind, message, kw), = recorded
+    assert kind == "cover_embedded" and kw["source"] == "cover" and kw["item_id"] is None
+    assert kw["data"] == {"album": "Artist — Album", "items": [i.id for i in items]}
+    assert message == "[ART] Artist — Album: embedded the cover on 2 track(s)"
+
+
 def test_dry_run_writes_nothing(tmp_path, ffmpeg, lib) -> None:
     from music_scan.cover import embed_covers
 

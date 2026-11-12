@@ -101,6 +101,30 @@ class Plan:
     same_recording: int = 0
     # (playlist, item.id) pairs that some entry rightly maps to.
     claimed: set = dataclasses.field(default_factory=set)
+    # item.id → its ID_FIELDS before the plan changed them, for the ids_written events.
+    before: dict = dataclasses.field(default_factory=dict)
+
+
+# The fields the backfill writes, each changed one an ids_written event's (homelab#2590).
+ID_FIELDS = ("spotify_ids", "words_ids", "isrc", "sources")
+
+
+def id_changes(before: dict, item) -> dict:
+    """``{field: [old, new]}`` for each of *item*'s ID_FIELDS that differs from *before*."""
+    return {f: [before.get(f) or None, item.get(f) or None] for f in ID_FIELDS
+            if (before.get(f) or None) != (item.get(f) or None)}
+
+
+def record_ids_written(item, before: dict, via: str) -> None:
+    """The ``ids_written`` event for *item*, when its ID fields changed (homelab#2590)."""
+    changed = id_changes(before, item)
+    if not changed:
+        return
+    events.record("ids_written", f"[IDS] {item.id} {item.get('artist')} — {item.get('title')}: "
+                  f"{', '.join(changed)} written by {via}", source="backfill", item_id=item.id,
+                  spotify_album_id=events.spotify_album(item.get("spotify_album_id")),
+                  release_group=item.get("mb_releasegroupid") or None,
+                  data={**events.item_fields(item), "changed": changed, "via": via})
 
 
 def _song_id(song: dict) -> str | None:
@@ -201,7 +225,7 @@ def plan_backfill(
     recordings: Callable[[str], set[str] | None] | None = None,
 ) -> Plan:
     """Work out the backfill on in-memory *items*; changes are made on them but not stored."""
-    plan = Plan()
+    plan = Plan(before={item.id: {f: item.get(f) for f in ID_FIELDS} for item in items})
     for item in items:
         if add_to_list(item, "spotify_ids", spotify_id(item.get("spotify_url"))):
             plan.ids_from_url += 1
@@ -449,6 +473,7 @@ def store_changed(plan: Plan) -> None:
                 logger.warning("item %s: the tags couldn't be written, so the next scan's beet update "
                                "takes the file's ISRCs back", item.id)
             item.store()
+            record_ids_written(item, plan.before.get(item.id, {}), "music-backfill-ids")
 
 
 def main() -> None:

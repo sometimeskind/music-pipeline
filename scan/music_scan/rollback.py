@@ -37,6 +37,7 @@ from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
 
+from music_fetch import events
 from music_fetch.albums import FALLBACK, FILLED, IMPORTED
 from music_fetch.usenet import clean_album, words
 from music_scan.audit import REPLACED, item_path, pipeline_lock
@@ -217,20 +218,38 @@ def run(apply: bool = False) -> int:
             logger.info("Dry run — nothing changed. Re-run with --apply to link the [LINK] items "
                         "and quarantine the [FAILED] ones.")
             return len(failed) + len(linked)
+        from music_scan.backfill import ID_FIELDS, record_ids_written  # noqa: PLC0415
+
         with pipeline_lock():
             for item, song_id in linked:
+                before = {f: item.get(f) for f in ID_FIELDS}
                 add_to_list(item, "spotify_ids", song_id)
                 item.store()
+                record_ids_written(item, before, "music-rollback-releases")
             if linked:
                 from music_scan import canon  # noqa: PLC0415
 
                 canon.canonicalize_items([item for item, _ in linked], budget=None)
+            for item in failed:
+                record_rollback(item)
             quarantine(failed)
             counts = regen_playlists()
         logger.info("Linked %d and rolled back %d item(s); playlists regenerated: %s", len(linked), len(failed),
                     ", ".join(f"{k} {v}" for k, v in sorted(counts.items())))
     trigger_scan()
     return len(failed) + len(linked)
+
+
+def record_rollback(item) -> None:
+    """The ``retire`` event for a failed release's item rolled back (homelab#2590),
+    before :func:`quarantine` drops its row."""
+    events.record("retire", f"[ROLLBACK] {item.id} {item.get('artist')} — {item.get('title')}: a failed "
+                  "release's item on no playlist entry → quarantine/replaced/", source="rollback", item_id=item.id,
+                  spotify_album_id=events.spotify_album(item.get("spotify_album_id")),
+                  release_group=item.get("mb_releasegroupid") or None,
+                  data={**events.item_fields(item), "origin": "rollback", "spotify_ids": item.get("spotify_ids") or None,
+                        "sources": item.get("sources") or None, "isrc": item.get("isrc") or None,
+                        "reason": "a failed release's item on no playlist entry (music-rollback-releases)"})
 
 
 def main() -> None:
