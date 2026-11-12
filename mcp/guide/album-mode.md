@@ -45,9 +45,9 @@ grabbed for 12 h. `SabnzbdQueueStalled` fires after 2 h with nothing downloaded.
 
 Search the album's name in the log. A job holding the same tracks in two formats logs `[FORMAT]` first:
 the best format is imported and the rest wait in `quarantine/replaced/retired/`, where `keep_quarantined`
-rescues a file until the purge. The import's event (`album_history`) says which MusicBrainz release the files are in `identified`
+rescues a file until the purge. The import's event (`album_history`) says which MusicBrainz release the files are in `data.identified`
 (`null`: none close enough) and how many files beets couldn't match and imported as they are in
-`as_is`, then one outcome:
+`data.as_is`, then one outcome:
 
 - `[DONE]`: imported. `[RETIRE]` lines before canon's `[RETAG]` are older copies moving to
   `quarantine/replaced/`. `[LOCAL]` keeps copies the release lacks as extras.
