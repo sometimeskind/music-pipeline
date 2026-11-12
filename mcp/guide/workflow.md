@@ -5,7 +5,7 @@
 | Tier | Who | Tools |
 |------|-----|-------|
 | Read | anyone signed in to the connector, and Claude Code's static token | the structured reads, the audits, `check_release`, `recheck_recordings`, `recording_candidates`, `compare_items`, `get_job`, `get_guide` |
-| Recoverable write | the claude.ai connector (a Pocket ID user in the `music` group) | `reset_album`, `requeue_albums`, `merge_items`, `replace_item`, `unlink_spotify_id`, `set_recording`, `fingerprint_items`, `keep_quarantined`, `retire_item`, `embed_covers`, `canon_albums`, `backfill_album_ids`, `apply_recheck`, `set_search_override`, `clear_search_override`, `hold_album`, `release_album`, `pin_track`, `unpin_track`, `trigger_scan`, `trigger_album_tick` |
+| Recoverable write | the claude.ai connector (a Pocket ID user in the `music` group) | `reset_album`, `requeue_albums`, `merge_items`, `replace_item`, `unlink_spotify_id`, `set_recording`, `fingerprint_items`, `keep_quarantined`, `restore_kept`, `retire_item`, `embed_covers`, `canon_albums`, `backfill_album_ids`, `apply_recheck`, `set_search_override`, `clear_search_override`, `hold_album`, `release_album`, `pin_track`, `unpin_track`, `trigger_scan`, `trigger_album_tick` |
 | Irreversible | not exposed | the workstation commands below |
 
 The tier belongs to the token, not to the client: the static token is read-only, and an OAuth
@@ -39,7 +39,8 @@ this is not a failed apply, so keep polling. Once it matches, the output restart
 Writes are recoverable: the library and pipeline state are backed up, and a merged or replaced
 file goes to `quarantine/replaced/` for 14 days (`keep_quarantined` moves one out of the purge's
 reach, to `quarantine/keep/`). A file `retire_item` took off an album goes the same way, and
-nothing in the library holds its recording, so `keep_quarantined` is the only way back. Still,
+nothing in the library holds its recording, so `keep_quarantined` is the only way back.
+`restore_kept` puts a kept file back on an album, and `retire_item` takes it off again. Still,
 apply only what the user agreed to.
 
 ## Jobs

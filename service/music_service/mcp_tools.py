@@ -286,22 +286,34 @@ def _set_recording(body: dict, _: Albums) -> dict:
     return {"id": _id(body.get("id"), "id"), "recording": mbid(body.get("recording"), "recording", "recording")}
 
 
-def quarantined_file(value) -> str:
-    """A file in ``quarantine/replaced/``: its path relative to it (``replaced/`` as
+def quarantined_file(value, where: str = "replaced") -> str:
+    """A file in ``quarantine/<where>/``: its path relative to it (``<where>/`` as
     list_quarantine shows it is dropped), or the item ID its name starts with."""
     if not isinstance(value, str) or not value.strip():
-        raise BadRequest("file must be a path in quarantine/replaced/ or the item ID its file name starts with")
+        raise BadRequest(f"file must be a path in quarantine/{where}/ or the item ID its file name starts with")
     name = value.strip()
-    name = name[len("replaced/"):] if name.startswith("replaced/") else name
+    name = name[len(where) + 1:] if name.startswith(f"{where}/") else name
     parts = name.split("/")
     if not name or len(name) > MAX_TEXT or name.startswith("/") or ".." in parts or "\x00" in name:
-        raise BadRequest("file must be a relative path inside quarantine/replaced/ (at most 500 characters)")
+        raise BadRequest(f"file must be a relative path inside quarantine/{where}/ (at most 500 characters)")
     return name
 
 
 def _keep_quarantined(body: dict, _: Albums) -> dict:
     _only(body, "file")
     return {"file": quarantined_file(body.get("file"))}
+
+
+def _restore_kept(body: dict, albums: Albums) -> dict:
+    _only(body, "file", "album", "allow_held")
+    return {"file": quarantined_file(body.get("file"), "keep"), "album": resolve_album(body.get("album"), albums),
+            "allow_held": _bool(body, "allow_held")}
+
+
+def _restore_argv(args: dict, apply: bool) -> list[list[str]]:
+    # --restore=FILE and --album=KEY, so a name starting with "-" stays the option's value.
+    argv = ["music-album-audit-releases", f"--restore={args['file']}", f"--album={args['album']}"]
+    return [_apply([*argv, *(["--allow-held"] if args["allow_held"] else [])], apply)]
 
 
 def _retire_item(body: dict, _: Albums) -> dict:
@@ -611,6 +623,8 @@ TOOLS: dict[str, Tool] = {t.name: t for t in [
     Tool("keep_quarantined", WRITE, _keep_quarantined,
          lambda a, apply: [_apply(["music-album-audit-releases", f"--keep={a['file']}"], apply)],
          ("pipeline",)),
+    # One kept file back on an album (homelab#2815), under the lock the retirements take.
+    Tool("restore_kept", WRITE, _restore_kept, _restore_argv, ("pipeline",)),
     # Local-only extras off their album (homelab#2648); --reason=R, so a reason starting
     # with "-" stays the option's value, and the IDs are integers, never flags.
     Tool("retire_item", WRITE, _retire_item,
