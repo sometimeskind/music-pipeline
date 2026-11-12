@@ -461,7 +461,8 @@ def recheck_unknown(rejected_dir: Path, inbox: Path, songs: dict[str, dict] | No
         if rejection.reason == UNKNOWN:
             write_sidecar(sidecar, first, stamps)
             outcomes[UNKNOWN] += 1
-            logger.info("  [UNKNOWN] %s: %s — still unknown to AcoustID on re-check", SOURCE, audio.name)
+            # Every scan's re-check says the same until it changes: the count line reports it (homelab#2590).
+            logger.debug("  [UNKNOWN] %s: %s — still unknown to AcoustID on re-check", SOURCE, audio.name)
             continue
         write_sidecar(sidecar, f"{rejection.reason}: {rejection.detail}", stamps)
         outcomes[rejection.reason] += 1

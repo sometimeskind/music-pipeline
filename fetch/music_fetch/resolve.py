@@ -152,10 +152,11 @@ class Report:
             logger.info("  [MERGE] %s", line)
         for line in self.conflicts:  # their events hold them; only --verbose lists them
             logger.log(logging.INFO if verbose else logging.DEBUG, "  [CONFLICT] %s", line)
+        # A standing conflict or a merge waiting on a grab is flagged at every pass:
+        # the conflict's daily event and the summary's count report it (homelab#2590).
         for reason, labels in sorted(self.flagged.items()):
-            if verbose or reason in (state.CONFLICT, state.IN_FLIGHT):
-                for item in labels:
-                    logger.info("  [FLAG] %s: %s", reason, item)
+            for item in labels:
+                logger.log(logging.INFO if verbose else logging.DEBUG, "  [FLAG] %s: %s", reason, item)
         if verbose:
             for line in self.rekeyed:
                 logger.info("  [REKEY] %s", line)
