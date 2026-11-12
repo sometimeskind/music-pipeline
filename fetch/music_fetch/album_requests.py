@@ -34,6 +34,7 @@ it as given, never with a title read from the library.
 from __future__ import annotations
 
 import dataclasses
+import logging
 import re
 from collections import Counter
 from collections.abc import Callable, Iterable, Mapping
@@ -46,6 +47,8 @@ from psycopg.types.json import Jsonb
 
 from music_fetch import events
 from music_fetch import state as statedb
+
+logger = logging.getLogger(__name__)
 
 # The pseudo-playlist a request's tracks are filed under in its album record:
 # the import's inbox folder (inbox/usenet/request/) and its items' sources.
@@ -131,11 +134,12 @@ class Tracklist:
     duration: int = 0  # seconds
     how: str = ""  # "preferred", or how the release was chosen
     release_label: str = ""  # the release as the dry run names it
+    primary_type: str = ""  # MusicBrainz's: "Album", "EP", "Single"
 
     def fields(self) -> dict:
         """The album record's fields the request sets (album mode's names)."""
         return {"name": self.name, "artist": self.artist, "year": self.year, "tracks_count": len(self.tracks),
-                "album_type": self.album_type, "duration": self.duration}
+                "album_type": self.album_type, "duration": self.duration, "primary_type": self.primary_type}
 
 
 def _credit(credits: Iterable[dict] | None) -> str:
@@ -281,7 +285,8 @@ def tracklist(get: Get, group_id: str, preferred: str | None = None) -> Tracklis
         raise Refused(f"release {preferred} has no audio tracks on MusicBrainz")
     album_type = "single" if group.get("primary-type") == "Single" else "album"
     return Tracklist(group_id, preferred, artist, group.get("title") or release.get("title") or "", tracks,
-                     _year(group.get("first-release-date")), album_type, seconds, how, _release_label(release))
+                     _year(group.get("first-release-date")), album_type, seconds, how, _release_label(release),
+                     group.get("primary-type") or "")
 
 
 def recording_url(recording: str) -> str:
@@ -384,7 +389,7 @@ class Request:
         """The album record's fields the request sets."""
         return {"name": self.name, "artist": self.artist, "year": self.data.get("year"),
                 "tracks_count": len(self.tracks), "album_type": self.data.get("album_type") or "album",
-                "duration": self.data.get("duration") or 0}
+                "duration": self.data.get("duration") or 0, "primary_type": self.data.get("primary_type") or ""}
 
 
 def load(conn: psycopg.Connection) -> list[Request]:
@@ -410,7 +415,8 @@ def add(conn: psycopg.Connection, found: Tracklist, by: str, key: str | None = N
     group, if any.  *note* ends the event's message (an automatic request's
     reason, homelab#2535); *source* is the event's (``stranded`` for a
     stranded row's request, homelab#2602)."""
-    data = {"year": found.year, "album_type": found.album_type, "duration": found.duration}
+    data = {"year": found.year, "album_type": found.album_type, "duration": found.duration,
+            "primary_type": found.primary_type}
     preferred = found.release if found.how == "preferred" else None
     with conn.transaction():
         row = conn.execute(
@@ -430,6 +436,48 @@ def add(conn: psycopg.Connection, found: Tracklist, by: str, key: str | None = N
                             "preferred_release": preferred, "tracklist_release": found.release,
                             "tracks": len(found.tracks)})
     return True
+
+
+TYPES_PER_TICK = 25
+
+
+def backfill_types(conn: psycopg.Connection, get: Get, limit: int = TYPES_PER_TICK) -> tuple[int, int, str]:
+    """Give the first *limit* requests made before homelab#2568, which have no
+    ``primary_type`` in their data, MusicBrainz's (``""`` for a release group
+    MusicBrainz no longer has, so it isn't read again): until then an EP
+    request refuses every release tagged EP.  Returns how many were filled,
+    how many are left, and why it stopped early (MusicBrainz down), if it did."""
+    groups = [g for (g,) in conn.execute(
+        "SELECT release_group::text FROM album_requests WHERE NOT (data ? 'primary_type') "
+        "ORDER BY requested_at, id")]
+    filled = 0
+    for group in groups[:limit]:
+        try:
+            found = get(f"release-group/{group}")
+        except OSError as exc:  # urllib's errors: MusicBrainz down or refusing
+            return filled, len(groups) - filled, f"reading release group {group} from MusicBrainz failed: {exc}"
+        with conn.transaction():
+            conn.execute("UPDATE album_requests SET data = data || %s WHERE release_group = %s",
+                         (Jsonb({"primary_type": (found or {}).get("primary-type") or ""}), group))
+        filled += 1
+    return filled, len(groups) - filled, ""
+
+
+def backfill_tick(get: Get | None, apply: bool) -> None:
+    """The album tick's step for :func:`backfill_types` (album mode ``on``
+    only).  One ``[REQ-TYPES]`` line while any are left.  Never raises: a
+    failure here mustn't stop the tick, and the next one tries again."""
+    if not apply or get is None:
+        return
+    try:
+        with statedb.session() as conn:
+            filled, left, stopped = backfill_types(conn, get)
+    except Exception:
+        logger.exception("[REQ-TYPES] reading the requests' MusicBrainz types failed; the next tick tries again")
+        return
+    if filled or left:
+        logger.info("[REQ-TYPES] %d request(s) given their MusicBrainz type, %d left%s", filled, left,
+                    f"; stopped: {stopped}" if stopped else "")
 
 
 def find_row(rows: statedb.AlbumRows, group: str) -> tuple[str, dict] | None:

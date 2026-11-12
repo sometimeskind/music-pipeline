@@ -14,7 +14,7 @@ import pytest
 
 from music_fetch import album_requests as req
 from music_fetch import album_requests_cli as cli
-from music_fetch import albums, resolve, state, store
+from music_fetch import albums, resolve, state, store, usenet
 from music_fetch.albums import Settings, State, tick
 
 sys.path.insert(0, str(Path(__file__).parent))  # importable however pytest imports this file
@@ -57,6 +57,25 @@ def test_without_a_preferred_release_the_most_common_official_count_wins():
     assert found.artist == "Band & Friend" and found.name == "The Album" and found.year == 1999
     assert found.album_type == "album" and found.duration == 12 * 200
     assert found.tracks[0] == ["Song 1", "Band & Friend", None, "GBAAA001001", 1, 1]
+
+
+def test_an_ep_request_takes_a_release_tagged_ep():
+    """A MusicBrainz EP's releases are tagged EP, which the matcher refused as
+    "the album isn't one" (homelab#2568).  The record's album_type stays
+    "album" (canon reads it); the matcher reads the EP as Spotify types one, a single."""
+    found = req.tracklist(FakeMB(group={**GROUP, "primary-type": "EP"}), RG)
+    record = found.fields()
+    assert record["album_type"] == "album" and record["primary_type"] == "EP"
+    args = albums.match_args(record, albums.plan(RG, record, {}))
+    assert args["album_type"] == "single"
+    title = "Band-The Album-EP-WEB-FLAC-2020-GRP"
+    assert usenet.matches(usenet.Release("g", title, 300_000_000, 1, "", [3000]), "Band", "The Album", 12, **args)
+    # A request row keeps it for the record the tick feeds.
+    row = req.Request(RG, R12, "Band", "The Album", [], {"album_type": "album", "primary_type": "EP"})
+    assert row.fields()["primary_type"] == "EP"
+    # An album's request still refuses one.
+    album = req.tracklist(FakeMB(), RG).fields()
+    assert albums.match_args(album, albums.plan(RG, album, {}))["album_type"] == "album"
 
 
 def test_a_tie_goes_to_the_count_of_the_earliest_release():
@@ -703,3 +722,55 @@ def test_release_flags():
     assert req.release_flags({"status": "Promotion"}) == ["promotion"]
     assert req.release_flags({"status": None, "disambiguation": "deluxe"}) == []
     assert req.group_flags({"secondary-types": ["Remix", "Compilation", "Soundtrack"]}) == ["remix", "compilation"]
+
+
+@needs_pg
+def test_the_tick_gives_older_requests_their_musicbrainz_type(pg_url, caplog):
+    """Requests made before homelab#2568 have no primary_type, so an EP request
+    refused every release tagged EP: the tick reads it from MusicBrainz, a few at
+    a time and once each, and the record already fed takes it."""
+    with state.connect() as conn:
+        for group in (RG, OTHER_RG):
+            conn.execute("INSERT INTO album_requests (release_group, tracklist_release, artist, name, data, tracks, "
+                         "requested_by) VALUES (%s, %s, 'Band', 'The Album', %s, '[]', 'sub-tom')",
+                         (group, R12, '{"album_type": "album"}'))
+        conn.commit()
+    s = State.load()
+    albums.feed_requests(s, req.album_requests(), [])
+    [record] = [r for r in s.albums.values() if r.get("release_group") == RG]
+    assert record["primary_type"] == ""
+
+    mb = FakeMB(group={**GROUP, "primary-type": "EP"})
+    req.backfill_tick(mb, apply=False)  # album mode dry-run: nothing read
+    assert mb.calls == []
+    with caplog.at_level(logging.INFO, logger=req.__name__):
+        with state.connect() as conn:
+            assert req.backfill_types(conn, mb, limit=1) == (1, 1, "")
+        req.backfill_tick(mb, apply=True)
+    assert "[REQ-TYPES] 1 request(s) given their MusicBrainz type, 0 left" in caplog.text
+    found = {r.release_group: r for r in req.album_requests()}
+    assert found[RG].data == {"album_type": "album", "primary_type": "EP"}
+    assert found[OTHER_RG].data["primary_type"] == ""  # MusicBrainz has no such group: not read again
+    calls = len(mb.calls)
+    req.backfill_tick(mb, apply=True)
+    assert len(mb.calls) == calls
+
+    albums.feed_requests(s, list(found.values()), [])
+    assert record["primary_type"] == "EP"
+    assert albums.match_args(record, albums.plan(RG, record, {}))["album_type"] == "single"
+
+
+@needs_pg
+def test_a_musicbrainz_outage_stops_the_type_backfill(pg_url):
+    with state.connect() as conn:
+        conn.execute("INSERT INTO album_requests (release_group, tracklist_release, artist, name, data, tracks, "
+                     "requested_by) VALUES (%s, %s, 'Band', 'The Album', '{}', '[]', 'sub-tom')", (RG, R12))
+        conn.commit()
+
+    def down(path: str, **params):
+        raise OSError("connection refused")
+
+    with state.connect() as conn:
+        filled, left, stopped = req.backfill_types(conn, down)
+    assert (filled, left) == (0, 1) and stopped.startswith(f"reading release group {RG}")
+    assert req.album_requests()[0].data == {}  # the next tick tries again

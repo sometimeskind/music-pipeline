@@ -356,7 +356,15 @@ def track_count(record: dict) -> int:
 
 def match_args(record: dict, search: Plan) -> dict:
     """The album's keywords for :func:`~music_fetch.usenet.rejection` and :func:`~music_fetch.usenet.rank`."""
-    return dict(album_type=record.get("album_type"), seconds=record.get("duration") or 0, any_album=search.any_album)
+    return dict(album_type=match_type(record), seconds=record.get("duration") or 0, any_album=search.any_album)
+
+
+def match_type(record: dict) -> str | None:
+    """The album's type as the matcher reads it: Spotify's ``album_type``, but
+    a requested MusicBrainz EP reads as Spotify types an EP, a single, so a
+    release tagged EP is it (homelab#2568).  The record keeps ``album``, which
+    canon reads."""
+    return "single" if record.get("primary_type") == "EP" else record.get("album_type")
 
 
 def by_status(counts: Mapping[str, int]) -> str:
@@ -889,6 +897,8 @@ def feed_requests(state: State, requests: list[album_requests.Request],
                 on.setdefault(album_requests.SOURCE, tracks)
                 record.setdefault("origin", REQUEST)
         record["requested"] = True
+        # Whichever way the record came: what the matcher reads an EP request by (homelab#2568).
+        record["primary_type"] = request.fields()["primary_type"]
         if album_requests.SOURCE in record.get("playlists", {}):
             # The release the tracks were read from: the fallback reads it again for its songs.
             record["tracklist_release"] = request.tracklist_release
@@ -1609,6 +1619,8 @@ def tick(
         # After Later's (which owns its stranded rows), before the requests are read (homelab#2602).
         album_playlists = [name for name, _ in playlists]
         stranded.tick(state, album_playlists, later_get, stranded_lookup, apply=settings.mode == "on")
+        # The older requests' MusicBrainz types, so an EP request takes a release tagged EP (homelab#2568).
+        album_requests.backfill_tick(later_get, apply=settings.mode == "on")
         requests = album_requests.album_requests()
     except statedb.Unavailable as exc:
         # Never run without the state (homelab#2410): skip, and let

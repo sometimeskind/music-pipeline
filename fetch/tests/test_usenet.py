@@ -354,6 +354,36 @@ def test_matches_accepts_a_single_when_spotify_says_so() -> None:
     assert not matches(rel(title, size=120 * MB), "Social Distortion", "Born To Kill", 11)
 
 
+@pytest.mark.parametrize("artist, album, title", [
+    ("Caoilfhionn Rose", "Constellation", "(2024).Caoilfhionn.Rose.-.Constellation.[FLAC]"),
+    ("Caoilfhionn Rose", "Constellation", "[2024].Caoilfhionn.Rose.-.Constellation.[FLAC] [57e4661d8]"),
+    ("SPELLLING", "The Turning Wheel", "2021 .Spellling.-.The.Turning.Wheel.[FLAC]"),
+    ("Bat for Lashes", "Lost Girls", "[2019).Bat.for.Lashes.-.Lost.Girls.[FLAC] [a1433033a]"),
+    ("Mt. Joy", "Orange Blood", "(2022).Mt.Joy.-.Orange.Blood.[FLAC]"),
+    ("Alex Cameron", "Miami Memories", "00-alex cameron-miami memories-web-2019-marr"),
+])
+def test_matches_reads_past_a_year_before_the_artist(artist: str, album: str, title: str) -> None:
+    """Some posters put the year (or a playlist's 00-) before the artist; the
+    artist rule read it as another artist's name (homelab#2568)."""
+    assert matches(rel(title), artist, album, 10, album_type="album")
+
+
+def test_a_year_before_the_artist_is_kept_when_it_is_the_artist() -> None:
+    assert matches(rel("2002-Album Name-WEB-FLAC-2020-GRP"), "2002", "Album Name", 10, album_type="album")
+    # Dropping the year doesn't make another artist's release this one.
+    why = rejection(rel("(2024).Other.Band.-.Constellation.[FLAC]"), "Caoilfhionn Rose", "Constellation", 10,
+                    album_type="album")
+    assert why is not None and why.rule == "artist"
+
+
+def test_matches_reads_an_x_between_collaborators() -> None:
+    """Spotify writes the collaboration ×, release names X (homelab#2568)."""
+    title = "Jean Grae X Quelle Chris-Everythings Fine-CD-FLAC-2018-CALiFLAC"
+    assert matches(rel(title), "Jean Grae × Quelle Chris", "Everything’s Fine", 0, album_type="album")
+    # An artist whose name has an x keeps it.
+    assert not matches(rel("Ambassadors-VHS-WEB-FLAC-2015-GRP"), "X Ambassadors", "VHS", 0, album_type="album")
+
+
 def test_matches_sizes_by_duration_when_known() -> None:
     forty_minutes = 40 * 60
     assert matches(rel("Artist-Album-WEB-FLAC-2020-GRP", size=300 * MB), "Artist", "Album", 10, seconds=forty_minutes)
