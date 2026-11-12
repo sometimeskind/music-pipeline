@@ -258,11 +258,13 @@ class FileTags(NamedTuple):
 class Retitle(NamedTuple):
     """A Usenet item's title or trackdisambig put back at ``import_task_apply``,
     recorded as a ``retitled`` event once ``item_imported`` gives it an ID
-    (homelab#2590).  Holds the item, like :class:`FileTags`."""
+    (homelab#2590), or beets' title kept because the file's can't be put back
+    (``title_kept``).  Holds the item, like :class:`FileTags`."""
 
     item: object
     message: str
     data: dict
+    kept: bool = False  # beets' title kept: a title_kept event
 
 
 class Beside(NamedTuple):
@@ -633,14 +635,12 @@ class MusicPipelinePlugin(BeetsPlugin):
             entry = self._file_tags.pop(id(item), None)
             if entry is None or entry.item is not item:
                 if _via_from_path(item.path) == "usenet":
-                    self._log.warning(
-                        "[TITLE] {}: no file title captured at import; beets' title kept", item.title)
+                    self._keep_title(item, item.title or "", None, "no file title captured at import")
                 continue
             matched = item.title or ""
             title = entry.own
             if title is None:
-                self._log.warning(
-                    "[TITLE] {}: the file's title {!r} names nothing; beets' title kept", matched, entry.title)
+                self._keep_title(item, matched, entry.title, f"the file's title {entry.title!r} names nothing")
                 continue
             disambig = item.get("trackdisambig") or ""
             recording = item.get("mb_trackid") or None
@@ -679,6 +679,15 @@ class MusicPipelinePlugin(BeetsPlugin):
                 "file_artist": entry.artist_fields["artist"] if other_artist else None,
                 "matched_artist": matched_artist if other_artist else None,
                 "usenet_job": item.get("usenet_job") or None})
+
+    def _keep_title(self, item, matched: str, file_title: str | None, why: str) -> None:
+        """Beets' title stays on a Usenet item whose own can't be put back: logged, and a
+        ``title_kept`` event once ``item_imported`` gives it an ID (homelab#2590)."""
+        message = f"[TITLE] {matched}: {why}; beets' title kept"
+        self._log.warning("{}", message)
+        self._retitled[id(item)] = Retitle(item, message, {
+            "matched": matched, "file_title": file_title, "why": why,
+            "usenet_job": item.get("usenet_job") or None}, kept=True)
 
     def clear_singleton_release_track(self, session, task):
         """Clear the recording ID beets writes as a singleton's ``mb_releasetrackid`` (homelab#2623).
@@ -741,11 +750,12 @@ class MusicPipelinePlugin(BeetsPlugin):
             self._record_imported(item, pending.playlist)
 
     def _record_retitle(self, item) -> None:
-        """The ``retitled`` event for a title :meth:`restore_file_title` put back (homelab#2590)."""
+        """The ``retitled`` event for a title :meth:`restore_file_title` put back, or
+        ``title_kept`` for beets' title kept (homelab#2590)."""
         retitle = self._retitled.pop(id(item), None)
         if retitle is None or retitle.item is not item:
             return
-        events.record("retitled", retitle.message, source="import", item_id=item.id,
+        events.record("title_kept" if retitle.kept else "retitled", retitle.message, source="import", item_id=item.id,
                       spotify_album_id=events.spotify_album(item.get("spotify_album_id")),
                       release_group=item.get("mb_releasegroupid"),
                       data={**events.item_fields(item), **retitle.data})

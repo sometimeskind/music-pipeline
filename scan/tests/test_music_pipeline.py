@@ -1494,6 +1494,26 @@ def test_a_cleared_trackdisambig_alone_is_a_retitled_event(monkeypatch) -> None:
     assert [kind for kind, _, _ in recorded] == ["retitled"]
 
 
+def test_a_generic_file_title_kept_is_a_title_kept_event(monkeypatch) -> None:
+    recorded = _recorded(monkeypatch)
+    plugin = _make_plugin()
+    item = _file(f"{LOADED}/07.flac", "Track 07", track=7)
+    task = _created(plugin, item)
+    _match(item, title="Cool It Down", trackdisambig="", mb_trackid="cool-rec")
+    plugin.restore_file_title(session=MagicMock(), task=task)
+    assert recorded == []  # no item ID yet
+
+    _stored(plugin, item, 80, "/root/Music/library/Artist/Album/07 - Cool It Down.flac")
+
+    (kind, message, kw), = recorded
+    assert kind == "title_kept" and kw["item_id"] == 80 and kw["source"] == "import"
+    assert message == "[TITLE] Cool It Down: the file's title 'Track 07' names nothing; beets' title kept"
+    data = kw["data"]
+    assert (data["matched"], data["file_title"]) == ("Cool It Down", "Track 07")
+    assert data["why"] == "the file's title 'Track 07' names nothing"
+    assert plugin._retitled == {}
+
+
 def test_a_title_left_as_matched_records_nothing(monkeypatch) -> None:
     recorded = _recorded(monkeypatch)
     plugin = _make_plugin()

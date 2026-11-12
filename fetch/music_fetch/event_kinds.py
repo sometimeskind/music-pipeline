@@ -148,6 +148,10 @@ KINDS: dict[str, Kind] = {
                            "recording dropped if refuted (data.dropped_why), and its artist if another's.",
                      (*_ITEM, "matched", "file_title", "trackdisambig", "recording_dropped", "dropped_mb_trackid",
                       "dropped_why", "versions", "file_artist", "matched_artist", "usenet_job")),
+    "title_kept": Kind(ITEM, "[TITLE] … beets' title kept: a Usenet item whose own title couldn't be put back at "
+                             "import (no file title captured, or one naming nothing, such as Track 07), so it "
+                             "keeps its match's title; why says which.",
+                       (*_ITEM, "matched", "file_title", "why", "usenet_job")),
     "import_alongside": Kind(ITEM, "[BOTH]/[ALBUM]: an item imported beside a library item of the same recording "
                                    "(data.duplicate), with why.", (*_ITEM, "why", "duplicate")),
     "kept_apart": Kind(ITEM, "[SPLIT]/[APART]: an item imported beside one with its artist and title that no ID "
