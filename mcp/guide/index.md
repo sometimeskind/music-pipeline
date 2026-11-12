@@ -34,7 +34,7 @@ imported before then has no earlier events, and the logs are all that holds them
 `find_events` answers "how often does X happen" and "which albums had Y" across the library:
 give it one or more event kinds (an incomplete import is kind import_incomplete, a search that
 matched nothing search_miss, a grab grab; a spotdl download imported is imported, a Usenet track's title
-put back from its file at import retitled, canon's tag changes on an album retagged, a superseded
+put back from its file at import retitled (beets' title kept instead title_kept), canon's tag changes on an album retagged, a superseded
 file deleted purged) and a window (`since`, default the last 7 days); `item_id`
 narrows it to one item's history, and `source` to one component's events (`stranded`: the rows a
 playlist that left `playlists.conf` stranded, see `requests`). Its
