@@ -222,9 +222,9 @@ def identify(folder: Path, run=subprocess.run) -> dict | None:
         raise RuntimeError(f"identifying {folder.name} failed ({proc.returncode}): {proc.stderr.strip()[-500:]}")
     found = json.loads(proc.stdout.strip().splitlines()[-1]) if proc.stdout.strip() else None
     if found is None:
-        logger.info("[NOMB] %s: no MusicBrainz release close enough; its completeness is unknown", folder.name)
+        logger.debug("[NOMB] %s: no MusicBrainz release close enough; its completeness is unknown", folder.name)
     else:
-        logger.info("[RELEASE] %s is %s (%s): %d of its %d track(s) have no file, %d file(s) unmatched",
+        logger.debug("[RELEASE] %s is %s (%s): %d of its %d track(s) have no file, %d file(s) unmatched",
                     folder.name, found["album"], found["mb_albumid"], found["missing"], found["tracks"],
                     found["unmatched"])
     return found
@@ -246,7 +246,7 @@ def import_rest(quarantine: Path, inbox: Path, playlist: str, job: str, run_impo
         target = dest / f.relative_to(src)
         target.parent.mkdir(parents=True, exist_ok=True)
         shutil.move(str(f), target)
-    logger.info("[REST] %s: importing %d file(s) beets couldn't match, as they are", job, len(files))
+    logger.debug("[REST] %s: importing %d file(s) beets couldn't match, as they are", job, len(files))
     with tempfile.TemporaryDirectory(prefix="rest-config-") as config_dir:
         config = Path(config_dir) / "config.yaml"
         config.write_text(_REST_CONFIG)

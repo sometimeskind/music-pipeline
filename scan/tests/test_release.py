@@ -99,7 +99,8 @@ def test_identify_runs_beets_in_a_subprocess(tmp_path, caplog) -> None:
             {"mb_albumid": "CD94", "album": "Ready to Die", "tracks": 17, "missing": 0, "unmatched": 1}),
             stderr="")
 
-    with caplog.at_level("INFO", logger="music_scan.release"):
+    # DEBUG since homelab#2590: the import's event carries the verdict.
+    with caplog.at_level("DEBUG", logger="music_scan.release"):
         found = release.identify(tmp_path, run=run)
     assert found["mb_albumid"] == "CD94" and calls[0][1:] == ["-m", "music_scan.release", str(tmp_path)]
     assert "[RELEASE]" in caplog.text
