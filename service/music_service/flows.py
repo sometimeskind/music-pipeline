@@ -736,8 +736,10 @@ def _album_library_hooks(lib):
             albums_by_stamp.update(by_stamp(library.items))
         if not scan.have_album(lambda pl: indexes(pl)[0], library, albums_by_id, key, record, albums_by_stamp):
             return False
-        for playlist, tracks in record["playlists"].items():
-            scan.have_or_link(*indexes(playlist), playlist, tracks)
+        # Links the items found outside the playlist: a write (#506).
+        with hold("pipeline"):
+            for playlist, tracks in record["playlists"].items():
+                scan.have_or_link(*indexes(playlist), playlist, tracks)
         return True
 
     def missing(playlist: str, tracks: list[list]) -> list[list]:
@@ -763,7 +765,8 @@ def _album_library_hooks(lib):
             quarantine_task(folder)
 
     def add_source(have_source: str, new_source: str, tracks: list[list[str]]) -> None:
-        scan.add_source(lib, have_source, new_source, tracks)
+        with hold("pipeline"):
+            scan.add_source(lib, have_source, new_source, tracks)
 
     def import_rest(playlist: str, job: str) -> int:
         # The files the singleton import couldn't match are the album's too (#279).
@@ -800,11 +803,17 @@ def _album_library_hooks(lib):
         return release.one_format(folder, key)
 
     def tag_ids(playlist: str, tracks: list[list], since: float, tracks_count: int, key: str) -> None:
-        scan.tag_album_ids(lib, playlist, tracks, since, tracks_count, key)
-        retire_held()
-        canon_albums(playlist, since)
-        supersede(playlist, since, tracks_count, tracks, key)
-        embed_covers(playlist, since)
+        # Every step writes the library, so all of them hold the slot, as one
+        # block (#506): the IDs and canon ran outside it, raced a scan's beet
+        # import and hit 'database is locked'.  One block, so no scan imports
+        # between the IDs and canon, and the steps below take no slot of their
+        # own (a second hold of a 1-slot limit in the same run waits forever).
+        with hold("pipeline"):
+            scan.tag_album_ids(lib, playlist, tracks, since, tracks_count, key)
+            retire_held()
+            canon_albums(playlist, since)
+            supersede(playlist, since, tracks_count, tracks, key)
+            embed_covers(playlist, since)
 
     def retire_held() -> None:
         # After tag_album_ids (#294): the release's new Spotify IDs may show it
@@ -813,9 +822,8 @@ def _album_library_hooks(lib):
         from music_scan import release  # noqa: PLC0415
 
         try:
-            with hold("pipeline"):
-                if release.retire_held(lib):
-                    scan.regen_playlists()
+            if release.retire_held(lib):
+                scan.regen_playlists()
         except Exception:
             release.logger.exception("Retiring held extras failed; the next scan retries it")
 
@@ -840,14 +848,12 @@ def _album_library_hooks(lib):
         from music_scan.navidrome import trigger_scan  # noqa: PLC0415
 
         try:
-            with hold("pipeline"):
-                fresh = [i for i in lib.items_by_source(playlist)
-                         if i.get("via") == "usenet" and (i.added or 0) >= since
-                         and str(i.get("album_record") or "") == str(key)]
-                n = sup.after_import(lib, fresh, tracks_count, tracks)
-                if n:
-                    scan.regen_playlists()
+            fresh = [i for i in lib.items_by_source(playlist)
+                     if i.get("via") == "usenet" and (i.added or 0) >= since
+                     and str(i.get("album_record") or "") == str(key)]
+            n = sup.after_import(lib, fresh, tracks_count, tracks)
             if n:
+                scan.regen_playlists()
                 trigger_scan()
         except Exception:
             sup.logger.exception("Superseding loose copies failed; music-canon-albums retries it")
