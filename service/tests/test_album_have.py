@@ -3,6 +3,16 @@
 from __future__ import annotations
 
 from pathlib import Path
+from unittest.mock import patch
+
+import pytest
+
+
+@pytest.fixture(autouse=True)
+def _no_prefect():
+    """have takes the pipeline slot to link (#506); no Prefect server here."""
+    with patch("music_service.flows.concurrency"):
+        yield
 
 
 def _add(lib, title: str, path: str, **fields):
