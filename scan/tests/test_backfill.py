@@ -14,6 +14,7 @@ from music_scan.backfill import (
     report_albums,
     run,
     run_albums,
+    store_changed,
     unlink_wrong,
 )
 
@@ -369,3 +370,24 @@ def test_mb_recordings_asks_for_isrcs_once_and_a_failed_lookup_is_none() -> None
     assert lookup("b") is None
     client.get.assert_any_call("recording/a", inc="isrcs")
     assert client.get.call_count == 2
+
+
+def test_store_changed_records_each_items_written_fields(monkeypatch) -> None:
+    """homelab#2590: the default mode's writes are ids_written events, one per changed item."""
+    from contextlib import nullcontext
+
+    from music_scan import audit, backfill
+
+    recorded = []
+    monkeypatch.setattr(backfill.events, "record", lambda kind, message, **kw: recorded.append((kind, message, kw)))
+    monkeypatch.setattr(audit, "pipeline_lock", nullcontext)
+    changed = _item(1, "Song", "a", spotify_url=URL + "S", artist="Artist")
+    changed.data["title"] = "Song"  # the fake's get reads data only
+    same = _item(2, "Other", "a", spotify_ids="T", isrc="GBT1")
+    plan = plan_backfill([changed, same], {"a": [_song("S", isrc="GBS1")]})
+    store_changed(plan)
+    (kind, message, kw), = recorded
+    assert kind == "ids_written" and kw["item_id"] == 1
+    assert kw["data"]["changed"] == {"spotify_ids": [None, "S"], "isrc": [None, "GBS1"]}
+    assert kw["data"]["via"] == "music-backfill-ids"
+    assert message == "[IDS] 1 Artist — Song: spotify_ids, isrc written by music-backfill-ids"

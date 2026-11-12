@@ -213,7 +213,28 @@ def test_cleanup_canonicalises_the_items_it_links(tmp_path, monkeypatch) -> None
     monkeypatch.setattr(canon, "canonicalize_items", lambda items, budget=None: events.append(("canon", items)))
     monkeypatch.setattr(scan, "regen_playlists", lambda: events.append("m3u") or {})
     monkeypatch.setattr(navidrome, "trigger_scan", lambda: events.append("rescan"))
+    recorded = []
+    monkeypatch.setattr(rollback.events, "record", lambda kind, message, **kw: recorded.append((kind, message, kw)))
 
     assert rollback.run(apply=True) == 1
     assert proud.get("spotify_ids") == "s1"
     assert events == [("canon", [proud]), "m3u", "rescan"]
+    # homelab#2590: the link is an ids_written event.
+    (kind, message, kw), = recorded
+    assert kind == "ids_written" and kw["item_id"] == 1 and kw["source"] == "backfill"
+    assert kw["data"]["changed"] == {"spotify_ids": [None, "s1"]}
+    assert kw["data"]["via"] == "music-rollback-releases"
+    assert message == "[IDS] 1 Drake feat. Nicki Minaj — Make Me Proud: spotify_ids written by music-rollback-releases"
+
+
+def test_a_rolled_back_item_is_a_retire_event(monkeypatch) -> None:
+    from music_scan import rollback
+
+    recorded = []
+    monkeypatch.setattr(rollback.events, "record", lambda kind, message, **kw: recorded.append((kind, message, kw)))
+    once = item(7, "Once in a Lifetime", album="Remain in Light", sources="later", isrc="USWB10001")
+    rollback.record_rollback(once)
+    (kind, message, kw), = recorded
+    assert kind == "retire" and kw["item_id"] == 7 and kw["source"] == "rollback"
+    assert kw["data"]["origin"] == "rollback" and kw["data"]["isrc"] == "USWB10001"
+    assert message.startswith("[ROLLBACK] 7 Talking Heads — Once in a Lifetime:")

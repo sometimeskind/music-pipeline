@@ -25,6 +25,7 @@ import urllib.request
 from collections.abc import Callable, Iterable
 from pathlib import Path
 
+from music_fetch import events
 from music_scan.identity import item_spotify_ids, spotify_id
 
 logger = logging.getLogger(__name__)
@@ -136,7 +137,7 @@ def embed_covers(
             logger.info("  [ART] %s: would embed the cover on %d track(s)", _label(album), len(entries))
             count += len(entries)
             continue
-        done = 0
+        done = []
         for item, url in entries:
             if url not in images:
                 try:
@@ -151,10 +152,17 @@ def embed_covers(
             except Exception as exc:
                 logger.warning("  [NOART] %s: embedding failed: %s", _path(item), exc)
                 continue
-            done += 1
+            done.append(item)
         if done:
-            logger.info("  [ART] %s: embedded the cover on %d track(s)", _label(album), done)
-        count += done
+            first = done[0]
+            name = f"{first.get('albumartist') or first.get('artist') or '?'} — {first.get('album') or '?'}"
+            message = f"[ART] {name}: embedded the cover on {len(done)} track(s)"
+            logger.info("  %s", message)
+            events.record("cover_embedded", message, source="cover", item_id=done[0].id if len(done) == 1 else None,
+                          spotify_album_id=events.spotify_album(done[0].get("spotify_album_id")),
+                          release_group=done[0].get("mb_releasegroupid") or None,
+                          data={"album": name, "items": [i.id for i in done]})
+        count += len(done)
     return count
 
 
