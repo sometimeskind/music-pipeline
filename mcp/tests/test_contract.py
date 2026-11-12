@@ -223,6 +223,8 @@ async def test_the_other_write_tools_dry_run(pipeline_url):
             ("requeue_albums", {"ids": ["ALB3", "ALB2", "ALB3"]}, {"ids": ["ALB2", "ALB3"], "since": None}),
             ("merge_items", {"pairs": [[1, 2]]}, {"pairs": [[1, 2]]}),
             ("fingerprint_items", {"ids": [18521, 534, 534]}, {"ids": [534, 18521]}),
+            ("restore_kept", {"file": "keep/17052", "album": "pastel"},
+             {"file": "17052", "album": "ALB3", "allow_held": False}),
             ("embed_covers", {}, {}),
             ("canon_albums", {"mb_budget": 3}, {"refresh": False, "search_budget": None, "mb_budget": 3}),
         ]:

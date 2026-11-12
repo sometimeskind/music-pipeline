@@ -33,7 +33,7 @@ IDs. An album key is the album's row in the album store, an integer such as 1734
 operator's one-time rekey, homelab#2478, it was the Spotify album ID); find_albums and get_album
 show it, requeue_albums takes it or any of the album's Spotify album IDs, and it is never a
 Spotify ID itself. An album query (find_albums, get_album, check_release,
-reset_album, the override and hold tools, remove_from_later's albums) is the key, any of the album's Spotify IDs, its
+reset_album, restore_kept, the override and hold tools, remove_from_later's albums) is the key, any of the album's Spotify IDs, its
 release group, the exact "artist — album", or a part matching one album; a query matching
 several returns "ambiguous" with the candidates and does nothing. A track (pin_track,
 unpin_track, unlink_spotify_id) is a Spotify track ID or URL. An album is requested (request_album) by its
@@ -52,8 +52,8 @@ that outlasts the inline wait returns a job_id: poll get_job. recheck_recordings
 the run ID, and apply_recheck applies the finished run.
 
 Tiers. Read tools anyone signed in may use. Write tools (reset_album, requeue_albums,
-merge_items, replace_item, unlink_spotify_id, set_recording, fingerprint_items, keep_quarantined, retire_item,
-embed_covers,
+merge_items, replace_item, unlink_spotify_id, set_recording, fingerprint_items, keep_quarantined, restore_kept,
+retire_item, embed_covers,
 canon_albums, backfill_album_ids,
 apply_recheck,
 set_search_override, clear_search_override, hold_album, release_album, pin_track, unpin_track,
@@ -176,7 +176,8 @@ def build_server(
             Field(description="unmatched: the scan's low-confidence files; rejected: the length "
                               "guard's; replaced: superseded and merged copies, which the purge deletes "
                               "14 days after the move once the library holds their recording; keep: "
-                              "files keep_quarantined moved out of replaced, which nothing deletes; "
+                              "files keep_quarantined moved out of replaced, which nothing deletes and "
+                              "restore_kept puts back on an album; "
                               "replaced/retired holds what retire_item took off an album, purged the same way"),
         ],
         query: Annotated[str | None, Field(description="case-insensitive substring of the path")] = None,
@@ -575,6 +576,34 @@ def build_server(
         holds its recording by a wrong ID. A name matching several files is refused. The apply
         records a kept event. list_quarantine kind=keep shows the kept files."""
         return await run("keep_quarantined", {"file": file, "apply": apply}, write=True)
+
+    @mcp.tool(annotations={"destructiveHint": True})
+    async def restore_kept(
+        file: Annotated[str, Field(description="a file in quarantine/keep: its path as list_quarantine kind=keep "
+                                               "shows it, or the item ID its file name starts with", min_length=1,
+                                   max_length=500)],
+        album: AlbumQuery,
+        allow_held: Annotated[bool, Field(description="import it although an item of another album holds its "
+                                                      "recording; never when the album's own release does")] = False,
+        apply: Apply = False,
+    ) -> dict:
+        """music-album-audit-releases --restore: put one file from quarantine/keep back in the
+        library, as a local-only extra of the album record named (its album_record, as an import
+        keeps an extra), so the next scan keeps it on that album. The dry run says what it imports
+        and its tags, which recording it gets, which item would then hold the same recording, and
+        where the file goes. An item that shares the file's recording ID but is another song or
+        version (its title or trackdisambig against the file's title and album, the import's rule),
+        or MusicBrainz's recording of the ID when no item shares it, leaves the file with no
+        recording rather than that one ([CLASH], [RECORDING] none). It is
+        refused when a release item of that album holds its recording or has its audio (the next
+        scan would retire or merge it again), when any other item holds it (Spotify ID, ISRC, a
+        recording ID at the same length, or the same audio by fingerprint) unless allow_held, when
+        the album is mid-import or has no release items, when its library path is taken, and when
+        the MusicBrainz lookup fails. The
+        apply records a restored event, regenerates the .m3u files and rescans Navidrome; the next
+        scan's canon files it under the album's tags. retire_item takes it off again."""
+        return await run("restore_kept", {"file": file, "album": album, "allow_held": allow_held, "apply": apply},
+                         write=True)
 
     @mcp.tool(annotations={"destructiveHint": True})
     async def retire_item(

@@ -111,7 +111,9 @@ wrong ID (17052, the *Nebraska* live take).  The purge, ``--replaced``, the
 digest's only copies and the scan's asis pass never read ``keep/`` (as for
 ``replaced/``, a spotdl file's URL there still counts as held, so it isn't
 downloaded again); ``list_quarantine`` shows it, and a kept file stays until a
-person deletes it.
+person deletes it, or ``--restore FILE --album QUERY`` (homelab#2815,
+:mod:`music_scan.restore`) puts it back in the library as a local-only extra of
+that album.
 
 ``--retire ITEM_ID... --reason R`` (homelab#2648, :func:`retire_chosen`) takes
 local-only extras a person chose off their album: a wrong release's tracks a
@@ -1264,26 +1266,37 @@ def keep_target(name: str, replaced_dir: Path) -> Path:
     ``17052-03-10 - Reason To Believe (Nebraska Live).m4a``: every move there
     prefixes the item ID).  Raises :class:`SystemExit` when it names none, or
     more than one file."""
+    return named_file(name, replaced_dir, "--keep", "replaced", "nothing moved")
+
+
+def named_file(name: str, folder: Path, flag: str, where: str, nothing: str) -> Path:
+    """The one audio file in *folder* (``quarantine/<where>/``) that *name* names:
+    its path relative to *folder* (a leading ``<where>/``, as ``list_quarantine``
+    shows it, is dropped), or the item ID its file name starts with.  Raises
+    :class:`SystemExit`, the message led by *flag* and ended by *nothing*, when it
+    names none, or more than one file (:func:`keep_target`, and ``--restore``'s
+    file in ``quarantine/keep/``, homelab#2815)."""
     name = name.strip()
-    if name.startswith("replaced/"):
-        name = name[len("replaced/"):]  # as list_quarantine shows it
+    if name.startswith(f"{where}/"):
+        name = name[len(where) + 1:]  # as list_quarantine shows it
     if not name:
-        raise SystemExit("--keep: name a file in quarantine/replaced/ or the item ID its name starts with")
-    files = audio_files(replaced_dir) if replaced_dir.is_dir() else []
+        raise SystemExit(f"{flag}: name a file in quarantine/{where}/ or the item ID its name starts with")
+    files = audio_files(folder) if folder.is_dir() else []
     if name.isdigit():
         hits = [f for f in files if f.name.startswith(f"{name}-")]
         what = f"a file name starting with {name}-"
     else:
         rel = Path(name)
         if rel.is_absolute() or ".." in rel.parts:
-            raise SystemExit(f"--keep: {name!r} must be a path inside quarantine/replaced/")
-        hits = [f for f in files if f.relative_to(replaced_dir) == rel]
+            raise SystemExit(f"{flag}: {name!r} must be a path inside quarantine/{where}/")
+        hits = [f for f in files if f.relative_to(folder) == rel]
         what = f"the path {name}"
     if not hits:
-        raise SystemExit(f"--keep: no audio file in {replaced_dir} has {what}; nothing moved")
+        raise SystemExit(f"{flag}: no audio file in {folder} has {what}; {nothing}")
     if len(hits) > 1:
-        listed = "; ".join(str(f.relative_to(replaced_dir)) for f in hits)
-        raise SystemExit(f"--keep: {len(hits)} files have {what} ({listed}); name one by its path. Nothing moved")
+        listed = "; ".join(str(f.relative_to(folder)) for f in hits)
+        raise SystemExit(f"{flag}: {len(hits)} files have {what} ({listed}); name one by its path. "
+                         f"{nothing[0].upper()}{nothing[1:]}")
     return hits[0]
 
 
@@ -1513,7 +1526,8 @@ def audit_main() -> None:
                     "with --merged, the records a release-group merge left holding several releases; "
                     "with --replaced, list (and with --apply delete) one album's copies in quarantine/replaced/; "
                     "with --replaced and no query, list every only copy there by album; "
-                    "with --retire, take local-only extras off their album")
+                    "with --retire, take local-only extras off their album; "
+                    "with --restore, put a file from quarantine/keep/ back on an album")
     parser.add_argument("--replaced", metavar="QUERY", nargs="?", const="",
                         help="the album's Spotify ID, its 'artist — album', or a part of it that matches one album; "
                              "without one, list every only copy in quarantine/replaced/ (read-only)")
@@ -1530,6 +1544,15 @@ def audit_main() -> None:
                              "quarantine/replaced/retired/, which the purge deletes after REPLACED_RETENTION_DAYS "
                              "(a dry run without --apply; homelab#2648)")
     parser.add_argument("--reason", help="with --retire: why, kept in each item's retire event")
+    parser.add_argument("--restore", metavar="FILE",
+                        help="put one file from quarantine/keep/ back in the library, as a local-only extra of "
+                             "--album: its path relative to quarantine/keep/, or the item ID its name starts with "
+                             "(a dry run without --apply; homelab#2815)")
+    parser.add_argument("--album", metavar="QUERY",
+                        help="with --restore: the album record, its key, a Spotify album ID or 'artist — album'")
+    parser.add_argument("--allow-held", action="store_true",
+                        help="with --restore: import it although another album's item holds its recording "
+                             "(never when the album's own release holds it)")
     parser.add_argument("--merged", action="store_true",
                         help="list the album records holding items of several releases (a release-group merge of "
                              "two imported records) and what the next scan retires of each (read-only, "
@@ -1540,6 +1563,13 @@ def audit_main() -> None:
     if args.retire is not None and (args.keep is not None or args.merged or args.replaced is not None
                                     or args.only_copies):
         parser.error("--retire takes items off an album; give it alone (with --reason and --apply)")
+    if (args.restore is None) != (args.album is None) or args.album == "":
+        parser.error("--restore and --album go together: the file and the album it goes back on")
+    if args.allow_held and args.restore is None:
+        parser.error("--allow-held goes with --restore")
+    if args.restore is not None and (args.keep is not None or args.retire is not None or args.merged
+                                     or args.replaced is not None or args.only_copies):
+        parser.error("--restore puts one file back; give it alone (with --album, --allow-held and --apply)")
     if args.keep is not None and (args.merged or args.replaced is not None or args.only_copies):
         parser.error("--keep moves one file; give it alone (with --apply)")
     if args.merged and (args.replaced is not None or args.apply or args.only_copies):
@@ -1549,6 +1579,11 @@ def audit_main() -> None:
     logging.basicConfig(level=logging.INFO, format="[%(asctime)s] %(message)s", datefmt="%Y-%m-%dT%H:%M:%S%z")
     if args.keep is not None:
         _keep_main(args.keep, args.apply)
+        return
+    if args.restore is not None:
+        from music_scan import restore  # noqa: PLC0415
+
+        restore.main(args.restore, args.album, args.allow_held, args.apply)
         return
     if args.retire is not None:
         _retire_main(args.retire, args.reason, args.apply)

@@ -281,6 +281,35 @@ def test_fingerprint_items_refuses_bad_arguments(client, body):
     assert client.post("/mcp-api/run/fingerprint_items", json=body, headers=WRITE).status_code == 400, body
 
 
+@pytest.mark.parametrize("file, expected", [
+    ("17052", "17052"),
+    (" keep/17052-03-10 - Live.m4a ", "17052-03-10 - Live.m4a"),  # as list_quarantine kind=keep shows it
+    ("--apply", "--apply"),  # passed as --restore=--apply: never a flag
+])
+def test_restore_kept_normalises_the_file_and_the_album(client, env, file, expected):
+    resp = client.post("/mcp-api/run/restore_kept", json={"file": file, "album": "pastel"}, headers=WRITE)
+    assert resp.status_code == 200, resp.json
+    assert resp.json["args"] == {"file": expected, "album": "ALB3", "allow_held": False}
+    assert env["commands"].ran[-1] == ["music-album-audit-releases", f"--restore={expected}", "--album=ALB3"]
+
+
+def test_restore_kept_passes_allow_held(client, env):
+    resp = client.post("/mcp-api/run/restore_kept", json={"file": "17052", "album": "ALB3", "allow_held": True},
+                       headers=WRITE)
+    assert resp.status_code == 200, resp.json
+    assert env["commands"].ran[-1] == ["music-album-audit-releases", "--restore=17052", "--album=ALB3",
+                                       "--allow-held"]
+
+
+@pytest.mark.parametrize("body", [
+    {"album": "pastel"}, {"file": "17052"}, {"file": "../x.m4a", "album": "pastel"},
+    {"file": "/etc/passwd", "album": "pastel"}, {"file": 7, "album": "pastel"}, {"file": "17052", "album": ""},
+    {"file": "17052", "album": "pastel", "allow_held": "yes"}, {"file": "17052", "album": "pastel", "force": True},
+])
+def test_restore_kept_refuses_bad_arguments(client, body):
+    assert client.post("/mcp-api/run/restore_kept", json=body, headers=WRITE).status_code == 400, body
+
+
 def test_retire_item_normalises_its_ids_and_reason(client, env):
     resp = client.post("/mcp-api/run/retire_item", json={"ids": [8283, 534, 8283], "reason": "  wrong\n box  set "},
                        headers=WRITE)

@@ -174,6 +174,11 @@ KINDS: dict[str, Kind] = {
     "kept": Kind(ITEM, "[KEEP]: a file moved by hand from quarantine/replaced to quarantine/keep, out of the "
                        "purge's reach (keep_quarantined).",
                  ("artist", "title", "album", "path", "dest")),
+    "restored": Kind(ITEM, "[RESTORE]: a file in quarantine/keep put back in the library as a local-only extra of "
+                           "album data.key (restore_kept); data.dropped holds the recording fields cleared when an "
+                           "item sharing its ID is another song or version (data.dropped_why, data.clashing).",
+                     (*_ITEM, "source", "key", "was", "via", "recording", "dropped", "dropped_why", "versions",
+                      "clashing", "holders", "fingerprint")),
     "claimed": Kind(ITEM, "[CLAIM]/[UNCLAIMED]: a request's fallback track stamped with its record, or not.",
                     (*_ITEM, "recording", "claimed", "key", "keys")),
     "id_linked": Kind(ALBUM, "[IDS]: Spotify track IDs linked to a Usenet release's items.",

@@ -102,6 +102,21 @@ rescues a file until the purge. The import's event (`album_history`) says which 
   are, so the user decides on those. Deleting them is workstation-only. A superseded copy the
   user wants kept anyway (the library holds its recording only by a wrong ID): `keep_quarantined`
   before the purge, which moves it to `quarantine/keep/`.
+- **A kept file back on its album:** `restore_kept` with the file in `quarantine/keep/` and the
+  album, after a dry run, imports it on its own tags as a local-only extra of that album
+  (stamped on the album record as an import keeps an extra), so the next scan keeps it there
+  and canon files it under the album's tags. Its recording is decided by the import's rule: an
+  item that shares the file's recording ID or ISRC but whose title or trackdisambig names
+  another song or version (`[CLASH]`) leaves the file with no recording (`[RECORDING] none`),
+  and the fingerprint recheck can name it later. When no item shares the ID, MusicBrainz's
+  recording of it is weighed the same way; a failed lookup refuses the call, so try again. `[HOLDER]` lines name the items that would
+  hold the same recording. Refused, nothing imported:
+  - A release item of the album holds the recording or has the same audio: the next scan would
+    retire it again (extra, now held) or merge it. Fix that item's recording first
+    (`set_recording`), or the file is a copy of that track after all.
+  - Another item holds it (a Spotify ID, an ISRC, a recording ID at the same length, or the same
+    audio): the library has it already. allow_held=true imports it beside, when the user wants both.
+  - The album is mid-import or has no release items, or the file's library path is taken.
 - **Two copies on one album:** the album's older items whose recording the release lacked
   stayed as `[LOCAL]` extras. Once the release's tracks get their Spotify IDs, the next scan
   retires those a release track holds and merges those whose audio one release track holds.
