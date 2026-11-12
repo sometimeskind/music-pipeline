@@ -492,7 +492,7 @@ def _no_retire(key, record, keep, drop):
 
 
 def run_complete(state, completion, roots, have_result=True, imported=None, tagged=None, titles=None,
-                 identity=None, retired=None, claimed=None, rest=None):
+                 identity=None, retired=None, claimed=None, rest=None, as_is=0):
     """*titles* are the titles of the release's items beets imported (default:
     the album's, or none when *have_result* is False); *identity* is the
     release's MusicBrainz match; *retired* collects ``(keep, drop)`` calls."""
@@ -519,7 +519,7 @@ def run_complete(state, completion, roots, have_result=True, imported=None, tagg
         tag_ids=lambda pl, tracks, since, count, key: tagged.append((pl, count)),
         retire=lambda key, record, keep, drop: retired.append((keep, drop)) or 0,
         identify=(lambda folder: identity),
-        import_rest=(lambda pl, job: (rest if rest is not None else []).append((pl, job)) or 0),
+        import_rest=(lambda pl, job: (rest if rest is not None else []).append((pl, job)) or as_is),
         complete_root=complete_root, inbox_root=inbox, quarantine_root=quarantine,
     )
     return status, seen, added
@@ -2299,6 +2299,36 @@ def test_import_done_carries_the_release_group_identify_found(roots, recorded) -
     (kind, message, kw), = recorded
     assert kind == "import_done" and message.startswith("[DONE] Artist — Album: 2 file(s) from ")
     assert kw["release_group"] == RG and kw["spotify_album_id"] == "a0"
+
+
+def test_import_done_carries_the_release_check_and_the_files_imported_as_they_are(roots, recorded) -> None:
+    """homelab#2590: [RELEASE] and [REST] are the import event's data, not log lines."""
+    identity = {"missing": 0, "unmatched": 1, "tracks": 2, "album": "Album", "mb_albumid": "mb1",
+                "files": 3, "distance": 0.1, "mb": {"mb_releasegroupid": RG}}
+    run_complete(grabbed_state(), albums.Completion("nzo1", True, "album/Artist-Album-FLAC"), roots,
+                 identity=identity, as_is=1)
+    (kind, _, kw), = recorded
+    assert kind == "import_done"
+    assert kw["data"]["identified"] == {"mb_albumid": "mb1", "album": "Album", "tracks": 2, "missing": 0,
+                                        "unmatched": 1}
+    assert kw["data"]["as_is"] == 1
+
+
+def test_a_release_musicbrainz_does_not_know_says_so_in_its_failure(roots, recorded) -> None:
+    """homelab#2590: [NOMB] is identified null.  A job beets imported nothing of (album 1550's
+    one .mp4) records what the check found too."""
+    run_complete(grabbed_state(), albums.Completion("nzo1", True, "album/Artist-Album-FLAC"), roots,
+                 have_result=False, identity=None)
+    (kind, message, kw), = recorded
+    assert kind == "failure" and "beets imported none of its files" in message
+    assert kw["data"]["identified"] is None and kw["data"]["as_is"] == 0
+
+
+def test_a_failed_download_records_no_release_check(roots, recorded) -> None:
+    run_complete(grabbed_state(), albums.Completion("nzo1", False, "album/Artist-Album-FLAC", "CRC error"), roots)
+    (kind, _, kw), = recorded
+    assert kind == "failure"
+    assert "identified" not in kw["data"] and "as_is" not in kw["data"]
 
 
 def test_import_done_says_how_many_titles_it_found(roots, recorded) -> None:

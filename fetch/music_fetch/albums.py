@@ -1939,6 +1939,7 @@ def complete(
     reason = completion.fail_message or "download failed"
     imported: list[str] | None = None  # the release's item titles, once imported
     started: float | None = None
+    judged: dict = {}  # what the release check found, for the import's events (homelab#2590)
     if completion.ok and source is not None and source.is_dir() and playlists:
         first = playlists[0]
         dest = inbox_root / first / job_name
@@ -1961,19 +1962,21 @@ def complete(
         if "import_identity" in record:
             # Judged on the first try's files: those beets imported are gone from the dir.
             identity = record["import_identity"]
+            judged["identified"] = _identified(identity)
         elif identify is not None:
             try:
                 identity = record["import_identity"] = identify(dest)
             except Exception:
                 logger.exception("[NOMB] %s: identifying %s failed; its completeness is unknown", label, job_name)
             else:
+                judged["identified"] = _identified(identity)
                 # A resumed import is judged on these files, not on the leftovers.
                 _save_import(save, label)
         gave_up = ""  # why a retried import now counts against the release
         try:
             import_inbox(dest)
             if import_rest is not None:
-                import_rest(first, job_name)
+                judged["as_is"] = import_rest(first, job_name) or 0
         except ImportDeferred as exc:
             record["import_deferrals"] = record.get("import_deferrals", 0) + 1
             if record["import_deferrals"] <= MAX_IMPORT_DEFERRALS:
@@ -2013,7 +2016,7 @@ def complete(
             logger.warning("[WRONG] %s: %s is %s", label, job_name, reason)
             # Not the album's release group: identity is the other album's.
             _event("import_wrong", key, record, f"[WRONG] {label}: {job_name} is {reason}", release=title,
-                   guid=guid, found=found, total=total, items=len(titles))
+                   guid=guid, found=found, total=total, items=len(titles), **judged)
         else:
             imported = titles
         if imported is None and titles:
@@ -2044,7 +2047,7 @@ def complete(
                 tag()
                 retired = f"; {n} item(s) of other copies → quarantine/replaced/" if n else ""
                 return _done(key, record, label, f": {len(titles)} file(s) from {title}{note}{retired}",
-                             found=found, total=total)
+                             found=found, total=total, **judged)
             mine = {"guid": guid, "release": this, "title": title, "missing": missing, "found": found, "total": total,
                     **{k: v for k in ("mb_albumid", "lacking") if (v := (identity or {}).get(k)) is not None}}
             same = bool(best) and same_gap(best, mine)
@@ -2058,7 +2061,7 @@ def complete(
                        f"{best['title']} ({best['missing']}) stays"
                        f"{'; the same track(s): the edition lacks them' if same else ''}",
                        release=title, guid=guid, missing=missing, lacking=mine.get("lacking"), kept=best["title"],
-                       same_gap=same)
+                       same_gap=same, **judged)
             else:
                 retire(key, record, this, None)
                 tag()
@@ -2068,7 +2071,7 @@ def complete(
                 _event("import_incomplete", key, record,
                        f"[INCOMPLETE] {label}: {title} lacks {missing} track(s) of its own release "
                        f"({identity.get('album') or identity.get('mb_albumid')}); kept for now",
-                       release=title, guid=guid, missing=missing, lacking=mine.get("lacking"), kept=title)
+                       release=title, guid=guid, missing=missing, lacking=mine.get("lacking"), kept=title, **judged)
             if guid and guid not in record["blocklist"]:
                 record["blocklist"].append(guid)
             record["attempts"] = record.get("attempts", 0) + 1
@@ -2078,12 +2081,12 @@ def complete(
                                             f"as {best['title']}; the edition lacks them, so {best['title']} is "
                                             f"the album{note}",
                              why="edition lacks the same tracks", missing=best["missing"],
-                             lacking=best.get("lacking"), kept=best["title"], **_counts(best))
+                             lacking=best.get("lacking"), kept=best["title"], **_counts(best), **judged)
             if record["attempts"] >= MAX_ATTEMPTS:
                 return _done(key, record, label, f": the most complete copy, {best['title']}, lacks {best['missing']} "
                                             f"track(s) of its own release{note}",
                              why="the most complete copy after the last attempt", missing=best["missing"],
-                             lacking=best.get("lacking"), kept=best["title"], **_counts(best))
+                             lacking=best.get("lacking"), kept=best["title"], **_counts(best), **judged)
             record["edition"] = sorted(edition(title))
             record["status"] = WANTED
             return WANTED
@@ -2112,26 +2115,35 @@ def complete(
     if record["attempts"] >= MAX_ATTEMPTS and best:
         logger.warning("[FAIL] %s: %s — gave up after %d release(s)", label, reason, record["attempts"])
         _event("failure", key, record, f"[FAIL] {label}: {reason} — gave up after {record['attempts']} release(s)",
-               reason=reason, guid=guid, attempts=record["attempts"], gave_up=True)
+               reason=reason, guid=guid, attempts=record["attempts"], gave_up=True, **judged)
         return _done(key, record, label, f": the most complete copy, {best['title']}, lacks {best['missing']} "
                                     "track(s) of its own release",
                      why="the most complete copy after the last attempt", missing=best["missing"],
-                     lacking=best.get("lacking"), kept=best["title"], **_counts(best))
+                     lacking=best.get("lacking"), kept=best["title"], **_counts(best), **judged)
     record["status"] = FAILED if record["attempts"] >= MAX_ATTEMPTS else WANTED
     if record["status"] == FAILED:
         logger.warning("[FAIL] %s: %s — gave up after %d release(s)%s", label, reason, record["attempts"],
                        _back(record))
         _event("failure", key, record,
                f"[FAIL] {label}: {reason} — gave up after {record['attempts']} release(s){_back(record)}",
-               reason=reason, guid=guid, attempts=record["attempts"], gave_up=True)
+               reason=reason, guid=guid, attempts=record["attempts"], gave_up=True, **judged)
     else:
         if job_name:
             for playlist in playlists:
                 shutil.rmtree(quarantine_root / playlist / job_name, ignore_errors=True)
         logger.warning("[FAIL] %s: %s — blocklisted, will try the next release", label, reason)
         _event("failure", key, record, f"[FAIL] {label}: {reason} — blocklisted, will try the next release",
-               reason=reason, guid=guid, attempts=record["attempts"], gave_up=False)
+               reason=reason, guid=guid, attempts=record["attempts"], gave_up=False, **judged)
     return record["status"]
+
+
+def _identified(identity: dict | None) -> dict | None:
+    """The release check's verdict for an import's event (homelab#2590): the MusicBrainz
+    release the job's files are, with its track count, the tracks without a file and the
+    files beets couldn't place, or None when no release was close enough (``[NOMB]``)."""
+    if identity is None:
+        return None
+    return {k: identity[k] for k in ("mb_albumid", "album", "tracks", "missing", "unmatched") if k in identity}
 
 
 def _save_import(save: Callable[[], None] | None, label: str) -> None:

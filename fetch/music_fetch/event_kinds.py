@@ -40,6 +40,11 @@ SUBJECTS = (ALBUM, ITEM, PLAYLIST, NONE)
 _ITEM = ("artist", "title", "album", "path")
 # The keys an album record's event carries (albums._event, stranded._event).
 _RECORD = ("album", "key", "origin")
+# An album import's events (homelab#2590): identified is the MusicBrainz release the job's
+# files are (mb_albumid, album, tracks, missing, unmatched), null when none was close
+# enough ([NOMB]); as_is the count of files beets couldn't match, imported as they are
+# ([REST]).  Absent when the import didn't get that far.
+_JUDGED = ("identified", "as_is")
 
 
 class Kind(NamedTuple):
@@ -54,11 +59,11 @@ KINDS: dict[str, Kind] = {
     # --- An album-mode import (music_fetch.albums) ---
     "import_done": Kind(ALBUM, "[DONE]: an album imported; an incomplete copy kept as the album says why.  "
                                "found of total: its wanted titles the release holds, since homelab#2662.",
-                        (*_RECORD, "why", "reposts", "missing", "lacking", "kept", "found", "total")),
+                        (*_RECORD, "why", "reposts", "missing", "lacking", "kept", "found", "total", *_JUDGED)),
     "import_wrong": Kind(ALBUM, "[WRONG]: a download that is not the album asked for.",
-                         (*_RECORD, "release", "guid", "found", "items", "total")),
+                         (*_RECORD, "release", "guid", "found", "items", "total", *_JUDGED)),
     "import_incomplete": Kind(ALBUM, "[INCOMPLETE]: a download lacking tracks of its release.",
-                              (*_RECORD, "release", "guid", "missing", "lacking", "kept", "same_gap")),
+                              (*_RECORD, "release", "guid", "missing", "lacking", "kept", "same_gap", *_JUDGED)),
     "import_lost": Kind(ALBUM, "[LOST]: a completed job whose directory is gone.", (*_RECORD, "path")),
     "format_dropped": Kind(ALBUM, "[FORMAT]: a job held the same tracks in several formats; kept is the one "
                                   "imported, dropped the rest, moved to quarantine/replaced/retired/.",
@@ -85,7 +90,7 @@ KINDS: dict[str, Kind] = {
     "fallback": Kind(ALBUM, "[FALLBACK]: tracks left to the spotdl fallback.", (*_RECORD, "tracks", "left")),
     "failure": Kind(ALBUM, "[FAIL]/[ERR]/[MISS]: a grab, an album or a spotdl download given up on or backed off.",
                     (*_RECORD, "what", "reason", "release", "guid", "gave_up", "track", "url", "kind", "attempts",
-                     "days")),
+                     "days", *_JUDGED)),
     "filled": Kind(ALBUM, "[FILLED]: a fallback album the library now completes.", _RECORD),
     "fallback_deferred": Kind(ALBUM, "[DEFER]: a request album's spotdl fallback put off to the next session.",
                               (*_RECORD, "tracks", "why")),
