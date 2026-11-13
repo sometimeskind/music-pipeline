@@ -60,11 +60,11 @@ def _images(path: Path) -> list:
     return MediaFile(str(path)).images or []
 
 
-def _item(lib, path: Path, *, via="usenet", spotify_ids="", album="Album", added=200.0):
+def _item(lib, path: Path, *, via="usenet", spotify_ids="", album="Album", added=200.0, mb_albumid="", **flex):
     from beets.library import Item
 
     item = Item(path=str(path), title=path.stem, artist="Artist", albumartist="Artist", album=album,
-                via=via, spotify_ids=spotify_ids, sources="later", added=added)
+                via=via, spotify_ids=spotify_ids, sources="later", added=added, mb_albumid=mb_albumid, **flex)
     lib._lib.add(item)
     return item
 
@@ -149,7 +149,7 @@ def test_an_embedded_cover_is_a_cover_embedded_event(tmp_path, ffmpeg, lib, monk
     assert cover.embed_covers(items, {"T1": COVER_URL, "T2": COVER_URL}, fetch=lambda url: art) == 2
     (kind, message, kw), = recorded
     assert kind == "cover_embedded" and kw["source"] == "cover" and kw["item_id"] is None
-    assert kw["data"] == {"album": "Artist — Album", "items": [i.id for i in items]}
+    assert kw["data"] == {"album": "Artist — Album", "items": [i.id for i in items], "cover_source": "store"}
     assert message == "[ART] Artist — Album: embedded the cover on 2 track(s)"
 
 
@@ -214,3 +214,169 @@ def test_backfill_embeds_only_usenet_items_and_rescans(tmp_path, ffmpeg, monkeyp
     assert _images(tmp_path / "a.m4a")[0].data == art and _images(tmp_path / "b.m4a") == []
     assert scans == [1]
     assert cover.run(apply=True) == 0  # safe to re-run
+
+
+# --- The Cover Art Archive fallback (homelab#2825) ---
+
+MBID = "0b3b0e8c-4a1f-4c3e-9d8a-6f1f2a3b4c5d"
+CAA_URL = f"https://coverartarchive.org/release/{MBID}/front-500"
+
+
+@pytest.fixture
+def today(monkeypatch):
+    from datetime import date
+
+    from music_scan import cover
+
+    day = date(2026, 11, 13)
+    monkeypatch.setattr(cover, "_today", lambda: day)
+    return day
+
+
+@pytest.fixture
+def recorded(monkeypatch):
+    from music_scan import cover
+
+    calls = []
+    monkeypatch.setattr(cover.events, "record", lambda kind, message, **kw: calls.append((kind, message, kw)))
+    return calls
+
+
+def _not_found(url):
+    import urllib.error
+
+    raise urllib.error.HTTPError(url, 404, "Not Found", {}, None)
+
+
+def _reload(lib, item):
+    return lib._lib.get_item(item.id)
+
+
+def test_album_in_no_store_gets_the_caa_front_image_fetched_once(tmp_path, ffmpeg, lib, today, recorded) -> None:
+    from music_scan.cover import embed_covers
+
+    art = _jpeg(tmp_path / "caa.jpg", "green")
+    items = [_item(lib, _m4a(tmp_path / f"{n}.m4a"), mb_albumid=MBID) for n in ("a", "b")]
+    noid = _item(lib, _m4a(tmp_path / "c.m4a"))  # no mb_albumid: borrows its album's release
+    fetched = []
+
+    assert embed_covers([*items, noid], {}, fetch=lambda url: fetched.append(url) or art) == 3
+
+    assert fetched == [CAA_URL]
+    for name in ("a", "b", "c"):
+        assert _images(tmp_path / f"{name}.m4a")[0].data == art
+    (kind, message, kw), = recorded
+    assert kind == "cover_embedded" and kw["source"] == "cover"
+    assert kw["data"] == {"album": "Artist — Album", "items": [i.id for i in (*items, noid)],
+                          "cover_source": "caa", "mb_albumid": MBID}
+    assert message == f"[ART] Artist — Album: embedded the Cover Art Archive front image (release {MBID}) on 3 track(s)"
+
+
+def test_a_store_cover_wins_over_the_caa(tmp_path, ffmpeg, lib, today, recorded) -> None:
+    from music_scan.cover import embed_covers
+
+    art = _jpeg(tmp_path / "c.jpg")
+    item = _item(lib, _m4a(tmp_path / "a.m4a"), spotify_ids="T1", mb_albumid=MBID)
+    fetched = []
+
+    assert embed_covers([item], {"T1": COVER_URL}, fetch=lambda url: fetched.append(url) or art) == 1
+    assert fetched == [COVER_URL]
+    assert recorded[0][2]["data"]["cover_source"] == "store"
+
+
+def test_caa_404_marks_the_items_and_leaves_them_bare(tmp_path, ffmpeg, lib, today, recorded, caplog) -> None:
+    from music_scan.cover import CAA_NONE, embed_covers
+
+    items = [_item(lib, _m4a(tmp_path / f"{n}.m4a"), mb_albumid=MBID) for n in ("a", "b")]
+    fetched = []
+
+    def fetch(url):
+        fetched.append(url)
+        _not_found(url)
+
+    assert embed_covers(items, {}, fetch=fetch) == 0
+
+    assert fetched == [CAA_URL]
+    assert [_reload(lib, i)[CAA_NONE] for i in items] == [f"{MBID} 2026-11-13"] * 2
+    assert _images(tmp_path / "a.m4a") == [] and recorded == []
+    assert "the Cover Art Archive has no front image" in caplog.text
+
+
+def test_a_marked_release_is_not_fetched_again(tmp_path, ffmpeg, lib, today, caplog) -> None:
+    import logging
+
+    from music_scan.cover import embed_covers
+
+    item = _item(lib, _m4a(tmp_path / "a.m4a"), mb_albumid=MBID, caa_none=f"{MBID} 2026-11-01")
+    with caplog.at_level(logging.INFO):
+        assert embed_covers([item], {}, fetch=lambda url: pytest.fail("fetched")) == 0
+        assert embed_covers([item], {}, apply=False, fetch=lambda url: pytest.fail("fetched")) == 0
+    assert f"the Cover Art Archive has no front image for release {MBID} (checked 2026-11-01)" in caplog.text
+    assert "would try the Cover Art Archive" not in caplog.text
+
+
+@pytest.mark.parametrize("mark", [f"{MBID} 2026-10-01",  # past CAA_RETRY_DAYS: art may have been added
+                                  "1c3b0e8c-4a1f-4c3e-9d8a-6f1f2a3b4c5d 2026-11-12",  # another release
+                                  "garbage"])
+def test_a_stale_or_other_mark_is_asked_again(tmp_path, ffmpeg, lib, today, mark) -> None:
+    from music_scan.cover import embed_covers
+
+    art = _jpeg(tmp_path / "c.jpg")
+    item = _item(lib, _m4a(tmp_path / "a.m4a"), mb_albumid=MBID, caa_none=mark)
+    fetched = []
+    assert embed_covers([item], {}, fetch=lambda url: fetched.append(url) or art) == 1
+    assert fetched == [CAA_URL]
+
+
+@pytest.mark.parametrize("error", [TimeoutError("timed out"), "urlerror", 503])
+def test_caa_network_errors_mark_nothing(tmp_path, ffmpeg, lib, today, error) -> None:
+    import urllib.error
+
+    from music_scan.cover import CAA_NONE, embed_covers
+
+    item = _item(lib, _m4a(tmp_path / "a.m4a"), mb_albumid=MBID)
+
+    def fetch(url):
+        if error == "urlerror":
+            raise urllib.error.URLError("Name or service not known")
+        if error == 503:
+            raise urllib.error.HTTPError(url, 503, "Service Unavailable", {}, None)
+        raise error
+
+    assert embed_covers([item], {}, fetch=fetch) == 0
+    assert _reload(lib, item).get(CAA_NONE) is None
+    art = _jpeg(tmp_path / "c.jpg")
+    assert embed_covers([item], {}, fetch=lambda url: art) == 1  # the next run asks again
+
+
+def test_dry_run_fetches_and_marks_nothing_for_the_caa(tmp_path, ffmpeg, lib, today, recorded, caplog) -> None:
+    import logging
+
+    from music_scan.cover import CAA_NONE, embed_covers
+
+    items = [_item(lib, _m4a(tmp_path / f"{n}.m4a"), mb_albumid=MBID) for n in ("a", "b")]
+    other = _item(lib, _m4a(tmp_path / "c.m4a"), album="Other", mb_albumid="not-an-mbid")
+    with caplog.at_level(logging.INFO):
+        assert embed_covers([*items, other], {}, apply=False, fetch=lambda url: pytest.fail("fetched")) == 0
+    assert f"[ART] artist — album: would try the Cover Art Archive (release {MBID}) for 2 track(s)" in caplog.text
+    assert "Would try the Cover Art Archive for 1 album(s) (2 track(s))" in caplog.text
+    assert "no matching playlist store entry, and no MusicBrainz release" in caplog.text
+    assert _images(tmp_path / "a.m4a") == [] and recorded == []
+    assert _reload(lib, items[0]).get(CAA_NONE) is None
+
+
+def test_download_sends_the_user_agent_and_a_timeout(monkeypatch) -> None:
+    import io
+
+    from music_scan import cover
+
+    seen = {}
+
+    def urlopen(req, timeout):
+        seen["ua"], seen["timeout"], seen["url"] = req.get_header("User-agent"), timeout, req.full_url
+        return io.BytesIO(b"jpeg")
+
+    monkeypatch.setattr(cover.urllib.request, "urlopen", urlopen)
+    assert cover.download(CAA_URL) == b"jpeg"
+    assert seen == {"ua": cover.USER_AGENT, "timeout": cover.DOWNLOAD_TIMEOUT, "url": CAA_URL}
+    assert "github.com/sometimeskind/music-pipeline" in cover.USER_AGENT
