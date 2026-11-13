@@ -186,9 +186,11 @@ KINDS: dict[str, Kind] = {
     "ids_written": Kind(ITEM, "[IDS]: an operator CLI (music-backfill-ids, music-rollback-releases) wrote an "
                               "item's Spotify IDs, ISRCs or sources; changed holds each field's old and new value.",
                         (*_ITEM, "changed", "via")),
-    "cover_embedded": Kind(ALBUM, "[ART]: the Spotify cover embedded on an album's Usenet items that had none "
-                                  "(after an import, or music-embed-covers).",
-                           ("album", "items")),
+    "cover_embedded": Kind(ALBUM, "[ART]: an album's cover embedded on its Usenet items that had none (after an "
+                                  "import, or music-embed-covers).  cover_source says where it came from: store "
+                                  "(the playlist store's Spotify cover) or caa (the Cover Art Archive front image "
+                                  "of release mb_albumid, homelab#2825); older rows have none and are store.",
+                           ("album", "items", "cover_source", "mb_albumid")),
     # --- Playlists ---
     "reject": Kind(PLAYLIST, "[REJECT]: a download a pre-import check quarantined.",
                    ("playlist", "file", "reason", "detail", "dest")),
