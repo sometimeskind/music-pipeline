@@ -188,9 +188,11 @@ KINDS: dict[str, Kind] = {
                         (*_ITEM, "changed", "via")),
     "cover_embedded": Kind(ALBUM, "[ART]: an album's cover embedded on its Usenet items that had none (after an "
                                   "import, or music-embed-covers).  cover_source says where it came from: store "
-                                  "(the playlist store's Spotify cover) or caa (the Cover Art Archive front image "
-                                  "of release mb_albumid, homelab#2825); older rows have none and are store.",
-                           ("album", "items", "cover_source", "mb_albumid")),
+                                  "(the playlist store's Spotify cover), caa (the Cover Art Archive front image "
+                                  "of release mb_albumid, homelab#2825) or caa_group (the Cover Art Archive "
+                                  "front image of release group mb_releasegroupid, when the release had none, "
+                                  "homelab#2857); older rows have none and are store.",
+                           ("album", "items", "cover_source", "mb_albumid", "mb_releasegroupid")),
     # --- Playlists ---
     "reject": Kind(PLAYLIST, "[REJECT]: a download a pre-import check quarantined.",
                    ("playlist", "file", "reason", "detail", "dest")),
