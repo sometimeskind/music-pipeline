@@ -94,11 +94,84 @@ def test_bit_error_rate_needs_enough_overlap() -> None:
     ("spotify_ids", "S1,S2", "S2"),
     ("isrc", "GB1;US9", "US9"),
 ])
-def test_a_shared_id_is_certain_whatever_the_lengths(field, a, b) -> None:
+def test_a_shared_id_is_certain_with_lengths_that_agree(field, a, b) -> None:
+    one = FakeItem(1, "Song", length=200.0, **{field: a})
+    other = FakeItem(2, "Song", length=201.5, **{field: b})
+    certain, uncertain, *_ = _tiers([one, other])
+    assert certain == [[1, 2]] and uncertain == []
+
+
+@pytest.mark.parametrize("field,a,b,value", [
+    ("spotify_ids", "S1,S2", "S2", "spotify S2"),
+    ("isrc", "GB1;US9", "US9", "isrc US9"),
+])
+def test_a_shared_id_with_lengths_apart_is_uncertain(field, a, b, value) -> None:
+    """homelab#2831: an ID is only a tag; a clip or another take shares it at another length."""
     one = FakeItem(1, "Song", length=200.0, **{field: a})
     clip = FakeItem(2, "Song (clip)", length=30.0, **{field: b})
-    certain, uncertain, *_ = _tiers([one, clip])
-    assert certain == [[1, 2]] and uncertain == []
+    certain, uncertain, _, _, loose = _tiers([one, clip])
+    assert certain == [] and uncertain == [[1, 2]]
+    assert loose[0].evidence == [(1, 2, f"{value} but 170s apart")]
+
+
+# homelab#2831, MCP job 411c840efe504549: certain groups that paired different tracks.
+WRONG_ID_PAIRS = {
+    "fred again": (
+        FakeItem(678, "Jungle (Rico Nasty remix)", artist="Fred again..", length=213.0, isrc="GBAHS2200916"),
+        FakeItem(13264, "Leavemealone (Nia Archives Remix)", artist="Fred again..", length=179.0,
+                 isrc="GBAHS2200916"),
+        "isrc GBAHS2200916 but 34s apart and the titles name different songs"),
+    "automatic": (
+        FakeItem(377, "New Beginning (Water From Your Eyes Remix)", artist="Automatic", length=191.0,
+                 isrc="US2S72266031"),
+        FakeItem(17981, "New Beginning", artist="Automatic", length=239.0, album="Excess", isrc="US2S72266031"),
+        "isrc US2S72266031 but 48s apart"),
+    "the national": (
+        FakeItem(332, "Slow Show", artist="The National", length=248.0, album="Boxer", isrc="GBAZP0700008"),
+        FakeItem(9585, "Slow Show - Live in Brussels", artist="The National", length=289.0, isrc="GBAZP0700008"),
+        "isrc GBAZP0700008 but 41s apart and only one is live"),
+    "the zombies": (
+        FakeItem(634, "This Will Be Our Year", artist="The Zombies", length=128.0,
+                 spotify_ids="560OsnDa7tpsK2B0krVlOP"),
+        FakeItem(14435, "This Will Be Our Year (Mono Remastered)", artist="The Zombies", length=134.0,
+                 spotify_ids="560OsnDa7tpsK2B0krVlOP"),
+        "spotify 560OsnDa7tpsK2B0krVlOP but 6s apart and only one is mono"),
+}
+
+
+@pytest.mark.parametrize("case", sorted(WRONG_ID_PAIRS))
+def test_an_id_shared_by_another_song_remix_live_or_mono_take_is_uncertain(case) -> None:
+    a, b, why = WRONG_ID_PAIRS[case]
+    certain, uncertain, _, _, loose = _tiers([a, b])
+    assert certain == [] and uncertain == [sorted([a.id, b.id])]
+    assert loose[0].evidence == [(a.id, b.id, why)]
+
+
+@pytest.mark.parametrize("field,value", [("isrc", "GB1"), ("spotify_ids", "S1"), ("mb_trackid", "rec")])
+def test_a_version_word_alone_makes_an_id_match_uncertain(field, value) -> None:
+    """Lengths agree, but only one title says live: the ID doesn't outvote it."""
+    studio = FakeItem(1, "Song", length=200.0, **{field: value})
+    live = FakeItem(2, "Song (Live)", length=201.0, **{field: value})
+    certain, uncertain, _, _, loose = _tiers([studio, live])
+    assert certain == [] and uncertain == [[1, 2]]
+    assert loose[0].evidence[0][2].endswith("but only one is live")
+
+
+@pytest.mark.parametrize("a,b", [
+    (FakeItem(1, "Mary", artist="Big Thief", length=330.0, isrc="US1"),
+     FakeItem(2, "Mary", artist="Big Thief", length=329.0, isrc="US1")),
+    (FakeItem(1, "Peg", artist="Steely Dan", length=236.0, spotify_ids="S1"),
+     FakeItem(2, "Peg", artist="Steely Dan", length=238.0, spotify_ids="S1")),
+    (FakeItem(1, "Gotta Get Up", artist="Harry Nilsson", length=143.0, isrc="US2"),
+     FakeItem(2, "Gotta Get Up", artist="Harry Nilsson", length=145.0, isrc="US2")),
+    (FakeItem(1, "Song - 2011 Remaster", length=200.0, isrc="GB1"),
+     FakeItem(2, "Song", length=201.0, isrc="GB1")),
+    (FakeItem(1, "Song (Remastered)", length=200.0, spotify_ids="S1"),
+     FakeItem(2, "Song", length=200.0, spotify_ids="S1")),
+], ids=["big thief mary", "steely dan peg", "nilsson gotta get up", "2011 remaster", "remastered"])
+def test_one_recording_under_one_id_stays_certain(a, b) -> None:
+    """Within LENGTH_SLACK, one song, and a remaster is the same recording, not a version."""
+    assert _tiers([a, b])[:2] == ([[1, 2]], [])
 
 
 def test_a_shared_recording_id_is_certain_only_with_lengths_that_agree() -> None:
@@ -107,7 +180,7 @@ def test_a_shared_recording_id_is_certain_only_with_lengths_that_agree() -> None
     file, so a shared one is certain only within LENGTH_SLACK."""
     stereo = FakeItem(6930, "Oh! Sweet Nuthin' (5.1 mix)", length=445.2, mb_trackid="d0063aee")
     surround = FakeItem(6994, "Oh! Sweet Nuthin' (5.1 mix)", length=456.0, mb_trackid="d0063aee")
-    reencode = FakeItem(7000, "Oh! Sweet Nuthin'", length=446.5, mb_trackid="d0063aee")
+    reencode = FakeItem(7000, "Oh! Sweet Nuthin' (5.1 mix)", length=446.5, mb_trackid="d0063aee")
     certain, uncertain, _, groups, loose = _tiers([stereo, surround, reencode])
     assert certain == [[6930, 7000]]
     assert groups[0].evidence == [(6930, 7000, "mbid d0063aee")]
@@ -922,3 +995,18 @@ def test_an_uncertain_pair_two_rules_found_prints_its_merge_command_once(monkeyp
     _, uncertain = dupes.run()
     assert len(uncertain[0].evidence) == 2
     assert caplog.text.count("if one recording: music-audit-dupes --merge") == 1
+
+
+def test_the_audit_logs_a_handful_of_progress_lines(caplog) -> None:
+    """homelab#2831: a full run takes half an hour, so a job poll must show it is alive."""
+    items = [FakeItem(n, f"Song {n}", artist="Band", length=200.0 + n, acoustid_fingerprint="other")
+             for n in range(1, 41)]
+    with caplog.at_level("INFO", logger=dupes.__name__):
+        _tiers(items)
+        assert not any("[PROGRESS]" in m for m in caplog.messages)  # the scan's per-album calls stay quiet
+        find_dupes(items, _decoder, logging.INFO)
+    lines = [m for m in caplog.messages if "[PROGRESS]" in m]
+    assert 4 <= len(lines) <= 8
+    assert any("up to 780 pair(s) to compare" in m for m in lines)
+    assert any("audio: 50% (390/780 pair(s))" in m for m in lines)
+    assert "done: 0 certain, " in lines[-1]

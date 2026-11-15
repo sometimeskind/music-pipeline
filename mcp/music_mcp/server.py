@@ -328,10 +328,13 @@ def build_server(
     async def audit_dupes() -> dict:
         """music-audit-dupes dry run: duplicate groups, certain and uncertain, with item IDs, and how
         many items had no fingerprint or no title words to compare. It compares the fingerprints
-        already stored, between items sharing an artist word, and stores none. It reads the whole
-        library and runs for minutes, and imports running beside it have died with "database is
-        locked" (homelab#2665): for one pair use compare_items, not this. Merge a confirmed pair
-        with merge_items."""
+        already stored, between items sharing an artist word, and stores none. An ID match (ISRC,
+        Spotify ID, recording) is certain only when the lengths agree within 2 s and the titles name
+        one song and one version; otherwise it is uncertain with the reason. It reads the whole
+        library and a full run takes about half an hour (31 min on ~32k items, homelab#2831): poll
+        get_job, whose output shows [PROGRESS] lines while it works. Imports running beside it have
+        died with "database is locked" (homelab#2665): for one pair use compare_items, not this.
+        Merge a confirmed pair with merge_items."""
         return await run("audit_dupes", {})
 
     @mcp.tool(annotations={"readOnlyHint": True})

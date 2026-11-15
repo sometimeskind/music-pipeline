@@ -650,14 +650,28 @@ def test_an_extra_left_to_music_audit_dupes_is_recorded_once_a_day(quarantined, 
     assert kw["item_id"] == extra.id and kw["data"]["left_to_dupes"] is True
 
 
-def test_extras_one_track_with_no_release_item_are_named_to_each_other(quarantined, recorded) -> None:
+def test_extras_that_share_a_live_takes_id_are_not_one_track(quarantined, recorded) -> None:
     """Nebraska (homelab#2609): the Expanded Edition's studio My Father's House (17061)
-    took the live take's (17051) recording and ISRC at import, and both stayed extras
-    of the 10-track release, which has its own copy.  Not "the same audio as 0 of the
-    release's items": each event names the other extra and the evidence."""
+    took the live take's (17051) recording and ISRC at import.  The lengths (6 s) and
+    the live word refute the ID (homelab#2831), so they aren't one track: nothing is
+    retired or named, and music-audit-dupes lists the pair uncertain."""
     track = _Audio(9044, "My Father's House", length=307.0, album_record="NEB", release="r@1", isrc="USSM18200429",
                    acoustid_id="aid-studio")
     live = _Audio(17051, "My Father's House (Nebraska Live)", length=313.85, album_record="NEB", album_extra="1",
+                  isrc="USSM12503412", mb_trackid="live-rec", acoustid_id="aid-live")
+    studio = _Audio(17061, "My Father’s House", length=307.48, album_record="NEB", album_extra="1",
+                    isrc="USSM12503412", mb_trackid="live-rec", acoustid_id="aid-remaster")
+    assert release.retire_held(FakeLib([track, live, studio]), decoder=lambda fp: []) == 0
+    assert not live.removed and not studio.removed and quarantined == [] and recorded == []
+
+
+def test_extras_one_track_with_no_release_item_are_named_to_each_other(quarantined, recorded) -> None:
+    """Two extras of one record that are one track by an ID, and the release has its own
+    copy under another ID.  Not "the same audio as 0 of the release's items": each event
+    names the other extra and the evidence."""
+    track = _Audio(9044, "My Father's House", length=307.0, album_record="NEB", release="r@1", isrc="USSM18200429",
+                   acoustid_id="aid-studio")
+    live = _Audio(17051, "My Father's House", length=308.1, album_record="NEB", album_extra="1",
                   isrc="USSM12503412", mb_trackid="live-rec", acoustid_id="aid-live")
     studio = _Audio(17061, "My Father’s House", length=307.48, album_record="NEB", album_extra="1",
                     isrc="USSM12503412", mb_trackid="live-rec", acoustid_id="aid-remaster")

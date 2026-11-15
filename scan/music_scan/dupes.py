@@ -7,16 +7,20 @@ ISRC, MusicBrainz recording ID and AcoustID fingerprints are supporting evidence
 
 Two tiers, grouped transitively:
 
-* **Certain:** a shared Spotify ID or ISRC; a shared MusicBrainz recording ID
-  with lengths within :data:`LENGTH_SLACK` seconds (beets names each file's
-  recording by a best guess, and a sibling such as a 5.1 mix or a live take
-  shares it at another length, homelab#2540); or an AcoustID match (a shared
-  ``acoustid_id``, or fingerprints within :data:`MATCH_BER`) with lengths
-  within :data:`LENGTH_SLACK` seconds and the same title once edition suffixes
-  are dropped.
+* **Certain:** a shared Spotify ID, ISRC or MusicBrainz recording ID
+  (:func:`id_match`) with lengths within :data:`LENGTH_SLACK` seconds, titles
+  naming one song and no version word (live, mono, demo…) only one side names:
+  beets names each file's recording by a best guess, so a sibling such as a 5.1
+  mix or a live take shares it at another length (homelab#2540), and a
+  release's tags can put another track's ISRC or Spotify ID on a remix or a
+  live take (homelab#2831).  Or an AcoustID match (a shared ``acoustid_id``, or
+  fingerprints within :data:`MATCH_BER`) with lengths within
+  :data:`LENGTH_SLACK` seconds and the same title once edition suffixes are
+  dropped.
 * **Uncertain:** the same title and artist after the album matcher's
-  normalisation (#197), or an AcoustID match or shared MusicBrainz recording
-  ID with lengths further apart.  An
+  normalisation (#197), or an ID or AcoustID match that one of those vetoes
+  held back, the evidence saying which (``isrc … but 41s apart and only one
+  is live``).  An
   AcoustID match between different titles is uncertain too: one file is
   likely the other's audio under the wrong tags (a wrong download, #221), which
   ``music-audit-lengths --replace`` fixes and a merge would make worse.
@@ -24,8 +28,10 @@ Two tiers, grouped transitively:
   title+artist pair whose ISRCs are both known and disjoint is the duplicate
   hook's ``[SPLIT]`` decision, so it is counted as distinct and not listed.
 
-Fingerprints are compared only between items that share an artist word, so the
-run stays a few thousand comparisons rather than every pair.
+Fingerprints are compared only between items that share an artist word rather
+than every pair; the count still grows with the square of an artist word's
+items, and a full run on ~32k items takes about half an hour.  It logs
+``[PROGRESS]`` lines per phase and through the fingerprint comparisons.
 
 On album playlists the album is the unit (#279): one recording legitimately
 sits on two whole albums (a greatest-hits and the studio album), or twice on
@@ -114,7 +120,7 @@ from music_fetch.usenet import clean_album, normalise, words
 from music_scan.audit import LIBRARY, REPLACED, item_path, pipeline_lock
 from music_scan.identity import (
     LENGTH_SLACK, MERGED_FILES, add_isrcs, add_merged_file, add_to_list, different_song, fingerprint,
-    item_isrcs, item_spotify_ids, lengths_agree, merged_files, spotify_id, split_list,
+    item_isrcs, item_spotify_ids, lengths_agree, merged_files, spotify_id, split_list, version_clash,
 )
 from music_scan.metrics import _gauge, _push
 from music_scan.supersede import MANAGED_VIA
@@ -251,8 +257,51 @@ def audio_match(a, b, frames_of: Callable[[object], list[int]]) -> tuple[str, st
     return CERTAIN, f"{why}, {gap:.0f}s apart"
 
 
-def find_dupes(items: list, decoder: Callable[[str], list[int]] = decode) -> tuple[list[Group], list[Group], int]:
-    """Certain groups, uncertain groups and the number of distinct (``[SPLIT]``) pairs."""
+def id_match(a, b, why: str) -> tuple[str, str]:
+    """``(tier, evidence)`` for *a* and *b*, which share an ID (*why*: ``isrc …``,
+    ``spotify …``, ``mbid …``).  The ID is only a tag, and a wrong one is common:
+    beets names each file's recording by a best guess (homelab#2540), and a
+    release's tags can put another track's ISRC or Spotify ID on a file
+    (homelab#2831: a remix holding the original's ISRC, a live take the studio
+    one's).  So the pair is :data:`CERTAIN` only when it passes the vetoes a
+    fingerprint match does (:func:`audio_match`): lengths within
+    :data:`LENGTH_SLACK`, titles naming one song (:func:`different_song`) and no
+    version only one side names (:func:`version_clash`: live, mono, demo…; a
+    remaster is not a version).  Else :data:`UNCERTAIN`, saying which veto held."""
+    gap = abs(float(a.length or 0) - float(b.length or 0))
+    vetoes = []
+    if not lengths_agree(a.length, b.length):
+        vetoes.append(f"{gap:.0f}s apart")
+    if different_song(a.title or "", b.title or ""):
+        vetoes.append("the titles name different songs")
+    elif versions := version_clash(a.title or "", b.title or "", a.get("trackdisambig") or "",
+                                   b.get("trackdisambig") or "", a.get("album") or "", b.get("album") or ""):
+        vetoes.append(f"only one is {'/'.join(versions)}")
+    if vetoes:
+        return UNCERTAIN, f"{why} but {' and '.join(vetoes)}"
+    return CERTAIN, why
+
+
+class _Progress:
+    """INFO lines while a full audit's :func:`find_dupes` works, so a job poll shows it is
+    alive (homelab#2831); DEBUG for the scan's per-album calls (:func:`music_scan.release.retire_held`)."""
+
+    def __init__(self, level: int) -> None:
+        self.start, self.level = time.monotonic(), level
+
+    def log(self, message: str, *args) -> None:
+        logger.log(self.level, "[PROGRESS] %ds: " + message, time.monotonic() - self.start, *args)
+
+
+# The fingerprint phase logs each time another share of its comparisons is done.
+PROGRESS_STEPS = 4
+
+
+def find_dupes(items: list, decoder: Callable[[str], list[int]] = decode,
+               progress_level: int = logging.DEBUG) -> tuple[list[Group], list[Group], int]:
+    """Certain groups, uncertain groups and the number of distinct (``[SPLIT]``) pairs,
+    logging ``[PROGRESS]`` at *progress_level*."""
+    progress = _Progress(progress_level)
     by_id = {item.id: item for item in items}
     certain = _Union()
     certain_edges: list[tuple[int, int, str]] = []
@@ -263,28 +312,30 @@ def find_dupes(items: list, decoder: Callable[[str], list[int]] = decode) -> tup
             certain.union(a.id, b.id)
             certain_edges.append((a.id, b.id, why))
 
-    # Shared IDs.
-    seen: dict[tuple[str, str], object] = {}
-    by_mbid: dict[str, list] = defaultdict(list)
+    # Shared IDs: each pair once, on the first ID it shares (Spotify, ISRC, then
+    # MusicBrainz recording), judged by id_match.
+    holders: dict[tuple[str, str], list] = defaultdict(list)
     for item in items:
         keys = [("spotify", s) for s in sorted(item_spotify_ids(item))]
         keys += [("isrc", c) for c in sorted(item_isrcs(item))]
         for key in keys:
-            if key in seen:
-                join(seen[key], item, f"{key[0]} {key[1]}")
-            else:
-                seen[key] = item
+            holders[key].append(item)
+    for item in items:
         if mbid := item.get("mb_trackid"):
-            by_mbid[mbid].append(item)
-    # A MusicBrainz recording ID is beets' guess per file (homelab#2540): certain
-    # only with lengths that agree, else a sibling recording (uncertain).
-    for mbid, holders in by_mbid.items():
-        for a, b in combinations(holders, 2):
-            if lengths_agree(a.length, b.length):
-                join(a, b, f"mbid {mbid}")
-            else:
-                gap = abs(float(a.length or 0) - float(b.length or 0))
-                uncertain_edges.append((a.id, b.id, f"mbid {mbid} but {gap:.0f}s apart"))
+            holders[("mbid", mbid)].append(item)
+    shared: dict[tuple[int, int], tuple] = {}
+    for (kind, value), sharing in holders.items():
+        for a, b in combinations(sharing, 2):
+            shared.setdefault((min(a.id, b.id), max(a.id, b.id)), (a, b, f"{kind} {value}"))
+    id_uncertain = 0
+    for a, b, why in shared.values():
+        tier, why = id_match(a, b, why)
+        if tier == CERTAIN:
+            join(a, b, why)
+        else:
+            uncertain_edges.append((a.id, b.id, why))
+            id_uncertain += 1
+    progress.log("%d item(s); %d pair(s) share an ID, %d of them uncertain", len(items), len(shared), id_uncertain)
 
     # AcoustID, between items sharing an artist word.
     by_word: dict[str, list] = defaultdict(list)
@@ -293,10 +344,17 @@ def find_dupes(items: list, decoder: Callable[[str], list[int]] = decode) -> tup
             for w in _artist_words(item):
                 by_word[w].append(item)
     frames_of = frames_reader(decoder)
+    planned = sum(len(bucket) * (len(bucket) - 1) // 2 for bucket in by_word.values())
+    progress.log("audio: up to %d pair(s) to compare, between items sharing an artist word", planned)
+    step, done, next_log = max(1, planned // PROGRESS_STEPS), 0, max(1, planned // PROGRESS_STEPS)
 
     compared: set[tuple[int, int]] = set()
     for bucket in by_word.values():
         for a, b in combinations(bucket, 2):
+            done += 1
+            if done >= next_log and done < planned:
+                progress.log("audio: %d%% (%d/%d pair(s))", 100 * done // planned, done, planned)
+                next_log += step
             pair = (min(a.id, b.id), max(a.id, b.id))
             if pair in compared or certain.find(a.id) == certain.find(b.id):
                 continue
@@ -308,6 +366,7 @@ def find_dupes(items: list, decoder: Callable[[str], list[int]] = decode) -> tup
                 join(a, b, why)
             else:
                 uncertain_edges.append((a.id, b.id, why))
+    progress.log("audio: done, %d pair(s) compared", len(compared))
 
     # Title + artist.
     distinct = 0
@@ -329,8 +388,11 @@ def find_dupes(items: list, decoder: Callable[[str], list[int]] = decode) -> tup
     for a, b, why in certain_edges:
         group = groups.setdefault(certain.find(a), Group(CERTAIN, [], []))
         group.evidence.append((a, b, why))
-    for root, group in groups.items():
-        group.items = sorted((i for i in items if certain.find(i.id) == root), key=lambda i: i.id)
+    for item in items:
+        if (group := groups.get(certain.find(item.id))) is not None:
+            group.items.append(item)
+    for group in groups.values():
+        group.items.sort(key=lambda i: i.id)
 
     # Uncertain groups join certain groups, so one listed group is one recording each side.
     loose = _Union()
@@ -344,6 +406,7 @@ def find_dupes(items: list, decoder: Callable[[str], list[int]] = decode) -> tup
     for group in uncertain_groups.values():
         ids = {i for a, b, _ in group.evidence for i in (a, b)}
         group.items = [by_id[i] for i in sorted(ids)]
+    progress.log("done: %d certain, %d uncertain group(s)", len(groups), len(uncertain_groups))
     return list(groups.values()), list(uncertain_groups.values()), distinct
 
 
@@ -848,7 +911,7 @@ def run(apply: bool = False, fingerprints: list[int] | None = None, merge_ids: l
             logger.info("Merged; playlists regenerated: %s", ", ".join(f"{k} {v}" for k, v in sorted(counts.items())))
             trigger_scan()
             return [], []
-        certain, uncertain, distinct = find_dupes(items, decode)
+        certain, uncertain, distinct = find_dupes(items, decode, logging.INFO)
         certain, held = hold_albums(certain)
         report(certain, uncertain, distinct, durations, held)
         log_coverage(items)
