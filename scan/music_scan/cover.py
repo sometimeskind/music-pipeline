@@ -14,10 +14,15 @@ alone.
 An album no playlist store lists (homelab#2825: it came in through the wants
 or library feed) falls back to the Cover Art Archive's front image of its
 ``mb_albumid``, one request per release.  A release with no front image (a
-404) is marked on its items (``caa_none``: the release MBID and the date), so
-it isn't asked again until :data:`CAA_RETRY_DAYS` have passed or the item's
-release changes; a network error or a timeout marks nothing.  A dry run makes
-no request: it lists the releases it would try.
+404) falls back in turn to the front image the archive picks for its release
+group (``mb_releasegroupid``, homelab#2857), often another edition's.  Each
+404 is marked on the items, the release's as ``caa_none`` and the group's as
+``caa_group_none`` (the MBID and the date), so neither is asked again until
+:data:`CAA_RETRY_DAYS` have passed or the item's release (or group) changes;
+the two marks are independent, so a release marked before the group fallback
+existed gets its group asked at the next run.  A network error or a timeout
+marks nothing, and a release that failed so isn't followed by its group.  A
+dry run makes no request: it lists the releases and groups it would try.
 
 At import the album completion embeds the covers of the tracks it imported.
 ``music-embed-covers`` backfills every ``via=usenet`` item with no art: dry
@@ -45,9 +50,15 @@ DOWNLOAD_TIMEOUT = 30
 USER_AGENT = "music-pipeline-covers/1.0 ( https://github.com/sometimeskind/music-pipeline )"
 # The same front-500 image the request feed takes (music_fetch.album_requests).
 CAA_URL = "https://coverartarchive.org/release/{}/front-500"
+# The release group's front image: the archive's pick among its releases' fronts
+# (homelab#2857).  Like the release's, a 307 to the image, or a 404 when there is none.
+CAA_GROUP_URL = "https://coverartarchive.org/release-group/{}/front-500"
 # Flexible field on an item: "<release MBID> <YYYY-MM-DD>", the day the Cover Art
 # Archive answered 404 for the item's release (homelab#2825).
 CAA_NONE = "caa_none"
+# Flexible field on an item: "<release group MBID> <YYYY-MM-DD>", the day the Cover
+# Art Archive answered 404 for the item's release group too (homelab#2857).
+CAA_GROUP_NONE = "caa_group_none"
 # Art gets added to releases over time: a 404 is asked again after this many days.
 CAA_RETRY_DAYS = 30
 _MBID = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
@@ -121,15 +132,24 @@ def _today() -> date:
     return datetime.now(timezone.utc).date()
 
 
-def _release(item) -> str | None:
-    mbid = str(item.get("mb_albumid") or "").strip().lower()
+def _mbid(item, field: str) -> str | None:
+    mbid = str(item.get(field) or "").strip().lower()
     return mbid if _MBID.fullmatch(mbid) else None
 
 
-def caa_checked(item, mbid: str, today: date) -> str | None:
+def _release(item) -> str | None:
+    return _mbid(item, "mb_albumid")
+
+
+def _group(item) -> str | None:
+    return _mbid(item, "mb_releasegroupid")
+
+
+def caa_checked(item, mbid: str, today: date, field: str = CAA_NONE) -> str | None:
     """The day the Cover Art Archive had no front image for *mbid*, as marked on
-    *item*, while that is under :data:`CAA_RETRY_DAYS` old; else None."""
-    mark = str(item.get(CAA_NONE) or "").split()
+    *item* in *field* (:data:`CAA_NONE` for a release, :data:`CAA_GROUP_NONE` for
+    a release group), while that is under :data:`CAA_RETRY_DAYS` old; else None."""
+    mark = str(item.get(field) or "").split()
     if len(mark) != 2 or mark[0] != mbid:
         return None
     try:
@@ -139,30 +159,43 @@ def caa_checked(item, mbid: str, today: date) -> str | None:
     return mark[1] if today - when < timedelta(days=CAA_RETRY_DAYS) else None
 
 
-def plan_caa(missing: Iterable, today: date) -> tuple[dict[str, list], list[tuple[object, str]]]:
-    """Items no store cover matched → ``({release MBID: [items]}, [(item, why it has no cover)])``.
+Lookup = tuple[str | None, str | None]
 
-    An item with no ``mb_albumid`` borrows the release of another such item on
-    its album.  A release marked as having no front image is left out until the
-    mark is :data:`CAA_RETRY_DAYS` old.
+
+def plan_caa(missing: Iterable, today: date) -> tuple[dict[Lookup, list], list[tuple[object, str]]]:
+    """Items no store cover matched → ``({(release, group): [items]}, [(item, why it has no cover)])``.
+
+    The key names what to ask the Cover Art Archive, in order: the release
+    (None once it is marked as having no front image), then the release group
+    (None when the item has none or it is marked too).  An item with no
+    ``mb_albumid`` or ``mb_releasegroupid`` borrows that of another such item
+    on its album.  A mark counts until it is :data:`CAA_RETRY_DAYS` old.
     """
     missing = list(missing)
     album_release: dict[tuple[str, str], str] = {}
+    album_group: dict[tuple[str, str], str] = {}
     for item in missing:
-        mbid = _release(item)
-        if mbid:
+        if mbid := _release(item):
             album_release.setdefault(_album(item), mbid)
-    planned: dict[str, list] = {}
+        if mbid := _group(item):
+            album_group.setdefault(_album(item), mbid)
+    planned: dict[Lookup, list] = {}
     left: list[tuple[object, str]] = []
     for item in missing:
-        mbid = _release(item) or album_release.get(_album(item))
-        if not mbid:
+        release = _release(item) or album_release.get(_album(item))
+        group = _group(item) or album_group.get(_album(item))
+        if not release and not group:
             left.append((item, "no matching playlist store entry, and no MusicBrainz release"))
-        elif when := caa_checked(item, mbid, today):
-            left.append((item, f"no matching playlist store entry, and the Cover Art Archive has no front image "
-                               f"for release {mbid} (checked {when})"))
-        else:
-            planned.setdefault(mbid, []).append(item)
+            continue
+        release_when = release and caa_checked(item, release, today)
+        group_when = group and caa_checked(item, group, today, CAA_GROUP_NONE)
+        if (release and not release_when) or (group and not group_when):
+            planned.setdefault((None if release_when else release, None if group_when else group), []).append(item)
+            continue
+        checked = [f"release {release} (checked {release_when})"] if release else []
+        checked += [f"{'its ' if release else ''}release group {group} (checked {group_when})"] if group else []
+        left.append((item, "no matching playlist store entry, and the Cover Art Archive has no front image "
+                           f"for {' or '.join(checked)}"))
     return planned, left
 
 
@@ -179,20 +212,24 @@ def _label(album: tuple[str, str]) -> str:
     return f"{album[0] or '?'} — {album[1] or '?'}"
 
 
-def _record(done: list, cover_source: str, mbid: str | None = None) -> None:
+def _record(done: list, cover_source: str, mbid: str | None = None, group: str | None = None) -> None:
     """Log the album's ``[ART]`` line and record its ``cover_embedded`` event."""
     first = done[0]
     name = f"{first.get('albumartist') or first.get('artist') or '?'} — {first.get('album') or '?'}"
-    if mbid:
+    if group:
+        message = (f"[ART] {name}: embedded the Cover Art Archive front image of release group {group} "
+                   f"on {len(done)} track(s)")
+    elif mbid:
         message = f"[ART] {name}: embedded the Cover Art Archive front image (release {mbid}) on {len(done)} track(s)"
     else:
         message = f"[ART] {name}: embedded the cover on {len(done)} track(s)"
     logger.info("  %s", message)
     events.record("cover_embedded", message, source="cover", item_id=first.id if len(done) == 1 else None,
                   spotify_album_id=events.spotify_album(first.get("spotify_album_id")),
-                  release_group=first.get("mb_releasegroupid") or None,
+                  release_group=group or first.get("mb_releasegroupid") or None,
                   data={"album": name, "items": [i.id for i in done], "cover_source": cover_source,
-                        **({"mb_albumid": mbid} if mbid else {})})
+                        **({"mb_albumid": mbid} if mbid else {}),
+                        **({"mb_releasegroupid": group} if group else {})})
 
 
 def _embed_each(items: Iterable, data: bytes) -> list:
@@ -207,13 +244,29 @@ def _embed_each(items: Iterable, data: bytes) -> list:
     return done
 
 
-def _mark_no_front(items: Iterable, mbid: str, today: date) -> None:
+def _mark_no_front(items: Iterable, field: str, mbid: str, today: date) -> None:
+    what = "release group" if field == CAA_GROUP_NONE else "release"
     for item in items:
         try:
-            item[CAA_NONE] = f"{mbid} {today.isoformat()}"
+            item[field] = f"{mbid} {today.isoformat()}"
             item.store()
         except Exception as exc:
-            logger.warning("  [NOART] %s: could not mark the release as having no front image: %s", _path(item), exc)
+            logger.warning("  [NOART] %s: could not mark the %s as having no front image: %s", _path(item), what, exc)
+
+
+def _ask_caa(fetch: Callable[[str], bytes], url: str, label: str) -> tuple[bytes | None, bool]:
+    """``(image, False)``, or ``(None, True)`` on a 404 (no front image), or
+    ``(None, False)`` when the request failed (a timeout, a network error, any
+    other status): that marks nothing, so the next run asks again."""
+    try:
+        return fetch(url), False
+    except urllib.error.HTTPError as exc:
+        if exc.code == 404:
+            return None, True
+        logger.warning("  [NOART] %s: Cover Art Archive download failed (%s): %s", label, url, exc)
+    except Exception as exc:
+        logger.warning("  [NOART] %s: Cover Art Archive download failed (%s): %s", label, url, exc)
+    return None, False
 
 
 def embed_covers(
@@ -225,8 +278,9 @@ def embed_covers(
     """Embed the album cover on every usenet item in *items* with no art.
 
     The cover is the playlist store's Spotify cover, else the Cover Art
-    Archive's front image of the item's release (homelab#2825), fetched once
-    per release, one after another.  Logs one ``[ART]`` line per album and
+    Archive's front image of the item's release (homelab#2825), else that of
+    its release group (homelab#2857), each fetched once, one after another.
+    Logs one ``[ART]`` line per album and
     ``[NOART]`` per item with no cover.  A failed download or write is logged
     and skipped: the backfill retries it.  A dry run fetches nothing and
     writes nothing.  Returns the count of items embedded (on a dry run, that
@@ -265,30 +319,45 @@ def embed_covers(
             _record(done, "store")
         count += len(done)
 
-    for mbid, group in caa.items():
-        label = _label(_album(group[0]))
+    answers: dict[str, tuple[bytes | None, bool]] = {}  # two lookups can share a release group
+
+    def ask(url: str, label: str) -> tuple[bytes | None, bool]:
+        if url not in answers:
+            answers[url] = _ask_caa(fetch, url, label)
+        return answers[url]
+
+    for (release, group), tracks in caa.items():
+        label = _label(_album(tracks[0]))
         if not apply:
-            logger.info("  [ART] %s: would try the Cover Art Archive (release %s) for %d track(s)",
-                        label, mbid, len(group))
+            what = " then ".join([*([f"release {release}"] if release else []),
+                                  *([f"release group {group}"] if group else [])])
+            logger.info("  [ART] %s: would try the Cover Art Archive (%s) for %d track(s)", label, what, len(tracks))
             continue
-        url = CAA_URL.format(mbid)
-        try:
-            data = fetch(url)
-        except urllib.error.HTTPError as exc:
-            if exc.code == 404:
-                logger.warning("  [NOART] %s: the Cover Art Archive has no front image for release %s "
-                               "(asked again in %d days)", label, mbid, CAA_RETRY_DAYS)
-                _mark_no_front(group, mbid, today)
-            else:
-                logger.warning("  [NOART] %s: Cover Art Archive download failed (%s): %s", label, url, exc)
-            continue
-        except Exception as exc:  # a timeout or a network error: nothing marked, the next run asks again
-            logger.warning("  [NOART] %s: Cover Art Archive download failed (%s): %s", label, url, exc)
-            continue
-        done = _embed_each(group, data)
-        if done:
-            _record(done, "caa", mbid)
-        count += len(done)
+        if release:
+            data, no_front = ask(CAA_URL.format(release), label)
+            if data is not None:
+                done = _embed_each(tracks, data)
+                if done:
+                    _record(done, "caa", release)
+                count += len(done)
+                continue
+            if not no_front:  # failed: the next run asks the release again before its group
+                continue
+            logger.warning("  [NOART] %s: the Cover Art Archive has no front image for release %s "
+                           "(asked again in %d days)%s", label, release, CAA_RETRY_DAYS,
+                           "; trying its release group" if group else "")
+            _mark_no_front(tracks, CAA_NONE, release, today)
+        if group:
+            data, no_front = ask(CAA_GROUP_URL.format(group), label)
+            if data is not None:
+                done = _embed_each(tracks, data)
+                if done:
+                    _record(done, "caa_group", group=group)
+                count += len(done)
+            elif no_front:
+                logger.warning("  [NOART] %s: the Cover Art Archive has no front image for release group %s "
+                               "(asked again in %d days)", label, group, CAA_RETRY_DAYS)
+                _mark_no_front(tracks, CAA_GROUP_NONE, group, today)
     if caa and not apply:
         logger.info("Would try the Cover Art Archive for %d album(s) (%d track(s)) with no playlist store cover",
                     len(caa), sum(len(g) for g in caa.values()))

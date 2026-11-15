@@ -380,3 +380,190 @@ def test_download_sends_the_user_agent_and_a_timeout(monkeypatch) -> None:
     assert cover.download(CAA_URL) == b"jpeg"
     assert seen == {"ua": cover.USER_AGENT, "timeout": cover.DOWNLOAD_TIMEOUT, "url": CAA_URL}
     assert "github.com/sometimeskind/music-pipeline" in cover.USER_AGENT
+
+
+# --- The release group fallback (homelab#2857) ---
+
+GROUP = "5d2b0e8c-4a1f-4c3e-9d8a-6f1f2a3b4c5d"
+GROUP_URL = f"https://coverartarchive.org/release-group/{GROUP}/front-500"
+
+
+def _answers(art: bytes | None = None, **by_url):
+    """A fetch hook: each URL's answer (bytes, or an int HTTP status to raise), *art* for a group's front."""
+    import urllib.error
+
+    fetched = []
+    answers = {CAA_URL: 404, GROUP_URL: art if art is not None else 404, **by_url}
+
+    def fetch(url):
+        fetched.append(url)
+        answer = answers[url]
+        if isinstance(answer, int):
+            raise urllib.error.HTTPError(url, answer, "Error", {}, None)
+        if isinstance(answer, Exception):
+            raise answer
+        return answer
+
+    return fetch, fetched
+
+
+def test_release_with_no_front_image_falls_back_to_its_release_group(tmp_path, ffmpeg, lib, today,
+                                                                     recorded) -> None:
+    from music_scan.cover import CAA_GROUP_NONE, CAA_NONE, embed_covers
+
+    art = _jpeg(tmp_path / "group.jpg", "green")
+    items = [_item(lib, _m4a(tmp_path / f"{n}.m4a"), mb_albumid=MBID, mb_releasegroupid=GROUP) for n in ("a", "b")]
+    noid = _item(lib, _m4a(tmp_path / "c.m4a"))  # borrows its album's release and group
+    fetch, fetched = _answers(art)
+
+    assert embed_covers([*items, noid], {}, fetch=fetch) == 3
+
+    assert fetched == [CAA_URL, GROUP_URL]
+    for name in ("a", "b", "c"):
+        assert _images(tmp_path / f"{name}.m4a")[0].data == art
+    assert [_reload(lib, i)[CAA_NONE] for i in (*items, noid)] == [f"{MBID} 2026-11-13"] * 3
+    assert _reload(lib, noid).get(CAA_GROUP_NONE) is None
+    (kind, message, kw), = recorded
+    assert kind == "cover_embedded" and kw["release_group"] == GROUP
+    assert kw["data"] == {"album": "Artist — Album", "items": [i.id for i in (*items, noid)],
+                          "cover_source": "caa_group", "mb_releasegroupid": GROUP}
+    assert message == (f"[ART] Artist — Album: embedded the Cover Art Archive front image of release group {GROUP} "
+                       "on 3 track(s)")
+
+
+def test_a_release_with_its_own_front_image_never_asks_its_group(tmp_path, ffmpeg, lib, today, recorded) -> None:
+    from music_scan.cover import embed_covers
+
+    art = _jpeg(tmp_path / "c.jpg")
+    item = _item(lib, _m4a(tmp_path / "a.m4a"), mb_albumid=MBID, mb_releasegroupid=GROUP)
+    fetch, fetched = _answers(**{CAA_URL: art})
+    assert embed_covers([item], {}, fetch=fetch) == 1
+    assert fetched == [CAA_URL]
+    assert recorded[0][2]["data"]["cover_source"] == "caa"
+
+
+def test_release_and_group_both_404_marks_both_and_neither_is_asked_again(tmp_path, ffmpeg, lib, today,
+                                                                          recorded, caplog) -> None:
+    import logging
+
+    from music_scan.cover import CAA_GROUP_NONE, CAA_NONE, embed_covers
+
+    item = _item(lib, _m4a(tmp_path / "a.m4a"), mb_albumid=MBID, mb_releasegroupid=GROUP)
+    fetch, fetched = _answers()
+    assert embed_covers([item], {}, fetch=fetch) == 0
+    assert fetched == [CAA_URL, GROUP_URL]
+    item = _reload(lib, item)
+    assert item[CAA_NONE] == f"{MBID} 2026-11-13" and item[CAA_GROUP_NONE] == f"{GROUP} 2026-11-13"
+    assert recorded == [] and _images(tmp_path / "a.m4a") == []
+
+    caplog.clear()
+    with caplog.at_level(logging.INFO):
+        assert embed_covers([item], {}, fetch=lambda url: pytest.fail("fetched")) == 0
+        assert embed_covers([item], {}, apply=False, fetch=lambda url: pytest.fail("fetched")) == 0
+    assert (f"the Cover Art Archive has no front image for release {MBID} (checked 2026-11-13) "
+            f"or its release group {GROUP} (checked 2026-11-13)") in caplog.text
+    assert "would try the Cover Art Archive" not in caplog.text
+
+
+def test_a_release_marked_before_the_group_fallback_gets_its_group_asked(tmp_path, ffmpeg, lib, today,
+                                                                         caplog) -> None:
+    """The 2026-11-15 marks (homelab#2857): the release isn't asked again, its group is, at once."""
+    import logging
+
+    from music_scan.cover import CAA_GROUP_NONE, CAA_NONE, embed_covers
+
+    item = _item(lib, _m4a(tmp_path / "a.m4a"), mb_albumid=MBID, mb_releasegroupid=GROUP,
+                 caa_none=f"{MBID} 2026-11-12")
+    with caplog.at_level(logging.INFO):
+        assert embed_covers([item], {}, apply=False, fetch=lambda url: pytest.fail("fetched")) == 0
+    assert f"would try the Cover Art Archive (release group {GROUP}) for 1 track(s)" in caplog.text
+
+    fetch, fetched = _answers()
+    assert embed_covers([item], {}, fetch=fetch) == 0
+    assert fetched == [GROUP_URL]
+    item = _reload(lib, item)
+    assert item[CAA_NONE] == f"{MBID} 2026-11-12"  # the release's mark keeps its date
+    assert item[CAA_GROUP_NONE] == f"{GROUP} 2026-11-13"
+
+    # A group mark names another group (the item's group changed since): it doesn't count.
+    other = _item(lib, _m4a(tmp_path / "b.m4a"), album="Other", mb_albumid=MBID, mb_releasegroupid=GROUP,
+                  caa_none=f"{MBID} 2026-11-12", caa_group_none="1c3b0e8c-4a1f-4c3e-9d8a-6f1f2a3b4c5d 2026-11-13")
+    fetch, fetched = _answers(_jpeg(tmp_path / "c.jpg"))
+    assert embed_covers([other], {}, fetch=fetch) == 1
+    assert fetched == [GROUP_URL]
+
+
+def test_a_stale_release_mark_asks_the_release_but_a_marked_group_stays_unasked(tmp_path, ffmpeg, lib,
+                                                                                today) -> None:
+    from music_scan.cover import CAA_NONE, embed_covers
+
+    item = _item(lib, _m4a(tmp_path / "a.m4a"), mb_albumid=MBID, mb_releasegroupid=GROUP,
+                 caa_none=f"{MBID} 2026-10-01", caa_group_none=f"{GROUP} 2026-11-01")
+    fetch, fetched = _answers()
+    assert embed_covers([item], {}, fetch=fetch) == 0
+    assert fetched == [CAA_URL]
+    assert _reload(lib, item)[CAA_NONE] == f"{MBID} 2026-11-13"
+
+
+def test_an_item_with_only_a_release_group_asks_the_group(tmp_path, ffmpeg, lib, today, recorded) -> None:
+    from music_scan.cover import embed_covers
+
+    art = _jpeg(tmp_path / "c.jpg")
+    item = _item(lib, _m4a(tmp_path / "a.m4a"), mb_releasegroupid=GROUP)
+    fetch, fetched = _answers(art)
+    assert embed_covers([item], {}, fetch=fetch) == 1
+    assert fetched == [GROUP_URL]
+    assert recorded[0][2]["data"]["cover_source"] == "caa_group"
+
+
+@pytest.mark.parametrize("error", [503, TimeoutError("timed out")])
+def test_a_failed_release_lookup_skips_the_group_and_marks_nothing(tmp_path, ffmpeg, lib, today, error) -> None:
+    from music_scan.cover import CAA_GROUP_NONE, CAA_NONE, embed_covers
+
+    item = _item(lib, _m4a(tmp_path / "a.m4a"), mb_albumid=MBID, mb_releasegroupid=GROUP)
+    fetch, fetched = _answers(**{CAA_URL: error})
+    assert embed_covers([item], {}, fetch=fetch) == 0
+    assert fetched == [CAA_URL]
+    item = _reload(lib, item)
+    assert item.get(CAA_NONE) is None and item.get(CAA_GROUP_NONE) is None
+
+
+@pytest.mark.parametrize("error", [503, TimeoutError("timed out")])
+def test_a_failed_group_lookup_marks_only_the_release(tmp_path, ffmpeg, lib, today, error) -> None:
+    from music_scan.cover import CAA_GROUP_NONE, CAA_NONE, embed_covers
+
+    item = _item(lib, _m4a(tmp_path / "a.m4a"), mb_albumid=MBID, mb_releasegroupid=GROUP)
+    fetch, fetched = _answers(**{GROUP_URL: error})
+    assert embed_covers([item], {}, fetch=fetch) == 0
+    item = _reload(lib, item)
+    assert item[CAA_NONE] == f"{MBID} 2026-11-13" and item.get(CAA_GROUP_NONE) is None
+    fetch, fetched = _answers(_jpeg(tmp_path / "c.jpg"))
+    assert embed_covers([item], {}, fetch=fetch) == 1  # the next run asks the group alone
+    assert fetched == [GROUP_URL]
+
+
+def test_two_releases_of_one_group_ask_the_group_once(tmp_path, ffmpeg, lib, today) -> None:
+    from music_scan.cover import embed_covers
+
+    other = "1c3b0e8c-4a1f-4c3e-9d8a-6f1f2a3b4c5d"
+    other_url = f"https://coverartarchive.org/release/{other}/front-500"
+    a = _item(lib, _m4a(tmp_path / "a.m4a"), mb_albumid=MBID, mb_releasegroupid=GROUP)
+    b = _item(lib, _m4a(tmp_path / "b.m4a"), album="Deluxe", mb_albumid=other, mb_releasegroupid=GROUP)
+    fetch, fetched = _answers(_jpeg(tmp_path / "c.jpg"), **{other_url: 404})
+    assert embed_covers([a, b], {}, fetch=fetch) == 2
+    assert fetched == [CAA_URL, GROUP_URL, other_url]
+
+
+def test_dry_run_names_the_release_then_its_group_and_fetches_nothing(tmp_path, ffmpeg, lib, today, recorded,
+                                                                     caplog) -> None:
+    import logging
+
+    from music_scan.cover import CAA_GROUP_NONE, CAA_NONE, embed_covers
+
+    item = _item(lib, _m4a(tmp_path / "a.m4a"), mb_albumid=MBID, mb_releasegroupid=GROUP)
+    with caplog.at_level(logging.INFO):
+        assert embed_covers([item], {}, apply=False, fetch=lambda url: pytest.fail("fetched")) == 0
+    assert (f"[ART] artist — album: would try the Cover Art Archive (release {MBID} then release group {GROUP}) "
+            "for 1 track(s)") in caplog.text
+    item = _reload(lib, item)
+    assert item.get(CAA_NONE) is None and item.get(CAA_GROUP_NONE) is None and recorded == []

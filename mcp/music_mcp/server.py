@@ -630,8 +630,9 @@ def build_server(
     @mcp.tool(annotations={"destructiveHint": True})
     async def embed_covers(apply: Apply = False) -> dict:
         """music-embed-covers: embed the album cover in every Usenet item without art: the playlist
-        store's Spotify cover, else the Cover Art Archive front image of the item's release. The dry
-        run downloads nothing: it lists the releases it would ask the Cover Art Archive for."""
+        store's Spotify cover, else the Cover Art Archive front image of the item's release, else
+        that of its release group. The dry run downloads nothing: it lists the releases and release
+        groups it would ask the Cover Art Archive for."""
         return await run("embed_covers", {"apply": apply}, write=True)
 
     @mcp.tool(annotations={"destructiveHint": True})
