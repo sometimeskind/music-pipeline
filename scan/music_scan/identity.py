@@ -118,13 +118,44 @@ def item_spotify_ids(item) -> set[str]:
 def fingerprint(path) -> str:
     """The AcoustID fingerprint of the file at *path*, as beets' ``acoustid_fingerprint`` stores it.
 
-    Computed locally (fpcalc/libchromaprint), no AcoustID lookup.  Evidence for
-    the duplicate audit (#210); raises when the file can't be decoded.
+    Computed locally with ``fpcalc`` (:func:`use_fpcalc`), no AcoustID lookup.
+    Evidence for the duplicate audit (#210); raises when the file can't be decoded.
     """
     import acoustid  # noqa: PLC0415
 
-    _, fp = acoustid.fingerprint_file(str(path))
+    _, fp = acoustid.fingerprint_file(str(path), force_fpcalc=True)
     return fp.decode() if isinstance(fp, bytes) else fp
+
+
+def use_fpcalc() -> None:
+    """Make every pyacoustid fingerprint in this process run ``fpcalc``, a
+    child process, instead of libchromaprint in-process (#517).  Idempotent.
+
+    pyacoustid prefers libchromaprint over ctypes, fed by audioread, whenever
+    both load.  audioread hands it ffmpeg's samples in 8192-byte blocks (4096
+    samples), and libchromaprint asserts that each block holds whole frames, so
+    a file of 3 or 6 channels (a 3.0 or 5.1 mix) aborts the whole process with
+    SIGABRT (``Assertion `length % m_num_channels == 0' failed``).  In ``beet
+    import`` that killed the import at every scan, and the inbox never drained.
+    fpcalc decodes with libavformat itself, and its fingerprint of a mono or
+    stereo file is libchromaprint's (to a stray bit), so the fingerprints
+    already in the library still compare.  It is no slower: about 0.7 s against
+    1.6 s for a 4-minute M4A.  A file it can't fingerprint, or that crashes it, is a
+    ``FingerprintGenerationError``, which beets' ``chroma`` and the plugin log
+    and import past.  The plugin calls this in the beets process, where
+    ``chroma`` calls ``acoustid.fingerprint_file`` itself; this package's own
+    callers pass ``force_fpcalc=True``."""
+    import acoustid  # noqa: PLC0415
+
+    original = acoustid.fingerprint_file
+    if getattr(original, "fpcalc_only", False):
+        return
+
+    def fingerprint_file(path, maxlength=acoustid.MAX_AUDIO_LENGTH, force_fpcalc=True):
+        return original(path, maxlength, force_fpcalc=True)
+
+    fingerprint_file.fpcalc_only = True  # type: ignore[attr-defined]
+    acoustid.fingerprint_file = fingerprint_file
 
 
 def item_isrcs(item) -> set[str]:

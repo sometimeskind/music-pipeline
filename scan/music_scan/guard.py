@@ -213,7 +213,8 @@ def acoustid_recordings(path: Path) -> dict[str, float]:
         raise LookupFailed("ACOUSTID_APIKEY is not set")
     best: dict[str, float] = {}
     try:
-        for score, rid, *_ in acoustid.match(key, str(path), timeout=LOOKUP_TIMEOUT):
+        # fpcalc, not libchromaprint in this process: a 3- or 6-channel file aborts that (#517).
+        for score, rid, *_ in acoustid.match(key, str(path), force_fpcalc=True, timeout=LOOKUP_TIMEOUT):
             if rid:
                 best[rid] = max(score or 0.0, best.get(rid, 0.0))
     except acoustid.FingerprintGenerationError as exc:

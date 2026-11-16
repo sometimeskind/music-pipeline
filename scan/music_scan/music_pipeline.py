@@ -124,7 +124,7 @@ Responsibilities
    ``import_task_start``, which ASIS mode never sends (see the note), so asis
    imports would carry no ``acoustid_fingerprint`` for the duplicate audit
    (#210).  An item stored without one is fingerprinted from its library file
-   (locally, no AcoustID lookup), and the tag is written to the file before
+   (locally with fpcalc, no AcoustID lookup), and the tag is written to the file before
    the store (homelab#2723).  Setting a tag field resets the item's stored
    mtime to 0, so the next scan's ``beet update`` re-reads every file whose
    item changed in the database alone and takes the file's tags back: a
@@ -185,7 +185,7 @@ from music_fetch.usenet import words
 
 from music_scan.identity import (
     Credit, add_isrcs, add_to_list, artist_credit, compilation, different_artist, different_song, fingerprint,
-    item_isrcs, item_spotify_ids, same_mb_recording, split_list, spotify_id, version_clash,
+    item_isrcs, item_spotify_ids, same_mb_recording, split_list, spotify_id, use_fpcalc, version_clash,
 )
 from music_scan.pathfold import fold, library_paths
 
@@ -566,6 +566,10 @@ class MusicPipelinePlugin(BeetsPlugin):
                 _chroma.API_KEY = key
             except Exception:
                 pass
+        # Every fingerprint in this beets process (chroma's at import_task_start,
+        # fingerprint_if_missing's) through fpcalc: libchromaprint in-process
+        # aborts beets on a 3- or 6-channel file, and with it the import (#517).
+        use_fpcalc()
         _patch_move_file()
         # id(item) → its playlist, via, job and spotdl tags, from import_task_created to item_imported.
         self._pending: dict[int, Pending] = {}
