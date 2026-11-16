@@ -20,6 +20,8 @@ jobs:
     runs-on: ubuntu-latest
     # Normally 3–5 min. A stalled Prefect test-server start-up has run for 20 (#318).
     timeout-minutes: 10
+    env:
+      FFMPEG_STATIC: b6.1.1
 
     # The event store's tests run against a real Postgres (fetch/tests/test_events.py,
     # homelab#2413), the cluster's major. Dependabot doesn't bump service images: move it
@@ -46,9 +48,41 @@ jobs:
         with:
           python-version: "3.13"
 
+      # The length guard's and library tests make audio fixtures with ffmpeg and ffprobe
+      # (#165), and skip without them. A pinned static build, cached, instead of apt: on a
+      # slow azure.archive.ubuntu.com day the apt install trickled at ~40 KB/s and used the
+      # job's whole 10 minutes (homelab#2673). The build is eugeneware/ffmpeg-static (no
+      # Dependabot): to bump it, change FFMPEG_STATIC and both digests (the release API's
+      # assets[].digest for the .gz files).
+      - name: Cache ffmpeg
+        id: ffmpeg-cache
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/ffmpeg
+          key: ffmpeg-static-${{ env.FFMPEG_STATIC }}-linux-x64
+
       - name: Install ffmpeg
-        # The length guard's tests generate audio fixtures with ffmpeg (#165).
-        run: sudo apt-get update -q && sudo apt-get install -y -q --no-install-recommends ffmpeg
+        if: steps.ffmpeg-cache.outputs.cache-hit != 'true'
+        timeout-minutes: 3
+        env:
+          FFMPEG_SHA256: bfe8a8fc511530457b528c48d77b5737527b504a3797a9bc4866aeca69c2dffa
+          FFPROBE_SHA256: 25d9b6ccb05e3d9de9e04e31e2506d8dd7f9f0418981965ac6df12e8d3afd067
+        run: |
+          mkdir -p ~/ffmpeg && cd ~/ffmpeg
+          base="https://github.com/eugeneware/ffmpeg-static/releases/download/${FFMPEG_STATIC}"
+          for bin in ffmpeg ffprobe; do
+            curl -fsSL --retry 3 --retry-all-errors --max-time 60 -o "${bin}.gz" "${base}/${bin}-linux-x64.gz"
+          done
+          printf '%s  ffmpeg.gz\n%s  ffprobe.gz\n' "$FFMPEG_SHA256" "$FFPROBE_SHA256" | sha256sum -c
+          gunzip ffmpeg.gz ffprobe.gz
+          chmod +x ffmpeg ffprobe
+
+      - name: Put ffmpeg on PATH
+        # Fails here, not as silently skipped tests, if the binaries are missing.
+        run: |
+          ~/ffmpeg/ffmpeg -hide_banner -version | head -n1
+          ~/ffmpeg/ffprobe -hide_banner -version | head -n1
+          echo "$HOME/ffmpeg" >> "$GITHUB_PATH"
 
       - name: Install dependencies
         run: |
