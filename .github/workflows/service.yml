@@ -48,7 +48,32 @@ jobs:
 
       - name: Install ffmpeg
         # The length guard's tests generate audio fixtures with ffmpeg (#165).
-        run: sudo apt-get update -q && sudo apt-get install -y -q --no-install-recommends ffmpeg
+        # A mirror trickling at ~40 KB/s once used the job's whole 10 minutes, so the tests
+        # showed as cancelled (homelab#2673). apt retries and times out stalled fetches, the
+        # update + install gets one more go, and the step has its own limit, so a mirror
+        # that stays slow fails the run instead. No .deb cache: apt checks only the size of
+        # an archive it finds in its cache, not its hash, so a cache would skip signatures.
+        timeout-minutes: 4
+        run: |
+          apt_opts=(-q -o Acquire::Retries=3 -o Acquire::http::Timeout=30)
+          for attempt in 1 2; do
+            if sudo apt-get "${apt_opts[@]}" update &&
+              sudo apt-get "${apt_opts[@]}" install -y --no-install-recommends ffmpeg; then
+              break
+            fi
+            if [ "$attempt" = 2 ]; then exit 1; fi
+            echo "::warning::apt update/install failed (attempt $attempt), retrying once"
+          done
+
+      - name: Check ffmpeg
+        # scan/tests/conftest.py skips the ffmpeg tests when ffmpeg or ffprobe is missing,
+        # so fail loudly here instead. Captured, not piped to head: the default shell has
+        # no pipefail, so `ffmpeg -version | head` would pass with ffmpeg missing.
+        run: |
+          ff=$(ffmpeg -version)
+          fp=$(ffprobe -version)
+          echo "${ff%%$'\n'*}"
+          echo "${fp%%$'\n'*}"
 
       - name: Install dependencies
         run: |
