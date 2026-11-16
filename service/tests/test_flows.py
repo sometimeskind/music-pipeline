@@ -845,6 +845,146 @@ def test_scan_reports_a_musicbrainz_outage():
     mock_scan.regen_playlists.assert_called_once()
 
 
+# A MusicBrainz outage's retry (#508): the busy scan's mechanism, against the
+# same test server and ``music-scan`` deployment.
+
+
+def _outage_scan(inbox, *, outage=True, navidrome=None) -> tuple[list[str], list]:
+    """Run the scan's tasks with *inbox* as the inbox (counted for real) and,
+    with *outage*, beets meeting a MusicBrainz outage; *navidrome* is the rescan's
+    side effect.  Returns the retry lines it logged and the metrics pushed."""
+    from music_scan import scan as real_scan
+    from music_scan.scan import MusicBrainzUnavailable
+    from music_service import flows, prefect_client
+
+    pushed: list = []
+    with patch.object(prefect_client, "_has_server", return_value=True), \
+         patch.object(real_scan, "INBOX", inbox), \
+         patch("music_service.flows.ingest") as mock_ingest, \
+         patch("music_service.flows.scan") as mock_scan, \
+         patch("music_service.flows.concurrency"), \
+         patch.object(flows, "get_run_logger") as logger, \
+         patch("music_scan.process.run_beet_update"), \
+         patch("music_scan.navidrome.trigger_scan", side_effect=navidrome), \
+         patch("music_scan.metrics.ScanMetrics.push", autospec=True, side_effect=pushed.append):
+        _scan_mocks(mock_scan, mock_ingest)
+        mock_scan.inbox_audio_count.side_effect = real_scan.inbox_audio_count
+        if outage:
+            mock_scan.run_inbox_import.side_effect = MusicBrainzUnavailable("503", [("A", "B")])
+        try:
+            flows._run_scan_tasks()
+        except (MusicBrainzUnavailable, RuntimeError):
+            pass
+    # The retry's lines only: other steps' (the purge, as a non-root user) aren't this test's.
+    retry = [c.args[0] % c.args[1:] for c in logger.return_value.exception.call_args_list
+             if c.args and c.args[0].startswith("%s; ")]
+    assert retry == []
+    lines = [c.args[0] % c.args[1:] for c in logger.return_value.info.call_args_list
+             if c.args and c.args[0].startswith("%s; ")]
+    return lines, pushed
+
+
+def _set_running(run_id) -> None:
+    from prefect.client.orchestration import get_client
+    from prefect.states import Running
+
+    with get_client(sync_client=True) as client:
+        client.set_flow_run_state(run_id, Running(), force=True)
+
+
+def test_a_scan_a_musicbrainz_outage_left_files_for_schedules_one_retry(tmp_path, scan_deployment):
+    """#508: nothing else scans the files an outage left (#264) before the
+    nightly, so the scan schedules one more, SCAN_OUTAGE_RETRY_SECONDS on; a
+    second outage while it is scheduled adds none."""
+    from datetime import datetime, timedelta, timezone
+
+    from music_service import prefect_client
+
+    logged, (m,) = _outage_scan(_inbox_batch(tmp_path))
+    assert m.failure_reason == "musicbrainz_unavailable"
+    (retry,) = _scheduled_scans(scan_deployment)
+    due = datetime.now(timezone.utc) + timedelta(seconds=prefect_client.SCAN_OUTAGE_RETRY_SECONDS)
+    assert abs((retry.expected_start_time - due).total_seconds()) < 60
+    # The scan's own count: the file still copying and the cover aren't waiting.
+    assert logged == ["MusicBrainz unavailable; retrying in 30 min (2 file(s) waiting)"]
+
+    logged, _ = _outage_scan(_inbox_batch(tmp_path / "again"))
+    assert [r.id for r in _scheduled_scans(scan_deployment)] == [retry.id]
+    assert logged == ["MusicBrainz unavailable; a scan is already waiting to run (2 file(s) waiting)"]
+
+
+def test_a_retry_that_meets_the_outage_again_schedules_the_next(tmp_path, scan_deployment):
+    """#508: the running retry isn't a waiting scan, so it schedules the next;
+    it runs SCAN_OUTAGE_RETRY_SECONDS after the first, in the next key window."""
+    import time
+
+    from music_service import prefect_client
+
+    _outage_scan(_inbox_batch(tmp_path))
+    (first,) = _scheduled_scans(scan_deployment)
+    _set_running(first.id)
+
+    real = time.time
+    with patch("time.time", side_effect=lambda: real() + prefect_client.SCAN_OUTAGE_RETRY_SECONDS):
+        logged, _ = _outage_scan(_inbox_batch(tmp_path / "again"))
+    (second,) = _scheduled_scans(scan_deployment)
+    assert second.id != first.id
+    assert logged == ["MusicBrainz unavailable; retrying in 30 min (2 file(s) waiting)"]
+
+
+def test_a_scan_that_imports_the_whole_inbox_schedules_no_retry(tmp_path, scan_deployment):
+    """#508: only an outage retries; a scan without one quarantines what is left."""
+    logged, (m,) = _outage_scan(_inbox_batch(tmp_path), outage=False)
+    assert m.success
+    assert logged == []
+    assert _scheduled_scans(scan_deployment) == []
+
+
+def test_an_outage_that_left_the_inbox_empty_schedules_no_retry(tmp_path, scan_deployment):
+    """The files beets skipped can be gone by the scan's end: nothing to retry."""
+    inbox = tmp_path / "inbox"
+    inbox.mkdir()
+    logged, _ = _outage_scan(inbox)
+    assert logged == []
+    assert _scheduled_scans(scan_deployment) == []
+
+
+def test_an_outage_scan_whose_navidrome_rescan_failed_still_schedules_the_retry(tmp_path, scan_deployment):
+    """#508: the failed rescan is the reason pushed, but the files still wait."""
+    logged, (m,) = _outage_scan(_inbox_batch(tmp_path), navidrome=RuntimeError("down"))
+    assert m.failure_reason == "navidrome_trigger_failed"
+    assert len(_scheduled_scans(scan_deployment)) == 1
+    assert logged == ["MusicBrainz unavailable; retrying in 30 min (2 file(s) waiting)"]
+
+
+def test_an_outage_scan_in_direct_mode_schedules_nothing(tmp_path, scan_deployment):
+    """Without a Prefect server there is no deployment to schedule a run of."""
+    from music_scan.scan import MusicBrainzUnavailable
+    from music_service import flows, prefect_client
+
+    with patch.object(prefect_client, "schedule_scan_retry") as retry, \
+         patch.object(prefect_client, "_has_server", return_value=False), \
+         patch("music_service.flows.ingest") as mock_ingest, \
+         patch("music_service.flows.scan") as mock_scan, \
+         patch("music_service.flows.concurrency"), \
+         patch("music_scan.process.run_beet_update"), \
+         patch("music_scan.navidrome.trigger_scan"), \
+         patch("music_scan.metrics.ScanMetrics.push"):
+        _scan_mocks(mock_scan, mock_ingest)
+        mock_scan.run_inbox_import.side_effect = MusicBrainzUnavailable("503")
+        with pytest.raises(MusicBrainzUnavailable):
+            flows._run_scan_tasks()
+    retry.assert_not_called()
+    mock_scan.inbox_audio_count.assert_not_called()
+
+
+def test_the_outage_retry_waits_longer_than_a_busy_scans():
+    """#508: an outage lasts hours and each retry is a whole scan, so it backs
+    off further than a busy scan's retry, but well within the night."""
+    from music_service import prefect_client
+    assert prefect_client.SCAN_RETRY_SECONDS < prefect_client.SCAN_OUTAGE_RETRY_SECONDS <= 60 * 60
+
+
 def test_album_import_defers_on_a_musicbrainz_outage(tmp_path):
     """The album flow sees an outage as ImportDeferred, not a crash (#264); the
     files beets skipped stay in the folder, which goes back, so none is quarantined."""
