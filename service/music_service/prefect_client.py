@@ -118,6 +118,13 @@ ALBUMS_DEPLOYMENT = "music-albums/music-albums"
 # (homelab#2761) the retry runs (homelab#2751).
 SCAN_RETRY_SECONDS = 5 * 60
 
+# How long after a scan that a MusicBrainz outage left files in the inbox (#264)
+# its retry runs (#508).  Longer than a busy scan's: an outage lasts hours (503s
+# from 00:05 to 03:38 UTC on 2026-11-16), MusicBrainz answers 503 to load as
+# well as when down, and each retry is a whole scan holding ``pipeline``, so 5
+# minutes would run some 40 scans into one outage to save a few minutes after it.
+SCAN_OUTAGE_RETRY_SECONDS = 30 * 60
+
 
 def schedule_scan(delay: int, idempotency_key: str | None = None) -> bool:
     """Schedule a ``music-scan`` run *delay* seconds from now, unless one is
@@ -156,10 +163,10 @@ def schedule_scan(delay: int, idempotency_key: str | None = None) -> bool:
 
 
 def schedule_scan_retry(delay: int = SCAN_RETRY_SECONDS) -> bool:
-    """A busy scan's retry (homelab#2751): :func:`schedule_scan`, *delay*
-    seconds on.  The idempotency key, one per *delay* window, keeps two scans
-    that skip at once from both adding one.  Called from inside the scan flow,
-    which runs only against a Prefect server."""
+    """A busy scan's retry (homelab#2751), or one after a MusicBrainz outage
+    (#508): :func:`schedule_scan`, *delay* seconds on.  The idempotency key, one
+    per *delay* window, keeps two scans that skip at once from both adding one.
+    Called from inside the scan flow, against a Prefect server."""
     import time  # noqa: PLC0415
 
     return schedule_scan(delay, idempotency_key=f"scan-retry-{int(time.time()) // delay}")

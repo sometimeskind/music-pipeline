@@ -405,12 +405,13 @@ def _run_scan_tasks() -> None:
     killed or failing, homelab#2763) ends the run there, before
     ``quarantine-leftovers`` and the as-is pass: the files beets didn't reach
     stay in the inbox for the next scan.  A MusicBrainz outage (#264) skips the
-    quarantine only, and the rest of the scan runs for what did import."""
+    quarantine only, and the rest of the scan runs for what did import; the
+    scan then schedules that next scan (:func:`_retry_outage_scan`, #508)."""
     metrics = ScanMetrics()
     start = time.monotonic()
+    outage: MusicBrainzUnavailable | None = None
     try:
         since = time.time()
-        outage: MusicBrainzUnavailable | None = None
         pre_import_tasks(metrics)
         try:
             imported = beet_import_task()
@@ -440,6 +441,9 @@ def _run_scan_tasks() -> None:
         metrics.success = False
         if not metrics.failure_reason:
             metrics.failure_reason = "unexpected_error"
+        if outage is not None:
+            # Also when a later step failed: the skipped files are still waiting.
+            _retry_outage_scan()
         raise
     except BaseException:
         # The pod is shutting down (homelab#2763): ImportInterrupted from a
@@ -619,18 +623,48 @@ def _retry_busy_scan(count: str) -> None:
     one is scheduled (:func:`prefect_client.schedule_scan_retry`)."""
     from music_service import prefect_client  # noqa: PLC0415
 
-    logger = get_run_logger()
-    minutes = prefect_client.SCAN_RETRY_SECONDS // 60
+    _schedule_retry("Scan skipped — pipeline busy", prefect_client.SCAN_RETRY_SECONDS, count)
+
+
+def _retry_outage_scan() -> None:
+    """A scan that a MusicBrainz outage left files in the inbox for (#264)
+    schedules another, ``SCAN_OUTAGE_RETRY_SECONDS`` on (#508): as for a busy
+    scan (:func:`_retry_busy_scan`), nothing else would scan them before the
+    nightly, and a Soulseek pull waits for an empty inbox (homelab#2698).  A
+    retry that meets the outage again schedules the next; at most one is
+    scheduled.  Without a Prefect server (direct mode) there is no deployment
+    to schedule, and the files wait for the next trigger."""
+    from music_service import prefect_client  # noqa: PLC0415
+
+    if not prefect_client._has_server():
+        return
     try:
-        scheduled = prefect_client.schedule_scan_retry()
+        waiting: int | None = scan.inbox_audio_count()
+    except OSError:
+        get_run_logger().warning("Could not count the inbox's files; scheduling a retry anyway", exc_info=True)
+        waiting = None
+    if waiting == 0:
+        return
+    _schedule_retry("MusicBrainz unavailable", prefect_client.SCAN_OUTAGE_RETRY_SECONDS,
+                    "?" if waiting is None else str(waiting))
+
+
+def _schedule_retry(why: str, delay: int, count: str) -> None:
+    """Schedule one ``music-scan`` run *delay* seconds on for the *count* files
+    waiting (:func:`prefect_client.schedule_scan_retry`), logging *why*.
+    Never raises."""
+    from music_service import prefect_client  # noqa: PLC0415
+
+    logger = get_run_logger()
+    try:
+        scheduled = prefect_client.schedule_scan_retry(delay)
     except Exception:
-        logger.exception("Scan skipped — pipeline busy; scheduling the retry failed (%s file(s) waiting for the "
-                         "next trigger)", count)
+        logger.exception("%s; scheduling the retry failed (%s file(s) waiting for the next trigger)", why, count)
         return
     if scheduled:
-        logger.info("Scan skipped — pipeline busy; retrying in %d min (%s file(s) waiting)", minutes, count)
+        logger.info("%s; retrying in %d min (%s file(s) waiting)", why, delay // 60, count)
     else:
-        logger.info("Scan skipped — pipeline busy; a scan is already waiting to run (%s file(s) waiting)", count)
+        logger.info("%s; a scan is already waiting to run (%s file(s) waiting)", why, count)
 
 
 # ---------------------------------------------------------------------------
