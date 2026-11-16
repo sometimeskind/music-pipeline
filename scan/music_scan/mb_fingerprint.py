@@ -143,7 +143,8 @@ def acoustid_recordings(path: str, api_key: str) -> Recordings:
 
     best: dict[str, float] = {}
     try:
-        for score, rid, *_ in acoustid.match(api_key, path, timeout=LOOKUP_TIMEOUT):
+        # fpcalc, not libchromaprint in this process: a 3- or 6-channel file aborts that (#517).
+        for score, rid, *_ in acoustid.match(api_key, path, force_fpcalc=True, timeout=LOOKUP_TIMEOUT):
             if rid:
                 best[rid] = max(score, best.get(rid, 0.0))
     except acoustid.FingerprintGenerationError as exc:
