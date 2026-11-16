@@ -42,3 +42,11 @@ just fetch && just scan  # or `just sync`
 - **`config/playlists.conf` is the declarative source of truth**: `music-ingest` reconciles disk state (`.nosync`/`.album` sentinels, a removed playlist's store) to match it on every run. Never manage playlists by touching the inbox directly.
 - **Prefect direct mode**: with `PREFECT_API_URL` unset, flows run in-process and concurrency is a threading lock instead of Prefect's global limits.
 - **Credentials**: Spotify credentials are injected at runtime via `op run --env-file=.env.tpl` (vault references, never secrets). `cookies.txt` (YouTube Premium, needed for 256 kbps M4A) is bind-mounted, gitignored and must be re-exported from the browser when it expires.
+
+## Gotchas
+
+- **Say what a dry run or guard actually tests before leaning on it.** Read the code and state what it checks and what it doesn't. `set_search_override`'s dry run never searches the indexer: only a reset and the next tick test the words. `wrong_album` judges a release by title count (fewer than half the album's titles), so a release that shares most titles with the album (another edition, a compilation) passes it; don't call it protection against every wrong grab.
+- **music-mcp writes may be refused by the token, not the tool.** The static read token on pilot gets every write refused; an OAuth login in the claude.ai Music connector doesn't. Don't refuse a write on a guess: run the dry run, and when the server refuses it as read-only, hand the step over as "in the claude.ai Music connector". When a fix plan needs writes, say up front where they will run.
+- **Check a PR's state before acting on it.** Parallel sessions merge, close and replace each other's PRs: `gh pr view <n> --json state,mergedAt,closedAt,headRefOid` first.
+- **Resolve conflicts hunk by hunk**, never `git checkout --theirs`/`--ours` on a whole file: it silently reverts the other side's edits elsewhere in it. Check with `git diff --cached` that the PR's changes survived.
+- **Before removing a worktree**, confirm `git log origin/<branch>..HEAD` and `git status --porcelain` are both empty, and read the whole output of the removal.
