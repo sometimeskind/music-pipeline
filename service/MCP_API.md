@@ -395,7 +395,7 @@ Accepted, the apply job, holding its locks, runs the dry run again and compares 
 
 ### Triggers (write tier, no dry run)
 
-`POST /mcp-api/trigger/scan` (`trigger_scan`) and `POST /mcp-api/trigger/album_tick` (`trigger_album_tick`) submit the `music-scan` or `music-albums` flow run. Each is a no-op when that flow already has a run pending or running (for `music-albums`, a scheduled run that is due counts as pending, but the next interval run does not):
+`POST /mcp-api/trigger/scan` (`trigger_scan`) and `POST /mcp-api/trigger/album_tick` (`trigger_album_tick`) submit the `music-scan` or `music-albums` flow run. Each is a no-op when that flow already has a run pending or running (for `music-albums`, a scheduled run that is due counts as pending, but the next interval run does not). A run RUNNING for over 6 hours doesn't count (`STALE_RUNNING_SECONDS`, #513): its runner died, and the service's next start sets it to Crashed:
 
 ```json
 200 {"status": "submitted", "flow": "music-scan"}

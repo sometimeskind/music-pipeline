@@ -676,6 +676,158 @@ def test_startup_with_the_prefect_server_unreachable_only_logs(tmp_path, scan_de
     assert warning.startswith("Startup: 2 file(s) waiting in the inbox; could not schedule a scan")
 
 
+# The runs a restart killed (#513): the service's start sets them to Crashed,
+# against the same test server.
+
+
+def _deployment(flow_name: str):
+    """A deployment named like its flow (``serve()``'s, ``music-scan/music-scan``), with no runs."""
+    from prefect.client.orchestration import get_client
+    from prefect.client.schemas.filters import FlowRunFilter, FlowRunFilterDeploymentId
+
+    with get_client(sync_client=True) as client:
+        deployment_id = client.create_deployment(client.create_flow_from_name(flow_name), flow_name)
+        for run in client.read_flow_runs(flow_run_filter=FlowRunFilter(
+                deployment_id=FlowRunFilterDeploymentId(any_=[deployment_id]))):
+            client.delete_flow_run(run.id)
+    return deployment_id
+
+
+def _run(deployment_id, state=None):
+    """A run of *deployment_id*, put in *state* (None: left SCHEDULED, due now)."""
+    from prefect.client.orchestration import get_client
+
+    with get_client(sync_client=True) as client:
+        run = client.create_flow_run_from_deployment(deployment_id)
+        if state is not None:
+            client.set_flow_run_state(run.id, state, force=True)
+        return client.read_flow_run(run.id)
+
+
+def _state(run) -> str:
+    from prefect.client.orchestration import get_client
+
+    with get_client(sync_client=True) as client:
+        return client.read_flow_run(run.id).state_type.value
+
+
+def _served(*flow_names):
+    """What ``cli.main`` hands ``crash_orphaned_runs``: ``serve()``'s deployments."""
+    from types import SimpleNamespace
+
+    return [SimpleNamespace(flow_name=name, name=name) for name in flow_names]
+
+
+SERVED = ("music-fetch", "music-scan", "music-albums", "music-playlist-sync", "music-album-import")
+
+
+def _crash_orphans(deployments):
+    """The service's start-up step, against the test server; returns (count, prefect_client logger)."""
+    from music_service import cli, prefect_client
+
+    with patch.object(prefect_client, "_has_server", return_value=True), \
+         patch.object(prefect_client, "logger") as logger:
+        count = cli.crash_orphaned_runs(deployments)
+    return count, logger
+
+
+def test_startup_crashes_the_running_and_pending_runs_of_the_served_deployments(scan_deployment, monkeypatch):
+    """#513: a restart leaves no RUNNING or PENDING run of a deployment this pod serves."""
+    from prefect.states import Completed, Pending, Running
+
+    from music_service import prefect_client
+
+    albums, imports, other = _deployment("music-albums"), _deployment("music-album-import"), _deployment("doc-scan")
+    scan_running, scan_pending = _run(scan_deployment, Running()), _run(scan_deployment, Pending())
+    scan_waiting = _run(scan_deployment)
+    albums_running = _run(albums, Running())
+    # More than one page of them (the first restart after the fix finds some 145).
+    monkeypatch.setattr(prefect_client, "_ORPHAN_PAGE", 2)
+    imports_running = [_run(imports, Running()) for _ in range(3)]
+    imports_done = _run(imports, Completed())
+    other_running = _run(other, Running())  # another service's flow on the same server
+
+    # music-fetch and music-playlist-sync have no deployment on the test server: a first start.
+    count, logger = _crash_orphans(_served(*SERVED))
+
+    crashed = [scan_running, scan_pending, albums_running, *imports_running]
+    assert count == len(crashed)
+    assert [_state(r) for r in crashed] == ["CRASHED"] * len(crashed)
+    assert [_state(r) for r in (scan_waiting, imports_done, other_running)] == ["SCHEDULED", "COMPLETED", "RUNNING"]
+    expected = sorted(f"[ORPHAN] {flow} {run.id} → Crashed" for flow, run in [
+        ("music-scan", scan_running), ("music-scan", scan_pending), ("music-albums", albums_running),
+        *(("music-album-import", r) for r in imports_running)])
+    assert sorted(_logged(logger.info)) == expected
+    logger.warning.assert_not_called()
+
+
+def test_the_crashed_state_names_the_restart(scan_deployment, monkeypatch):
+    from prefect.client.orchestration import get_client
+    from prefect.states import Running
+
+    monkeypatch.setenv("HOSTNAME", "music-pipeline-7c9d-x2v4q")
+    run = _run(scan_deployment, Running())
+    _crash_orphans(_served("music-scan"))
+    with get_client(sync_client=True) as client:
+        state = client.read_flow_run(run.id).state
+    assert state.message == ("The music-pipeline service restarted (pod music-pipeline-7c9d-x2v4q) while this run "
+                             "was in progress (#513)")
+
+
+def test_after_the_startup_cleanup_a_scan_trigger_is_no_longer_pending(scan_deployment):
+    """#513's done-when: ``trigger_scan`` submits right after a restart."""
+    from prefect.states import Running
+
+    from music_service import prefect_client
+
+    _run(scan_deployment, Running())
+    with patch.object(prefect_client, "_has_server", return_value=True):
+        assert prefect_client.pending_state(prefect_client.SCAN_DEPLOYMENT) == "RUNNING"
+        _crash_orphans(_served("music-scan"))
+        assert prefect_client.pending_state(prefect_client.SCAN_DEPLOYMENT) is None
+
+
+def test_startup_cleanup_with_the_prefect_server_unreachable_only_logs(scan_deployment):
+    """The service starts anyway; the runs stay RUNNING until the next start."""
+    from prefect.settings import PREFECT_API_URL, temporary_settings
+    from prefect.states import Running
+
+    from music_service import cli
+
+    run = _run(scan_deployment, Running())
+    with temporary_settings({PREFECT_API_URL: "http://127.0.0.1:9/api"}), patch.object(cli, "logger") as logger:
+        count, _ = _crash_orphans(_served(*SERVED))
+    assert count == 0
+    assert _state(run) == "RUNNING"
+    (warning,) = _logged(logger.warning)
+    assert warning.startswith("[ORPHAN] Could not set the runs the restart cut short to Crashed")
+
+
+def test_startup_cleanup_in_direct_mode_does_nothing():
+    from music_service import cli, prefect_client
+
+    with patch.object(prefect_client, "_has_server", return_value=False), \
+         patch.object(prefect_client, "crash_orphaned_runs") as crash:
+        assert cli.crash_orphaned_runs(_served(*SERVED)) == 0
+    crash.assert_not_called()
+
+
+def test_a_scan_running_past_the_bound_no_longer_counts_as_pending(scan_deployment, monkeypatch):
+    """#513, belt and braces: a runner that died without a restart.  The server
+    stamps a run's start itself, so the bound moves instead of the start."""
+    from prefect.states import Running
+
+    from music_service import prefect_client
+
+    _run(scan_deployment, Running())
+    with patch.object(prefect_client, "_has_server", return_value=True):
+        assert prefect_client.pending_state(prefect_client.SCAN_DEPLOYMENT) == "RUNNING"
+        monkeypatch.setattr(prefect_client, "STALE_RUNNING_SECONDS", 0)
+        assert prefect_client.pending_state(prefect_client.SCAN_DEPLOYMENT) is None
+        _run(scan_deployment)  # a run due now still counts
+        assert prefect_client.pending_state(prefect_client.SCAN_DEPLOYMENT) == "SCHEDULED"
+
+
 # ---------------------------------------------------------------------------
 # Scan metrics (music-pipeline#173)
 # ---------------------------------------------------------------------------

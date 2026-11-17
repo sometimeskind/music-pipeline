@@ -172,12 +172,73 @@ def schedule_scan_retry(delay: int = SCAN_RETRY_SECONDS) -> bool:
     return schedule_scan(delay, idempotency_key=f"scan-retry-{int(time.time()) // delay}")
 
 
+# How many runs one read of :func:`crash_orphaned_runs` takes: the first
+# restart after #513 finds some 145.
+_ORPHAN_PAGE = 200
+
+
+def crash_orphaned_runs(deployment_names: list[str], message: str) -> list[tuple[str, str]]:
+    """Set every RUNNING or PENDING run of *deployment_names* (``flow/deployment``)
+    to Crashed with *message* (#513).  For the service's start, before ``serve()``:
+    the pod is these deployments' only runner, so such a run died with the last
+    pod, and Prefect would show it RUNNING for ever.  A deployment the server
+    doesn't know yet (a first start) has no runs.  Returns ``(flow, run id)`` for
+    each run set to Crashed, and logs each as ``[ORPHAN] <flow> <run id> →
+    Crashed``.  Needs a Prefect server, and raises when it can't be reached."""
+    from prefect import get_client  # noqa: PLC0415
+    from prefect.client.schemas.filters import (  # noqa: PLC0415
+        FlowRunFilter, FlowRunFilterDeploymentId, FlowRunFilterState, FlowRunFilterStateType)
+    from prefect.client.schemas.objects import StateType  # noqa: PLC0415
+    from prefect.client.schemas.responses import SetStateStatus  # noqa: PLC0415
+    from prefect.exceptions import ObjectNotFound  # noqa: PLC0415
+    from prefect.states import Crashed  # noqa: PLC0415
+
+    crashed: list[tuple[str, str]] = []
+    with get_client(sync_client=True) as client:
+        flows: dict = {}
+        for name in deployment_names:
+            try:
+                flows[client.read_deployment_by_name(name).id] = name.split("/", 1)[0]
+            except ObjectNotFound:
+                continue
+        if not flows:
+            return crashed
+        flow_filter = FlowRunFilter(
+            deployment_id=FlowRunFilterDeploymentId(any_=list(flows)),
+            state=FlowRunFilterState(type=FlowRunFilterStateType(any_=[StateType.RUNNING, StateType.PENDING])),
+        )
+        # Read them all first: paging while their states change would skip some.
+        orphans: list = []
+        while True:
+            page = client.read_flow_runs(flow_run_filter=flow_filter, limit=_ORPHAN_PAGE, offset=len(orphans))
+            orphans += page
+            if len(page) < _ORPHAN_PAGE:
+                break
+        for run in orphans:
+            result = client.set_flow_run_state(run.id, Crashed(message=message))
+            if result.status == SetStateStatus.ACCEPT:
+                crashed.append((flows[run.deployment_id], str(run.id)))
+                logger.info("[ORPHAN] %s %s → Crashed", flows[run.deployment_id], run.id)
+            else:
+                logger.warning("[ORPHAN] %s %s: Prefect refused Crashed (%s)",
+                               flows[run.deployment_id], run.id, result.status.value)
+    return crashed
+
+
 _album_tick_lock = threading.Lock()
+
+# A RUNNING run older than this doesn't count as pending (#513): its runner died
+# without the restart that :func:`crash_orphaned_runs` cleans up after.  Far
+# above any real run ``pending_state`` is asked about: the longest scan in 30
+# days took 84 min, plus its 30-min wait for the pipeline slot
+# (``flows.SCAN_WAIT_SECONDS``); an album tick waits 20 min at most.
+STALE_RUNNING_SECONDS = 6 * 3600
 
 
 async def _pending_state(deployment_name: str) -> str | None:
     """The state of a run of *deployment_name* that is pending or running: a
-    scheduled run counts once it is due, so the next interval run doesn't."""
+    scheduled run counts once it is due, so the next interval run doesn't, and
+    a run RUNNING for over ``STALE_RUNNING_SECONDS`` doesn't either (#513)."""
     from datetime import datetime, timedelta, timezone  # noqa: PLC0415
 
     from prefect import get_client  # noqa: PLC0415
@@ -195,9 +256,13 @@ async def _pending_state(deployment_name: str) -> str | None:
             ),
             limit=50,
         )
-    due = datetime.now(timezone.utc) + timedelta(seconds=5)
+    now = datetime.now(timezone.utc)
+    due = now + timedelta(seconds=5)
+    stale = now - timedelta(seconds=STALE_RUNNING_SECONDS)
     for run in runs:
         state = run.state_type
+        if state == StateType.RUNNING and run.start_time and run.start_time < stale:
+            continue
         if state != StateType.SCHEDULED or (run.expected_start_time and run.expected_start_time <= due):
             return state.value
     return None
