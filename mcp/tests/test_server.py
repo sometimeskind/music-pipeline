@@ -121,6 +121,7 @@ async def test_reads_route_to_the_contract(pipeline, fake, tool, args, method, p
     ("audit_lengths", {"silence": True}, "/mcp-api/run/audit_lengths", {"silence": True}),
     ("audit_releases", {}, "/mcp-api/run/audit_releases", {}),
     ("audit_releases", {"replaced_query": ""}, "/mcp-api/run/audit_releases", {"replaced_query": ""}),
+    ("audit_releases", {"usenet": True}, "/mcp-api/run/audit_releases", {"usenet": True}),
     ("audit_want_albums", {}, "/mcp-api/run/audit_want_albums", {}),
     ("audit_titles", {}, "/mcp-api/run/audit_titles", {}),
     ("audit_artists", {}, "/mcp-api/run/audit_artists", {}),

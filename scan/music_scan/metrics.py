@@ -49,6 +49,12 @@ class ScanMetrics:
     # those the purge deleted this scan (#288); empty when the purge didn't run.
     replaced: dict[str, int] = field(default_factory=dict)
     replaced_purged: int = 0
+    # Files left in quarantine/usenet/ by kind (junk, superseded, only_copy,
+    # not_imported), their bytes, and those the purge deleted this scan
+    # (homelab#2667); empty when the purge didn't run.
+    usenet: dict[str, int] = field(default_factory=dict)
+    usenet_bytes: int = 0
+    usenet_purged: int = 0
 
     def push(self) -> None:
         lines = [
@@ -68,6 +74,11 @@ class ScanMetrics:
             lines.append("# TYPE music_scan_replaced_files gauge")
             lines += [f'music_scan_replaced_files{{kind="{k}"}} {n}' for k, n in sorted(self.replaced.items())]
             lines.append(_gauge("music_scan_replaced_purged_total", self.replaced_purged))
+        if self.usenet:
+            lines.append("# TYPE music_scan_usenet_quarantine_files gauge")
+            lines += [f'music_scan_usenet_quarantine_files{{kind="{k}"}} {n}' for k, n in sorted(self.usenet.items())]
+            lines.append(_gauge("music_scan_usenet_quarantine_bytes", self.usenet_bytes))
+            lines.append(_gauge("music_scan_usenet_purged_total", self.usenet_purged))
         if not self.success and self.failure_reason:
             lines.append(
                 _gauge("music_scan_last_failure_reason", 1, {"reason": self.failure_reason})

@@ -1318,7 +1318,8 @@ def test_album_import_imports_only_its_own_release_folder(tmp_path, monkeypatch)
          patch.object(flows, "restamp_task"), patch.object(flows, "retire_merged_task"), \
          patch.object(flows, "retire_held_task"), patch.object(flows, "canon_task"), \
          patch.object(flows, "beet_update_task"), patch.object(flows, "regen_playlists_task"), \
-         patch.object(flows, "purge_replaced_task"), patch.object(flows, "navidrome_task"), \
+         patch.object(flows, "purge_replaced_task"), patch.object(flows, "purge_usenet_task"), \
+         patch.object(flows, "navidrome_task"), \
          patch.object(flows.scan, "count_lossless_items", return_value=0), \
          patch("music_scan.metrics.ScanMetrics.push"), \
          patch.object(flows, "concurrency"):
@@ -1536,6 +1537,51 @@ def test_scan_purges_quarantine_replaced_and_pushes_the_counts():
     assert purge.call_args.args[2] == 14
     (m,) = pushed
     assert m.replaced == {"superseded": 3, "only_copy": 17} and m.replaced_purged == 5
+
+
+def test_scan_purges_quarantine_usenet_and_pushes_the_counts():
+    """homelab#2667: every scan purges quarantine/usenet/ too, on the same retention."""
+    from music_service.flows import _run_scan_tasks
+    pushed: list = []
+    left = {"junk": 1, "superseded": 2, "only_copy": 60, "not_imported": 9}
+
+    with patch("music_service.flows.ingest") as mock_ingest, \
+         patch("music_service.flows.scan") as mock_scan, \
+         patch("music_service.flows.concurrency"), \
+         patch("music_scan.process.run_beet_update"), \
+         patch("music_scan.navidrome.trigger_scan"), \
+         patch("music_scan.library.MusicLibrary"), \
+         patch("music_scan.release.purge_replaced", return_value={"superseded": 0, "only_copy": 0, "purged": 0}), \
+         patch("music_scan.usenet_quarantine.purge",
+               return_value={**left, "bytes": 1500, "purged": 4}) as purge, \
+         patch("music_scan.metrics.ScanMetrics.push", autospec=True, side_effect=pushed.append):
+        _scan_mocks(mock_scan, mock_ingest)
+        _run_scan_tasks()
+
+    assert str(purge.call_args.args[0]) == "/root/Music/quarantine/usenet" and purge.call_args.args[2] == 14
+    (m,) = pushed
+    assert m.usenet == left and m.usenet_bytes == 1500 and m.usenet_purged == 4
+
+
+def test_a_failed_usenet_purge_does_not_fail_the_scan():
+    """homelab#2667: the purge is housekeeping; the next scan retries it."""
+    from music_service.flows import _run_scan_tasks
+    pushed: list = []
+
+    with patch("music_service.flows.ingest") as mock_ingest, \
+         patch("music_service.flows.scan") as mock_scan, \
+         patch("music_service.flows.concurrency"), \
+         patch("music_scan.process.run_beet_update"), \
+         patch("music_scan.navidrome.trigger_scan"), \
+         patch("music_scan.library.MusicLibrary"), \
+         patch("music_scan.release.purge_replaced", return_value={"superseded": 0, "only_copy": 0, "purged": 0}), \
+         patch("music_scan.usenet_quarantine.purge", side_effect=OSError("boom")), \
+         patch("music_scan.metrics.ScanMetrics.push", autospec=True, side_effect=pushed.append):
+        _scan_mocks(mock_scan, mock_ingest)
+        _run_scan_tasks()
+
+    (m,) = pushed
+    assert m.success and m.usenet == {}
 
 
 def test_album_mixed_hook_reads_the_library_once():

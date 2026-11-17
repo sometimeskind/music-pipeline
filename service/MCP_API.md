@@ -294,7 +294,7 @@ A write tool's **apply** takes Prefect's `pipeline` lock (and first `albums`, fo
 | `audit_dupes` | `{}` | `music-audit-dupes` |
 | `compare_items` | `{"ids": [534, 18521]}` (two different items) | `music-audit-dupes --compare <id> <id>` |
 | `audit_lengths` | `{"silence": false}` | `music-audit-lengths [--silence]` |
-| `audit_releases` | `{"replaced_query": "…"}` (optional; `""` lists every only copy) | `music-album-audit-releases` / `… --replaced` / `… --replaced=QUERY` |
+| `audit_releases` | `{"replaced_query": "…"}` (optional; `""` lists every only copy) or `{"usenet": true}` | `music-album-audit-releases` / `… --replaced` / `… --replaced=QUERY` / `… --usenet` |
 | `audit_want_albums` | `{}` | `music-audit-want-albums` |
 | `audit_titles` | `{}` | `music-audit-titles` |
 | `audit_artists` | `{}` | `music-audit-artists` |

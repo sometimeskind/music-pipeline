@@ -104,6 +104,10 @@ keeper's: a wrong merge's loser is judged by its identity tags, and kept as an
 only copy when none is held (homelab#2539).  ``--replaced`` logs each such file
 ``[MISMERGED]``.  It never deletes an only copy.  The scan pushes what is left there by kind.
 
+``--usenet`` lists what an album import's job left in ``quarantine/usenet/``
+and what the scan's purge of it deletes and keeps (homelab#2667,
+:mod:`music_scan.usenet_quarantine`).
+
 ``--keep FILE`` (homelab#2623, :func:`keep_replaced`) moves one file from
 ``quarantine/replaced/`` to ``quarantine/keep/`` before the purge reaches it: a
 copy a person wants kept that the library holds the recording of only by a
@@ -1527,7 +1531,8 @@ def audit_main() -> None:
                     "with --replaced, list (and with --apply delete) one album's copies in quarantine/replaced/; "
                     "with --replaced and no query, list every only copy there by album; "
                     "with --retire, take local-only extras off their album; "
-                    "with --restore, put a file from quarantine/keep/ back on an album")
+                    "with --restore, put a file from quarantine/keep/ back on an album; "
+                    "with --usenet, what the scan's purge deletes from quarantine/usenet/ and what it keeps")
     parser.add_argument("--replaced", metavar="QUERY", nargs="?", const="",
                         help="the album's Spotify ID, its 'artist — album', or a part of it that matches one album; "
                              "without one, list every only copy in quarantine/replaced/ (read-only)")
@@ -1557,7 +1562,13 @@ def audit_main() -> None:
                         help="list the album records holding items of several releases (a release-group merge of "
                              "two imported records) and what the next scan retires of each (read-only, "
                              "homelab#2545)")
+    parser.add_argument("--usenet", action="store_true",
+                        help="list every file in quarantine/usenet/ by job folder: what the scan deletes now, "
+                             "later or never, and why (read-only, homelab#2667)")
     args = parser.parse_args()
+    if args.usenet and (args.apply or args.only_copies or args.merged or args.replaced is not None
+                        or args.keep is not None or args.retire is not None or args.restore is not None):
+        parser.error("--usenet only lists; every scan deletes what it says is due")
     if (args.retire is None) != (args.reason is None) or args.reason == "":
         parser.error("--retire and --reason go together, and the reason says why")
     if args.retire is not None and (args.keep is not None or args.merged or args.replaced is not None
@@ -1577,6 +1588,11 @@ def audit_main() -> None:
     if args.replaced == "" and (args.apply or args.only_copies):
         parser.error("--replaced without a query only lists; give it an album to delete that album's copies")
     logging.basicConfig(level=logging.INFO, format="[%(asctime)s] %(message)s", datefmt="%Y-%m-%dT%H:%M:%S%z")
+    if args.usenet:
+        from music_scan import usenet_quarantine  # noqa: PLC0415
+
+        usenet_quarantine.main()
+        return
     if args.keep is not None:
         _keep_main(args.keep, args.apply)
         return

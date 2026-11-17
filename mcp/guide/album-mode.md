@@ -162,6 +162,11 @@ rescues a file until the purge. The import's event (`album_history`) says which 
 - **`MusicReplacedPurgeStalled`**: superseded files are 21 days old and no scan purged one.
   This is operator territory (`REPLACED_RETENTION_DAYS`, the scan's `[PURGE]` lines).
 - **Mixed albums** have no alert. `audit_releases` lists them.
+- **quarantine/usenet/** holds what an album import's job left behind (homelab#2667). Every scan
+  deletes, 14 days after the move, the junk (empty, unreadable stubs, truncated files) and the
+  files whose recording the library holds, only in job folders a library item came from. Only
+  copies and a failed release's folder stay. `audit_releases` with `usenet=true` lists each file
+  with its verdict ([JUNK], [SUPERSEDED], [ONLYCOPY], a job folder kept whole) and when it goes.
 
 ## 7. Album never downloads
 

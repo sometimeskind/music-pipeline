@@ -161,7 +161,7 @@ async def test_a_read_caller_runs_the_audits(pipeline_url):
                            ("audit_artists", {}), ("audit_grabs", {}), ("audit_zero_wanted", {}), ("audit_case_twins", {}),
                            ("compare_items", {"ids": [18521, 534]}),
                            ("check_release", {"album": "pastel", "title": "Nina Simone-Pastel Blues-FLAC"}),
-                           ("audit_releases", {"replaced_query": ""})]:
+                           ("audit_releases", {"replaced_query": ""}), ("audit_releases", {"usenet": True})]:
             job = await finish(c, (await c.call_tool(tool, args)).data)
             assert job["status"] == "done", job
             assert job["caller"] == "pilot" and job["tier"] == "read"

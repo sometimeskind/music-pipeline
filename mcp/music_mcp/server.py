@@ -364,11 +364,20 @@ def build_server(
             str | None,
             Field(description="list an album's files in quarantine/replaced/ ('' = every only copy)"),
         ] = None,
+        usenet: Annotated[
+            bool,
+            Field(description="instead, every file in quarantine/usenet/ by job folder: what the scan's purge "
+                              "deletes now, later or never, and why"),
+        ] = False,
     ) -> dict:
         """music-album-audit-releases: albums mixed from several releases, or with
-        replaced_query, the album's [REPLACED] and [ONLYCOPY] files. Albums not imported, and
-        album requests, are counted by status, not read."""
+        replaced_query, the album's [REPLACED] and [ONLYCOPY] files, or with usenet=true, what
+        an album import's job left in quarantine/usenet/ ([JUNK], [SUPERSEDED], [ONLYCOPY], and
+        job folders no library item came from). Albums not imported, and album requests, are
+        counted by status, not read."""
         body = {} if replaced_query is None else {"replaced_query": replaced_query}
+        if usenet:
+            body["usenet"] = True
         return await run("audit_releases", body)
 
     @mcp.tool(annotations={"readOnlyHint": True})

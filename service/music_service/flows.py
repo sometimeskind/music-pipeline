@@ -333,6 +333,27 @@ def purge_replaced_task(metrics: ScanMetrics) -> None:
     metrics.replaced = counts
 
 
+@task(name="purge-usenet-quarantine", log_prints=True)
+def purge_usenet_task(metrics: ScanMetrics) -> None:
+    """Delete the junk and superseded files of imported jobs from
+    quarantine/usenet/ after their retention (homelab#2667); count what is
+    left there by kind.  Under the scan's ``pipeline`` lock, like
+    :func:`purge_replaced_task`: no album import moves files there meanwhile."""
+    logger = get_run_logger()
+    from music_scan import usenet_quarantine  # noqa: PLC0415
+    from music_scan.library import MusicLibrary  # noqa: PLC0415
+    try:
+        with MusicLibrary(scan.LIBRARY_DB) as lib:
+            items = list(lib.all_items())
+        counts = usenet_quarantine.purge(usenet_quarantine.USENET, items, usenet_quarantine.retention_days())
+    except Exception:
+        logger.exception("Purging quarantine/usenet/ failed; the next scan retries it")
+        return
+    metrics.usenet_purged = counts.pop("purged")
+    metrics.usenet_bytes = counts.pop("bytes")
+    metrics.usenet = counts
+
+
 @task(name="prune-events", log_prints=True)
 def prune_events_task() -> None:
     """Delete events past their retention (homelab#2413).  Best-effort: the
@@ -429,6 +450,7 @@ def _run_scan_tasks() -> None:
         beet_update_task()
         regen_playlists_task(metrics)
         purge_replaced_task(metrics)
+        purge_usenet_task(metrics)
         try:
             navidrome_task()
         except Exception:
