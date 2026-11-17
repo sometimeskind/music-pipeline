@@ -86,6 +86,33 @@ def schedule_startup_scan() -> None:
         logger.info("Startup: %s file(s) waiting in the inbox; a scan is already waiting to run", count)
 
 
+def crash_orphaned_runs(deployments) -> int:
+    """Set the runs a restart killed to Crashed (#513), before ``serve()`` starts.
+
+    *deployments* are what ``serve()`` runs in this process.  The pod is their
+    only runner (one replica, ``Recreate``), and nothing here starts a run
+    before ``serve()``: a trigger until then only adds a SCHEDULED one.  So a
+    run of theirs still RUNNING or PENDING now died with the last pod; left so,
+    it counted as a pending run for ever and the MCP's triggers did nothing.
+    Without a Prefect server (direct mode) it does nothing.  Never raises: a
+    server that can't be reached is logged and the service starts anyway.
+    Returns how many runs it set to Crashed."""
+    from music_service import prefect_client
+
+    if not prefect_client._has_server():
+        return 0
+    names = [f"{d.flow_name}/{d.name}" for d in deployments]
+    pod = os.environ.get("HOSTNAME") or "?"
+    message = f"The music-pipeline service restarted (pod {pod}) while this run was in progress (#513)"
+    try:
+        crashed = prefect_client.crash_orphaned_runs(names, message)
+    except Exception as exc:
+        logger.warning("[ORPHAN] Could not set the runs the restart cut short to Crashed; they stay RUNNING until "
+                       "the next start: %s", exc)
+        return 0
+    return len(crashed)
+
+
 def resume_asis_staging() -> int:
     """Move what a restart left in the as-is pass's staging dirs back to
     quarantine (homelab#2763), before anything can scan.  A pod killed during
@@ -209,8 +236,14 @@ def main() -> None:
     )
     # Run by /trigger-album-import when SABnzbd finishes an album job.
     album_import_deployment = album_import_flow.to_deployment(name="music-album-import")
+    deployments = [fetch_deployment, scan_deployment, albums_deployment, album_import_deployment,
+                   playlist_sync_deployment]
 
     ensure_concurrency_limits()
+
+    # Runs the last pod was running when it died (#513).  Before the startup
+    # scan: a PENDING orphan of music-scan would count as a scan waiting to run.
+    crash_orphaned_runs(deployments)
 
     # Files already in the inbox get a scan of their own (homelab#2751).  Only
     # now: park_interrupted_imports() above has moved any album job a restart
@@ -224,8 +257,7 @@ def main() -> None:
 
     logger.info("Starting Prefect runner (FETCH_CRON=%s)", fetch_cron)
     try:
-        prefect_serve(fetch_deployment, scan_deployment, albums_deployment, album_import_deployment,
-                      playlist_sync_deployment)
+        prefect_serve(*deployments)
     finally:
         debouncer.cancel()
         observer.stop()

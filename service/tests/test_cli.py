@@ -39,7 +39,9 @@ def test_startup_scan_runs_after_resume_and_the_watcher_before_serve(monkeypatch
     """homelab#2751: the startup scan counts the inbox only once an interrupted
     album import is parked back (#344) and the watcher runs, and before serve() blocks.
     homelab#2763: an interrupted as-is pass's staged files go back to quarantine
-    first, before the API or the watcher can start a scan."""
+    first, before the API or the watcher can start a scan.  #513: the runs the
+    last pod died with go to Crashed before the startup scan, for every
+    deployment serve() runs."""
     from unittest.mock import MagicMock, patch
 
     from music_service import cli
@@ -48,6 +50,7 @@ def test_startup_scan_runs_after_resume_and_the_watcher_before_serve(monkeypatch
         monkeypatch.setenv(var, "x")
     monkeypatch.delenv("MUSIC_LOCKS_HELD", raising=False)
     order: list[str] = []
+    cleaned, served = [], []
 
     def step(name):
         return lambda *a, **k: order.append(name) or MagicMock()
@@ -59,11 +62,16 @@ def test_startup_scan_runs_after_resume_and_the_watcher_before_serve(monkeypatch
          patch.object(cli, "make_api_server"), \
          patch.object(cli, "_start_file_watcher", side_effect=step("watcher")), \
          patch("music_service.prefect_client.ensure_concurrency_limits"), \
+         patch.object(cli, "crash_orphaned_runs", side_effect=lambda d: cleaned.extend(d) or step("orphans")()), \
          patch.object(cli, "schedule_startup_scan", side_effect=step("startup-scan")), \
-         patch("prefect.serve", side_effect=step("serve")):
+         patch("prefect.serve", side_effect=lambda *d: served.extend(d) or step("serve")()):
         cli.main()
 
-    assert order == ["resume", "asis", "api", "watcher", "startup-scan", "serve"]
+    assert order == ["resume", "asis", "api", "watcher", "orphans", "startup-scan", "serve"]
+    assert cleaned == served
+    assert sorted(f"{d.flow_name}/{d.name}" for d in served) == [
+        "music-album-import/music-album-import", "music-albums/music-albums", "music-fetch/music-fetch",
+        "music-playlist-sync/music-playlist-sync", "music-scan/music-scan"]
 
 
 def test_resume_asis_staging_moves_the_staged_files_back_and_logs_counts(tmp_path, monkeypatch, caplog):
