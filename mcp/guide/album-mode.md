@@ -166,7 +166,9 @@ rescues a file until the purge. The import's event (`album_history`) says which 
   deletes, 14 days after the move, the junk (empty, unreadable stubs, truncated files) and the
   files whose recording the library holds, only in job folders a library item came from. Only
   copies and a failed release's folder stay. `audit_releases` with `usenet=true` lists each file
-  with its verdict ([JUNK], [SUPERSEDED], [ONLYCOPY], a job folder kept whole) and when it goes.
+  with its verdict ([JUNK], [SUPERSEDED], [ONLYCOPY]) and when it goes. A job folder kept whole
+  (no library item came from it) is judged file by file too, so its summary says how much of it
+  is junk, held by the library, or only copies; deleting such a folder is the operator's call.
 
 ## 7. Album never downloads
 

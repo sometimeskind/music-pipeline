@@ -29,7 +29,10 @@ decides on it.  An emptied job folder, and an emptied playlist folder, go too.
 
 ``music-album-audit-releases --usenet`` (the Music MCP's ``audit_releases``
 with ``usenet=true``) lists every file with its verdict, its reason and its
-size, and what the scan would delete now, later and never.  It deletes nothing.
+size, and what the scan would delete now, later and never.  The files of a job
+folder the scan keeps whole are judged by content too (junk, held by the
+library, only copy), so a person can decide on the folder without opening it.
+It deletes nothing.
 """
 
 from __future__ import annotations
@@ -70,6 +73,10 @@ class Verdict:
     left_days: float = 0.0  # days until it is due, when deletable and not yet due
     artist: str = ""
     title: str = ""
+    # NOT_IMPORTED only, and only from judge(assess=True): what its content is (JUNK, SUPERSEDED or
+    # ONLY_COPY) and why, so a person can decide on a folder the purge keeps whole.
+    content: str = ""
+    content_why: str = ""
 
     @property
     def deletable(self) -> bool:
@@ -108,9 +115,11 @@ def _junk(f: Path, size: int, tags) -> str:
     return ""
 
 
-def judge(root: Path, items: list, days: int, now: float | None = None) -> list[Verdict]:
+def judge(root: Path, items: list, days: int, now: float | None = None, assess: bool = False) -> list[Verdict]:
     """A :class:`Verdict` for every audio file under *root* (``quarantine/usenet/``),
-    by *items* (the library's) and the retention *days* (``0``: nothing is due)."""
+    by *items* (the library's) and the retention *days* (``0``: nothing is due).
+    With *assess*, a file of a job no library item came from is judged by its
+    content too (:attr:`Verdict.content`); it stays ``NOT_IMPORTED`` either way."""
     from music_scan.identity import Recordings  # noqa: PLC0415
     from music_scan.playlists import _file_tags  # noqa: PLC0415
     from music_scan.release import _moved_at  # noqa: PLC0415
@@ -118,6 +127,24 @@ def judge(root: Path, items: list, days: int, now: float | None = None) -> list[
     now = time.time() if now is None else now
     imported = imported_jobs(items)
     library: Recordings | None = None
+
+    def content(f: Path, size: int) -> tuple[str, str, str, str]:
+        """``(kind, why, artist, title)`` of *f* by what it holds: JUNK, SUPERSEDED or ONLY_COPY."""
+        nonlocal library
+        tags = _file_tags(f) if size else None
+        artist, title = (tags.artist, tags.title) if tags is not None else ("", "")
+        why = _junk(f, size, tags)
+        if why:
+            return JUNK, why, artist, title
+        if library is None:
+            library = Recordings(items)
+        if tags is not None and library.holds(tags.recording_ids, tags.length):
+            return SUPERSEDED, "the library holds its recording", artist, title
+        why = ("unreadable" if tags is None else
+               "no library item holds its recording" if tags.recording_ids else
+               "no identity tags (Spotify ID, ISRC or MusicBrainz recording) say the library holds it")
+        return ONLY_COPY, why, artist, title
+
     verdicts = []
     for f in _audio_files(root):
         parts = f.relative_to(root).parts
@@ -128,24 +155,14 @@ def judge(root: Path, items: list, days: int, now: float | None = None) -> list[
             logger.warning("  [USENET] %s: %s", f, exc)
             continue
         if len(parts) <= 2 or (parts[0], parts[1]) not in imported:
-            verdicts.append(Verdict(f, job, st.st_size, NOT_IMPORTED, "no library item came from its job folder"))
+            kept, kept_why, artist, title = content(f, st.st_size) if assess else ("", "", "", "")
+            verdicts.append(Verdict(f, job, st.st_size, NOT_IMPORTED, "no library item came from its job folder",
+                                    artist=artist, title=title, content=kept, content_why=kept_why))
             continue
-        tags = _file_tags(f) if st.st_size else None
-        artist, title = (tags.artist, tags.title) if tags is not None else ("", "")
-        why = _junk(f, st.st_size, tags)
-        kind = JUNK
-        if not why:
-            if library is None:
-                library = Recordings(items)
-            if tags is not None and library.holds(tags.recording_ids, tags.length):
-                kind, why = SUPERSEDED, "the library holds its recording"
-            else:
-                kind = ONLY_COPY
-                why = ("unreadable" if tags is None else
-                       "no library item holds its recording" if tags.recording_ids else
-                       "no identity tags (Spotify ID, ISRC or MusicBrainz recording) say the library holds it")
-                verdicts.append(Verdict(f, job, st.st_size, kind, why, artist=artist, title=title))
-                continue
+        kind, why, artist, title = content(f, st.st_size)
+        if kind == ONLY_COPY:
+            verdicts.append(Verdict(f, job, st.st_size, kind, why, artist=artist, title=title))
+            continue
         age = (now - _moved_at(f)) / 86400
         due = days > 0 and age > days
         verdicts.append(Verdict(f, job, st.st_size, kind, why, due=due,
@@ -211,26 +228,32 @@ def _size(n: int) -> str:
 
 def report(root: Path, items: list, days: int, now: float | None = None) -> dict[str, int]:
     """Log every file under *root* by job folder, with its verdict, why, and
-    when the scan deletes it; then the totals.  Deletes nothing.  Returns the
-    files by kind and ``due``, ``later`` and ``kept`` with their bytes."""
-    verdicts = judge(root, items, days, now)
+    when the scan deletes it; then the totals.  Deletes nothing.  A job folder
+    no library item came from is kept whole by the scan, but its files are
+    judged by content all the same (junk, held by the library, only copy), so a
+    person can decide on it.  Returns the files by kind, ``due``, ``later`` and
+    ``kept`` with their bytes, and ``not_imported_<kind>`` with their bytes."""
+    verdicts = judge(root, items, days, now, assess=True)
     by_job: dict[str, list[Verdict]] = {}
     for v in verdicts:
         by_job.setdefault(v.job, []).append(v)
+    labels = {JUNK: "JUNK", SUPERSEDED: "SUPERSEDED", ONLY_COPY: "ONLYCOPY"}
     for job in sorted(by_job, key=str.casefold):
         vs = by_job[job]
         size = sum(v.size for v in vs)
         if vs[0].kind == NOT_IMPORTED:
-            logger.info("[JOB] %s: %d file(s), %s; no library item came from this job: kept whole", job, len(vs),
-                        _size(size))
+            logger.info("[JOB] %s: %d file(s), %s; no library item came from this job: kept whole (%s)", job,
+                        len(vs), _size(size), _content_counts(vs))
+            for v in vs:
+                logger.info("  [%s] %s: %s; kept whole with its job", labels[v.content], v.path.relative_to(root),
+                            v.content_why)
             continue
         logger.info("[JOB] %s: %d file(s), %s; its album imported from this job", job, len(vs), _size(size))
         for v in vs:
             when = ("the next scan deletes it" if v.due else
                     f"the scan deletes it in {v.left_days:.0f} day(s)" if v.deletable and days > 0 else
                     "kept (REPLACED_RETENTION_DAYS is 0)" if v.deletable else "kept")
-            label = {JUNK: "JUNK", SUPERSEDED: "SUPERSEDED", ONLY_COPY: "ONLYCOPY"}[v.kind]
-            logger.info("  [%s] %s: %s; %s", label, v.path.relative_to(root), v.why, when)
+            logger.info("  [%s] %s: %s; %s", labels[v.kind], v.path.relative_to(root), v.why, when)
     due = [v for v in verdicts if v.due]
     later = [v for v in verdicts if v.deletable and not v.due]
     kept = [v for v in verdicts if not v.deletable]
@@ -246,7 +269,24 @@ def report(root: Path, items: list, days: int, now: float | None = None) -> dict
                 _size(sum(v.size for v in only)), len(kept) - len(only),
                 _size(result["kept_bytes"] - sum(v.size for v in only)),
                 len({v.job for v in kept if v.kind == NOT_IMPORTED}))
+    not_imported = [v for v in verdicts if v.kind == NOT_IMPORTED]
+    for kind in (JUNK, SUPERSEDED, ONLY_COPY):
+        vs = [v for v in not_imported if v.content == kind]
+        result[f"not_imported_{kind}"] = len(vs)
+        result[f"not_imported_{kind}_bytes"] = sum(v.size for v in vs)
+    if not_imported:
+        logger.info("[SUMMARY] the job folder(s) no library item came from hold %s; the scan never deletes them, "
+                    "a person decides", _content_counts(not_imported))
     return result
+
+
+def _content_counts(vs: list[Verdict]) -> str:
+    """What NOT_IMPORTED verdicts hold, by content, with their sizes."""
+    parts = []
+    for kind, what in ((JUNK, "junk"), (SUPERSEDED, "held by the library"), (ONLY_COPY, "only copies")):
+        of = [v for v in vs if v.content == kind]
+        parts.append(f"{len(of)} {what}, {_size(sum(v.size for v in of))}")
+    return "; ".join(parts)
 
 
 def retention_days() -> int:
