@@ -166,14 +166,19 @@ def _audit_lengths(body: dict, _: Albums) -> dict:
 
 
 def _audit_releases(body: dict, _: Albums) -> dict:
-    _only(body, "replaced_query")
+    _only(body, "replaced_query", "usenet")
     query = body.get("replaced_query")
     if query is not None and not isinstance(query, str):
         raise BadRequest("replaced_query must be a string or null")
-    return {"replaced_query": None if query is None else query.strip()}
+    usenet = _bool(body, "usenet")
+    if usenet and query is not None:
+        raise BadRequest("usenet lists quarantine/usenet/; give it without replaced_query")
+    return {"replaced_query": None if query is None else query.strip(), "usenet": usenet}
 
 
 def _audit_releases_argv(args: dict, _: bool) -> list[list[str]]:
+    if args.get("usenet"):
+        return [["music-album-audit-releases", "--usenet"]]
     query = args["replaced_query"]
     if query is None:
         return [["music-album-audit-releases"]]

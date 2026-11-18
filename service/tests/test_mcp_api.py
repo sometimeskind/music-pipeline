@@ -97,6 +97,15 @@ def test_read_tier_runs_the_audit_dry_runs(client, env):
     assert twins.status_code == 200 and env["commands"].ran[-1] == ["music-audit-case-twins"]
 
 
+def test_read_tier_lists_the_usenet_quarantine(client, env):
+    """homelab#2667: audit_releases with usenet runs the read-only --usenet listing, never with a query."""
+    resp = client.post("/mcp-api/run/audit_releases", json={"usenet": True}, headers=READ)
+    assert resp.status_code == 200 and resp.json["status"] == "done"
+    assert env["commands"].ran == [["music-album-audit-releases", "--usenet"]]
+    for body in ({"usenet": True, "replaced_query": ""}, {"usenet": "yes"}):
+        assert client.post("/mcp-api/run/audit_releases", json=body, headers=READ).status_code == 400, body
+
+
 def test_read_tier_checks_a_release_against_the_matcher(client, env):
     body = {"album": "pastel", "title": "  Nina Simone-Pastel   Blues-FLAC ", "size_bytes": 400000000,
             "words": "Pastel Blues -Live"}

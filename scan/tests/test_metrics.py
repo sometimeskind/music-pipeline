@@ -146,3 +146,19 @@ def test_scan_metrics_replaced_files_by_kind(monkeypatch: pytest.MonkeyPatch) ->
     assert 'music_scan_replaced_files{kind="only_copy"} 17' in body
     assert 'music_scan_replaced_files{kind="superseded"} 4' in body
     assert "music_scan_replaced_purged_total 2" in body
+
+
+def test_scan_metrics_usenet_quarantine_by_kind(monkeypatch: pytest.MonkeyPatch) -> None:
+    """homelab#2667: what is left in quarantine/usenet/, by kind and in bytes, and what the purge deleted."""
+    pushed: list[str] = []
+    monkeypatch.setattr("music_scan.metrics._push", lambda body, job: pushed.append(body))
+    ScanMetrics().push()
+    assert "music_scan_usenet_quarantine_files" not in pushed[0]
+    ScanMetrics(usenet={"junk": 0, "superseded": 1, "only_copy": 60, "not_imported": 9}, usenet_bytes=1500,
+                usenet_purged=3).push()
+    body = pushed[1]
+    assert body.count("# TYPE music_scan_usenet_quarantine_files gauge") == 1
+    assert 'music_scan_usenet_quarantine_files{kind="only_copy"} 60' in body
+    assert 'music_scan_usenet_quarantine_files{kind="not_imported"} 9' in body
+    assert "music_scan_usenet_quarantine_bytes 1500" in body
+    assert "music_scan_usenet_purged_total 3" in body

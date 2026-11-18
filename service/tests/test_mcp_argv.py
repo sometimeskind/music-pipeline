@@ -27,7 +27,7 @@ CASES = {
     "fingerprint_items": [{"ids": [534]}, {"ids": [3, 7]}],
     "audit_lengths": [{"silence": False}, {"silence": True}],
     "audit_releases": [{"replaced_query": None}, {"replaced_query": ""}, {"replaced_query": "Artist — Album"},
-                       {"replaced_query": "--apply"}],
+                       {"replaced_query": "--apply"}, {"replaced_query": None, "usenet": True}],
     "audit_want_albums": [{}],
     "audit_titles": [{}],
     "audit_artists": [{}],

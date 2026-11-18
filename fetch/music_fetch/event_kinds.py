@@ -169,8 +169,9 @@ KINDS: dict[str, Kind] = {
                      ("key", "album_id", "items")),
     "restamped": Kind(ALBUM, "[RESTAMP]: album_record stamps moved to the record's row.",
                       ("album", "key", "from", "items")),
-    "purged": Kind(ITEM, "[PURGE]: a superseded file deleted from quarantine/replaced.",
-                   ("artist", "title", "album", "path", "key", "only_copy", "days")),
+    "purged": Kind(ITEM, "[PURGE]: a superseded file deleted from quarantine/replaced, or a junk or superseded "
+                         "file of an imported job from quarantine/usenet (homelab#2667, no item).",
+                   ("artist", "title", "album", "path", "key", "only_copy", "days", "why")),
     "kept": Kind(ITEM, "[KEEP]: a file moved by hand from quarantine/replaced to quarantine/keep, out of the "
                        "purge's reach (keep_quarantined).",
                  ("artist", "title", "album", "path", "dest")),
