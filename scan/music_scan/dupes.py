@@ -96,7 +96,7 @@ already joined by an ID, and says nothing about a pair that differs.
 the whole library, and hold no transaction while they work: beets' SQLite is in
 rollback-journal mode, so a reader's lock makes a writer's commit wait, and an
 import gives up after 5 seconds (homelab#2665).  The other runs read every item:
-in one query that held the database for 30 s on a synthetic 35k-item library
+in one query that held the database for 41 s on a synthetic 35k-item library
 (2026-11-19), so they read it by ranges of 500 IDs
 (:meth:`music_scan.library.MusicLibrary.all_items_in_batches`), and an import
 commits between two batches.  The full audit also runs at the lowest CPU
