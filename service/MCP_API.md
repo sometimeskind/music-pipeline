@@ -334,6 +334,7 @@ Every write tool's body takes `"apply": false` (the default) or `true`.
 | `canon_albums` | `{"refresh": false, "search_budget": null, "mb_budget": null}` | `music-canon-albums [--refresh] [--search-budget N] [--mb-budget N]` | pipeline |
 | `backfill_album_ids` | `{}` | `music-backfill-ids --albums` | pipeline |
 | `clear_bad_isrcs` | `{}` | `music-clear-bad-isrcs` | pipeline |
+| `clear_release_tracks` | `{}` | `music-clear-release-tracks` | pipeline |
 | `apply_recheck` | `{"run_id": "…"}` | `music-mb-fingerprint --replace-run=<run ID>` | pipeline |
 | `set_search_override` | `{"album": "…", "words": "…", "reason": ""}` | `music-overrides search [--reason=R] -- <key> <words>` | none |
 | `clear_search_override` | `{"album": "…"}` | `music-overrides clear-search -- <key>` | none |

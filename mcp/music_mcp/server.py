@@ -54,7 +54,7 @@ the run ID, and apply_recheck applies the finished run.
 Tiers. Read tools anyone signed in may use. Write tools (reset_album, requeue_albums,
 merge_items, replace_item, unlink_spotify_id, set_recording, fingerprint_items, keep_quarantined, restore_kept,
 retire_item, embed_covers,
-canon_albums, backfill_album_ids, clear_bad_isrcs,
+canon_albums, backfill_album_ids, clear_bad_isrcs, clear_release_tracks,
 apply_recheck,
 set_search_override, clear_search_override, hold_album, release_album, pin_track, unpin_track,
 request_album, remove_from_later) are a dry run unless
@@ -672,6 +672,15 @@ def build_server(
         the item and its file. The dry run lists each item and the values, and counts them. The
         item's ISRCs stay; each item cleared is an ids_written event."""
         return await run("clear_bad_isrcs", {"apply": apply}, write=True)
+
+    @mcp.tool(annotations={"destructiveHint": True})
+    async def clear_release_tracks(apply: Apply = False) -> dict:
+        """music-clear-release-tracks: clear items' mb_releasetrackid where it holds the item's own
+        recording ID (equal to its mb_trackid), as beets stored it on every singleton import before
+        music-pipeline#437. A release-track ID that differs stays. This takes the value off the
+        item and its file. The dry run counts the items first, then lists each. Each item cleared
+        is an ids_written event."""
+        return await run("clear_release_tracks", {"apply": apply}, write=True)
 
     @mcp.tool(annotations={"destructiveHint": True})
     async def apply_recheck(
