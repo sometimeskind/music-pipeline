@@ -24,7 +24,7 @@ READS = {"library_status", "find_albums", "get_album", "get_item", "list_quarant
          "album_history", "find_events", "digest_summary", "list_overrides", "list_requests", "get_later"}
 WRITES = {"reset_album", "requeue_albums", "merge_items", "replace_item", "unlink_spotify_id", "set_recording",
           "keep_quarantined", "restore_kept", "retire_item", "fingerprint_items",
-          "embed_covers", "canon_albums", "backfill_album_ids",
+          "embed_covers", "canon_albums", "backfill_album_ids", "clear_bad_isrcs",
           "apply_recheck",
           "trigger_scan", "trigger_album_tick", "set_search_override", "clear_search_override", "hold_album",
           "release_album", "pin_track", "unpin_track", "request_album", "remove_from_later"}
@@ -43,6 +43,7 @@ WRITE_CALLS = {
     "embed_covers": {},
     "canon_albums": {},
     "backfill_album_ids": {},
+    "clear_bad_isrcs": {},
     "apply_recheck": {"run_id": "3f2a9c0d1e2b4a5c"},
     "trigger_scan": {},
     "trigger_album_tick": {},

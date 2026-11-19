@@ -641,6 +641,8 @@ TOOLS: dict[str, Tool] = {t.name: t for t in [
     # Imported albums' empty entries, by disc/track and title (homelab#2664): spotify_ids only, no file touched.
     Tool("backfill_album_ids", WRITE, _none,
          lambda a, apply: [_apply(["music-backfill-ids", "--albums"], apply)], ("pipeline",)),
+    # Values in items' isrc that aren't ISRCs (homelab#2672): the field and the file's tag.
+    Tool("clear_bad_isrcs", WRITE, _none, lambda a, apply: [_apply(["music-clear-bad-isrcs"], apply)], ("pipeline",)),
     # A recorded recheck's replacements (homelab#2553): the dry run reads the
     # findings, never AcoustID; an apply a restart cuts short is resumed.
     Tool("apply_recheck", WRITE, _apply_recheck,

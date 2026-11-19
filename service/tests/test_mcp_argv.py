@@ -61,6 +61,7 @@ CASES = {
     "canon_albums": [{"refresh": False, "search_budget": None, "mb_budget": None},
                      {"refresh": True, "search_budget": 5, "mb_budget": 0}],
     "backfill_album_ids": [{}],
+    "clear_bad_isrcs": [{}],
     "set_search_override": [{"album": "0ETFjACtuP2ADo6LFhL6HN", "words": "four tet", "reason": ""},
                             {"album": "-m-/le baptême", "words": "--apply", "reason": "-x --apply"}],
     "clear_search_override": [{"album": "--apply"}],
