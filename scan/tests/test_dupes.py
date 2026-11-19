@@ -651,6 +651,7 @@ def _patch_run(monkeypatch, items, tmp_path):
     events: list = []
     lib = MagicMock()
     lib.__enter__.return_value.all_items.return_value = items
+    lib.__enter__.return_value.all_items_in_batches.return_value = items
     monkeypatch.setattr(library, "MusicLibrary", lambda *_: lib)
     monkeypatch.setattr(navidrome, "trigger_scan", lambda: events.append("rescan"))
     monkeypatch.setattr(scan, "regen_playlists", lambda: events.append("m3u") or {"aaaaaaah": 2})
@@ -844,6 +845,7 @@ def real_library(tmp_path, monkeypatch):
     lib._close()
     monkeypatch.setattr(library, "LIBRARY_DB", db)
     monkeypatch.setattr(library.MusicLibrary, "all_items", lambda self: pytest.fail("read every item"))
+    monkeypatch.setattr(library.MusicLibrary, "all_items_in_batches", lambda self: pytest.fail("read every item"))
     return db
 
 
@@ -893,6 +895,87 @@ def test_the_fingerprint_dry_run_reads_only_its_items(real_library, monkeypatch,
     with caplog.at_level("INFO", logger=dupes.__name__):
         dupes.run(fingerprints=[2])
     assert sum("[WOULD-FINGERPRINT] 2 " in m for m in caplog.messages) == 1
+
+
+# --- the audit leaves the database free (homelab#2665) --------------------------
+
+@pytest.fixture
+def album_library(tmp_path, monkeypatch):
+    """A real beets library of one album of five copies of one song, read two items at a time."""
+    from beets.library import Item, Library
+
+    from music_scan import library
+
+    db = tmp_path / "library.db"
+    lib = Library(str(db), directory=str(tmp_path))
+    lib.add_album([Item(title="Song", artist="Artist", album="Album", track=n, length=200.0,
+                        acoustid_fingerprint=f"fp{n}", path=str(tmp_path / f"{n}.m4a").encode())
+                   for n in range(1, 6)])
+    lib._close()
+    monkeypatch.setattr(library, "LIBRARY_DB", db)
+    monkeypatch.setattr(library, "READ_BATCH", 2)
+    monkeypatch.setattr(dupes, "spotify_durations", dict)
+    monkeypatch.setattr(dupes, "push_metrics", lambda c, u: None)
+    monkeypatch.setattr(dupes, "decode", lambda fp: _frames(1))
+    return db
+
+
+def test_the_audit_reads_a_batch_at_a_time_so_an_import_commits_between(album_library, monkeypatch) -> None:
+    """Reading every item in one query held the database for 41 s on a synthetic library of
+    35k items, and an import's commit beside it gave up with ``database is locked``.  The
+    audit reads at most a range of IDs per query, and an import commits after each one."""
+    from music_scan import library
+
+    beets_library = library._library_class()
+    items = beets_library.items
+    read: list[int] = []
+
+    def reading(self, *args, **kwargs) -> list:
+        batch = list(items(self, *args, **kwargs))
+        read.append(len(batch))
+        importer = sqlite3.connect(album_library, timeout=0)  # no wait: fails if the audit holds it
+        try:
+            with importer:
+                importer.execute("UPDATE items SET comments = ? WHERE id = 1", (f"commit {len(read)}",))
+        finally:
+            importer.close()
+        return batch
+
+    monkeypatch.setattr(beets_library, "items", reading)
+    certain, _ = dupes.run()
+    assert read == [2, 2, 1]
+    assert [sorted(i.id for i in g.items) for g in certain] == [[1, 2, 3, 4, 5]]
+    conn = sqlite3.connect(album_library)
+    assert conn.execute("SELECT comments FROM items WHERE id = 1").fetchone() == ("commit 3",)
+    conn.close()
+
+
+def test_reading_in_batches_skips_the_gaps_in_the_ids(album_library) -> None:
+    from music_scan.library import MusicLibrary
+
+    conn = sqlite3.connect(album_library)
+    with conn:
+        conn.execute("DELETE FROM items WHERE id IN (2, 3)")
+    conn.close()
+    with MusicLibrary(album_library) as lib:
+        assert [i.id for i in lib.all_items_in_batches()] == [1, 4, 5]
+        assert [i.id for i in lib.all_items_in_batches(size=1)] == [1, 4, 5]
+
+
+@pytest.mark.parametrize(("argv", "niced"), [
+    ([], [dupes.AUDIT_NICE]),
+    (["--apply"], [dupes.AUDIT_NICE]),
+    (["--compare", "1", "2"], []),
+    (["--merge", "1", "2"], []),
+    (["--fingerprint", "1"], []),
+])
+def test_the_full_audit_runs_at_the_lowest_priority(monkeypatch, argv, niced) -> None:
+    calls: list[int] = []
+    monkeypatch.setattr(dupes.os, "nice", calls.append)
+    monkeypatch.setattr(dupes, "run", lambda **_: None)
+    monkeypatch.setattr("sys.argv", ["music-audit-dupes", *argv])
+    dupes.main()
+    assert calls == niced
 
 
 # --- album records: the album is the unit (#279, #311) ------------------------
