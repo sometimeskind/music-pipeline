@@ -33,6 +33,7 @@ def _make_plugin() -> MusicPipelinePlugin:
     plugin._retitled = {}
     plugin._beside = {}
     plugin._unwritten = set()
+    plugin._bad_isrcs = set()
     return plugin
 
 
@@ -177,6 +178,34 @@ def test_tag_source_on_created_album_task_tags_all_items() -> None:
     for item in (item1, item2):
         item.__setitem__.assert_any_call("sources", "pop")
         item.__setitem__.assert_any_call("via", "spotdl")
+
+
+def test_tag_source_on_created_drops_a_value_that_isnt_an_isrc() -> None:
+    """homelab#2672: a [PMEDIA] release's tag in the ISRC field is never imported, wherever
+    the file comes from, and the item is written once it is in the library."""
+    plugin = _make_plugin()
+    inbox = _item("/root/Music/inbox/spotdl/pop/a.m4a")
+    inbox["isrc"] = "PMEDIA;USSM10104366"
+    manual = _item("/root/Music/library/Artist/Album/track.m4a")
+    manual["isrc"] = "qobuz_123456"
+    clean = _item("/root/Music/inbox/spotdl/pop/b.m4a")
+    clean["isrc"] = "USSM10104367"
+    with patch("music_scan.music_pipeline._read_spotdl_tags", return_value=SpotdlTags()):
+        plugin.tag_source_on_created(session=MagicMock(), task=_task(items=[inbox, manual, clean]))
+
+    assert [i.get("isrc") for i in (inbox, manual, clean)] == ["USSM10104366", "", "USSM10104367"]
+    assert plugin._bad_isrcs == {id(inbox), id(manual)}
+
+    for item in (manual, clean):
+        item.mtime = 0
+        plugin.write_dropped_isrcs(MagicMock(), item)
+    manual.try_write.assert_called_once()
+    manual.store.assert_called_once()
+    clean.try_write.assert_not_called()
+    inbox.mtime = 1793843109  # tag_source_on_stored wrote it
+    plugin.write_dropped_isrcs(MagicMock(), inbox)
+    inbox.try_write.assert_not_called()
+    assert not plugin._bad_isrcs
 
 
 # ---------------------------------------------------------------------------
@@ -645,16 +674,16 @@ def _incoming(tags: SpotdlTags = SpotdlTags(), title: str = "Song") -> tuple:
 
 def test_handle_duplicates_merges_a_retitled_release_by_isrc() -> None:
     """Beets' artist+title check misses "Song - 2011 Remaster"; the shared ISRC catches it."""
-    plugin, item, task = _incoming(SpotdlTags("https://open.spotify.com/track/REM", "GBX1"), title="Song - 2011 Remaster")
-    existing = _lib_dup(7, isrc="USX9;GBX1", spotify_ids="ALBUM")
-    session = _session({"isrc:GBX1": [existing]})
+    plugin, item, task = _incoming(SpotdlTags("https://open.spotify.com/track/REM", "GBXQQ0000001"), title="Song - 2011 Remaster")
+    existing = _lib_dup(7, isrc="USXQQ0000009;GBXQQ0000001", spotify_ids="ALBUM")
+    session = _session({"isrc:GBXQQ0000001": [existing]})
 
     plugin.handle_duplicates(session=session, task=task)
 
     task.set_choice.assert_called_once_with(beets_importer.Action.SKIP)
     assert existing._data["sources"] == "playlist-a,playlist-b"
     assert existing._data["spotify_ids"] == "ALBUM,REM"
-    assert existing._data["isrc"] == "USX9;GBX1"
+    assert existing._data["isrc"] == "USXQQ0000009;GBXQQ0000001"
 
 
 def test_handle_duplicates_merges_by_musicbrainz_recording_id(monkeypatch) -> None:
@@ -662,16 +691,16 @@ def test_handle_duplicates_merges_by_musicbrainz_recording_id(monkeypatch) -> No
 
     recorded = []
     monkeypatch.setattr(events, "record", lambda kind, message, **kw: recorded.append((kind, message, kw)))
-    plugin, item, task = _incoming(SpotdlTags(URL_X, "GBNEW"))
+    plugin, item, task = _incoming(SpotdlTags(URL_X, "GBNEW0000001"))
     task.chosen_info.return_value = {"track_id": "mb-rec-1", "isrc": None}
-    existing = _lib_dup(7, isrc="USOLD", mb_trackid="mb-rec-1")
+    existing = _lib_dup(7, isrc="USOLD0000000", mb_trackid="mb-rec-1")
     session = _session({"mb_trackid:mb-rec-1": [existing]})
 
     plugin.handle_duplicates(session=session, task=task)
 
     task.set_choice.assert_called_once_with(beets_importer.Action.SKIP)
     # Same recording: Spotify's ISRC joins MusicBrainz's.
-    assert existing._data["isrc"] == "USOLD;GBNEW"
+    assert existing._data["isrc"] == "USOLD0000000;GBNEW0000001"
     # One warning-level line per merge (#191).
     same = [c for c in plugin._log.warning.call_args_list if "[SAME]" in c.args[0]]
     assert len(same) == 1
@@ -685,8 +714,8 @@ def test_handle_duplicates_merges_by_musicbrainz_recording_id(monkeypatch) -> No
 
 def test_handle_duplicates_splits_a_different_recording() -> None:
     """Live take with the studio's artist+title: imported alongside, not merged or replaced."""
-    plugin, item, task = _incoming(SpotdlTags(URL_X, "GBLIVE"))
-    studio = _lib_dup(7, isrc="GBSTUDIO")
+    plugin, item, task = _incoming(SpotdlTags(URL_X, "GBLIV0000000"))
+    studio = _lib_dup(7, isrc="GBSTU0000000")
     task.find_duplicates.return_value = [studio]
 
     plugin.handle_duplicates(session=_session({}), task=task)
@@ -716,9 +745,9 @@ def test_handle_duplicates_never_merges_by_words_alone() -> None:
     assert not any("[WORDS]" in c.args[0] for c in plugin._log.warning.call_args_list)
 
 def test_handle_duplicates_same_recording_id_is_never_split() -> None:
-    plugin, item, task = _incoming(SpotdlTags(URL_X, "GBA"))
+    plugin, item, task = _incoming(SpotdlTags(URL_X, "GBAQQ0000000"))
     task.chosen_info.return_value = {"track_id": "mb-1"}
-    dup = _lib_dup(7, isrc="GBB", mb_trackid="mb-1")
+    dup = _lib_dup(7, isrc="GBBQQ0000000", mb_trackid="mb-1")
     session = _session({"mb_trackid:mb-1": [dup]})
     task.find_duplicates.return_value = [dup]
 
@@ -730,10 +759,10 @@ def test_handle_duplicates_same_recording_id_is_never_split() -> None:
 def test_handle_duplicates_a_recording_id_at_another_length_is_not_the_same_recording() -> None:
     """homelab#2540: beets names a singleton's recording by a best guess, so a stereo
     download can share a 5.1 mix's ID.  11 s apart, it is imported, never skipped."""
-    plugin, item, task = _incoming(SpotdlTags(URL_X, "GBA"))
+    plugin, item, task = _incoming(SpotdlTags(URL_X, "GBAQQ0000000"))
     item.length = 445.2
     task.chosen_info.return_value = {"track_id": "mb-1"}
-    surround = _lib_dup(7, isrc="GBB", mb_trackid="mb-1", length=456.0)
+    surround = _lib_dup(7, isrc="GBBQQ0000000", mb_trackid="mb-1", length=456.0)
     session = _session({"mb_trackid:mb-1": [surround]})
     task.find_duplicates.return_value = [surround]
 
@@ -745,10 +774,10 @@ def test_handle_duplicates_a_recording_id_at_another_length_is_not_the_same_reco
 
 
 def test_handle_duplicates_a_recording_id_within_two_seconds_is_the_same_recording() -> None:
-    plugin, item, task = _incoming(SpotdlTags(URL_X, "GBA"))
+    plugin, item, task = _incoming(SpotdlTags(URL_X, "GBAQQ0000000"))
     item.length = 445.2
     task.chosen_info.return_value = {"track_id": "mb-1"}
-    remaster = _lib_dup(7, isrc="GBB", mb_trackid="mb-1", length=446.4)
+    remaster = _lib_dup(7, isrc="GBBQQ0000000", mb_trackid="mb-1", length=446.4)
     session = _session({"mb_trackid:mb-1": [remaster]})
 
     plugin.handle_duplicates(session=session, task=task)
@@ -757,9 +786,9 @@ def test_handle_duplicates_a_recording_id_within_two_seconds_is_the_same_recordi
 
 
 def test_handle_duplicates_protects_a_manual_import_matched_by_identity() -> None:
-    plugin, item, task = _incoming(SpotdlTags(URL_X, "GBA"))
-    manual = _lib_dup(7, via="", isrc="GBA")
-    session = _session({"isrc:GBA": [manual]})
+    plugin, item, task = _incoming(SpotdlTags(URL_X, "GBAQQ0000000"))
+    manual = _lib_dup(7, via="", isrc="GBAQQ0000000")
+    session = _session({"isrc:GBAQQ0000000": [manual]})
 
     plugin.handle_duplicates(session=session, task=task)
 
@@ -916,7 +945,7 @@ def test_a_request_fallback_download_records_its_recording_never_a_spotify_id() 
     plugin = _make_plugin()
     item = _item("/root/Music/inbox/spotdl/request/Band - Song.m4a", title="Song")
     task = _task(item=item)
-    with patch("music_scan.music_pipeline._read_spotdl_tags", return_value=SpotdlTags(REC_URL, "GBAAA001001")):
+    with patch("music_scan.music_pipeline._read_spotdl_tags", return_value=SpotdlTags(REC_URL, "GBAAA0010001")):
         plugin.tag_source_on_created(session=MagicMock(), task=task)
     item.__setitem__.assert_any_call("fallback_recording", REC)
     item.__setitem__.assert_any_call("mb_trackid", REC)
@@ -1033,7 +1062,7 @@ def test_a_sibling_naming_another_version_gets_the_files_title_and_loses_the_rec
     item = _file(f"{LOADED}/10 - Oh! Sweet Nuthin'.flac", "Oh! Sweet Nuthin'", track=10)
     task = _created(plugin, item)
     _match(item, title="Oh! Sweet Nuthin' (5.1 mix)", trackdisambig="5.1 mix",
-           mb_trackid="d0063aee", mb_releasetrackid="d0063aee", isrc="USWB10005", work="Oh! Sweet Nuthin'")
+           mb_trackid="d0063aee", mb_releasetrackid="d0063aee", isrc="USWBQ0010005", work="Oh! Sweet Nuthin'")
 
     plugin.restore_file_title(session=MagicMock(), task=task)
 
@@ -1384,8 +1413,8 @@ def _import_two_equal_titles(monkeypatch, tmp_path, choose, matched=None) -> lis
     monkeypatch.setattr(metadata_plugins, "tracks_for_ids", lambda *a, **k: iter([]))
     monkeypatch.setattr(metadata_plugins, "item_candidates", lambda item, artist, title: iter([TrackInfo(
         title=matched or title, artist=artist, track_id=f"mb-{artist}", length=200.0, data_source="MusicBrainz")]))
-    tags = {b"/root/Music/inbox/spotdl/111/Artist - Home.m4a": SpotdlTags("https://open.spotify.com/track/AAA", "ISRCAAA"),
-            b"/root/Music/inbox/spotdl/222/Other - HOME.m4a": SpotdlTags("https://open.spotify.com/track/BBB", "ISRCBBB")}
+    tags = {b"/root/Music/inbox/spotdl/111/Artist - Home.m4a": SpotdlTags("https://open.spotify.com/track/AAA", "GBAAA0000001"),
+            b"/root/Music/inbox/spotdl/222/Other - HOME.m4a": SpotdlTags("https://open.spotify.com/track/BBB", "GBBBB0000002")}
     monkeypatch.setattr(music_pipeline, "_read_spotdl_tags", lambda path: tags[path])
 
     lib = Library(str(tmp_path / "library.db"), str(tmp_path / "library"))
@@ -1404,8 +1433,8 @@ def _import_two_equal_titles(monkeypatch, tmp_path, choose, matched=None) -> lis
     return sorted((i.artist, i.sources, i.spotify_ids, i.spotify_url, i.isrc) for i in lib.items())
 
 
-TWO_HOMES = [("Artist", "111", "AAA", "https://open.spotify.com/track/AAA", "ISRCAAA"),
-             ("Other", "222", "BBB", "https://open.spotify.com/track/BBB", "ISRCBBB")]
+TWO_HOMES = [("Artist", "111", "AAA", "https://open.spotify.com/track/AAA", "GBAAA0000001"),
+             ("Other", "222", "BBB", "https://open.spotify.com/track/BBB", "GBBBB0000002")]
 
 
 def test_two_equal_titles_imported_as_is_keep_their_own_identity(monkeypatch, tmp_path) -> None:
@@ -1531,7 +1560,7 @@ def test_a_spotdl_import_is_an_imported_event(monkeypatch) -> None:
     recorded = _recorded(monkeypatch)
     plugin = _make_plugin()
     item = _item("/root/Music/library/Artist/Album/03 - My Track.m4a", title="My Track")
-    _pend(plugin, item, "jazz", SpotdlTags(URL_X, "GBAAA001001"))
+    _pend(plugin, item, "jazz", SpotdlTags(URL_X, "GBAAA0010001"))
     item.id = 42
 
     plugin.tag_source_on_stored(lib=MagicMock(), item=item)
@@ -1581,8 +1610,8 @@ def _imported(plugin, item) -> None:
 
 def test_a_split_is_a_kept_apart_event_on_the_stored_item(monkeypatch) -> None:
     recorded = _recorded(monkeypatch)
-    plugin, item, task = _incoming(SpotdlTags(URL_X, "GBLIVE"))
-    studio = _lib_dup(7, isrc="GBSTUDIO")
+    plugin, item, task = _incoming(SpotdlTags(URL_X, "GBLIV0000000"))
+    studio = _lib_dup(7, isrc="GBSTU0000000")
     task.find_duplicates.return_value = [studio]
 
     plugin.handle_duplicates(session=_session({}), task=task)
@@ -1592,10 +1621,10 @@ def test_a_split_is_a_kept_apart_event_on_the_stored_item(monkeypatch) -> None:
 
     [(kind, message, kw)] = [r for r in recorded if r[0] != "imported"]
     assert kind == "kept_apart" and kw["item_id"] == 88 and kw["source"] == "import"
-    assert message.startswith("[SPLIT] ") and "(ISRCs GBLIVE vs GBSTUDIO)" in message
+    assert message.startswith("[SPLIT] ") and "(ISRCs GBLIV0000000 vs GBSTU0000000)" in message
     data = kw["data"]
-    assert (data["why"], data["isrcs"]) == ("ISRCs differ", ["GBLIVE"])
-    assert (data["duplicate"]["item_id"], data["duplicate"]["isrc"]) == (7, "GBSTUDIO")
+    assert (data["why"], data["isrcs"]) == ("ISRCs differ", ["GBLIV0000000"])
+    assert (data["duplicate"]["item_id"], data["duplicate"]["isrc"]) == (7, "GBSTU0000000")
     assert data["path"] == "/root/Music/library/Song.m4a"
     assert plugin._beside == {}
 
@@ -1625,7 +1654,7 @@ def _usenet_incoming() -> tuple:
 def test_each_duplicate_of_a_usenet_track_is_its_own_import_alongside_event(monkeypatch) -> None:
     recorded = _recorded(monkeypatch)
     plugin, item, task = _usenet_incoming()
-    released = _lib_dup(7, via="usenet", mb_trackid="mb-rec-1", isrc="GBA")
+    released = _lib_dup(7, via="usenet", mb_trackid="mb-rec-1", isrc="GBAQQ0000000")
     loose = _lib_dup(8, via="spotdl", mb_trackid="mb-rec-1")
 
     plugin.handle_duplicates(session=_session({"mb_trackid:mb-rec-1": [released, loose]}), task=task)
@@ -1652,8 +1681,8 @@ def test_an_album_requests_copy_is_an_import_alongside_event(monkeypatch) -> Non
 
 def test_an_import_that_never_lands_records_nothing_beside(monkeypatch) -> None:
     recorded = _recorded(monkeypatch)
-    plugin, item, task = _incoming(SpotdlTags(URL_X, "GBLIVE"))
-    task.find_duplicates.return_value = [_lib_dup(7, isrc="GBSTUDIO")]
+    plugin, item, task = _incoming(SpotdlTags(URL_X, "GBLIV0000000"))
+    task.find_duplicates.return_value = [_lib_dup(7, isrc="GBSTU0000000")]
 
     plugin.handle_duplicates(session=_session({}), task=task)
     plugin._record_beside(_item("/root/Music/inbox/spotdl/playlist-b/Other.m4a", title="Other"))

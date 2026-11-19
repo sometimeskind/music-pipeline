@@ -158,14 +158,50 @@ def use_fpcalc() -> None:
     acoustid.fingerprint_file = fingerprint_file
 
 
+ISRC_FORM = re.compile(r"[A-Z]{2}[A-Z0-9]{3}[0-9]{7}")
+"""An ISRC (ISO 3901): a country code, a three-character registrant, then two
+digits of year and five of designation."""
+
+
+def isrc_code(value: str | None) -> str | None:
+    """*value* as an ISRC, hyphens dropped and upper-cased, or None when it
+    isn't one (:data:`ISRC_FORM`, homelab#2672).  A release's tag in the ISRC
+    field (``PMEDIA``, ``qobuz_<n>``) names no recording, and two files that
+    share one are no more one track than two files of one upload group."""
+    code = (value or "").strip().replace("-", "").upper()
+    return code if ISRC_FORM.fullmatch(code) else None
+
+
+def split_isrcs(value: str | None) -> list[str]:
+    """The ISRCs of a ``;``-joined field, in order and once each, as
+    :func:`isrc_code` gives them: an entry that isn't one is dropped."""
+    return list(dict.fromkeys(filter(None, map(isrc_code, split_list(value, ";")))))
+
+
+def bad_isrcs(item) -> list[str]:
+    """The entries of *item*'s ``isrc`` that aren't ISRCs (:func:`isrc_code`)."""
+    return [c for c in split_list(item.get("isrc"), ";") if not isrc_code(c)]
+
+
+def drop_bad_isrcs(item) -> list[str]:
+    """Take :func:`bad_isrcs` off *item*'s ``isrc`` (its ISRCs stay as
+    written) and return them; the caller stores it."""
+    if bad := bad_isrcs(item):
+        item["isrc"] = ";".join(c for c in split_list(item.get("isrc"), ";") if isrc_code(c))
+    return bad
+
+
 def item_isrcs(item) -> set[str]:
-    return set(split_list(item.get("isrc"), ";"))
+    """*item*'s ISRCs (:func:`split_isrcs`): what isn't one is never compared."""
+    return set(split_isrcs(item.get("isrc")))
 
 
 def add_isrcs(item, codes) -> bool:
-    """Union *codes* into the item's ``;``-joined ISRCs. True when it changed."""
+    """Union *codes* into the item's ``;``-joined ISRCs. True when it changed.
+    A code that isn't an ISRC (:func:`isrc_code`) is never added."""
     have = split_list(item.get("isrc"), ";")
-    new = [c for c in dict.fromkeys(codes) if c and c not in have]
+    held = set(split_isrcs(item.get("isrc")))
+    new = [c for c in dict.fromkeys(filter(None, map(isrc_code, codes))) if c not in held]
     if not new:
         return False
     item["isrc"] = ";".join(have + new)
@@ -195,7 +231,7 @@ class ItemIndex:
 
     def match(self, song_id: str | None, isrc: str | None, name: str = "", artist: str = "", words: bool = True):
         """``(item, rung)`` for a playlist entry, or ``(None, None)``."""
-        for rung, index, key in ((BY_ID, self.by_id, song_id), (BY_ISRC, self.by_isrc, isrc)):
+        for rung, index, key in ((BY_ID, self.by_id, song_id), (BY_ISRC, self.by_isrc, isrc_code(isrc))):
             if key and key in index:
                 self.rungs[rung] += 1
                 return index[key], rung
@@ -437,7 +473,7 @@ def recording_ids(spotify_ids=(), isrcs=(), mb_trackid: str | None = None) -> fr
     ``isrc:<code>`` and ``mb:<MusicBrainz recording ID>``.  Two recordings are
     one track only when a key agrees; titles never count (homelab#1889)."""
     keys = {f"spotify:{s.strip()}" for s in spotify_ids if s and s.strip()}
-    keys |= {f"isrc:{c.strip().upper()}" for c in isrcs if c and c.strip()}
+    keys |= {f"isrc:{code}" for code in map(isrc_code, isrcs) if code}
     if mb_trackid and mb_trackid.strip():
         keys.add(f"mb:{mb_trackid.strip().lower()}")
     return frozenset(keys)

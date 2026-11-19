@@ -54,7 +54,7 @@ the run ID, and apply_recheck applies the finished run.
 Tiers. Read tools anyone signed in may use. Write tools (reset_album, requeue_albums,
 merge_items, replace_item, unlink_spotify_id, set_recording, fingerprint_items, keep_quarantined, restore_kept,
 retire_item, embed_covers,
-canon_albums, backfill_album_ids,
+canon_albums, backfill_album_ids, clear_bad_isrcs,
 apply_recheck,
 set_search_override, clear_search_override, hold_album, release_album, pin_track, unpin_track,
 request_album, remove_from_later) are a dry run unless
@@ -663,6 +663,15 @@ def build_server(
         each [NOID] left empty, with the reason. Writes Spotify IDs only: it moves no file and
         retires or merges nothing. unlink_spotify_id undoes one link."""
         return await run("backfill_album_ids", {"apply": apply}, write=True)
+
+    @mcp.tool(annotations={"destructiveHint": True})
+    async def clear_bad_isrcs(apply: Apply = False) -> dict:
+        """music-clear-bad-isrcs: clear the values in items' isrc that aren't ISRCs (12 characters:
+        2 letters, 3 letters or digits, 7 digits), such as a release group's tag (PMEDIA) or a
+        store's track key (qobuz_<n>). No tool compares them as ISRCs any more; this takes them off
+        the item and its file. The dry run lists each item and the values, and counts them. The
+        item's ISRCs stay; each item cleared is an ids_written event."""
+        return await run("clear_bad_isrcs", {"apply": apply}, write=True)
 
     @mcp.tool(annotations={"destructiveHint": True})
     async def apply_recheck(

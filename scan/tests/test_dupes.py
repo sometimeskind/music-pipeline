@@ -92,7 +92,7 @@ def test_bit_error_rate_needs_enough_overlap() -> None:
 
 @pytest.mark.parametrize("field,a,b", [
     ("spotify_ids", "S1,S2", "S2"),
-    ("isrc", "GB1;US9", "US9"),
+    ("isrc", "GBQQQ0000001;USQQQ0000009", "USQQQ0000009"),
 ])
 def test_a_shared_id_is_certain_with_lengths_that_agree(field, a, b) -> None:
     one = FakeItem(1, "Song", length=200.0, **{field: a})
@@ -103,7 +103,7 @@ def test_a_shared_id_is_certain_with_lengths_that_agree(field, a, b) -> None:
 
 @pytest.mark.parametrize("field,a,b,value", [
     ("spotify_ids", "S1,S2", "S2", "spotify S2"),
-    ("isrc", "GB1;US9", "US9", "isrc US9"),
+    ("isrc", "GBQQQ0000001;USQQQ0000009", "USQQQ0000009", "isrc USQQQ0000009"),
 ])
 def test_a_shared_id_with_lengths_apart_is_uncertain(field, a, b, value) -> None:
     """homelab#2831: an ID is only a tag; a clip or another take shares it at another length."""
@@ -147,7 +147,7 @@ def test_an_id_shared_by_another_song_remix_live_or_mono_take_is_uncertain(case)
     assert loose[0].evidence == [(a.id, b.id, why)]
 
 
-@pytest.mark.parametrize("field,value", [("isrc", "GB1"), ("spotify_ids", "S1"), ("mb_trackid", "rec")])
+@pytest.mark.parametrize("field,value", [("isrc", "GBQQQ0000001"), ("spotify_ids", "S1"), ("mb_trackid", "rec")])
 def test_a_version_word_alone_makes_an_id_match_uncertain(field, value) -> None:
     """Lengths agree, but only one title says live: the ID doesn't outvote it."""
     studio = FakeItem(1, "Song", length=200.0, **{field: value})
@@ -158,14 +158,14 @@ def test_a_version_word_alone_makes_an_id_match_uncertain(field, value) -> None:
 
 
 @pytest.mark.parametrize("a,b", [
-    (FakeItem(1, "Mary", artist="Big Thief", length=330.0, isrc="US1"),
-     FakeItem(2, "Mary", artist="Big Thief", length=329.0, isrc="US1")),
+    (FakeItem(1, "Mary", artist="Big Thief", length=330.0, isrc="USQQQ0000001"),
+     FakeItem(2, "Mary", artist="Big Thief", length=329.0, isrc="USQQQ0000001")),
     (FakeItem(1, "Peg", artist="Steely Dan", length=236.0, spotify_ids="S1"),
      FakeItem(2, "Peg", artist="Steely Dan", length=238.0, spotify_ids="S1")),
-    (FakeItem(1, "Gotta Get Up", artist="Harry Nilsson", length=143.0, isrc="US2"),
-     FakeItem(2, "Gotta Get Up", artist="Harry Nilsson", length=145.0, isrc="US2")),
-    (FakeItem(1, "Song - 2011 Remaster", length=200.0, isrc="GB1"),
-     FakeItem(2, "Song", length=201.0, isrc="GB1")),
+    (FakeItem(1, "Gotta Get Up", artist="Harry Nilsson", length=143.0, isrc="USQQQ0000002"),
+     FakeItem(2, "Gotta Get Up", artist="Harry Nilsson", length=145.0, isrc="USQQQ0000002")),
+    (FakeItem(1, "Song - 2011 Remaster", length=200.0, isrc="GBQQQ0000001"),
+     FakeItem(2, "Song", length=201.0, isrc="GBQQQ0000001")),
     (FakeItem(1, "Song (Remastered)", length=200.0, spotify_ids="S1"),
      FakeItem(2, "Song", length=200.0, spotify_ids="S1")),
 ], ids=["big thief mary", "steely dan peg", "nilsson gotta get up", "2011 remaster", "remastered"])
@@ -250,8 +250,8 @@ def test_fingerprints_are_compared_only_between_items_sharing_an_artist_word() -
 
 def test_groups_are_transitive() -> None:
     a = FakeItem(1, "Song", spotify_ids="S1")
-    b = FakeItem(2, "Song", spotify_ids="S1", isrc="GB1")
-    c = FakeItem(3, "Song", isrc="GB1")
+    b = FakeItem(2, "Song", spotify_ids="S1", isrc="GBQQQ0000001")
+    c = FakeItem(3, "Song", isrc="GBQQQ0000001")
     certain, uncertain, *_ = _tiers([a, b, c])
     assert certain == [[1, 2, 3]] and uncertain == []
 
@@ -273,14 +273,14 @@ def test_title_and_artist_after_normalisation_is_uncertain() -> None:
 
 
 def test_title_and_artist_with_disjoint_isrcs_is_distinct_not_listed() -> None:
-    studio = FakeItem(1, "The 1975", artist="The 1975", isrc="GB1")
-    other = FakeItem(2, "The 1975", artist="The 1975", isrc="GB2")
+    studio = FakeItem(1, "The 1975", artist="The 1975", isrc="GBQQQ0000001")
+    other = FakeItem(2, "The 1975", artist="The 1975", isrc="GBQQQ0000002")
     certain, uncertain, distinct, *_ = _tiers([studio, other])
     assert (certain, uncertain, distinct) == ([], [], 1)
 
 
 def test_title_and_artist_with_one_side_missing_isrcs_stays_uncertain() -> None:
-    a = FakeItem(1, "Song", isrc="GB1")
+    a = FakeItem(1, "Song", isrc="GBQQQ0000001")
     b = FakeItem(2, "Song")
     assert _tiers([a, b])[1] == [[1, 2]]
 
@@ -339,9 +339,9 @@ def test_merge_moves_ids_and_playlists_and_quarantines_the_file(tmp_path, monkey
 
     recorded = []
     monkeypatch.setattr(events, "record", lambda kind, message, **kw: recorded.append((kind, message, kw)))
-    keeper = _on_disk(tmp_path, FakeItem(1, "Song", spotify_ids="A", isrc="GB1", sources="keep"))
+    keeper = _on_disk(tmp_path, FakeItem(1, "Song", spotify_ids="A", isrc="GBQQQ0000001", sources="keep"))
     loser = _on_disk(tmp_path, FakeItem(2, "Song", spotify_url="https://open.spotify.com/track/B",
-                                        isrc="GB1;US2", mb_trackid="rec", sources="keep,later"))
+                                        isrc="GBQQQ0000001;USQQQ0000002", mb_trackid="rec", sources="keep,later"))
     old = Path(loser.path.decode())
     moved = merge(keeper, [loser], tmp_path / "replaced", recordings=lambda rid: {"title": "Song (Live)"})
     (kind, message, kw), = recorded
@@ -349,7 +349,7 @@ def test_merge_moves_ids_and_playlists_and_quarantines_the_file(tmp_path, monkey
     assert kw["data"]["mb_trackid_taken"] == "rec"
     assert kw["item_id"] == 1 and kw["data"]["merged"] == 2 and kw["data"]["why"] == "duplicate"
     assert keeper.get("spotify_ids") == "A,B"
-    assert keeper.get("isrc") == "GB1;US2"
+    assert keeper.get("isrc") == "GBQQQ0000001;USQQQ0000002"
     assert keeper.get("sources") == "keep,later"
     assert keeper.get("mb_trackid") == "rec"
     assert keeper.stored and keeper.written
@@ -440,14 +440,14 @@ def test_merge_records_the_losers_files_on_the_keeper_and_passes_them_on(tmp_pat
 
     monkeypatch.setattr(playlists, "_file_tags",
                         lambda path: playlists.ReplacedFile(path, "Song", "", frozenset(), frozenset(), None))
-    keeper = _on_disk(tmp_path, FakeItem(1, "Song", isrc="GB1"))
+    keeper = _on_disk(tmp_path, FakeItem(1, "Song", isrc="GBQQQ0000001"))
     bare = _on_disk(tmp_path, FakeItem(2, "Song"))  # no identity at all, as #302's legacy extras
     moved = merge(keeper, [bare], tmp_path / "replaced")
     assert keeper.get("merged_files") == moved[0].name and keeper.stored
     assert split_replaced(moved, Recordings([keeper])) == (moved, [])
-    assert split_replaced(moved, Recordings([FakeItem(3, "Song", isrc="GB1")])) == ([], moved)
+    assert split_replaced(moved, Recordings([FakeItem(3, "Song", isrc="GBQQQ0000001")])) == ([], moved)
 
-    final = _on_disk(tmp_path, FakeItem(4, "Song", isrc="GB1"))
+    final = _on_disk(tmp_path, FakeItem(4, "Song", isrc="GBQQQ0000001"))
     later = merge(final, [keeper], tmp_path / "replaced")
     assert final.get("merged_files") == f"{moved[0].name}/{later[0].name}"
     assert split_replaced(moved + later, Recordings([final])) == (moved + later, [])

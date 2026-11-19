@@ -63,11 +63,11 @@ def test_audit_counts_files_the_silence_scan_could_not_find(caplog) -> None:
 
 
 def test_audit_finds_items_outside_the_playlist_by_isrc_but_words_only_within_it() -> None:
-    by_isrc = _item(1, "Song", "keep", 300.0, isrc="GB1")
+    by_isrc = _item(1, "Song", "keep", 300.0, isrc="GBQQQ0000001")
     by_words = _item(2, "Other", "keep", 300.0)
     suspects, counts = run_audit(
         [by_isrc, by_words],
-        {"mood": [_song("X", "Song", isrc="GB1"), _song("Y", "Other")]},
+        {"mood": [_song("X", "Song", isrc="GBQQQ0000001"), _song("Y", "Other")]},
     )
     assert [s.item for s in suspects] == [by_isrc]
     assert counts["unmatched"] == 1

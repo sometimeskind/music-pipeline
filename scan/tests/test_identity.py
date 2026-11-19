@@ -63,20 +63,48 @@ def test_item_spotify_ids_includes_legacy_spotify_url() -> None:
 
 
 def test_add_isrcs_unions_musicbrainz_and_spotify() -> None:
-    item = _item(isrc="USX1;GBX2")
-    assert add_isrcs(item, ["GBX2", "SEX3"])
-    assert item.data["isrc"] == "USX1;GBX2;SEX3"
-    assert not add_isrcs(item, ["USX1", None])
+    item = _item(isrc="USXQQ0000001;GBXQQ0000002")
+    assert add_isrcs(item, ["GBXQQ0000002", "SEXQQ0000003"])
+    assert item.data["isrc"] == "USXQQ0000001;GBXQQ0000002;SEXQQ0000003"
+    assert not add_isrcs(item, ["USXQQ0000001", None])
+
+
+def test_a_value_that_isnt_an_isrc_is_never_one() -> None:
+    """homelab#2672: a release's tag in the ISRC field (PMEDIA, qobuz_<n>) made 25 items
+    one recording; it is ignored, while an ISRC with hyphens or in lower
+    case is the same code."""
+    from music_scan.identity import bad_isrcs, drop_bad_isrcs, isrc_code, item_isrcs, split_isrcs
+
+    for junk in ("PMEDIA", "qobuz_123456789", "QOBUZ_123456789", "USSM1010436", "USSM101043667", "1USSM0104366",
+                 "US$M10104366", "", None):
+        assert isrc_code(junk) is None, junk
+    assert isrc_code(" us-sm1-01-04366 ") == "USSM10104366"
+    assert split_isrcs("PMEDIA;USSM10104366;qobuz_1;US-SM1-01-04366") == ["USSM10104366"]
+
+    pmedia = [_item(f"Song {n}", isrc="PMEDIA") for n in range(3)]
+    assert all(not item_isrcs(item) for item in pmedia)
+    index = ItemIndex(pmedia)
+    assert index.match(None, "PMEDIA", "Another", "Artist") == (None, None)
+    assert not recording_ids(isrcs=["PMEDIA", "qobuz_42"])
+    assert not Recordings(pmedia).holds_item(_item("Another", isrc="PMEDIA"))
+
+    item = _item(isrc="PMEDIA;GBAYE0601498")
+    assert item_isrcs(item) == {"GBAYE0601498"}
+    assert not add_isrcs(item, ["PMEDIA", "qobuz_9", None])
+    assert bad_isrcs(item) == ["PMEDIA"]
+    assert drop_bad_isrcs(item) == ["PMEDIA"]
+    assert item.data["isrc"] == "GBAYE0601498"
+    assert drop_bad_isrcs(item) == []
 
 
 def test_item_index_ladder() -> None:
     by_id = _item("Song", spotify_ids="SID")
-    by_isrc = _item("Song (Remastered)", isrc="A;B")
+    by_isrc = _item("Song (Remastered)", isrc="GBAAA0000001;GBBBB0000002")
     by_words = _item("Other")
     index = ItemIndex([by_id, by_isrc, by_words])
 
-    assert index.match("SID", "B", "Song", "Artist") == (by_id, BY_ID)
-    assert index.match("NOPE", "B", "Song", "Artist") == (by_isrc, BY_ISRC)
+    assert index.match("SID", "GBBBB0000002", "Song", "Artist") == (by_id, BY_ID)
+    assert index.match("NOPE", "GBBBB0000002", "Song", "Artist") == (by_isrc, BY_ISRC)
     assert index.match(None, None, "Other", "Artist") == (by_words, BY_WORDS)
     assert index.match(None, None, "Other", "Artist", words=False) == (None, None)
     assert index.match_song({"name": "x", "url": "https://open.spotify.com/track/SID"}) == (by_id, BY_ID)
@@ -139,17 +167,17 @@ def test_recordings_hold_a_mb_recording_only_at_its_length() -> None:
     assert library.holds(recording_ids(mb_trackid="d0063aee"))  # no length to veto with
     assert not library.holds_item(_item(mb_trackid="d0063aee", length=445.2))
     # A Spotify ID or ISRC holds a recording whatever the lengths.
-    library = Recordings([_item(isrc="USX1", mb_trackid="d0063aee", length=456.0)])
-    assert library.holds(recording_ids(isrcs=["USX1"], mb_trackid="d0063aee"), 445.2)
+    library = Recordings([_item(isrc="USXQQ0000001", mb_trackid="d0063aee", length=456.0)])
+    assert library.holds(recording_ids(isrcs=["USXQQ0000001"], mb_trackid="d0063aee"), 445.2)
 
 
 def test_recordings_hold_a_recording_by_spotify_id_isrc_or_mb_recording_id_never_by_title() -> None:
     """The identity rule of homelab#1889 (#287)."""
-    library = Recordings([_item(spotify_ids="SP1"), _item(isrc="usx1;GBX2"), _item(mb_trackid="ABC-REC")])
+    library = Recordings([_item(spotify_ids="SP1"), _item(isrc="usxqq0000001;GBXQQ0000002"), _item(mb_trackid="ABC-REC")])
     assert library.holds(recording_ids(["SP1"]))
-    assert library.holds(recording_ids(isrcs=[" usx1 "]))
+    assert library.holds(recording_ids(isrcs=[" usxqq0000001 "]))
     assert library.holds(recording_ids(mb_trackid="abc-rec"))
-    assert library.holds_item(_item(title="Other", isrc="GBX2"))
+    assert library.holds_item(_item(title="Other", isrc="GBXQQ0000002"))
     assert not library.holds_item(_item(title="Song"))  # the same title is not the same recording
     assert not library.holds(recording_ids(["SP2"], ["USX9"], "other-rec"))
     assert not Recordings().holds(recording_ids(["SP1"]))

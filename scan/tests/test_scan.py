@@ -694,7 +694,7 @@ def _tag(items, tracks, since=50.0, tracks_count=2, recordings=lambda _: None, l
 
 def test_tag_album_ids_prefers_isrc_over_track_number() -> None:
     # Retitled by MusicBrainz and at the other track number: only the ISRC links it.
-    a = _lib_item("Uno", isrc="USX1;GBUM71029604", track=2)
+    a = _lib_item("Uno", isrc="USXQQ0000001;GBUM71029604", track=2)
     b = _lib_item("Dos", track=1)
     assert _tag([a, b], [["One", "Artist", "sid1", "GBUM71029604", 1, 1]]) == 1
     assert a.data["spotify_ids"] == "sid1"
@@ -844,14 +844,14 @@ def test_tag_album_ids_disagreeing_isrcs_stay_empty_when_musicbrainz_cant_be_ask
 
 
 def test_tag_album_ids_two_isrcs_of_one_recording_link() -> None:
-    item = _usenet("One", 1, isrc="USMB1", mb_trackid="rec")
-    assert _tag([item], [["One", "Artist", "sid", "GBS1", 1, 1]],
-                recordings={"rec": {"isrcs": ["USMB1", "GBS1"]}}.get) == 1
+    item = _usenet("One", 1, isrc="USMBQ0000001", mb_trackid="rec")
+    assert _tag([item], [["One", "Artist", "sid", "GBSQQ0000001", 1, 1]],
+                recordings={"rec": {"isrcs": ["USMBQ0000001", "GBSQQ0000001"]}}.get) == 1
 
 
 def test_tag_album_ids_disagreeing_isrcs_veto_a_same_edition_link_too() -> None:
-    item = _lib_item("One", isrc="USMB1", mb_trackid="rec")
-    assert _tag([item], [["One", "Artist", "sid", "GBS1", 1, 1]], recordings={"rec": {"isrcs": ["USMB1"]}}.get) == 0
+    item = _lib_item("One", isrc="USMBQ0000001", mb_trackid="rec")
+    assert _tag([item], [["One", "Artist", "sid", "GBSQQ0000001", 1, 1]], recordings={"rec": {"isrcs": ["USMBQ0000001"]}}.get) == 0
 
 
 def test_tag_album_ids_a_version_only_one_side_names_does_not_link() -> None:
@@ -893,8 +893,8 @@ def test_tag_album_ids_a_real_disc_number_that_differs_does_not_link() -> None:
 
 
 def test_tag_album_ids_an_isrc_tie_with_disc_0_is_told_apart_by_track() -> None:
-    a, b = _usenet("Foo", 1, isrc="X"), _usenet("Foo", 2, isrc="X")
-    assert _tag([a, b], [["Foo", "Artist", "sid", "X", 1, 2]]) == 1
+    a, b = _usenet("Foo", 1, isrc="GBXQQ0000000"), _usenet("Foo", 2, isrc="GBXQQ0000000")
+    assert _tag([a, b], [["Foo", "Artist", "sid", "GBXQQ0000000", 1, 2]]) == 1
     assert (a.data["spotify_ids"], b.data["spotify_ids"]) == ("", "sid")
 
 
@@ -998,7 +998,7 @@ def test_regen_playlists_matches_by_id_before_words(tmp_path: Path, caplog) -> N
     items = [
         _make_mock_item("Song", "Art", studio, spotify_ids="STUDIO"),
         _make_mock_item("Song", "Art", live, spotify_url="https://open.spotify.com/track/LIVE"),
-        _make_mock_item("Song - 2011 Remaster", "Art", remaster, isrc="USX;GBREM0000001"),
+        _make_mock_item("Song - 2011 Remaster", "Art", remaster, isrc="USXQQ0000000;GBREM0000001"),
         _make_mock_item("Other", "Art", lib_root / "Other.m4a"),
     ]
 
@@ -1053,10 +1053,10 @@ def test_link_song_tags_the_item_matched_by_isrc(real_lib) -> None:
     from music_scan.identity import ItemIndex
     from music_scan.scan import link_song
 
-    item = _add(real_lib, sources="", via="usenet", isrc="GBX1;GBX2")
+    item = _add(real_lib, sources="", via="usenet", isrc="GBXQQ0000001;GBXQQ0000002")
     index = ItemIndex(real_lib.all_items())
 
-    song = {"url": "https://open.spotify.com/track/B2", "song_id": "B2", "isrc": "GBX2", "name": "Other title"}
+    song = {"url": "https://open.spotify.com/track/B2", "song_id": "B2", "isrc": "GBXQQ0000002", "name": "Other title"}
     assert link_song(index, "later", song)
     assert _reload(real_lib, item).get("sources") == "later"
     assert _reload(real_lib, item).get("spotify_ids") == "B2"
@@ -1080,8 +1080,8 @@ def test_have_or_link_counts_an_album_held_under_another_playlist(real_lib) -> N
     from music_scan.scan import have_or_link
 
     one = _add(real_lib, sources="liked", spotify_ids="T1")
-    two = _add(real_lib, title="Two", sources="", isrc="ISRC2")
-    tracks = [["Song", "Artist", "T1", None, 1, 1], ["Two", "Artist", "T2", "ISRC2", 1, 2]]
+    two = _add(real_lib, title="Two", sources="", isrc="ISRCQ0000002")
+    tracks = [["Song", "Artist", "T1", None, 1, 1], ["Two", "Artist", "T2", "ISRCQ0000002", 1, 2]]
 
     assert have_or_link(ItemIndex(real_lib.items_by_source("later")), ItemIndex(real_lib.all_items()), "later", tracks)
     assert _reload(real_lib, one).get("sources") == "liked,later"
@@ -1095,7 +1095,7 @@ def test_have_or_link_tags_nothing_when_a_track_is_missing(real_lib) -> None:
 
     one = _add(real_lib, sources="liked", spotify_ids="T1")
     _add(real_lib, title="Two", sources="liked")  # title+artist only: not enough outside the playlist
-    tracks = [["Song", "Artist", "T1", None, 1, 1], ["Two", "Artist", "T2", "ISRC2", 1, 2]]
+    tracks = [["Song", "Artist", "T1", None, 1, 1], ["Two", "Artist", "T2", "ISRCQ0000002", 1, 2]]
 
     assert not have_or_link(ItemIndex(real_lib.items_by_source("later")), ItemIndex(real_lib.all_items()), "later", tracks)
     assert _reload(real_lib, one).get("sources") == "liked"
@@ -1108,7 +1108,7 @@ def test_missing_tracks_counts_other_playlists_by_id_only_and_tags_nothing(real_
 
     one = _add(real_lib, sources="liked", spotify_ids="T1")
     _add(real_lib, title="Two", sources="liked")  # title+artist only: not enough outside the playlist
-    tracks = [["Song", "Artist", "T1", None, 1, 1], ["Two", "Artist", "T2", "ISRC2", 1, 2]]
+    tracks = [["Song", "Artist", "T1", None, 1, 1], ["Two", "Artist", "T2", "ISRCQ0000002", 1, 2]]
 
     gaps = missing_tracks(ItemIndex(real_lib.items_by_source("later")), tracks, ItemIndex(real_lib.all_items()))
     assert gaps == [tracks[1]]
@@ -1147,11 +1147,11 @@ def test_regen_playlists_fills_a_slot_from_the_whole_library(tmp_path: Path, cap
     lib_root = tmp_path / "library"
     tagged = _make_mock_item("Tagged", "Art", lib_root / "tagged.m4a", spotify_ids="T1", sources="pl")
     elsewhere = _make_mock_item("Elsewhere", "Art", lib_root / "elsewhere.m4a", spotify_ids="E1", sources="keep")
-    by_isrc = _make_mock_item("Remaster", "Art", lib_root / "remaster.m4a", isrc="GBX1", sources="")
+    by_isrc = _make_mock_item("Remaster", "Art", lib_root / "remaster.m4a", isrc="GBXQQ0000001", sources="")
     songs = [
         {"name": "Elsewhere", "artists": ["Art"], "url": "u1", "song_id": "E1"},
         {"name": "Tagged", "artists": ["Art"], "url": "u2", "song_id": "T1"},
-        {"name": "Original", "artists": ["Art"], "url": "u3", "song_id": "O1", "isrc": "GBX1"},
+        {"name": "Original", "artists": ["Art"], "url": "u3", "song_id": "O1", "isrc": "GBXQQ0000001"},
         {"name": "Nowhere", "artists": ["Art"], "url": "u4", "song_id": "N1"},
     ]
     metrics = ScanMetrics()
@@ -1233,8 +1233,8 @@ def test_missing_tracks_and_have_or_link_read_resolved_slots(real_lib) -> None:
     from music_scan.scan import have_or_link, missing_tracks
 
     _add(real_lib, title="One", sources="later", spotify_ids="T1")
-    two = _add(real_lib, title="Two", sources="keep", isrc="ISRC2")
-    tracks = [["One", "Artist", "T1", None, 1, 1], ["Two", "Artist", "T2", "ISRC2", 1, 2], ["Three", "Artist", "T3", None, 1, 3]]
+    two = _add(real_lib, title="Two", sources="keep", isrc="ISRCQ0000002")
+    tracks = [["One", "Artist", "T1", None, 1, 1], ["Two", "Artist", "T2", "ISRCQ0000002", 1, 2], ["Three", "Artist", "T3", None, 1, 3]]
     source, library = ItemIndex(real_lib.items_by_source("later")), ItemIndex(real_lib.all_items())
 
     assert missing_tracks(source, tracks, library) == [tracks[2]]
