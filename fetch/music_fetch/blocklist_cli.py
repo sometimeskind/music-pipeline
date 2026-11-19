@@ -186,8 +186,9 @@ def _album_data(key: str, record: dict) -> tuple[str | None, str | None, str, st
 def write_add(state: albums.State, key: str, record: dict, entry: dict, was: str | None) -> None:
     """Append *entry*'s GUID (unless it is there) and record its ``blocklisted`` event, in one transaction."""
     by = overrides.caller()
-    if entry["guid"] not in record["blocklist"]:
-        record["blocklist"].append(entry["guid"])
+    listed = record.setdefault("blocklist", [])
+    if entry["guid"] not in listed:
+        listed.append(entry["guid"])
     spotify, group, album, origin = _album_data(key, record)
     message = (f"[BLOCKLIST] {albums._label(record)} ({key}): {entry['title'] or entry['guid']} blocklisted by "
                f"{by}: {entry['reason'][len(blocklist.BY_HAND):]}")
@@ -203,7 +204,7 @@ def write_remove(state: albums.State, key: str, record: dict, gone: list[dict]) 
     """Take *gone*'s GUIDs off the blocklist, each with its ``unblocklisted`` event, in one transaction."""
     by = overrides.caller()
     guids = {e["guid"] for e in gone}
-    record["blocklist"] = [g for g in record["blocklist"] if g not in guids]
+    record["blocklist"] = [g for g in record.get("blocklist") or () if g not in guids]
     spotify, group, album, origin = _album_data(key, record)
     with statedb.session() as conn, conn.transaction():
         statedb.save_albums(conn, state)

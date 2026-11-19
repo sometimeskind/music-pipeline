@@ -1286,8 +1286,7 @@ def auto_reimport(
     before (another album, an incomplete copy, a broken download, or the
     track-level rules' ``[FAIL]``) is not grabbed again.  The last release
     leaves it, as any reset's does: it is the one the album was imported from.
-    Unless :func:`blocklist.stays` keeps it, as it keeps a release a person
-    blocklisted (homelab#2750).
+    Unless a person blocklisted it (:data:`blocklist.HAND`, homelab#2750).
 
     Only in ``on``, at most ``auto_reimports_per_day`` in a rolling 24 hours,
     and only while the grab budget has room for the resets not yet grabbed.
@@ -1321,8 +1320,8 @@ def auto_reimport(
         if state.used("grab", now()) + waiting >= settings.grabs_per_day:
             logger.info("Grab budget has no room for another reimport (%d/24h)", settings.grabs_per_day)
             return
-        # The entries no reset clears stay, the last candidate too: a release blocklisted by hand (homelab#2750).
-        broken = {e["guid"] for e in blocklist_entries(key, record) if blocklist.stays(e)}
+        # A release blocklisted by hand stays, the last candidate too (homelab#2750).
+        broken = {e["guid"] for e in blocklist_entries(key, record) if e.get("kind") == blocklist.HAND}
         reset_record(record, reimport=True, keep_blocklist=True, broken=broken)
         record["auto_reimported_at"] = _iso(now())
         state.record("reimport", now())
