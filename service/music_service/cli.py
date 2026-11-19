@@ -183,6 +183,7 @@ def main() -> None:
     from prefect import serve as prefect_serve
 
     from music_fetch.albums import park_interrupted_imports
+    from music_service import slots
     from music_service.api import create_app
     from music_service.debounce import Debouncer
     from music_service.flows import (
@@ -240,6 +241,8 @@ def main() -> None:
                    playlist_sync_deployment]
 
     ensure_concurrency_limits()
+    # Who holds albums and pipeline, for MusicSlotHeldLong (homelab#2841).
+    slots.start_reporter()
 
     # Runs the last pod was running when it died (#513).  Before the startup
     # scan: a PENDING orphan of music-scan would count as a scan waiting to run.
