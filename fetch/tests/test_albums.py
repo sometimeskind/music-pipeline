@@ -9,6 +9,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 import music_fetch.albums as albums
+from music_fetch import blocklist
 from music_fetch import state as statedb
 from music_fetch import store
 from music_fetch.albums import Settings, State, reduce_to_albums, refresh_playlists, tick, top_up
@@ -484,7 +485,7 @@ def grabbed_state(playlists=None) -> State:
 
 
 def _claim_all(playlist, since, key, guid, job):
-    return ["One", "Two"]
+    return [albums.Claimed("One", 200.0), albums.Claimed("Two", 200.0)]
 
 
 def _no_retire(key, record, keep, drop):
@@ -492,10 +493,11 @@ def _no_retire(key, record, keep, drop):
 
 
 def run_complete(state, completion, roots, have_result=True, imported=None, tagged=None, titles=None,
-                 identity=None, retired=None, claimed=None, rest=None, as_is=0):
+                 identity=None, retired=None, claimed=None, rest=None, as_is=0, lengths=None):
     """*titles* are the titles of the release's items beets imported (default:
-    the album's, or none when *have_result* is False); *identity* is the
-    release's MusicBrainz match; *retired* collects ``(keep, drop)`` calls."""
+    the album's, or none when *have_result* is False), *lengths* their lengths
+    (default: 200 s each); *identity* is the release's MusicBrainz match;
+    *retired* collects ``(keep, drop)`` calls."""
     complete_root, inbox, quarantine = roots
     seen = imported if imported is not None else []
     added = []
@@ -511,7 +513,7 @@ def run_complete(state, completion, roots, have_result=True, imported=None, tagg
 
     def claim(playlist, since, key, guid, job):
         claimed.append((playlist, key, guid))
-        return titles
+        return [albums.Claimed(t, n) for t, n in zip(titles, lengths or [200.0] * len(titles))]
 
     status = albums.complete(
         state, completion, import_inbox, claim,
@@ -1821,6 +1823,81 @@ def test_holds_none_needs_tracks_and_titles() -> None:
     assert not albums.holds_none({**record, "playlists": {}}, ["One"])
 
 
+@pytest.mark.parametrize("titles", [
+    pytest.param(["", "", "", ""], id="1467-untagged"),
+    # 2100: three of its files had titles, seven none.
+    pytest.param(["Future Reflections", "", "Electric Feel", " "], id="2100-partly-untagged"),
+])
+def test_a_release_with_untitled_files_is_refused(roots, caplog, recorded, titles) -> None:
+    """homelab#2687: an untagged file beets imported as it is has no title, and every such item of
+    the album clashed on one path (``__/00 -.16.m4a``).  The release fails, and the next is tried."""
+    state = wants_state(["Electric Feel"])
+    retired = []
+    with caplog.at_level("INFO", logger="music_fetch.albums"):
+        status, _, _ = run_complete(state, albums.Completion("nzo1", True, "album/Artist-Album-FLAC"), roots,
+                                    titles=titles, retired=retired)
+    record = state.albums["a0"]
+    assert status == albums.WANTED and record["blocklist"] == ["r1"] and record["attempts"] == 1
+    # Its items leave the library: retire(keep=None) with the release to drop.
+    assert [(k, d.split("@")[0]) for k, d in retired] == [(None, "r1")]
+    blank = sum(not t.strip() for t in titles)
+    reason = f"not tracks: {blank} of its {len(titles)} file(s) have no title"
+    (kind, message, kw), = recorded
+    assert kind == "failure" and reason in message and kw["data"]["reason"] == reason
+    # A verdict on what the release held: every copy of it is blocked (homelab#2757).
+    assert blocklist.kind({"reason": reason}) == blocklist.WRONG_RELEASE
+
+
+def greatest(**fields) -> State:
+    """Album 1434, Bee Gees *Greatest*: a wants record of 2 tracks on a Spotify album of 27, 6,129 s."""
+    return wants_state(["You Should Be Dancing", "More Than A Woman"], tracks_count=27, duration=6129, **fields)
+
+
+def test_unsplit_disc_images_are_refused(roots, recorded) -> None:
+    """homelab#2688, album 1434: two files of a 2CD release, each most of a disc (2,533 s), imported
+    as two tracks and called [DONE].  The share of titles can't see it: an image carries a track's
+    title, and one tagged with a wanted title passed holds_none."""
+    state = greatest()
+    retired = []
+    status, _, _ = run_complete(state, albums.Completion("nzo1", True, "album/Artist-Album-FLAC"), roots,
+                                titles=["Night Fever", "More Than A Woman"], lengths=[2533.0, 2490.0],
+                                retired=retired)
+    record = state.albums["a0"]
+    assert status == albums.WANTED and record["blocklist"] == ["r1"]
+    assert [(k, d.split("@")[0]) for k, d in retired] == [(None, "r1")]
+    (kind, message, kw), = recorded
+    assert kind == "failure" and kw["data"]["reason"] == (
+        "not tracks: 2 file(s) for the album's 27 tracks, 2512 s each against 227 s a track: unsplit disc images")
+
+
+@pytest.mark.parametrize("record, lengths", [
+    # A single-track album, or a DJ mix Spotify lists as one track: as many files as tracks.
+    pytest.param({"tracks_count": 1, "duration": 3600}, [3600.0], id="one-long-track"),
+    # Two long movements of a two-track album.
+    pytest.param({"tracks_count": 2, "duration": 2400}, [1300.0, 1100.0], id="two-long-tracks"),
+    # A copy lacking most tracks: few files, but each a track's length.
+    pytest.param({"tracks_count": 27, "duration": 6129}, [240.0, 210.0], id="an-incomplete-copy"),
+    # One long track among the files of a short release isn't the files' mean.
+    pytest.param({"tracks_count": 12, "duration": 3000}, [250.0, 240.0, 230.0, 260.0, 900.0], id="one-long-track-of-5"),
+    # Nothing to judge by.
+    pytest.param({"tracks_count": 27, "duration": 0}, [2533.0], id="no-duration"),
+    pytest.param({"tracks_count": 0, "duration": 6129}, [2533.0], id="no-track-count"),
+    pytest.param({"tracks_count": 27, "duration": 6129}, [2533.0, 0.0], id="a-length-unread"),
+])
+def test_long_files_that_are_tracks_pass(record, lengths) -> None:
+    claimed = [albums.Claimed(f"T{i}", n) for i, n in enumerate(lengths)]
+    assert albums.disc_images(record, claimed) is None
+    assert albums.not_tracks(record, claimed) is None
+
+
+def test_a_disc_image_tagged_with_a_wanted_title_is_refused_too() -> None:
+    """homelab#2688: holds_none passes an image whose title is a wanted track's."""
+    record = greatest().albums["a0"]
+    claimed = [albums.Claimed("You Should Be Dancing", 2533.0), albums.Claimed("More Than A Woman", 2533.0)]
+    assert not albums.holds_none(record, [c.title for c in claimed])
+    assert albums.not_tracks(record, claimed).endswith("unsplit disc images")
+
+
 def test_an_incomplete_copy_is_kept_and_the_same_edition_grabbed_again(roots, caplog) -> None:
     state = ready_to_die()
     retired = []
@@ -2284,7 +2361,8 @@ def test_a_reimport_is_still_a_reimport_when_retire_runs(roots) -> None:
     complete_root, inbox, quarantine = roots
     status = albums.complete(
         state, albums.Completion("nzo1", True, "album/Artist-Album-FLAC"), lambda folder: None,
-        lambda playlist, since, key, guid, job: [t[0] for t in albums.album_tracks(state.albums["a0"])],
+        lambda playlist, since, key, guid, job: [albums.Claimed(t[0])
+                                                 for t in albums.album_tracks(state.albums["a0"])],
         add_source=lambda *_: None, tag_ids=lambda *_: None,
         retire=lambda key, record, keep, drop: seen.append(record.get("reimport")) or 0,
         identify=lambda folder: None, complete_root=complete_root, inbox_root=inbox, quarantine_root=quarantine)
@@ -2332,14 +2410,14 @@ def test_a_failed_download_records_no_release_check(roots, recorded) -> None:
 
 
 def test_import_done_says_how_many_titles_it_found(roots, recorded) -> None:
-    """homelab#2662: untagged files can't be told from another album's (homelab#2683), so 0 of 2 is [DONE]."""
+    """homelab#2662: a release of a 2-track album holding one of its titles is [DONE], and says so."""
     state = grabbed_state()
     status, _, _ = run_complete(state, albums.Completion("nzo1", True, "album/Artist-Album-FLAC"), roots,
-                                titles=["", ""])
+                                titles=["One", "Else"])
     assert status == albums.IMPORTED
     (kind, message, kw), = recorded
-    assert kind == "import_done" and "2 of Spotify's 2 titles not in this release" in message
-    assert (kw["data"]["found"], kw["data"]["total"]) == (0, 2)
+    assert kind == "import_done" and "1 of Spotify's 2 titles not in this release" in message
+    assert (kw["data"]["found"], kw["data"]["total"]) == (1, 2)
 
 
 def test_wrong_release_records_import_wrong_and_a_failure(roots, recorded) -> None:

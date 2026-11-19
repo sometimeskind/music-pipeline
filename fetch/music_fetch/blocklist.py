@@ -16,7 +16,8 @@ homelab#2661: its event holds the title but not the GUID.
 The reason sorts an entry into one of two kinds (:func:`kind`, homelab#2757),
 which say how far it reaches now that two indexers can return one release
 under two GUIDs (:class:`usenet.Copies`).  A :data:`WRONG_RELEASE` is a verdict
-on what the release held, another album or an incomplete copy: every copy of
+on what the release held, another album, an incomplete copy, or files that
+aren't the album's tracks (untagged, unsplit disc images): every copy of
 it, on any indexer, holds the same, so it blocks them all.  A
 :data:`DEAD_DOWNLOAD` is any other failure, a broken download above all: it
 blocks only its own GUID, as another indexer's copy may be another post, and
@@ -38,10 +39,13 @@ from music_fetch.usenet import Copies, repost_name
 
 UNKNOWN = "unknown"
 UNREADABLE = "unknown: the event store can't be read"
-# How the two verdicts on what a release held begin (:func:`kind`).
+# How the verdicts on what a release held begin (:func:`kind`): another album, an
+# incomplete copy, and files that are no album's tracks (untagged, or unsplit disc
+# images: homelab#2687, homelab#2688).
 ANOTHER_ALBUM = "another album: "
 LACKS = "lacks "
-VERDICTS = (ANOTHER_ALBUM, LACKS)
+NOT_TRACKS = "not tracks: "
+VERDICTS = (ANOTHER_ALBUM, LACKS, NOT_TRACKS)
 # The kinds of entry (:func:`kind`).
 WRONG_RELEASE = "wrong release"
 DEAD_DOWNLOAD = "dead download"
@@ -148,10 +152,10 @@ def blocked(listed: list[dict]) -> Copies:
 
 def stays(entry: dict) -> bool:
     """Whether a reset leaves *entry* on the blocklist (homelab#2661).  Only a
-    :data:`WRONG_RELEASE` comes off, another album or an incomplete copy, as
-    such a release can be wanted after all.  Any other failure stays, a broken
-    download above all: it would fail the same way, an attempt each time, and
-    the album is better missing than broken.  So does an entry whose reason
+    :data:`WRONG_RELEASE` comes off, another album, an incomplete copy or files
+    that aren't tracks, as such a release can be wanted after all.  Any other
+    failure stays, a broken download above all: it would fail the same way, an
+    attempt each time, and the album is better missing than broken.  So does an entry whose reason
     isn't known."""
     return kind(entry) != WRONG_RELEASE
 

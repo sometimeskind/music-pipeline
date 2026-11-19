@@ -1442,7 +1442,7 @@ def test_album_completion_wires_the_release_hooks():
         events.append(("format", hooks["one_format"]("/x", "K")))
         return albums.IMPORTED
 
-    title = MagicMock(title="Juicy")
+    title = MagicMock(title="Juicy", length=241.5)
     listed = MagicMock(name="listed")
     with patch.object(albums, "complete", side_effect=fake_complete), \
          patch.object(flows.scan, "store_listings", return_value=listed), \
@@ -1457,7 +1457,7 @@ def test_album_completion_wires_the_release_hooks():
         state = albums.State()
         assert complete(state, albums.Completion(nzo_id="n", ok=True, path="x")) == albums.IMPORTED
 
-    assert events == [("claim", ["Juicy"]), "m3u", ("retire", 2), ("rest", 1), ("identify", {"missing": 0}),
+    assert events == [("claim", [albums.Claimed("Juicy", 241.5)]), "m3u", ("retire", 2), ("rest", 1), ("identify", {"missing": 0}),
                       ("format", None)]
     # The import's start is saved before beets runs (homelab#2603).
     assert kw["save"] == state.save

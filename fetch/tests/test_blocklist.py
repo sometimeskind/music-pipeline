@@ -41,8 +41,8 @@ OLD_ITEMS = ("Nothing is deleted now: the album's old items stay until an import
              "they stay unless the new release holds their recording, and retire_item takes them off. A playlist "
              "entry only a moved item held goes empty: a spotdl playlist downloads it at the next nightly, an "
              "album playlist's slot stays empty.")
-STAYS = ("Stays on the blocklist (a reset clears only another album or an incomplete copy, and only reimport=true "
-         "more than the last candidate):")
+STAYS = ("Stays on the blocklist (a reset clears only a wrong release: another album, an incomplete copy or files "
+         "that aren't tracks, and only reimport=true more than the last candidate):")
 # What each kind of entry blocks, as the dry run says (homelab#2757).
 ONE_DEAD = " (a dead download, so only this copy: another indexer's copy may be tried once)"
 EVERY_WRONG = " (a wrong release, so every copy of it, on any indexer)"
