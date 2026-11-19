@@ -161,6 +161,23 @@ def test_resolving_keeps_the_row_and_clears_the_flag(pg_url):
 
 
 @needs_pg
+def test_a_release_group_moves_between_two_rows_in_one_save(pg_url):
+    """homelab#2691: a pass moves one row off a release group (a regroup) and keys
+    another to it.  The rows save in key order, so the second is written first,
+    while the first still holds the group: unique, unless the save frees it."""
+    with state.connect() as conn:
+        state.save_albums(conn, state.AlbumRows(albums=_records()))
+        rows = state.load_albums(conn)
+        rows.albums = {"sp3": rows.albums["sp3"], **{k: r for k, r in rows.albums.items() if k != "sp3"}}
+        rows.albums["sp1"]["release_group"] = RG2
+        rows.albums["sp3"].update(release_group=RG, unresolved=None)
+        assert state.save_albums(conn, rows) == 2
+        loaded = state.load_albums(conn)
+    assert (loaded.albums["sp1"]["release_group"], loaded.albums["sp3"]["release_group"]) == (RG2, RG)
+    assert (loaded.albums["sp1"]["unresolved"], loaded.albums["sp3"]["unresolved"]) == (None, None)
+
+
+@needs_pg
 def test_a_merge_moves_a_ref_between_rows(pg_url):
     with state.connect() as conn:
         state.save_albums(conn, state.AlbumRows(albums=_records()))

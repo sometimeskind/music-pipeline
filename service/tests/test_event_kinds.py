@@ -37,7 +37,7 @@ OPAQUE = {
     # Each Beside holds the kind handle_duplicates chose for it.
     ("music_scan.music_pipeline", "_record_beside"): {"import_alongside", "kept_apart"},
     # resolve.Pass.record_events replays the (kind, …) tuples a pass collected.
-    ("music_fetch.resolve", "record_events"): {"album_merged", "spotify_id_resolved", "conflict"},
+    ("music_fetch.resolve", "record_events"): {"album_merged", "spotify_id_resolved", "album_regrouped", "conflict"},
 }
 
 ITEM_FIELDS = ("artist", "title", "album", "path")  # events.item_fields

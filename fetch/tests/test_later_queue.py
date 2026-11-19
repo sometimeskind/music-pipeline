@@ -236,3 +236,16 @@ def test_music_later_refuses_a_through_past_the_end_and_an_empty_call(music_db, 
         _run(later_cli, ["remove", "--through", "0"], caplog)
     with pytest.raises(later_cli.req.Refused, match="not a MusicBrainz"):
         _run(later_cli, ["remove", "--", "nonsense"], caplog)
+
+
+def test_an_entry_finds_its_row_by_ref_once_the_row_moved_to_another_release_group():
+    """homelab#2691: the resolver moves a row to the release group its reimport
+    names; the Later entry that resolved to the old one still finds it by the
+    ref it kept, so the album isn't requested again as the old group."""
+    moved = {**_album(RG3, "imported"), "_id": 7, "spotify_album_ids": ["sp1"]}
+    rows = state.AlbumRows(albums={"7": moved}, by_row=True)
+    index = later_queue.Index(rows)
+    stale = later_queue.Entry(1, RG2, None, ref="sp1")
+    assert index.find(stale) == ("7", moved)
+    assert index.find(later_queue.Entry(2, RG2, None)) is None
+    assert index.find(later_queue.Entry(3, RG3, None, ref="other")) == ("7", moved)

@@ -287,6 +287,9 @@ def save_albums(conn: psycopg.Connection, rows: AlbumRows) -> int:
         updated = [r["_id"] for r, _ in changed if r.get("_id") is not None]
         if updated:
             conn.execute("DELETE FROM album_refs WHERE album_id = ANY(%s)", (updated,))
+            # So may a release group (homelab#2691: one row moves off it, another is keyed to it).
+            conn.execute("UPDATE albums SET release_group = NULL, unresolved = coalesce(unresolved, %s) "
+                         "WHERE id = ANY(%s) AND release_group IS NOT NULL", (PENDING, updated))
         for record, is_mixed in changed:
             values = _row(record, is_mixed)
             if record.get("_id") is None:
