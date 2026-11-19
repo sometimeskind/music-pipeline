@@ -106,9 +106,10 @@ KINDS: dict[str, Kind] = {
     "requeued": Kind(ALBUM, "[REQUEUE]: an album requeued by hand (music-album-requeue, requeue_albums).",
                      (*_RECORD, "fell_back_at", "tracks")),
     "blocklisted": Kind(ALBUM, "[BLOCKLIST]: a release blocklisted for an album by hand (music-album-blocklist, "
-                               "blocklist_release); data.reason begins 'by hand: ', so no reset clears it, and "
-                               "data.was is the entry's reason before, when it was on the blocklist already "
-                               "(homelab#2750).",
+                               "blocklist_release); data.reason begins 'by hand: '.  The entry itself is on the "
+                               "record (blocklisted_by_hand), so no reset clears it and pruning this event leaves "
+                               "it whole; data.was is the entry's reason before, when it was on the blocklist "
+                               "already (homelab#2750).",
                         (*_RECORD, "release", "guid", "size", "reason", "was")),
     "unblocklisted": Kind(ALBUM, "[UNBLOCKLIST]: a release blocklisted by hand taken off its album's blocklist "
                                  "(music-album-blocklist remove, unblocklist_release), with its reason.",

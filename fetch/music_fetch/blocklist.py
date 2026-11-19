@@ -27,12 +27,15 @@ every entry did before.  The record stores no kind, so the records written
 before homelab#2757 read the same way.
 
 A third kind is a person's (homelab#2750): ``music-album-blocklist``
-(``blocklist_release``) appends a release's GUID and records a ``blocklisted``
-event with that GUID, its title and a reason that begins :data:`BY_HAND`.  Such
-a :data:`HAND` entry blocks every copy of its title, as a wrong release does,
-and no reset clears it, the last candidate included: only
-``unblocklist_release`` takes it off.  Like any entry it reads its reason from
-the events, so once they are pruned it blocks only its GUID, and still stays.
+(``blocklist_release``) appends a release's GUID and keeps the entry whole on
+the record, under :data:`HAND_FIELD` (GUID → ``title``, ``size``, ``reason``,
+``at``), with a reason that begins :data:`BY_HAND`; a ``blocklisted`` event
+records who did it.  Such a :data:`HAND` entry blocks every copy of its title,
+as a wrong release does, and no reset clears it, the last candidate included
+(:func:`hand_guids`): only ``unblocklist_release`` takes it off.  It is the one
+entry the record describes itself, so pruned events or an unreadable event
+store leave its reason and its reach as they are.  A record without the field
+has no hand entry, so nothing stored before needs a change.
 """
 
 from __future__ import annotations
@@ -66,15 +69,22 @@ SELECT at, kind, data FROM events
 """
 
 
-# How the reason of a release a person blocklisted begins, and its kind (homelab#2750).
+# How the reason of a release a person blocklisted begins, its kind, and the record
+# field that holds such entries whole, by GUID (homelab#2750).
 BY_HAND = "by hand: "
 HAND = "by hand"
+HAND_FIELD = "blocklisted_by_hand"
 
 
 def album_events(conn, refs: list[str], group: str | None) -> list[tuple[datetime, str, dict]]:
     """The album's grabs and their outcomes, oldest first (*refs*: :func:`events.album_refs`)."""
-    return conn.execute(_EVENTS, {"kinds": ["grab", "failure", "import_incomplete", "blocklisted"],
-                                  "refs": list(refs), "group": group}).fetchall()
+    return conn.execute(_EVENTS, {"kinds": ["grab", "failure", "import_incomplete"], "refs": list(refs),
+                                  "group": group}).fetchall()
+
+
+def hand_guids(record: dict) -> set[str]:
+    """The GUIDs a person blocklisted (:data:`HAND_FIELD`), which no reset clears."""
+    return set(record.get(HAND_FIELD) or ())
 
 
 def _reason(kind: str, data: dict) -> str:
@@ -114,12 +124,21 @@ def entries(record: dict, rows: list[tuple[datetime, str, dict]] | None) -> list
     ``size``, ``reason`` and ``at``, its :func:`kind` and ``every_copy``,
     whether it blocks every copy of its title (:func:`blocked`).  What the
     events lack stays None and the reason :data:`UNKNOWN`, but the record's
-    last candidate and kept copy name themselves.  *rows* None: the event store
-    couldn't be read."""
+    last candidate and kept copy name themselves, and an entry blocklisted by
+    hand is read from the record alone (:data:`HAND_FIELD`).  *rows* None: the
+    event store couldn't be read."""
     found = {} if rows is None else outcomes(rows)
     held = {c["guid"]: c for c in (record.get("best_copy"), record.get("candidate")) if c and c.get("guid")}
+    hand = record.get(HAND_FIELD) or {}
     out = []
     for guid in record.get("blocklist") or ():
+        if guid in hand:
+            h = hand[guid]
+            entry = {"guid": guid, "title": h.get("title"), "size": h.get("size"), "reason": h["reason"],
+                     "at": h.get("at")}
+            entry["kind"] = kind(entry)
+            out.append(entry)
+            continue
         known, copy = found.get(guid, {}), held.get(guid, {})
         entry = {"guid": guid, "title": known.get("title") or copy.get("title"),
                  "size": known.get("size") or copy.get("size"),

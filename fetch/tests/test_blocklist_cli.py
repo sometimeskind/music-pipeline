@@ -49,7 +49,12 @@ def row(minutes: int, kind: str, **data) -> tuple:
 ROWS = [row(0, "grab", guid=DEAD_GUID, release=DEAD, size=237966466),
         row(1, "failure", reason=REPAIR, guid=DEAD_GUID),
         row(2, "grab", guid=PLAIN_GUID, release=PLAIN, size=869849295)]
-HAND = [*ROWS, row(3, "blocklisted", guid=PLAIN_GUID, release=PLAIN, reason=f"{blocklist.BY_HAND}{WHY}")]
+
+
+def hand(title: str | None = PLAIN, **fields) -> dict:
+    """The album with the plain release blocklisted by hand, as the record keeps it."""
+    entry = {"title": title, "size": 869849295, "reason": f"{blocklist.BY_HAND}{WHY}", "at": "2026-11-04T03:03:00Z"}
+    return album(**{"blocklist": [DEAD_GUID, PLAIN_GUID], blocklist.HAND_FIELD: {PLAIN_GUID: entry}, **fields})
 
 
 # ---------------------------------------------------------------------------
@@ -68,35 +73,51 @@ def test_a_hand_entry_is_its_own_kind_and_stays():
     assert blocklist.stays(entry)
 
 
-def test_a_hand_entry_blocks_every_copy_of_its_title():
-    record = album(blocklist=[DEAD_GUID, PLAIN_GUID])
-    dead, plain = listed = blocklist.entries(record, HAND)
+@pytest.mark.parametrize("rows", [ROWS, [], None], ids=["events", "pruned", "unreadable"])
+def test_a_hand_entry_blocks_every_copy_of_its_title_whatever_the_events_hold(rows):
+    """The record holds a hand entry whole, so its kind, reach and reason don't wait on its events:
+    pruned (none left) or an event store that can't be read leave it as it was."""
+    dead, plain = listed = blocklist.entries(hand(), rows)
     assert (plain["kind"], plain["every_copy"], plain["reason"]) == (blocklist.HAND, True, f"by hand: {WHY}")
-    assert (dead["kind"], dead["every_copy"]) == (blocklist.DEAD_DOWNLOAD, False)
+    assert blocklist.stays(plain) and plain["at"] == "2026-11-04T03:03:00Z"
     copies = blocklist.blocked(listed)
     assert nest() in copies and nest(f"{PLAIN}-1") in copies and nest(DEAD) not in copies
     assert blocklist.describe(plain) == f"{PLAIN} (870 MB): by hand: {WHY}{HAND_REACH}"
+    if rows:
+        assert (dead["kind"], dead["every_copy"]) == (blocklist.DEAD_DOWNLOAD, False)
 
 
 def test_a_hand_entry_with_no_title_blocks_only_its_guid():
-    (entry,) = blocklist.entries(album(blocklist=[PLAIN_GUID], candidate={}),
-                                 [row(0, "blocklisted", guid=PLAIN_GUID, reason=f"{blocklist.BY_HAND}{WHY}")])
+    (_, entry) = blocklist.entries(hand(title=None, candidate={}), [])
     assert entry["kind"] == blocklist.HAND and not entry["every_copy"]
     assert blocklist.reach(entry) == "blocklisted by hand, so only this copy: its title isn't recorded; no reset clears it"
 
 
+def test_a_hand_field_entry_off_the_blocklist_is_no_entry():
+    """The blocklist's GUIDs say what is on it; the field only describes them."""
+    assert [e["guid"] for e in blocklist.entries(hand(blocklist=[DEAD_GUID]), [])] == [DEAD_GUID]
+
+
 def test_a_reset_keeps_a_hand_entry_even_as_the_last_candidate(monkeypatch):
-    monkeypatch.setattr(albums, "blocklist_entries", lambda key, record: blocklist.entries(record, HAND))
+    # Nothing in the events: the entry is the record's.
+    monkeypatch.setattr(albums, "blocklist_entries", lambda key, record: blocklist.entries(record, []))
     for reimport in (False, True):
-        state = State(albums={"K": album(blocklist=[DEAD_GUID, PLAIN_GUID])})
+        state = State(albums={"K": hand()})
         _, _, after = albums.reset_album(state, "K", reimport=reimport)
-        assert after["blocklist"] == [DEAD_GUID, PLAIN_GUID]
+        assert after["blocklist"] == [DEAD_GUID, PLAIN_GUID] and PLAIN_GUID in after[blocklist.HAND_FIELD]
+
+
+def test_reset_record_keeps_a_hand_entry_whoever_calls():
+    for kwargs in ({}, {"reimport": True}, {"reimport": True, "keep_blocklist": True}):
+        record = hand()
+        albums.reset_record(record, **kwargs)
+        assert PLAIN_GUID in record["blocklist"], kwargs
 
 
 def test_the_ticks_automatic_reimport_keeps_a_hand_entry_and_grabs_another_release(monkeypatch, caplog):
     """The last candidate leaves the blocklist at an [AUTORESET]: not when it was blocklisted by hand."""
-    monkeypatch.setattr(albums, "blocklist_entries", lambda key, record: blocklist.entries(record, HAND))
-    record = album(blocklist=[DEAD_GUID, PLAIN_GUID], duration=0)
+    monkeypatch.setattr(albums, "blocklist_entries", lambda key, record: blocklist.entries(record, []))
+    record = hand(duration=0)
     state = State(albums={"K": record})
     albums.auto_reimport(state, Settings(mode="on"), lambda key, r: ["1 spotdl track(s) on the album"], set(),
                          albums.TickResult(), now=lambda: NOW)
@@ -114,8 +135,8 @@ def test_the_ticks_automatic_reimport_keeps_a_hand_entry_and_grabs_another_relea
 
 
 def test_with_only_copies_of_a_hand_entry_left_a_reimport_stays(monkeypatch, caplog):
-    monkeypatch.setattr(albums, "blocklist_entries", lambda key, record: blocklist.entries(record, HAND))
-    record = album(blocklist=[DEAD_GUID, PLAIN_GUID], duration=0)
+    monkeypatch.setattr(albums, "blocklist_entries", lambda key, record: blocklist.entries(record, []))
+    record = hand(duration=0)
     state = State(albums={"K": record})
     albums.reset_album(state, "K", reimport=True)
     prowlarr, sab = MagicMock(), MagicMock()
@@ -181,7 +202,10 @@ def test_the_apply_blocklists_it_with_its_event(caplog, monkeypatch):
     monkeypatch.setenv("MUSIC_EVENT_JOB", "job-1")
     lines = run(caplog, "add", f"--reason=  {WHY} ", "--apply", "--", key, PLAIN)
     assert f"[BLOCKLIST] Artist — Album (wants: cool) ({key}): {PLAIN} blocklisted by sub-tom: {WHY}" in lines
-    assert stored()["blocklist"] == [DEAD_GUID, PLAIN_GUID]
+    record = stored()
+    assert record["blocklist"] == [DEAD_GUID, PLAIN_GUID]
+    held = record[blocklist.HAND_FIELD][PLAIN_GUID]
+    assert (held["title"], held["size"], held["reason"]) == (PLAIN, 869849295, f"by hand: {WHY}") and held["at"]
     ((caller, job, message, data),) = album_events("blocklisted")
     assert (caller, job) == ("sub-tom", "job-1") and message.startswith("[BLOCKLIST]")
     assert data == {"album": "Artist — Album", "key": key, "origin": albums.WANTS, "release": PLAIN,
@@ -207,6 +231,65 @@ def test_a_reset_lists_it_as_staying_and_keeps_it(caplog, monkeypatch):
     assert f"  {PLAIN} (870 MB): by hand: {WHY}{HAND_REACH}" in text
     record = stored()
     assert record["blocklist"] == [DEAD_GUID, PLAIN_GUID] and record["reimport"] is True
+
+
+def reset(caplog, *argv: str) -> str:
+    caplog.clear()
+    with patch("sys.argv", ["music-album-reset", *argv]), caplog.at_level(logging.INFO, logger="music_fetch.albums"):
+        albums.reset_main()
+    return caplog.text
+
+
+def test_a_hand_entry_outlives_its_pruned_events(caplog):
+    """homelab#2750: once the album's events are pruned (its blocklisted event and the grab
+    before it), the entry still blocks every copy of its title, keeps its reason, and no reset
+    clears it, the tick's own reimport included; only remove takes it off."""
+    key = seed()
+    run(caplog, "add", f"--reason={WHY}", "--apply", "--", key, PLAIN)
+    with statedb.session() as conn:
+        assert events.prune(conn, days=0, keep=0) >= 4
+        assert conn.execute("SELECT count(*) FROM events").fetchone()[0] == 0
+
+    def plain() -> dict:
+        return albums.blocklist_entries(key, stored())[1]
+
+    entry = plain()
+    assert (entry["title"], entry["kind"], entry["every_copy"], entry["reason"]) == (
+        PLAIN, blocklist.HAND, True, f"by hand: {WHY}")
+    assert nest(f"{PLAIN}-1") in blocklist.blocked([entry])
+
+    # reset_album's dry run lists it, reason and reach, under "Stays on the blocklist".
+    text = reset(caplog, "--reimport", key)
+    assert "Stays on the blocklist (" in text and f"  {PLAIN} (870 MB): by hand: {WHY}{HAND_REACH}" in text
+    assert "Dry run" in text
+
+    # The tick's automatic reimport of a mixed album.
+    state = State.load()
+    albums.auto_reimport(state, Settings(mode="on"), lambda k, r: ["1 spotdl track(s) on the album"], set(),
+                         albums.TickResult(), now=lambda: NOW)
+    assert state.albums[key]["reimport"] and state.albums[key]["blocklist"] == [DEAD_GUID, PLAIN_GUID]
+
+    # A plain reset, then a --reimport reset, each applied.
+    for argv in (("--apply", key), ("--reimport", "--apply", key)):
+        reset(caplog, *argv)
+        assert stored()["blocklist"] == [DEAD_GUID, PLAIN_GUID], argv
+        assert plain()["reason"] == f"by hand: {WHY}" and plain()["every_copy"], argv
+
+    # remove still finds it, by title, and takes it off the list and the record.
+    dry = run(caplog, "remove", "--", key, PLAIN)
+    assert f"Blocklist: by hand: {WHY}{HAND_REACH} → off it; the matcher accepts it again" in dry
+    run(caplog, "remove", "--apply", "--", key, PLAIN)
+    assert stored()["blocklist"] == [DEAD_GUID] and blocklist.HAND_FIELD not in stored()
+
+
+def test_a_merge_keeps_the_absorbed_records_hand_entries():
+    from music_fetch import resolve
+
+    survivor = album(blocklist=[DEAD_GUID])
+    resolve.merge_into(survivor, hand())
+    assert survivor["blocklist"] == [DEAD_GUID, PLAIN_GUID]
+    assert survivor[blocklist.HAND_FIELD][PLAIN_GUID]["reason"] == f"by hand: {WHY}"
+    assert blocklist.entries(survivor, [])[1]["kind"] == blocklist.HAND
 
 
 def test_a_wrong_release_on_the_list_already_becomes_a_hand_entry(caplog):
@@ -251,7 +334,7 @@ def test_remove_takes_a_hand_entry_off_and_nothing_else(caplog, monkeypatch):
     assert f"Blocklist: by hand: {WHY}{HAND_REACH} → off it; the matcher accepts it again" in dry
     assert run(caplog, "remove", "--", key, PLAIN) == dry
     run(caplog, "remove", "--apply", "--", key, PLAIN)
-    assert stored()["blocklist"] == [DEAD_GUID]
+    assert stored()["blocklist"] == [DEAD_GUID] and blocklist.HAND_FIELD not in stored()
     ((caller, _, message, data),) = album_events("unblocklisted")
     assert caller == "sub-tom" and message.startswith("[UNBLOCKLIST]")
     assert (data["guid"], data["reason"]) == (PLAIN_GUID, f"by hand: {WHY}")

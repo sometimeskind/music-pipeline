@@ -229,12 +229,20 @@ GUID = "https://indexer/details/walkman"
 AT = datetime(2026, 11, 4, 3, 0, tzinfo=timezone.utc)
 
 
+def _hand(reason: str, title: str = WALKMAN, guid: str = GUID) -> dict:
+    """An album with one release blocklisted by hand, as the record keeps it."""
+    return _record(blocklist=[guid], **{blocklist.HAND_FIELD: {guid: {
+        "title": title, "size": 400_000_000, "reason": reason, "at": "2026-11-04T03:00:00Z"}}})
+
+
 def _listed(reason: str, title: str = WALKMAN, guid: str = GUID) -> list[dict]:
-    """The album's blocklist as :func:`blocklist.entries` reads it: one grab of *title*, then *reason*."""
+    """The album's blocklist as :func:`blocklist.entries` reads it: one grab of *title*, then *reason*
+    (by hand: on the record, its events since pruned)."""
+    if reason.startswith(blocklist.BY_HAND):
+        return blocklist.entries(_hand(reason, title, guid), [])
     record = _record(blocklist=[guid])
     return blocklist.entries(record, [(AT, "grab", {"guid": guid, "release": title, "size": 400_000_000}),
-                                      (AT, "blocklisted" if reason.startswith(blocklist.BY_HAND) else "failure",
-                                       {"guid": guid, "reason": reason})])
+                                      (AT, "failure", {"guid": guid, "reason": reason})])
 
 
 def test_a_title_blocklisted_by_hand_is_refused_by_the_blocklist(caplog) -> None:
@@ -243,6 +251,16 @@ def test_a_title_blocklisted_by_hand_is_refused_by_the_blocklist(caplog) -> None
     output = _output(caplog, result)
     assert ("Verdict: refused by the blocklist (below); the matcher alone: accepted on the title; size not checked"
             in output)
+    assert (f"Blocklist: refuses it: {WALKMAN} (400 MB): by hand: another album in it (blocklisted by hand, so every "
+            "copy of it, on any indexer; no reset clears it)") in output
+
+
+def test_a_hand_entry_refuses_its_title_with_its_events_gone(caplog) -> None:
+    """The record holds the entry whole: read through the album's own blocklist with none of its
+    events in the store (pruned; or no store at all), it still refuses every copy, and says why."""
+    record = _hand("by hand: another album in it")
+    output = _output(caplog, _check(f"{WALKMAN}-1", record=record))
+    assert "Verdict: refused by the blocklist (below)" in output
     assert (f"Blocklist: refuses it: {WALKMAN} (400 MB): by hand: another album in it (blocklisted by hand, so every "
             "copy of it, on any indexer; no reset clears it)") in output
 

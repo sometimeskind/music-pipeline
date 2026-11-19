@@ -164,7 +164,8 @@ def build_server(
         """One album: its key, its primary Spotify album ID, the stored record (status,
         attempts, blocklist…), its beets album and item IDs, and its items. Ambiguous: the candidates.
         blocklisted lists each blocklist entry with its release title, size and why it is there, read
-        from the events; a reason of "unknown" means no event holds it (they began 2026-10-29)."""
+        from the events; a reason of "unknown" means no event holds it (they began 2026-10-29). An
+        entry blocklisted by hand is read from the record (blocklisted_by_hand), so it never is."""
         return await call("get_album", lambda c: pipeline.get(c, "/album", query=query))
 
     @mcp.tool(annotations={"readOnlyHint": True})

@@ -527,7 +527,9 @@ def test_a_release_blocklisted_by_hand_passes_the_gate_and_stays_through_a_reset
     applied = client.post("/mcp-api/run/blocklist_release", json={**body, "apply": True}, headers=WRITE)
     assert applied.json["status"] == "done", applied.json
     assert applied.json["locks"] == ["albums", "pipeline"]
-    assert albums.State.load().albums["ALB3"]["blocklist"] == [PLAIN_GUID]
+    record = albums.State.load().albums["ALB3"]
+    assert record["blocklist"] == [PLAIN_GUID]
+    assert record["blocklisted_by_hand"][PLAIN_GUID]["reason"] == "by hand: another album"
 
     reset = client.post("/mcp-api/run/reset_album", json={"query": "pastel", "reimport": True}, headers=WRITE)
     assert "Stays on the blocklist" in reset.json["output"] and f"{PLAIN} (300 MB): by hand: another album" in \
@@ -538,6 +540,7 @@ def test_a_release_blocklisted_by_hand_passes_the_gate_and_stays_through_a_reset
     removed = client.post("/mcp-api/run/unblocklist_release", json={**off, "apply": True}, headers=WRITE)
     assert removed.json["status"] == "done", removed.json
     assert albums.State.load().albums["ALB3"]["blocklist"] == []
+    assert "blocklisted_by_hand" not in albums.State.load().albums["ALB3"]
 
 
 @pytest.mark.parametrize("body", [

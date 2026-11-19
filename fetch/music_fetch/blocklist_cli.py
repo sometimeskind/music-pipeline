@@ -4,13 +4,14 @@ take such an entry off again (homelab#2750, :mod:`music_fetch.blocklist`).
 A release the matcher accepts can still be the wrong one: a plain title
 (``Artist-Album.1987.FLAC``) that holds another album's files passes every
 rule, and a ``reimport`` reset would grab it again whenever it ranks first.
-``add`` appends its GUID to the album's ``blocklist`` and records a
-``blocklisted`` event whose reason begins :data:`blocklist.BY_HAND`: a
+``add`` appends its GUID to the album's ``blocklist``, keeps the entry whole on
+the record (:data:`blocklist.HAND_FIELD`: its title, size and a reason that
+begins :data:`blocklist.BY_HAND`) and records a ``blocklisted`` event: a
 :data:`blocklist.HAND` entry, which blocks every copy of its title on any
 indexer and which no reset clears, the last candidate included
-(:func:`blocklist.stays`).  ``remove`` takes a hand entry off, with an
-``unblocklisted`` event; no other entry, since what a reset leaves on the list
-it leaves there on purpose.
+(:func:`blocklist.hand_guids`).  As the record holds it, pruned events don't
+shrink it.  ``remove`` takes a hand entry off, with an ``unblocklisted`` event;
+no other entry, since what a reset leaves on the list it leaves there on purpose.
 
 The release is named by its GUID or its exact title, as the album's own
 history gives them: ``album_history``'s grabs and failures (``data.guid``,
@@ -19,7 +20,7 @@ release the album never grabbed isn't one it can be refused, so it isn't
 taken.  Blocklisting the release the album holds changes nothing until a
 reset: the album stays as it is, and ``reset_album`` with ``reimport=true``
 then grabs another release or logs ``[STAYS]``.  A release in flight is
-refused: its import outcome would overwrite the reason.
+refused: its import is under way, and goes on whatever the list says.
 
 Every write is a dry run unless ``--apply``, and the Music MCP compares the
 dry run again before an apply, so it prints nothing that changes between two
@@ -106,7 +107,7 @@ def _release_line(guid: str, title: str | None, size: int | None) -> str:
 
 
 def _hand_entry(guid: str, title: str | None, size: int | None, reason: str) -> dict:
-    """The entry :func:`blocklist.entries` will read once the event is written."""
+    """The entry :func:`blocklist.entries` will read once it is on the record."""
     entry = {"guid": guid, "title": title, "size": size, "reason": f"{blocklist.BY_HAND}{reason}", "at": None}
     entry["kind"] = blocklist.kind(entry)
     entry["every_copy"] = bool(title)
@@ -135,7 +136,7 @@ def add_dry_run(state: albums.State, key: str, record: dict, rows: list, release
     title, size = found[guid]["title"], found[guid]["size"]
     if record.get("status") == albums.GRABBED and (record.get("candidate") or {}).get("guid") == guid:
         raise Refused(f"{title or guid} is in flight for album {key} (grabbed): blocklist it once its import is "
-                      "done, as its outcome would overwrite the reason")
+                      "done, as the import goes on whatever the blocklist says")
     lines = [_album_line(key, record), _release_line(guid, title, size)]
     listed = blocklist.entries(record, rows)
     hand = [e for e in listed if e["kind"] == blocklist.HAND]
@@ -184,11 +185,14 @@ def _album_data(key: str, record: dict) -> tuple[str | None, str | None, str, st
 
 
 def write_add(state: albums.State, key: str, record: dict, entry: dict, was: str | None) -> None:
-    """Append *entry*'s GUID (unless it is there) and record its ``blocklisted`` event, in one transaction."""
+    """Append *entry*'s GUID (unless it is there), keep the entry on the record
+    (:data:`blocklist.HAND_FIELD`) and record its ``blocklisted`` event, in one transaction."""
     by = overrides.caller()
     listed = record.setdefault("blocklist", [])
     if entry["guid"] not in listed:
         listed.append(entry["guid"])
+    record.setdefault(blocklist.HAND_FIELD, {})[entry["guid"]] = {
+        "title": entry["title"], "size": entry["size"], "reason": entry["reason"], "at": albums._iso(albums._now())}
     spotify, group, album, origin = _album_data(key, record)
     message = (f"[BLOCKLIST] {albums._label(record)} ({key}): {entry['title'] or entry['guid']} blocklisted by "
                f"{by}: {entry['reason'][len(blocklist.BY_HAND):]}")
@@ -201,10 +205,16 @@ def write_add(state: albums.State, key: str, record: dict, entry: dict, was: str
 
 
 def write_remove(state: albums.State, key: str, record: dict, gone: list[dict]) -> None:
-    """Take *gone*'s GUIDs off the blocklist, each with its ``unblocklisted`` event, in one transaction."""
+    """Take *gone*'s GUIDs off the blocklist and the record's hand entries, each
+    with its ``unblocklisted`` event, in one transaction."""
     by = overrides.caller()
     guids = {e["guid"] for e in gone}
     record["blocklist"] = [g for g in record.get("blocklist") or () if g not in guids]
+    hand = {g: h for g, h in (record.get(blocklist.HAND_FIELD) or {}).items() if g not in guids}
+    if hand:
+        record[blocklist.HAND_FIELD] = hand
+    else:
+        record.pop(blocklist.HAND_FIELD, None)
     spotify, group, album, origin = _album_data(key, record)
     with statedb.session() as conn, conn.transaction():
         statedb.save_albums(conn, state)
