@@ -37,9 +37,9 @@ retires the other's copies as an import would (homelab#2545).
 
 A keyed record can be judged again (homelab#2691): its release group may be
 an import's that a later import replaced (a wrong release first, the right one
-on a reimport), and nothing else keyed it.  An import that names another
-release group than the record's marks it (``regroup``, set by
-:func:`music_fetch.albums.complete`), and the next pass moves it to the new
+on a reimport), and nothing else keyed it.  An import that names its release
+marks the keyed record (``regroup``, set by :func:`music_fetch.albums.complete`),
+and when that release is of another release group the next pass moves it to the
 import's group (``[REGROUP]``, an ``album_regrouped`` event) unless
 
 - an album request holds the record (``requested``): the request names its
