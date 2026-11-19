@@ -357,6 +357,36 @@ def _album_follows_artist(title_words: list[str], artist: str, album: str) -> bo
     return bool(names) and lead[:len(names)] == names and lead[len(names):len(names) + len(name)] == name
 
 
+# A number that names an album (Beach House's *7*, *Chicago 17*, Van Halen's
+# *5150*), not a year: up to four digits, a 19xx or 20xx left out.  Longer
+# runs are catalogue numbers.
+_ALBUM_NUMBER = re.compile(r"(?!(?:19|20)\d\d$)\d{1,4}")
+# A bit depth and sample rate written apart (``24-96``, ``16.44.1``): a format, not a name.
+_BIT_DEPTHS = {"16", "24", "32"}
+_SAMPLE_RATES = {"44", "48", "88", "96", "176", "192"}
+
+
+def number_after_artist(title_words: list[str], artist: str) -> str:
+    """The number right after the artist in a self-titled album's release
+    title, which names another of the artist's albums (homelab#2721):
+    ``Beach.House.7.2018.FLAC`` is *7*, not *Beach House*.  Empty when there is
+    none.  :func:`leftover` drops a number outside the artist's segment as a year
+    or catalogue number, so the self-titled rule saw nothing else in the title.
+    A year (``Beach.House.2006.FLAC``), a word holding letters too (``2CD``,
+    ``CAK33``) and a bit depth (``24-96``, ``24 Bit``) aren't a name;
+    a roman numeral (``IV``) is a word, so it is a leftover already."""
+    lead = [w for w in title_words if w not in _ARTICLES]
+    names = [w for w in words(artist) if w not in _ARTICLES]
+    if not names or set(lead[:len(names)]) != set(names):
+        return ""
+    after = lead[len(names):len(names) + 2]
+    if not after or not _ALBUM_NUMBER.fullmatch(after[0]):
+        return ""
+    if after[0] in _BIT_DEPTHS and after[1:] and (after[1] == "bit" or after[1].removesuffix("khz") in _SAMPLE_RATES):
+        return ""
+    return after[0]
+
+
 def named_by_artist(release: Release, artist: str, album: str) -> str:
     """What the title adds to an album name it holds only through the artist's
     (homelab#2656), as "<album words>, beside <leftover words>"; empty when it
@@ -486,13 +516,13 @@ def rejection(
         return Rejection(3, "leftover words", " ".join(extra), distance=len(extra))
     # Self-titled: the artist words already satisfy the album check, so the
     # title must name the album again right after the artist, say so, or
-    # carry nothing else.
-    if not any_album and set(album_words) <= set(artist_words) and not (
-        _album_follows_artist(title_words, artist, album)
-        or {"self", "titled"} <= title
-        or not extra
-    ):
-        return Rejection(4, "self-titled", "names the album once, beside " + " ".join(extra))
+    # carry nothing else; a number after the artist is another album's name.
+    if (not any_album and set(album_words) <= set(artist_words)
+            and not _album_follows_artist(title_words, artist, album)):
+        if number := number_after_artist(title_words, artist):
+            return Rejection(4, "self-titled", f"names another album after the artist: {number}")
+        if not ({"self", "titled"} <= title or not extra):
+            return Rejection(4, "self-titled", "names the album once, beside " + " ".join(extra))
     borrowed = "" if any_album else named_by_artist(release, artist, album)
     if borrowed:
         return Rejection(5, "artist words", borrowed)
