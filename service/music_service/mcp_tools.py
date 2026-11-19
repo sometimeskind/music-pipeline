@@ -643,6 +643,9 @@ TOOLS: dict[str, Tool] = {t.name: t for t in [
          lambda a, apply: [_apply(["music-backfill-ids", "--albums"], apply)], ("pipeline",)),
     # Values in items' isrc that aren't ISRCs (homelab#2672): the field and the file's tag.
     Tool("clear_bad_isrcs", WRITE, _none, lambda a, apply: [_apply(["music-clear-bad-isrcs"], apply)], ("pipeline",)),
+    # Recording IDs beets stored as items' mb_releasetrackid (homelab#2624): the field and the file's tag.
+    Tool("clear_release_tracks", WRITE, _none,
+         lambda a, apply: [_apply(["music-clear-release-tracks"], apply)], ("pipeline",)),
     # A recorded recheck's replacements (homelab#2553): the dry run reads the
     # findings, never AcoustID; an apply a restart cuts short is resumed.
     Tool("apply_recheck", WRITE, _apply_recheck,

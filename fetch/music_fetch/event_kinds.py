@@ -191,8 +191,8 @@ KINDS: dict[str, Kind] = {
     "id_linked": Kind(ALBUM, "[IDS]: Spotify track IDs linked to a Usenet release's items.",
                       ("key", "playlist", "linked", "skipped")),
     "ids_written": Kind(ITEM, "[IDS]: an operator CLI (music-backfill-ids, music-rollback-releases, "
-                              "music-clear-bad-isrcs) wrote an item's Spotify IDs, ISRCs or sources; changed holds "
-                              "each field's old and new value.",
+                              "music-clear-bad-isrcs, music-clear-release-tracks) wrote an item's Spotify IDs, "
+                              "ISRCs, release track ID or sources; changed holds each field's old and new value.",
                         (*_ITEM, "changed", "via")),
     "cover_embedded": Kind(ALBUM, "[ART]: an album's cover embedded on its Usenet items that had none (after an "
                                   "import, or music-embed-covers).  cover_source says where it came from: store "
