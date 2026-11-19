@@ -18,6 +18,8 @@ Responsibilities
    * ``via=spotdl|usenet``    — import origin (``usenet`` for album mode's
      ``inbox/usenet/<playlist>/``); used *only* to decide whether a
      duplicate can be replaced safely.  Never inherited.
+   * ``track``                — a Usenet file with none takes the number its
+     file name starts with (``02_artist_-_title``, homelab#2680).
 
    Fires from ``handle_created()`` during ``read_tasks`` — always, regardless
    of autotag mode — while ``item.path`` still points to the inbox file.
@@ -330,6 +332,25 @@ def own_title(title: str | None, track) -> str | None:
     return None if _GENERIC_TITLE.fullmatch(title) else title
 
 
+def _number_from_name(item) -> None:
+    """Give a Usenet file with no track number the one its file name starts with
+    (homelab#2680): ``02_prince_-_sexy_m._f.-satan.mp3`` is track 2, as beets'
+    fromfilename would read it, but fromfilename only runs for a file with no
+    title, and never under ``--asis``.  A singleton match sets no position, so
+    without it the item imports at track 0, and the number rung of
+    ``tag_album_ids``, which needs the slot and the title together, can never
+    link it.  The number is the file's own, never one read from a release
+    beets matched, and a title alone still links nothing.  The disc stays as
+    the tags say: 0 counts as disc 1."""
+    from music_scan.release import FILE_TRACK  # noqa: PLC0415
+
+    if getattr(item, "track", None):
+        return
+    named = FILE_TRACK.fullmatch(Path(os.fsdecode(item.path)).stem)
+    if named and int(named[1]):
+        item.track = int(named[1])
+
+
 class SpotdlTags(NamedTuple):
     url: str | None = None
     isrc: str | None = None
@@ -621,6 +642,7 @@ class MusicPipelinePlugin(BeetsPlugin):
             if job:
                 item["usenet_job"] = job
             if via == "usenet":
+                _number_from_name(item)
                 # Its own title goes back on at import_task_apply (homelab#2544).
                 own = own_title(item.title, getattr(item, "track", None))
                 self._file_tags[id(item)] = FileTags(

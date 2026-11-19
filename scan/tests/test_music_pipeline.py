@@ -1853,3 +1853,57 @@ def test_another_artists_recording_is_no_duplicate() -> None:
     plugin.handle_duplicates(session=session, task=task)
 
     task.set_choice.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# tag_source_on_created — a Usenet file's number from its name (homelab#2680)
+# ---------------------------------------------------------------------------
+
+LOVE_SYMBOL = "/root/Music/inbox/usenet/cool/Prince-Love Symbol-1992-SataN INT"
+
+
+def test_a_usenet_file_with_no_track_number_takes_its_file_names() -> None:
+    """Album 582: every file of the job named its number (``02_prince_-_sexy_m._f.-satan.mp3``)
+    and none tagged it, so all 18 imported at track 0 and the number rung linked none."""
+    plugin = _make_plugin()
+    item = _file(f"{LOVE_SYMBOL}/02_prince_-_sexy_m._f.-satan.mp3", "Sexy M.F.", track=0, disc=0)
+    _created(plugin, item)
+    assert (item.track, item.disc, item.title) == (2, 0, "Sexy M.F.")
+
+
+def test_the_number_from_the_name_drops_from_a_title_that_repeats_it() -> None:
+    plugin = _make_plugin()
+    item = _file(f"{LOVE_SYMBOL}/01. Mighty.mp3", "01. Mighty", track=0)
+    _created(plugin, item)
+    assert item.track == 1 and plugin._file_tags[id(item)].own == "Mighty"
+
+
+def test_a_tagged_number_and_a_spotdl_file_keep_theirs() -> None:
+    plugin = _make_plugin()
+    tagged = _file(f"{LOVE_SYMBOL}/02_prince_-_sexy_m._f.-satan.mp3", "Sexy M.F.", track=5)
+    spotdl = _file("/root/Music/inbox/spotdl/cool/02 - Sexy M.F..m4a", "Sexy M.F.", track=0)
+    for item in (tagged, spotdl):
+        with patch("music_scan.music_pipeline._read_spotdl_tags", return_value=SpotdlTags()):
+            _created(plugin, item)
+    assert (tagged.track, spotdl.track) == (5, 0)
+
+
+def test_a_name_with_no_leading_number_gives_none() -> None:
+    plugin = _make_plugin()
+    item = _file(f"{LOVE_SYMBOL}/1999 - Prince.mp3", "1999", track=0)
+    _created(plugin, item)
+    assert item.track == 0
+
+
+def test_the_number_from_the_name_links_582s_wanted_track_with_its_title() -> None:
+    """The number rung needs the slot and the title together: at 1-2 with Sexy M.F.'s title
+    it links; another title at that slot doesn't, so a number alone gives no ID either."""
+    from music_scan.identity import PlaylistTrack, number_match
+
+    plugin = _make_plugin()
+    item = _file(f"{LOVE_SYMBOL}/02_prince_-_sexy_m._f.-satan.mp3", "Sexy M.F.", track=0, disc=0)
+    _created(plugin, item)
+    entry = PlaylistTrack("Sexy M.F.", "Prince", "3DqvBu9MpNNz4UToUXDJ4u", "USWB19900587", 1, 2)
+    assert number_match(entry, [item], lambda _: None) == (item, None)
+    other = PlaylistTrack("The Max", "Prince", "s5", None, 1, 2)
+    assert number_match(other, [item], lambda _: None)[0] is None
