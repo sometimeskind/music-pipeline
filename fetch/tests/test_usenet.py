@@ -286,6 +286,45 @@ def test_matches_a_self_titled_release(artist: str, album: str, title: str) -> N
 
 
 @pytest.mark.parametrize(
+    "artist, album, title, number",
+    [
+        # Album 1188 grabbed Beach House's *7* for *Beach House* (homelab#2721).
+        ("Beach House", "Beach House", "Beach.House.7.2018.FLAC", "7"),
+        ("Beach House", "Beach House", "Beach House-7-WEB-FLAC-2018-GRP", "7"),
+        ("Beach House", "Beach House", "Beach House - 7 (2018) [FLAC]", "7"),
+        ("Chicago", "Chicago", "Chicago-17-CD-FLAC-1984-GRP", "17"),
+        ("Van Halen", "Van Halen", "Van.Halen.5150.1986.FLAC", "5150"),
+    ],
+)
+def test_a_self_titled_album_refuses_a_number_titled_one(artist: str, album: str, title: str, number: str) -> None:
+    why = rejection(rel(title), artist, album, 8, album_type="album")
+    assert why is not None and why.rule == "self-titled" and why.detail.endswith(f": {number}")
+
+
+def test_a_self_titled_album_refuses_a_roman_numbered_one() -> None:
+    """A roman numeral is a word, so it is a leftover beside the artist already."""
+    why = rejection(rel("Led.Zeppelin.IV.1971.FLAC"), "Led Zeppelin", "Led Zeppelin", 8, album_type="album")
+    assert why is not None and why.rule == "self-titled"
+
+
+@pytest.mark.parametrize(
+    "title",
+    [
+        "Beach House-Beach House-CD-FLAC-2006-GRP",
+        "Beach.House.2006.FLAC",
+        "Beach House - Beach House (2006) [FLAC]",
+        "Beach House-2CD-FLAC-2006-GRP",
+        "Beach House-CAK33-WEB-FLAC-2006-GRP",
+        "Beach House-24-96-WEB-FLAC-2006-GRP",
+        "Beach.House.24.Bit.FLAC",
+        "Beach House-Self Titled-WEB-FLAC-2006-GRP",
+    ],
+)
+def test_a_self_titled_album_keeps_its_years_formats_and_catalogue_numbers(title: str) -> None:
+    assert rejection(rel(title), "Beach House", "Beach House", 8, album_type="album") is None
+
+
+@pytest.mark.parametrize(
     "artist, album, title, size_mb",
     [
         # Self-titled: the album words are the artist words.
