@@ -154,6 +154,7 @@ def make_blueprint(jobs: mcp_jobs.JobQueue) -> Blueprint:
 
         with library() as lib:
             items = lib.count()
+            shapes = lib.shapes()
         albums = records()
         by_status: dict[str, int] = {}
         for record in albums.values():
@@ -161,7 +162,7 @@ def make_blueprint(jobs: mcp_jobs.JobQueue) -> Blueprint:
         active = jobs.active(mcp_jobs.SHORT)
         running = next((j for j in active if j["status"] != mcp_jobs.QUEUED), None)
         long_job = next(iter(jobs.active(mcp_jobs.LONG)), None)
-        return jsonify({"status": "ok", "items": items,
+        return jsonify({"status": "ok", "items": items, "shapes": shapes,
                         "albums": {"total": len(albums), "by_status": by_status},
                         "album_mode": os.environ.get("ALBUM_MODE", "off") or "off",
                         "quarantine": mcp_reads.quarantine_counts(quarantine),

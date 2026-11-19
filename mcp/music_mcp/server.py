@@ -147,7 +147,9 @@ def build_server(
     @mcp.tool(annotations={"readOnlyHint": True})
     async def library_status() -> dict:
         """Counts of items, albums by status, quarantine by kind, the playlists, album mode, and
-        the job queue (what runs now, how many wait)."""
+        the job queue (what runs now, how many wait). shapes counts the items at track 0 (no_track),
+        with a blank title (no_title) and over 20 minutes (long: a disc image, or a real long
+        track), each with its first 50 item IDs for get_item."""
         return await call("library_status", lambda c: pipeline.get(c, "/library_status"))
 
     @mcp.tool(annotations={"readOnlyHint": True})

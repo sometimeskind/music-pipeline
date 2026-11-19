@@ -137,6 +137,20 @@ def test_library_status(client):
     assert body["quarantine"] == {"unmatched": 1, "rejected": 1, "replaced": 2, "keep": 0}
     assert body["playlists"] == ["chill"]
     assert body["jobs"] == {"running": None, "queued": 0, "depth": 5, "long": None}
+    assert body["shapes"] == {shape: {"count": 0, "ids": []} for shape in ("no_track", "no_title", "long")}
+
+
+def test_library_status_counts_the_items_no_entry_can_link(env):
+    """homelab#2680, homelab#2687, homelab#2688: no read tool counted the items at track 0, with
+    a blank title, or a disc long (19214, 2,533 s)."""
+    a, b, c = (i.id for i in env["items"])
+    with sqlite3.connect(env["db"]) as conn:
+        conn.execute("UPDATE items SET track = 0, title = '' WHERE id = ?", (a,))
+        conn.execute("UPDATE items SET track = 0, length = 331.9 WHERE id = ?", (b,))
+        conn.execute("UPDATE items SET length = 2533.0 WHERE id = ?", (c,))
+    body = env["client"].get("/mcp-api/library_status", headers=MCP).json
+    assert body["shapes"] == {"no_track": {"count": 2, "ids": [a, b]}, "no_title": {"count": 1, "ids": [a]},
+                              "long": {"count": 1, "ids": [c]}}
 
 
 def test_find_albums_lists_every_match_with_item_counts(client):
