@@ -391,8 +391,11 @@ def build_server(
     async def audit_titles() -> dict:
         """music-audit-titles: items whose title or trackdisambig names a version (5.1, live, demo,
         alternate, mono, take, outtake) that Spotify's entry at their slot doesn't, by album, with the
-        album's reset command. Items with no Spotify ID or store entry are counted, not compared.
-        The fix is the album's: reset_album with reimport=true."""
+        album's item IDs to recheck and its reset command. Items with no Spotify ID or store entry are
+        counted, not compared. Check the recording first: recheck_recordings with the IDs, then
+        apply_recheck, fixes a sibling recording and its title on a good file; recording_candidates
+        shows whether a file the recheck leaves fits its slot. reset_album with reimport=true only for
+        a file that is another take."""
         return await run("audit_titles", {})
 
     @mcp.tool(annotations={"readOnlyHint": True})

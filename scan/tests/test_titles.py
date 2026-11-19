@@ -124,10 +124,25 @@ def test_log_report_names_the_reset_and_each_item(caplog) -> None:
     with caplog.at_level(logging.INFO, logger="music_scan.titles"):
         titles.log_report(report, records)
     assert "[ALBUM] Artist — Loaded (record 256): 1 item(s)" in caplog.text
-    assert "music-album-reset 'Artist — Loaded' --reimport" in caplog.text
+    # The recheck first: most are a good file under a sibling's ID (homelab#2644); the reset for another take.
+    lines = [r.getMessage() for r in caplog.records]
+    assert lines[1:3] == ["    first: music-mb-fingerprint --recheck 6930",
+                          "    only for a file that is another take: music-album-reset 'Artist — Loaded' --reimport"]
+    assert "Check the recording first: recheck the items (recheck_recordings, then apply_recheck)" in caplog.text
+    assert "Fix an album whole: reset it" not in caplog.text
     assert ('[VERSION] 6930 1-10 "Oh! Sweet Nuthin\' (5.1 mix)" [trackdisambig: 5.1 mix] '
             'vs Spotify "Oh! Sweet Nuthin\' - 2015 Remaster": 5.1') in caplog.text
     assert "1 item(s) on 1 album(s)" in caplog.text and "of 1 compared" in caplog.text
+
+
+def test_an_album_without_a_record_still_gets_its_recheck_and_no_reset(caplog) -> None:
+    songs = [_song("a6", "Head Held High - 2015 Remaster"), _song("a10", "Oh! Sweet Nuthin' - 2015 Remaster")]
+    report = titles.audit([_item(6930, "Oh! Sweet Nuthin' (5.1 mix)", "a10", album="Loaded", track=10),
+                           _item(6928, "Head Held High (5.1 mix)", "a6", album="Loaded", track=6)], songs)
+    with caplog.at_level(logging.INFO, logger="music_scan.titles"):
+        titles.log_report(report, {})
+    assert "    first: music-mb-fingerprint --recheck 6928 6930" in caplog.text  # by track
+    assert "music-album-reset" not in caplog.text
 
 
 def test_main_reads_the_library_and_the_stores(monkeypatch, caplog) -> None:
