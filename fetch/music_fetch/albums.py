@@ -1567,7 +1567,7 @@ def resolve_keys(state: State, fixes: list[overrides.AlbumOverride] | None = Non
     except Exception:
         logger.exception("Resolving the album keys failed; the next tick tries again")
         return None
-    if report.rekeyed or report.merged or report.conflicts:
+    if report.rekeyed or report.regrouped or report.merged or report.conflicts:
         report.log()
     report.record_events()  # the tick saves the state it changed
     return report
@@ -2028,6 +2028,8 @@ def complete(
                 add_source(first, other, record["playlists"][other])
             if identity:
                 record["release_files"] = identity
+                if record.get("release_group"):
+                    record[resolve.REGROUP] = True  # the next pass judges its group again (homelab#2691)
             else:
                 record.pop("release_files", None)
             note = f"; {total - found} of Spotify's {total} titles not in this release" if found < total else ""

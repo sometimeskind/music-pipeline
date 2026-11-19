@@ -122,8 +122,13 @@ KINDS: dict[str, Kind] = {
     "album_merged": Kind(ALBUM, "[MERGE]: the resolve pass merged records into one; data.conflict is what the "
                                 "merge settled (an absorbed record's evidence, differing search overrides).",
                          ("album", "key", "absorbed", "conflict")),
+    "album_regrouped": Kind(ALBUM, "[REGROUP]: the resolve pass moved a keyed record to the release group its "
+                                   "import names, as nothing but an earlier import named the old one "
+                                   "(homelab#2691); data.was is the old group, data.conflict cache evidence the "
+                                   "import outranked.", ("album", "key", "was", "via", "conflict")),
     "conflict": Kind(ALBUM, "[CONFLICT]: evidence naming two release groups leaves a record unkeyed "
-                            "(once a day while it stands).", ("album", "key", "conflict")),
+                            "(once a day while it stands), or a keyed record on its release group although "
+                            "its import names another (homelab#2691).", ("album", "key", "conflict")),
     "merged_releases": Kind(ALBUM, "[MERGED]/[MULTI]: which releases a record a release-group merge left "
                                    "holding several keeps, and why.",
                             ("album", "key", "kept", "why", "releases")),

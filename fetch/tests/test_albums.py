@@ -1728,6 +1728,46 @@ def test_ready_to_die_cd_is_the_album_whole(roots, caplog) -> None:
     assert "[DONE]" in caplog.text and "2 of Spotify's 19 titles not in this release" in caplog.text
 
 
+# Album 568 (homelab#2691): keyed to the 1982 debut by its first, wrong import.
+DEBUT = "a03d7530-7bd2-35f2-b49e-0f036ea3ecc4"
+JANET = "785e1f49-f5b7-3ca3-a58e-e138a0e5e531"
+
+
+def _identity(group: str) -> dict:
+    return {"mb_albumid": "mb1", "album": "Album", "missing": 0, "mb": {"mb_albumid": "mb1", "mb_releasegroupid": group}}
+
+
+def test_a_correct_reimport_moves_the_album_to_its_release_group(roots) -> None:
+    """The reimport marks the keyed record, and the next resolve pass moves it
+    to the release group the files identify as: before homelab#2691 the first
+    import's group stayed, as the resolver skipped every keyed record."""
+    state = grabbed_state()
+    record = state.albums["a0"]
+    record.update(release_group=DEBUT, unresolved=None, reimport=True)
+    status, _, _ = run_complete(state, albums.Completion("nzo1", True, "album/Artist-Album-FLAC"), roots,
+                                identity=_identity(JANET))
+    assert status == albums.IMPORTED and record[albums.resolve.REGROUP] is True
+    assert record["release_group"] == DEBUT  # the import alone doesn't rekey
+    report = albums.resolve.resolve(state, {}, {})
+    assert (record["release_group"], report.regrouped) == (JANET, [f"Artist — Album (a0): {DEBUT} → {JANET}"])
+    assert albums.resolve.REGROUP not in record
+
+
+def test_an_import_of_an_unkeyed_album_marks_nothing(roots) -> None:
+    state = grabbed_state()
+    run_complete(state, albums.Completion("nzo1", True, "album/Artist-Album-FLAC"), roots, identity=_identity(JANET))
+    assert albums.resolve.REGROUP not in state.albums["a0"]
+
+
+def test_a_wrong_import_marks_nothing(roots) -> None:
+    """A release the import rolls back ([WRONG]) leaves no release_files, so the record's group is not judged."""
+    state = grabbed_state()
+    state.albums["a0"].update(release_group=DEBUT, unresolved=None)
+    run_complete(state, albums.Completion("nzo1", True, "album/Artist-Album-FLAC"), roots, titles=["Other"],
+                 identity=_identity(JANET))
+    assert albums.resolve.REGROUP not in state.albums["a0"] and "release_files" not in state.albums["a0"]
+
+
 def test_another_album_fails_the_title_check(roots, caplog) -> None:
     state = ready_to_die()
     retired = []

@@ -35,6 +35,27 @@ restamps the absorbed record's: the scan's
 :func:`music_scan.release.retire_merged` keeps the survivor's own release and
 retires the other's copies as an import would (homelab#2545).
 
+A keyed record can be judged again (homelab#2691): its release group may be
+an import's that a later import replaced (a wrong release first, the right one
+on a reimport), and nothing else keyed it.  An import that names another
+release group than the record's marks it (``regroup``, set by
+:func:`music_fetch.albums.complete`), and the next pass moves it to the new
+import's group (``[REGROUP]``, an ``album_regrouped`` event) unless
+
+- an album request holds the record (``requested``): the request names its
+  release group;
+- the cache names the record's group for one of its Spotify IDs: evidence
+  besides an import holds it, so the import that disagrees is reported as a
+  conflict and the record stays (that import may be the wrong one, homelab#2662);
+- another row has the import's group, or another record is keyed to it in
+  the same pass: a merge of two held albums is the operator's call, so it is
+  reported as a conflict and the record stays.
+
+The library rung is no evidence here: canon writes the import's release group
+onto the album's items, so they echo an import.  ``music-album-resolve
+--regroup`` judges every keyed record whose import names another release group
+again, marked or not: the records keyed before the mark existed.
+
 The pass is idempotent: run it again after the cache or the library learns
 more, and it resolves and merges what it now can (``music-album-resolve``).
 
@@ -69,6 +90,9 @@ LIBRARY_DB = Path("/root/.config/beets/library.db")
 _IMPORT_FIELDS = ("import_started", "import_errors", "import_deferrals", "import_path", "import_identity")
 # Every pass sees a standing conflict again: one event a day, like search_miss.
 CONFLICT_ONCE_HOURS = 24
+# Set on a keyed record by an import that names its release (albums.complete):
+# the next pass judges its release group again (homelab#2691).
+REGROUP = "regroup"
 
 
 def library_groups(db_path: Path) -> dict[str, set[str]]:
@@ -101,20 +125,30 @@ class Verdict:
     conflict: str = ""
 
 
-def judge(record: Mapping, cache: Mapping[str, dict], library: Mapping[str, set[str]]) -> Verdict:
-    """The release group the evidence gives *record*, or why there is none."""
-    imported = ((record.get("release_files") or {}).get("mb") or {}).get("mb_releasegroupid") or None
-    found: dict[str, set[str]] = {}  # release group → the evidence naming it
-    looked_up = True
-    ids = record.get("spotify_album_ids") or []
-    for album_id in ids:
+def files_group(record: Mapping) -> str | None:
+    """The release group of the release album mode imported for *record* (``release_files``)."""
+    return ((record.get("release_files") or {}).get("mb") or {}).get("mb_releasegroupid") or None
+
+
+def cached_groups(record: Mapping, cache: Mapping[str, dict]) -> dict[str, set[str]]:
+    """Release group → the cache rungs naming it, over *record*'s Spotify IDs."""
+    found: dict[str, set[str]] = {}
+    for album_id in record.get("spotify_album_ids") or []:
         entry = cache.get(album_id)
-        if entry is None:
-            looked_up = False
-        elif entry.get("rung") != "none":
+        if entry is not None and entry.get("rung") != "none":
             group = ((entry.get("fields") or {}).get("mb_releasegroupid")) or None
             if group:
                 found.setdefault(group, set()).add(f"{CACHE}:{entry.get('rung')}")
+    return found
+
+
+def judge(record: Mapping, cache: Mapping[str, dict], library: Mapping[str, set[str]]) -> Verdict:
+    """The release group the evidence gives *record*, or why there is none."""
+    imported = files_group(record)
+    found = cached_groups(record, cache)  # release group → the evidence naming it
+    ids = record.get("spotify_album_ids") or []
+    looked_up = all(cache.get(album_id) is not None for album_id in ids)
+    for album_id in ids:
         groups = library.get(album_id) or set()
         if len(groups) == 1:
             found.setdefault(next(iter(groups)), set()).add(LIBRARY)
@@ -133,6 +167,7 @@ def judge(record: Mapping, cache: Mapping[str, dict], library: Mapping[str, set[
 @dataclasses.dataclass
 class Report:
     rekeyed: list[str] = dataclasses.field(default_factory=list)
+    regrouped: list[str] = dataclasses.field(default_factory=list)
     flagged: dict[str, list[str]] = dataclasses.field(default_factory=dict)
     merged: list[str] = dataclasses.field(default_factory=list)
     conflicts: list[str] = dataclasses.field(default_factory=list)
@@ -143,13 +178,16 @@ class Report:
 
     def summary(self) -> str:
         flags = ", ".join(f"{len(v)} {k}" for k, v in sorted(self.flagged.items()))
-        return (f"{len(self.rekeyed)} rekeyed, {sum(len(v) for v in self.flagged.values())} flagged"
+        return (f"{len(self.rekeyed)} rekeyed, {len(self.regrouped)} regrouped, "
+                f"{sum(len(v) for v in self.flagged.values())} flagged"
                 f"{f' ({flags})' if flags else ''}, {self.absorbed} merged into {len(self.merged)} album(s), "
                 f"{len(self.conflicts)} conflict(s)")
 
     def log(self, verbose: bool = False) -> None:
         for line in self.merged:
             logger.info("  [MERGE] %s", line)
+        for line in self.regrouped:
+            logger.info("  [REGROUP] %s", line)
         for line in self.conflicts:  # their events hold them; only --verbose lists them
             logger.log(logging.INFO if verbose else logging.DEBUG, "  [CONFLICT] %s", line)
         # A standing conflict or a merge waiting on a grab is flagged at every pass:
@@ -201,10 +239,52 @@ def merge_into(survivor: dict, other: Mapping) -> None:
         survivor["origin"] = origin
 
 
+def regroup(rows: Any, cache: Mapping[str, dict], report: Report, keyed: dict[str, str],
+            targets: Mapping[str, list[str]], everything: bool = False) -> None:
+    """Move each keyed record an import marked (:data:`REGROUP`), or with
+    *everything* each keyed record, to its import's release group when that
+    is another and nothing but an earlier import named the old one (homelab#2691).
+    *keyed* (release group → key) follows the moves; *targets* are the release
+    groups this pass keys unkeyed records to."""
+    for key, record in rows.albums.items():
+        marked = record.pop(REGROUP, None)
+        old, new = record.get("release_group"), files_group(record)
+        if not old or not (marked or everything) or new in (None, old) or in_flight(record):
+            continue
+        cached = cached_groups(record, cache)
+        if record.get("requested"):
+            why = f"an album request names {old}"
+        elif old in cached:
+            why = f"the cache names {old} ({'+'.join(sorted(cached[old]))})"
+        elif new in keyed:
+            why = f"{label(keyed[new], rows.albums[keyed[new]])} has {new}"
+        elif new in targets:
+            why = f"{', '.join(label(k, rows.albums[k]) for k in targets[new])} resolve to {new}"
+        else:
+            why = ""
+        if why:
+            conflict = f"the import's {new} is not its {old}, which stays: {why}"
+            line = f"{label(key, record)}: {conflict}"
+            report.conflicts.append(line)
+            report.changes.append(("conflict", f"[CONFLICT] {line}", key, record, {"conflict": conflict}))
+            continue
+        record["release_group"] = new
+        del keyed[old]
+        keyed[new] = key
+        line = f"{label(key, record)}: {old} → {new}"
+        report.regrouped.append(line)
+        others = sorted(g for g in cached if g != new)
+        report.changes.append(("album_regrouped", f"[REGROUP] {line}", key, record,
+                               {"was": old, "via": IMPORT,
+                                **({"conflict": f"the import's {new} beats {', '.join(others)}"} if others else {})}))
+
+
 def resolve(rows: Any, cache: Mapping[str, dict], library: Mapping[str, set[str]],
-            overrides: Mapping[str, str] | None = None) -> Report:
+            overrides: Mapping[str, str] | None = None, regroup_all: bool = False) -> Report:
     """Resolve and merge the unresolved records of *rows* (a :class:`state.AlbumRows`,
-    or album mode's ``State``) in place; returns what changed."""
+    or album mode's ``State``) in place, and move the keyed records an import
+    marked, or with *regroup_all* every keyed one, to their import's release
+    group (:func:`regroup`); returns what changed."""
     overrides = overrides or {}
     report = Report()
     targets: dict[str, list[str]] = {}
@@ -228,6 +308,7 @@ def resolve(rows: Any, cache: Mapping[str, dict], library: Mapping[str, set[str]
             if verdict.conflict:
                 report.changes.append(("conflict", f"[CONFLICT] {line}", key, record, {"conflict": verdict.conflict}))
     keyed = {r["release_group"]: k for k, r in rows.albums.items() if r.get("release_group")}
+    regroup(rows, cache, report, keyed, targets, everything=regroup_all)
     absorbed: set[str] = set()
     for group, keys in targets.items():
         existing = keyed.get(group)  # the row that has the release group already

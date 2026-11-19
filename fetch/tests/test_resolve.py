@@ -242,3 +242,133 @@ def test_the_conflict_line_is_debug_unless_verbose(caplog):
         assert "[CONFLICT]" not in caplog.text
         report.log(verbose=True)
     assert "[CONFLICT]" in caplog.text
+
+
+# --- regroup: a keyed record its import names another release group for (homelab#2691) ---
+
+# Album 568's shape: keyed to the 1982 debut by its first, wrong import; the
+# reimport's files are the 1993 album.
+DEBUT = "a03d7530-7bd2-35f2-b49e-0f036ea3ecc4"
+JANET = "785e1f49-f5b7-3ca3-a58e-e138a0e5e531"
+
+
+def _keyed(*ids, group: str, files: str | None = None, marked: bool = True, **fields) -> dict:
+    record = {**_rec(*ids, status="imported", **fields), "release_group": group, "unresolved": None}
+    if files:
+        record.update(_imported(files))
+    if marked:
+        record[resolve.REGROUP] = True
+    return record
+
+
+def _by_row(albums: dict[str, dict]) -> state.AlbumRows:
+    """The store keyed by row id, as it is since the rekey: a numeric key is the record's ``_id``."""
+    for key, record in albums.items():
+        if key.isdigit():
+            record["_id"] = int(key)
+    return state.AlbumRows(albums=albums, by_row=True)
+
+
+def test_a_reimport_moves_the_record_to_its_release_group(monkeypatch):
+    recorded = _recorded(monkeypatch)
+    rows = _by_row({"568": _keyed("sp1", group=DEBUT, files=JANET)})
+    report = resolve.resolve(rows, {}, {"sp1": {DEBUT}})  # the library echoes the old import: no evidence
+    record = rows.albums["568"]
+    assert (record["release_group"], record["unresolved"]) == (JANET, None)
+    assert resolve.REGROUP not in record
+    assert report.regrouped == [f"Artist — Album (568): {DEBUT} → {JANET}"] and report.conflicts == []
+    assert "1 regrouped" in report.summary()
+    report.record_events()
+    [(kind, message, kw)] = recorded
+    assert (kind, kw["release_group"], kw["data"]["was"], kw["data"]["via"]) == ("album_regrouped", JANET, DEBUT, "import")
+    assert message.startswith("[REGROUP] ") and "conflict" not in kw["data"]
+
+
+def test_a_reimport_the_cache_agrees_with_regroups_without_a_conflict():
+    rows = _by_row({"568": _keyed("sp1", group=DEBUT, files=JANET)})
+    report = resolve.resolve(rows, {"sp1": _cached(JANET)}, {})
+    assert rows.albums["568"]["release_group"] == JANET and report.conflicts == []
+
+
+def test_cache_evidence_for_a_third_group_is_outranked_and_reported(monkeypatch):
+    recorded = _recorded(monkeypatch)
+    rows = _by_row({"568": _keyed("sp1", group=DEBUT, files=JANET)})
+    resolve.resolve(rows, {"sp1": _cached(RG)}, {}).record_events()
+    assert rows.albums["568"]["release_group"] == JANET
+    assert recorded[0][2]["data"]["conflict"] == f"the import's {JANET} beats {RG}"
+
+
+def test_a_group_the_cache_names_stays_and_the_import_is_a_conflict(monkeypatch):
+    """homelab#2662's case: the record's group has evidence besides an import, so
+    an import naming another is reported and acted on by nobody."""
+    recorded = _recorded(monkeypatch)
+    rows = _by_row({"862": _keyed("sp1", group=RG, files=RG2)})
+    report = resolve.resolve(rows, {"sp1": _cached(RG, "isrc")}, {})
+    assert rows.albums["862"]["release_group"] == RG and report.regrouped == []
+    assert report.conflicts == [f"Artist — Album (862): the import's {RG2} is not its {RG}, which stays: "
+                                f"the cache names {RG} (cache:isrc)"]
+    report.record_events()
+    [(kind, message, kw)] = recorded
+    assert (kind, kw["release_group"], kw["once_hours"]) == ("conflict", RG, 24)
+    assert message == f"[CONFLICT] {report.conflicts[0]}"
+    # The mark is spent: the next pass doesn't report it again.
+    assert resolve.REGROUP not in rows.albums["862"]
+    assert resolve.resolve(rows, {"sp1": _cached(RG, "isrc")}, {}).conflicts == []
+
+
+def test_a_group_another_row_has_is_not_taken():
+    rows = _by_row({"568": _keyed("sp1", group=DEBUT, files=JANET),
+                                   "900": _keyed("sp2", group=JANET, marked=False)})
+    report = resolve.resolve(rows, {}, {})
+    assert rows.albums["568"]["release_group"] == DEBUT and set(rows.albums) == {"568", "900"}
+    assert report.conflicts == [f"Artist — Album (568): the import's {JANET} is not its {DEBUT}, which stays: "
+                                f"Artist — Album (900) has {JANET}"]
+
+
+def test_a_group_an_unkeyed_record_resolves_to_in_the_same_pass_is_not_taken():
+    rows = _by_row({"568": _keyed("sp1", group=DEBUT, files=JANET), "sp2": _rec("sp2")})
+    report = resolve.resolve(rows, {"sp2": _cached(JANET)}, {})
+    assert rows.albums["568"]["release_group"] == DEBUT and set(rows.albums) == {"568", "sp2"}
+    assert rows.albums["sp2"]["release_group"] == JANET
+    assert "resolve to" in report.conflicts[0]
+
+
+def test_the_freed_group_is_another_albums_not_the_regrouped_ones():
+    """An unkeyed record the cache names the old group for is the album the wrong
+    import was: it takes that group as a row of its own, not a merge."""
+    rows = _by_row({"568": _keyed("sp1", group=DEBUT, files=JANET), "sp2": _rec("sp2")})
+    resolve.resolve(rows, {"sp2": _cached(DEBUT)}, {})
+    assert set(rows.albums) == {"568", "sp2"}
+    assert (rows.albums["568"]["release_group"], rows.albums["sp2"]["release_group"]) == (JANET, DEBUT)
+
+
+def test_a_requested_album_keeps_the_requests_group():
+    rows = _by_row({"568": _keyed(group=DEBUT, files=JANET, requested=True, origin="request")})
+    report = resolve.resolve(rows, {}, {})
+    assert rows.albums["568"]["release_group"] == DEBUT
+    assert "an album request names" in report.conflicts[0]
+
+
+def test_an_album_grabbed_again_is_judged_once_that_import_lands():
+    rows = _by_row({"568": _keyed("sp1", group=DEBUT, files=JANET, import_started="t")})
+    report = resolve.resolve(rows, {}, {})
+    assert rows.albums["568"]["release_group"] == DEBUT and report.regrouped == report.conflicts == []
+
+
+def test_an_unmarked_record_is_judged_again_only_with_regroup_all():
+    """The records keyed before an import marked them (713, 568 today): counted by
+    ``music-album-resolve --regroup``, moved by its ``--apply``."""
+    rows = _by_row({"568": _keyed("sp1", group=DEBUT, files=JANET, marked=False),
+                                   "713": _keyed("sp2", group=RG, files=RG, marked=False)})
+    assert resolve.resolve(rows, {}, {}).regrouped == []
+    assert rows.albums["568"]["release_group"] == DEBUT
+    report = resolve.resolve(rows, {}, {}, regroup_all=True)
+    assert len(report.regrouped) == 1 and rows.albums["568"]["release_group"] == JANET
+    assert rows.albums["713"]["release_group"] == RG  # its import agrees
+
+
+def test_a_record_with_no_import_or_the_same_group_is_left_alone():
+    rows = _by_row({"a": _keyed("sp1", group=RG), "b": _keyed("sp2", group=RG2, files=RG2)})
+    report = resolve.resolve(rows, {}, {}, regroup_all=True)
+    assert report.regrouped == report.conflicts == []
+    assert [r["release_group"] for r in rows.albums.values()] == [RG, RG2]
