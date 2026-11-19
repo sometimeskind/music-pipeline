@@ -155,6 +155,7 @@ def test_report_lists_every_file_and_deletes_nothing(tmp_path, ffmpeg, caplog) -
     assert counts["due"] == 0 and counts["later"] == 2 and counts["kept"] == 2
     assert counts["only_copy"] == 1 and counts["not_imported"] == 1
     assert "[JOB] soft/Failed: 1 file(s), 0.0 MiB; no library item came from this job: kept whole" in caplog.text
+    assert "  [JUNK] soft/Failed/01.flac: empty; kept whole with its job" in caplog.text
     assert "[JOB] soft/Job: 3 file(s)" in caplog.text
     assert "[SUPERSEDED] soft/Job/01-held.m4a: the library holds its recording; the scan deletes it in 14 day(s)" \
         in caplog.text
@@ -167,3 +168,35 @@ def test_report_lists_every_file_and_deletes_nothing(tmp_path, ffmpeg, caplog) -
     assert later["due"] == 2 and later["later"] == 0
     assert "[JUNK] soft/Job/03-empty.flac: empty; the next scan deletes it" in caplog.text
     assert "The scan deletes 2 (" in caplog.text and "it keeps 1 only copies" in caplog.text
+
+
+def test_report_judges_a_job_kept_whole_by_content_and_the_purge_still_keeps_it(
+        tmp_path, ffmpeg, caplog, recorded) -> None:
+    """A job no library item came from (a release from before usenet_job, homelab#2667): the
+    report says what it holds so a person can decide; the purge never touches it."""
+    job = tmp_path / "keep" / "Artist-Album-Deluxe-FLAC"
+    held = _m4a(job / "CD1" / "01-held.m4a", isrc="USHS06000001")
+    only = _m4a(job / "CD3" / "01-bonus.m4a", isrc="USHS06000009")
+    stub = _bytes(job / "Artist.-.Album._2023_.Mp3", b"not audio\n" * 115)
+    items = [FakeItem(1, isrc="USHS06000001", via="usenet", usenet_job="Another-Release", sources="keep")]
+
+    with caplog.at_level(logging.INFO, logger=uq.logger.name):
+        counts = uq.report(tmp_path, items, 14, now=time.time() + 400 * DAY)
+    assert counts["not_imported"] == 3 and counts["due"] == 0 and counts["kept"] == 3
+    assert counts["not_imported_superseded"] == 1 and counts["not_imported_only_copy"] == 1
+    assert counts["not_imported_junk"] == 1 and counts["not_imported_junk_bytes"] == stub.stat().st_size
+    assert counts["not_imported_only_copy_bytes"] == only.stat().st_size
+    assert "no library item came from this job: kept whole (1 junk, 0.0 MiB; 1 held by the library, 0.0 MiB; " \
+        "1 only copies, 0.0 MiB)" in caplog.text
+    assert "  [SUPERSEDED] keep/Artist-Album-Deluxe-FLAC/CD1/01-held.m4a: the library holds its recording; " \
+        "kept whole with its job" in caplog.text
+    assert "  [ONLYCOPY] keep/Artist-Album-Deluxe-FLAC/CD3/01-bonus.m4a: no library item holds its recording; " \
+        "kept whole with its job" in caplog.text
+    assert "  [JUNK] keep/Artist-Album-Deluxe-FLAC/Artist.-.Album._2023_.Mp3: unreadable, 1150 bytes; " \
+        "kept whole with its job" in caplog.text
+    assert "[SUMMARY] the job folder(s) no library item came from hold 1 junk" in caplog.text
+
+    assert uq.purge(tmp_path, items, 14, now=time.time() + 400 * DAY)["purged"] == 0
+    assert held.exists() and only.exists() and stub.exists() and not recorded
+    # The purge doesn't read the tags of a folder it keeps whole.
+    assert all(not v.content for v in uq.judge(tmp_path, items, 14))
