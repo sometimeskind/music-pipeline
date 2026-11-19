@@ -51,7 +51,10 @@ search can't find), each with its reason and who set it when. `set_search_overri
 `hold_album` and `pin_track` set them, and `clear_search_override`, `release_album` and
 `unpin_track` undo them, all dry run first. The tick and the nightly read them on their next
 run. There is no git history behind them: each change is an event in `album_history`, and a
-bad one is undone the same way. Routes: `[NOWORDS]` → `set_search_override`, its words checked on a title
+bad one is undone the same way. A release blocklisted by hand (`blocklist_release`, undone by
+`unblocklist_release`) is kept the same way, but on the album: `get_album`'s `blocklisted` shows it
+with kind `by hand`, and `album_history` its `blocklisted` event. Routes: a wrong release the
+matcher accepts, which a reimport could grab again → `blocklist_release`, then `reset_album`; `[NOWORDS]` → `set_search_override`, its words checked on a title
 with `check_release` first (no search: see `album-mode`); an album mixed on purpose → `hold_album`; a `[MISS]` that never resolves → `pin_track` (see `classify`).
 
 ## Requests

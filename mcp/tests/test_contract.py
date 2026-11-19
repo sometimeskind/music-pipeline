@@ -282,6 +282,35 @@ async def test_the_override_tools(pipeline_url):
         assert listed["status"] == "unavailable" and listed["error"]
 
 
+async def test_the_blocklist_tools(pipeline_url):
+    """homelab#2750: the album query resolves to its key and the release is trimmed, not rewritten."""
+    async with Client(server(pipeline_url, TOM)) as c:
+        for tool, args, normalised, argv in [
+            ("blocklist_release", {"album": "abbey road (remastered)", "release": " The.Beatles-Abbey.Road-FLAC ",
+                                   "reason": " another\n album "},
+             {"album": "ALB2", "release": "The.Beatles-Abbey.Road-FLAC", "reason": "another album"},
+             ["music-album-blocklist", "add", "--reason=another album", "--", "ALB2", "The.Beatles-Abbey.Road-FLAC"]),
+            ("unblocklist_release", {"album": "pastel", "release": "https://indexer/details/9"},
+             {"album": "ALB3", "release": "https://indexer/details/9"},
+             ["music-album-blocklist", "remove", "--", "ALB3", "https://indexer/details/9"]),
+        ]:
+            job = await finish(c, (await c.call_tool(tool, args)).data)
+            assert job["status"] == "done", (tool, job)
+            assert job["args"] == normalised and job["argv"] == [argv], (tool, job)
+        applied = await finish(c, (await c.call_tool("unblocklist_release", {
+            "album": "pastel", "release": "https://indexer/details/9", "apply": True})).data)
+        assert applied["status"] == "done" and any("--apply" in cmd for cmd in applied["argv"]), applied
+        assert (await c.call_tool("blocklist_release", {"album": "abbey", "release": "x", "reason": "x"})
+                ).data["status"] == "ambiguous"
+        for args in [{"album": "ALB3", "release": "a\nb", "reason": "x"}, {"album": "ALB3", "release": "x",
+                                                                           "reason": " "}]:
+            with pytest.raises(ToolError):
+                await c.call_tool("blocklist_release", args)
+    async with Client(server(pipeline_url, PILOT)) as c:
+        with pytest.raises(ToolError, match="write tier"):
+            await c.call_tool("blocklist_release", {"album": "ALB3", "release": "x", "reason": "x"})
+
+
 async def test_the_request_tools(pipeline_url):
     """homelab#2478: request_album's release groups normalise as music-requests takes them."""
     rg, rg2, rel = ("6e0a6c2a-2d38-3d3c-9d38-4f0c2b5b7a11", "0b4ed3a1-7d3c-4d9e-9b8e-0c5c6a8d2f10",

@@ -48,6 +48,10 @@ CASES = {
                        {"ids": [], "since": "2026-10-20T00:00:00+00:00"},
                        {"ids": ["A", "B"], "since": "2026-10-20T00:00:00+00:00"},
                        {"ids": ["--apply", "-x"], "since": None}],  # hostile IDs stay positional
+    "blocklist_release": [{"album": "1454", "release": "Artist-Album.1987.FLAC", "reason": "another album"},
+                          {"album": "-m-/le baptême", "release": "--apply", "reason": "--apply -x"}],
+    "unblocklist_release": [{"album": "1454", "release": "https://indexer/details/b5a40762"},
+                            {"album": "-x", "release": "--apply"}],
     "merge_items": [{"pairs": [[1, 2]]}, {"pairs": [[1, 2], [3, 4]]}],
     "replace_item": [{"id": 10001, "youtube_url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ"}],
     "unlink_spotify_id": [{"id": 9674, "track": "2o49Twc3qrNMOt8gq9W06L"}],

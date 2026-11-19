@@ -13,7 +13,7 @@ from unittest.mock import patch
 import psycopg
 import pytest
 
-from music_fetch import albums, events, overrides, overrides_cli, state
+from music_fetch import albums, blocklist_cli, events, overrides, overrides_cli, state
 from music_service import mcp_jobs, mcp_reads
 
 sys.path.insert(0, str(Path(__file__).parent))  # importable however pytest imports this file
@@ -398,7 +398,7 @@ def test_reset_album_dry_run_then_apply(client, env):
 
 
 class RealCli(mcp_harness.Commands):
-    """The real music-album-reset and music-overrides, in this process: each run's
+    """The real music-album-reset, music-album-blocklist and music-overrides, in this process: each run's
     lines carry a log timestamp of their own, as a subprocess's do."""
 
     def __init__(self) -> None:
@@ -415,7 +415,8 @@ class RealCli(mcp_harness.Commands):
                 on_line(stamp + record.getMessage())
 
         handler = Lines(logging.INFO)
-        loggers = [logging.getLogger("music_fetch.albums"), logging.getLogger("music_fetch.overrides_cli")]
+        loggers = [logging.getLogger("music_fetch.albums"), logging.getLogger("music_fetch.overrides_cli"),
+                   logging.getLogger("music_fetch.blocklist_cli")]
         levels = [log.level for log in loggers]
         for log in loggers:
             log.addHandler(handler)
@@ -424,6 +425,8 @@ class RealCli(mcp_harness.Commands):
             if argv[0] == "music-album-reset":
                 with patch("sys.argv", argv):
                     albums.reset_main()
+            elif argv[0] == "music-album-blocklist":
+                blocklist_cli.main(argv[1:])
             else:
                 overrides_cli.main(argv[1:])
         finally:
@@ -499,6 +502,50 @@ def test_the_override_dry_run_passes_the_apply_gate(env, real_cli):
     assert applied.json["status"] == "done", applied.json
     search, _ = overrides.keyed(albums.album_fixes(), albums.State.load())
     assert search == {"ALB3": "pastel blues"}
+
+
+PLAIN = "Nina.Simone-Pastel.Blues.1964.FLAC"
+PLAIN_GUID = "https://indexer/details/9"
+
+
+def test_a_release_blocklisted_by_hand_passes_the_gate_and_stays_through_a_reset(env, real_cli):
+    """homelab#2750: the album's own release, named by its title; the reset that follows keeps it."""
+    rows = albums.State.load()
+    rows.albums["ALB3"].update(status="imported", duration=2400, tracks_count=9,
+                               candidate={"guid": PLAIN_GUID, "title": PLAIN, "size": 300_000_000})
+    rows.save()
+    events.record("grab", "[GRAB]", source="albums", data={"key": "ALB3", "guid": PLAIN_GUID, "release": PLAIN,
+                                                            "size": 300_000_000})
+    client = env["client"]
+    body = {"album": "pastel", "release": f"  {PLAIN} ", "reason": " another\n album "}
+    dry = client.post("/mcp-api/run/blocklist_release", json=body, headers=WRITE)
+    assert dry.json["status"] == "done", dry.json
+    assert dry.json["args"] == {"album": "ALB3", "release": PLAIN, "reason": "another album"}
+    assert real_cli.ran[-1] == ["music-album-blocklist", "add", "--reason=another album", "--", "ALB3", PLAIN]
+    assert f"Release: {PLAIN} (300 MB) [{PLAIN_GUID}]" in dry.json["output"]
+    assert "Blocklist: not on it → by hand: another album (blocklisted by hand" in dry.json["output"]
+    applied = client.post("/mcp-api/run/blocklist_release", json={**body, "apply": True}, headers=WRITE)
+    assert applied.json["status"] == "done", applied.json
+    assert applied.json["locks"] == ["albums", "pipeline"]
+    assert albums.State.load().albums["ALB3"]["blocklist"] == [PLAIN_GUID]
+
+    reset = client.post("/mcp-api/run/reset_album", json={"query": "pastel", "reimport": True}, headers=WRITE)
+    assert "Stays on the blocklist" in reset.json["output"] and f"{PLAIN} (300 MB): by hand: another album" in \
+        reset.json["output"]
+
+    off = {"album": "ALB3", "release": PLAIN_GUID}
+    assert client.post("/mcp-api/run/unblocklist_release", json=off, headers=WRITE).json["status"] == "done"
+    removed = client.post("/mcp-api/run/unblocklist_release", json={**off, "apply": True}, headers=WRITE)
+    assert removed.json["status"] == "done", removed.json
+    assert albums.State.load().albums["ALB3"]["blocklist"] == []
+
+
+@pytest.mark.parametrize("body", [
+    {"album": "pastel", "release": "a\nb", "reason": "x"}, {"album": "pastel", "release": " ", "reason": "x"},
+    {"album": "pastel", "release": "x"}, {"album": "pastel", "release": "x", "reason": "x", "words": "x"}])
+def test_blocklist_release_needs_a_one_line_release_and_a_reason(client, env, body):
+    assert client.post("/mcp-api/run/blocklist_release", json=body, headers=WRITE).status_code == 400
+    assert env["commands"].ran == []
 
 
 def test_a_dashed_override_word_is_a_400(client, env):
