@@ -11,7 +11,16 @@ import time
 from dataclasses import asdict, replace
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 from music_service import flows, slots
+
+
+@pytest.fixture(autouse=True)
+def _slots_dir(tmp_path_factory, monkeypatch):
+    """These tests write other runs' records: keep them out of ``/tmp/music-slots``."""
+    monkeypatch.setattr(slots, "SLOTS_DIR", tmp_path_factory.mktemp("music-slots"))
+
 
 # 2026-11-12 13:14:20Z, the day tomato-gaur held albums for nearly five hours.
 SINCE = 1794489260.0
