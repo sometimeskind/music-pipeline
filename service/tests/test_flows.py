@@ -429,7 +429,7 @@ def test_a_busy_scan_with_files_waits_for_the_pipeline_then_runs(tmp_path, scan_
         "scan",
         ("release", "pipeline"),
     ]
-    assert logged[0] == "[WAIT] The pipeline slot is held by another run; waiting for it"
+    assert logged[0] == "[WAIT] The pipeline slot is held by another run (no holder recorded: a CLI run in the pod?); waiting for it"
     assert logged[1].startswith("[WAIT] Got the pipeline slot after ")
     assert len(logged) == 2
     assert _scheduled_scans(scan_deployment) == []
@@ -464,8 +464,8 @@ def test_a_busy_scan_whose_wait_runs_out_schedules_one_retry(tmp_path, scan_depl
     due = datetime.now(timezone.utc) + timedelta(seconds=prefect_client.SCAN_RETRY_SECONDS)
     assert abs((retry.expected_start_time - due).total_seconds()) < 60
     # The scan's own count: the file still copying and the cover aren't waiting.
-    assert logged == ["[WAIT] The pipeline slot is held by another run; waiting for it",
-                      "[WAIT] The pipeline slot was still held after 30 min",
+    assert logged == ["[WAIT] The pipeline slot is held by another run (no holder recorded: a CLI run in the pod?); waiting for it",
+                      "[WAIT] The pipeline slot was still held after 30 min (no holder recorded: a CLI run in the pod?)",
                       "Scan skipped — pipeline busy; retrying in 5 min (2 file(s) waiting)"]
 
     logged = _busy_scan(_inbox_batch(tmp_path / "again"))
@@ -1731,7 +1731,7 @@ def test_hold_says_it_waits_for_a_held_slot():
     assert mock_concurrency.call_args_list[1] == (("albums",), {"occupy": 1})
     free.__exit__.assert_called_once()
     lines = [c.args[0] % c.args[1:] for c in mock_logger.return_value.info.call_args_list]
-    assert lines[0] == "[WAIT] The albums slot is held by another run; waiting for it"
+    assert lines[0] == "[WAIT] The albums slot is held by another run (no holder recorded: a CLI run in the pod?); waiting for it"
     assert lines[1].startswith("[WAIT] Got the albums slot after ")
 
 
@@ -1775,7 +1775,7 @@ def test_the_album_tick_skips_only_after_its_wait():
         task, lines = _albums_flow()
     task.assert_not_called()
     assert lines == [f"Album tick skipped — another album run held the lock for "
-                     f"{flows.ALBUM_TICK_WAIT_SECONDS // 60} min"]
+                     f"{flows.ALBUM_TICK_WAIT_SECONDS // 60} min (no holder recorded: a CLI run in the pod?)"]
 
 
 def test_a_timeout_inside_the_album_tick_is_not_a_skip():
@@ -1851,6 +1851,10 @@ def test_the_pipeline_probe_takes_the_slot_and_lets_it_go():
         assert _pipeline_free() is True
     slot.assert_called_once_with("pipeline", occupy=1, timeout_seconds=SKIP_IF_BUSY_SECONDS)
     slot.return_value.__exit__.assert_called_once()
-    with patch("music_service.flows.concurrency") as slot:
+    with patch("music_service.flows.concurrency") as slot, \
+         patch("music_service.flows.get_run_logger") as logger:
         slot.return_value.__enter__.side_effect = TimeoutError
         assert _pipeline_free() is False
+    # The busy probe names the holder (homelab#2841).
+    logger.return_value.info.assert_called_once_with("[SYNC] The pipeline slot is held (%s)",
+                                                     "no holder recorded: a CLI run in the pod?")

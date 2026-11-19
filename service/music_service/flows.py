@@ -18,6 +18,7 @@ import music_scan.scan as scan
 from music_fetch.config import load_playlists
 from music_scan.metrics import ScanMetrics
 from music_scan.scan import INTERRUPTED, PRE_IMPORT_STEPS, MusicBrainzUnavailable
+from music_service import slots
 
 # Prefect runs each flow run in a `python -m prefect.engine` subprocess where its own
 # logging dictConfig owns the root logger (level WARNING). music_fetch / music_scan
@@ -525,14 +526,16 @@ def hold(name: str, wait: float | None = None) -> Iterator[None]:
 
     A wait says so (homelab#2596): ``[WAIT]`` when another run holds the slot,
     then how long it took.  Before, a flow waiting on a slot was silent, so a
-    stalled pipeline looked idle.  A slot whose holder died stays held until
+    stalled pipeline looked idle.  The wait line names the holder, and the run
+    records itself as the holder while it holds the slot (homelab#2841,
+    :mod:`music_service.slots`).  A slot whose holder died stays held until
     its lease expires (Prefect's default lease is 300 s)."""
     with contextlib.ExitStack() as stack:
         try:
             stack.enter_context(concurrency(name, occupy=1, timeout_seconds=SKIP_IF_BUSY_SECONDS))
         except TimeoutError:
             logger = get_run_logger()
-            logger.info("[WAIT] The %s slot is held by another run; waiting for it", name)
+            logger.info("[WAIT] The %s slot is held by another run (%s); waiting for it", name, slots.describe(name))
             start = time.monotonic()
             bound = {} if wait is None else {"timeout_seconds": wait}
             try:
@@ -540,6 +543,7 @@ def hold(name: str, wait: float | None = None) -> Iterator[None]:
             except TimeoutError:
                 raise Busy(name) from None
             logger.info("[WAIT] Got the %s slot after %ds", name, time.monotonic() - start)
+        stack.enter_context(slots.held(name))
         yield
 
 
@@ -585,6 +589,8 @@ def scan_flow() -> None:
         except TimeoutError:
             if not _wait_busy_scan(stack):
                 return
+        else:
+            stack.enter_context(slots.held("pipeline"))
         _run_scan_tasks()
 
 
@@ -629,7 +635,8 @@ def _wait_busy_scan(stack: contextlib.ExitStack) -> bool:
         try:
             stack.enter_context(hold("pipeline", wait=SCAN_WAIT_SECONDS))
         except Busy:
-            logger.info("[WAIT] The pipeline slot was still held after %d min", SCAN_WAIT_SECONDS // 60)
+            logger.info("[WAIT] The pipeline slot was still held after %d min (%s)", SCAN_WAIT_SECONDS // 60,
+                        slots.describe("pipeline"))
             _retry_busy_scan(count)
             return False
     return True
@@ -748,6 +755,7 @@ def _after_album_import() -> None:
             get_run_logger().info(
                 "Album import: playlists not regenerated — pipeline busy; the next scan regenerates them")
         else:
+            stack.enter_context(slots.held("pipeline"))
             try:
                 regen_playlists_task()
             except Exception:
@@ -1067,7 +1075,8 @@ def albums_flow() -> None:
         with hold("albums", wait=ALBUM_TICK_WAIT_SECONDS):
             album_tick_task(settings)
     except Busy:
-        logger.info("Album tick skipped — another album run held the lock for %d min", ALBUM_TICK_WAIT_SECONDS // 60)
+        logger.info("Album tick skipped — another album run held the lock for %d min (%s)",
+                    ALBUM_TICK_WAIT_SECONDS // 60, slots.describe("albums"))
 
 
 @flow(name="music-album-import", log_prints=True)
@@ -1112,6 +1121,7 @@ def _pipeline_free() -> bool:
         with concurrency("pipeline", occupy=1, timeout_seconds=SKIP_IF_BUSY_SECONDS):
             return True
     except TimeoutError:
+        get_run_logger().info("[SYNC] The pipeline slot is held (%s)", slots.describe("pipeline"))
         return False
 
 

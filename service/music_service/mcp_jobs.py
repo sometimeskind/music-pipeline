@@ -41,6 +41,7 @@ from pathlib import Path
 from typing import Callable, Iterator
 
 from music_fetch import events
+from music_service import slots
 
 logger = logging.getLogger(__name__)
 # The service's root logger may sit at WARNING under Prefect's logging config;
@@ -395,7 +396,9 @@ class JobQueue:
         if locks:
             self._update(job, status=WAITING)
             logger.info("[MCP] job=%s waiting for lock(s) %s", job_id, ", ".join(locks))
-        with self._locks(locks), log_path.open("a" if resumed else "w", encoding="utf-8") as log:
+        # The job names itself as the holder of its locks (homelab#2841).
+        with self._locks(locks), slots.held_all(locks, flow=f"mcp-job {job['tool']}", run=job_id), \
+                log_path.open("a" if resumed else "w", encoding="utf-8") as log:
             self._update(job, status=RUNNING, started_at=now())
             # MUSIC_LOCKS_HELD is only ever set here, for the locks this job holds.
             env = {k: v for k, v in os.environ.items() if k != "MUSIC_LOCKS_HELD"}
