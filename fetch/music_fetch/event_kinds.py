@@ -152,6 +152,9 @@ KINDS: dict[str, Kind] = {
                           (*_ITEM, "old", "new", "recording_title", "refreshed")),
     "recording_filled": Kind(ITEM, "[FILLED]: a request album's item given the recording AcoustID names.",
                              (*_ITEM, "key", "old", "new", "score", "track", "track_title", "item_track")),
+    "track_placed": Kind(ITEM, "[PLACED]: an album item imported with no track number given the disc, track and "
+                               "recording of the one track of its release AcoustID names (homelab#2680).",
+                         (*_ITEM, "key", "release", "old", "new", "score", "disc", "track", "track_title")),
     # --- Imports and the scan's later item changes ---
     "imported": Kind(ITEM, "[IMPORTED]: a spotdl download imported into the library.",
                      (*_ITEM, "playlist", "spotify_ids", "isrc", "mb_trackid", "fallback_recording")),

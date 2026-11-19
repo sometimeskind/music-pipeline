@@ -128,6 +128,15 @@ rescues a file until the purge. The import's event (`album_history`) says which 
   the id_linked event's `skipped`, and its playlist entry stays empty, so the fetch may download
   it again. `backfill_album_ids` runs that rung over albums already imported: it only writes
   Spotify IDs, so it moves no file and retires or merges nothing.
+- **A release whose files carry no track numbers** (every item at track 0, `library_status`'
+  `no_track`): the rung has no slot to read, so no entry links. The import, and
+  `backfill_album_ids` for an album already imported, look each such item up on AcoustID: when
+  its fingerprint names exactly one track of the album's release, the item takes that track's
+  disc, number and recording (`[PLACED]`, a `track_placed` event), and the rung then links it
+  by that slot and its title. A file name is no evidence of a number, and a title alone none of
+  a recording: an item AcoustID can't place stays at track 0 (`[NOPLACE]` with why: no
+  confident recording, none on the release, several tracks, another song's slot, a slot another
+  item holds). Its path keeps `00 - ` until canon runs on it (`canon_albums`).
 - **A wrong extra:** a reimport doesn't take extras off, since the kept release lacks their
   recording: a wrong release's live tracks stay as `[LOCAL]` extras after the right release
   arrives. The user chooses them, and `retire_item` with the IDs and a reason takes them off,

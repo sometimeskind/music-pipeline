@@ -868,6 +868,18 @@ def _album_library_hooks(lib):
 
         return release.one_format(folder, key)
 
+    def place(playlist: str, key: str, since: float, release: str | None) -> None:
+        # Before tag_ids (homelab#2680): the release's items imported at track 0 take the
+        # slot and recording their fingerprint names on the files' release, so the number
+        # rung can link them.  The lookups run outside the slot, the writes under it; a
+        # failure leaves them at track 0 for backfill_album_ids, and the import goes on.
+        from music_scan import unnumbered  # noqa: PLC0415
+
+        try:
+            unnumbered.at_import(lib, playlist, key, since, release, lock=lambda: hold("pipeline"))
+        except Exception:
+            unnumbered.logger.exception("Placing the items at track 0 failed; backfill_album_ids retries it")
+
     def tag_ids(playlist: str, tracks: list[list], since: float, tracks_count: int, key: str) -> None:
         # Every step writes the library, so all of them hold the slot, as one
         # block (#506): the IDs and canon ran outside it, raced a scan's beet
@@ -941,7 +953,8 @@ def _album_library_hooks(lib):
         imported.clear()
         # save: the import's start is in the database before beets runs (homelab#2603).
         status = albums.complete(state, completion, import_inbox, claim, add_source, tag_ids, retire,
-                                 identify=identify, import_rest=import_rest, save=state.save, one_format=one_format)
+                                 identify=identify, import_rest=import_rest, save=state.save, one_format=one_format,
+                                 place=place)
         if imported:
             _after_album_import()
         keys.clear()

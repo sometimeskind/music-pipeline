@@ -666,9 +666,12 @@ def build_server(
     @mcp.tool(annotations={"destructiveHint": True})
     async def backfill_album_ids(apply: Apply = False) -> dict:
         """music-backfill-ids --albums: link imported albums' empty playlist entries to the
-        release item at their disc and track with their title. The dry run lists each [LINK] and
-        each [NOID] left empty, with the reason. Writes Spotify IDs only: it moves no file and
-        retires or merges nothing. unlink_spotify_id undoes one link."""
+        release item at their disc and track with their title. First, a release item at track 0
+        (files with no numbers) is looked up on AcoustID and, when its fingerprint names exactly
+        one track of the album's release, takes that track's disc, number and recording
+        ([WOULD-PLACE]; [NOPLACE] with why when not). The dry run lists those, each [LINK] and each
+        [NOID] left empty, with the reason. Otherwise it writes Spotify IDs only: it moves no file
+        and retires or merges nothing. unlink_spotify_id undoes one link."""
         return await run("backfill_album_ids", {"apply": apply}, write=True)
 
     @mcp.tool(annotations={"destructiveHint": True})

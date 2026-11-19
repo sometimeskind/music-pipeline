@@ -493,7 +493,7 @@ def _no_retire(key, record, keep, drop):
 
 
 def run_complete(state, completion, roots, have_result=True, imported=None, tagged=None, titles=None,
-                 identity=None, retired=None, claimed=None, rest=None, as_is=0, lengths=None):
+                 identity=None, retired=None, claimed=None, rest=None, as_is=0, lengths=None, placed=None):
     """*titles* are the titles of the release's items beets imported (default:
     the album's, or none when *have_result* is False), *lengths* their lengths
     (default: 200 s each); *identity* is the release's MusicBrainz match;
@@ -521,10 +521,25 @@ def run_complete(state, completion, roots, have_result=True, imported=None, tagg
         tag_ids=lambda pl, tracks, since, count, key: tagged.append((pl, count)),
         retire=lambda key, record, keep, drop: retired.append((keep, drop)) or 0,
         identify=(lambda folder: identity),
+        place=None if placed is None else (lambda pl, key, since, release: placed.append((pl, key, release, len(tagged)))),
         import_rest=(lambda pl, job: (rest if rest is not None else []).append((pl, job)) or as_is),
         complete_root=complete_root, inbox_root=inbox, quarantine_root=quarantine,
     )
     return status, seen, added
+
+
+def test_complete_places_unnumbered_items_on_the_files_release_before_the_ids(roots) -> None:
+    """homelab#2680: the release's items at track 0 get their slot from their fingerprint
+    on the release the files were matched to, before tag_ids reads the slots."""
+    state = grabbed_state()
+    key = next(iter(state.albums))
+    placed, tagged = [], []
+    identity = {"mb_albumid": "132908e4-1391-4dd0-bdef-824f9d3375ec", "album": "Album", "tracks": 1, "files": 1,
+                "missing": 0, "unmatched": 0}
+    status, _, _ = run_complete(state, albums.Completion("nzo1", True, "album/Artist-Album-FLAC"), roots,
+                                identity=identity, placed=placed, tagged=tagged)
+    assert status == albums.IMPORTED
+    assert placed == [("later", key, "132908e4-1391-4dd0-bdef-824f9d3375ec", 0)] and tagged
 
 
 def test_complete_imports_from_the_playlist_inbox(roots) -> None:
