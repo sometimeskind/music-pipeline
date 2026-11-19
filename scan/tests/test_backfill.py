@@ -97,6 +97,46 @@ def test_disjoint_isrcs_stay_wrong_when_musicbrainz_disagrees_or_fails() -> None
         assert plan.same_recording == 0
 
 
+def test_a_near_miss_isrc_is_listed_apart_never_linked_or_redownloaded(caplog) -> None:
+    """homelab#2732: the 2026-11-09 dry run's near misses, one look-alike character or one swap
+    apart with the digits equal, are no wrong version on the ISRCs alone and no link either.
+    Digits that differ (FR0Q10900165 against FROQ10900142) stay a wrong version."""
+    one_i = _item(1, "Song", "a,b", spotify_url=URL + "MINE", isrc="USSMI0104366")
+    swapped = _item(2, "Other", "a,b", spotify_url=URL + "MINE2", isrc="GBALZ0500225")
+    digits = _item(3, "Third", "a,b", spotify_url=URL + "MINE3", isrc="FROQ10900142")
+    songs = {"a": [_song("MINE", isrc="USSMI0104366"), _song("MINE2", "Other", isrc="GBALZ0500225"),
+                   _song("MINE3", "Third", isrc="FROQ10900142")],
+             "b": [_song("SP1", isrc="USSM10104366"), _song("SP2", "Other", isrc="GBLAZ0500225"),
+                   _song("SP3", "Third", isrc="FR0Q10900165")]}
+    with caplog.at_level("INFO", logger="music_scan.backfill"):
+        plan = plan_backfill([one_i, swapped, digits], songs, lambda _: {"another-recording"})
+        report(plan)
+    assert [(w.song["song_id"], w.item.id) for w in plan.near_miss] == [("SP1", 1), ("SP2", 2)]
+    assert [(w.song["song_id"], w.item.id) for w in plan.wrong] == [("SP3", 3)]
+    assert one_i.data["isrc"] == "USSMI0104366" and swapped.data["isrc"] == "GBALZ0500225"
+    assert "SP1" not in one_i.data["spotify_ids"] and "SP2" not in swapped.data["spotify_ids"]
+    assert {(("b", 1)), ("b", 2)} <= plan.claimed
+    assert "[NEARMISS] b: Artist — Song (SP1, ISRC USSM10104366) and /lib/Song.m4a (item 1, ISRC USSMI0104366)" \
+        in caplog.text
+    assert "1 wrong version(s), 2 near-miss ISRC(s)" in caplog.text
+
+
+def test_a_near_miss_musicbrainz_settles_is_the_same_recording() -> None:
+    item = _item(1, "Song", "b", isrc="USSMI0104366", mb_trackid="rec")
+    plan = plan_backfill([item], {"b": [_song("SP1", isrc="USSM10104366")]}, lambda _: {"rec"})
+    assert (plan.same_recording, plan.near_miss, plan.wrong) == (1, [], [])
+    assert item.data["spotify_ids"] == "SP1"
+
+
+def test_a_near_miss_is_never_redownloaded() -> None:
+    item = _item(1, "Song", "a,b", spotify_url=URL + "MINE", isrc="USSMI0104366")
+    songs = {"a": [_song("MINE", isrc="USSMI0104366")], "b": [_song("SP1", isrc="USSM10104366")]}
+    plan, dl, _ = _run([item], songs, apply=True, redownload=5)
+    dl.assert_not_called()
+    assert item.data["sources"] == "a,b"
+    assert len(plan.near_miss) == 1
+
+
 def test_musicbrainz_lookup_reads_recordings_and_caches(monkeypatch) -> None:
     import io
     import json
@@ -274,6 +314,14 @@ def test_albums_links_what_the_rung_links_and_reports_the_rest() -> None:
                                                            ("1699", "number, other isrc")]
     assert plan.albums == 4
     assert "spotify_ids" not in falling.data, "a plan changes nothing"
+
+
+def test_albums_a_near_miss_isrc_is_its_own_reason_and_no_link() -> None:
+    """homelab#2732: the number rung leaves a near miss empty too, saying it is one."""
+    item = _usenet(5, "Song", 1, "20", isrc="GBALZ0500226")
+    plan = plan_album_ids([item], {"20": _record(["Song", "Artist", "SP", "GBLAZ0500226", 1, 1])}, {}.get)
+    assert plan.links == []
+    assert [k.why["why"] for k in plan.skips] == ["number, near-miss isrc"]
 
 
 def test_albums_leaves_entries_an_item_holds_and_records_not_imported() -> None:
