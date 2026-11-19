@@ -199,10 +199,17 @@ class LibraryAlbum:
     """The album's record in the album store, if any."""
     on: dict[str, list[dict]] = dataclasses.field(default_factory=dict)
     """Every store track on the album, held or wanted, by playlist (:func:`library_view`)."""
+    elsewhere: list = dataclasses.field(default_factory=list)
+    """The loose held items whose recording another album's release import
+    holds too (an ID agrees, homelab#2802): copies of a track the library has
+    on an album already, so no reference to this one."""
 
     @property
     def refs(self) -> int:
-        return len(self.held) + len(self.wanted)
+        """The references that ask for this album: its held recordings, less the
+        ones another album's release import holds (:attr:`elsewhere`), and its
+        wanted tracks."""
+        return len(self.held) - len(self.elsewhere) + len(self.wanted)
 
     @property
     def loose(self) -> list:
@@ -238,10 +245,22 @@ class LibraryAlbum:
 def library_albums(items, wanted: list[AlbumWants], records: dict[str, dict]) -> tuple[list[LibraryAlbum], int]:
     """Every Spotify album the library's items (by ``spotify_album_id``) and
     the *wanted* albums reference, each recording once, and the number of
-    items with no Spotify album (not counted).  Local-file keys are left out."""
+    items with no Spotify album (not counted).  Local-file keys are left out.
+
+    A loose item whose recording a release import holds on another album (by
+    Spotify ID, ISRC or MusicBrainz recording; homelab#2802) is held but no
+    reference (:attr:`LibraryAlbum.elsewhere`): album 594 imported *PAINLESS*
+    under its deluxe edition, and two loose copies of its tracks on the
+    standard edition made the library feed grab the same release again (1995)."""
     albums: dict[str, LibraryAlbum] = {}
     seen: dict[str, set[str]] = {}
     unplaced = 0
+    items = list(items)
+    placed: dict[str, set[str | None]] = {}  # recording ID → the Spotify albums release imports hold it on
+    for item in items:
+        if item.get("album_record"):
+            for rid in item_recording_ids(item):
+                placed.setdefault(rid, set()).add(item.get("spotify_album_id") or None)
     # A record by any of its Spotify album IDs: two editions of one release group are one (homelab#2410).
     records = {ref: r for k, r in records.items() for ref in (k, *(r.get("spotify_album_ids") or ()))}
     for item in items:
@@ -260,6 +279,8 @@ def library_albums(items, wanted: list[AlbumWants], records: dict[str, dict]) ->
             continue  # another copy of a recording already counted
         known |= ids
         album.held.append(item)
+        if not item.get("album_record") and any(other != key for rid in ids for other in placed.get(rid, ())):
+            album.elsewhere.append(item)
     for want in wanted:
         if not _spotify_album(want.key):
             continue

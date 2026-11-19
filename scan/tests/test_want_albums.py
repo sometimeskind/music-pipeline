@@ -264,3 +264,27 @@ def test_library_view_puts_every_store_track_on_its_album() -> None:
     assert {n: [s["song_id"] for s in songs] for n, songs in by_key["A"].on.items()} == {"pl": ["a1", "a2"], "mood": ["a2"]}
     assert by_key["Z"].on == {}  # held, on no playlist
     assert not by_key["A"].whole and want_albums.LibraryAlbum("K", "", "", 1, [items[0]]).whole
+
+
+def test_a_track_another_albums_release_holds_is_no_reference() -> None:
+    """homelab#2802: 594 imported *PAINLESS* under its deluxe edition (D); two
+    loose copies of its tracks on the standard edition (S) referenced S, and
+    the library feed grabbed the same release again as 1995."""
+    def isrc_item(item_id, album, isrc, record=None):
+        item = _item(item_id, album, record=record)
+        fields = {"spotify_album_id": album, "isrc": isrc, "album_record": record, "albumartist": "Artist",
+                  "album": f"Album {album}"}
+        item.get.side_effect = lambda k, d=None: fields.get(k) or d
+        return item
+
+    release = [isrc_item(11892 + n, "D", f"USATO21003{n:02d}", record="594") for n in range(12)]
+    loose = [isrc_item(251, "S", "USATO2100311"), isrc_item(253, "S", "USATO2100303")]
+    other = isrc_item(300, "S", "USATO2100399")  # a track the deluxe import doesn't hold
+    albums, _ = want_albums.library_albums([*release, *loose], [], {})
+    standard = {a.key: a for a in albums}["S"]
+    assert (len(standard.held), standard.elsewhere, standard.refs) == (2, loose, 0)
+    assert {a.key: a for a in albums}["D"].refs == 12  # its own import's items count for it
+
+    albums, _ = want_albums.library_albums([*release, *loose, other], [_wants("S", "s9")], {})
+    standard = {a.key: a for a in albums}["S"]
+    assert standard.refs == 2  # the track only S has, and the wanted one
