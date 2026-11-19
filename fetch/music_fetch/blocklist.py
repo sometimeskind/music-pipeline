@@ -24,10 +24,15 @@ blocks only its own GUID, as another indexer's copy may be another post, and
 complete, so that copy may be tried once; a second dead copy of the title
 blocks the rest.  An entry whose reason isn't known blocks only its GUID, as
 every entry did before.  The record stores no kind, so the records written
-before homelab#2757 read the same way.  A later "blocklist this release" tool
-(homelab#2750) adds a wrong release by appending its GUID and recording a
-``failure`` event with that GUID, the release's title and a reason that begins
-with one of :data:`VERDICTS`.
+before homelab#2757 read the same way.
+
+A third kind is a person's (homelab#2750): ``music-album-blocklist``
+(``blocklist_release``) appends a release's GUID and records a ``blocklisted``
+event with that GUID, its title and a reason that begins :data:`BY_HAND`.  Such
+a :data:`HAND` entry blocks every copy of its title, as a wrong release does,
+and no reset clears it, the last candidate included: only
+``unblocklist_release`` takes it off.  Like any entry it reads its reason from
+the events, so once they are pruned it blocks only its GUID, and still stays.
 """
 
 from __future__ import annotations
@@ -61,10 +66,15 @@ SELECT at, kind, data FROM events
 """
 
 
+# How the reason of a release a person blocklisted begins, and its kind (homelab#2750).
+BY_HAND = "by hand: "
+HAND = "by hand"
+
+
 def album_events(conn, refs: list[str], group: str | None) -> list[tuple[datetime, str, dict]]:
     """The album's grabs and their outcomes, oldest first (*refs*: :func:`events.album_refs`)."""
-    return conn.execute(_EVENTS, {"kinds": ["grab", "failure", "import_incomplete"], "refs": list(refs),
-                                  "group": group}).fetchall()
+    return conn.execute(_EVENTS, {"kinds": ["grab", "failure", "import_incomplete", "blocklisted"],
+                                  "refs": list(refs), "group": group}).fetchall()
 
 
 def _reason(kind: str, data: dict) -> str:
@@ -120,7 +130,7 @@ def entries(record: dict, rows: list[tuple[datetime, str, dict]] | None) -> list
     dead = Counter(_name(e) for e in out if e["kind"] == DEAD_DOWNLOAD and _name(e))
     for e in out:
         e["every_copy"] = bool(_name(e)) and (
-            e["kind"] == WRONG_RELEASE or e["kind"] == DEAD_DOWNLOAD and dead[_name(e)] >= DEAD_COPIES)
+            e["kind"] in (WRONG_RELEASE, HAND) or e["kind"] == DEAD_DOWNLOAD and dead[_name(e)] >= DEAD_COPIES)
     return out
 
 
@@ -129,10 +139,14 @@ def _name(entry: dict) -> str:
 
 
 def kind(entry: dict) -> str | None:
-    """:data:`WRONG_RELEASE` when *entry*'s reason is a verdict on what the
-    release held (:data:`VERDICTS`), :data:`DEAD_DOWNLOAD` for any other
-    failure, and None when the reason isn't known."""
+    """:data:`HAND` when a person blocklisted *entry* (:data:`BY_HAND`),
+    :data:`WRONG_RELEASE` when its reason is a verdict on what the release held
+    (:data:`VERDICTS`), :data:`DEAD_DOWNLOAD` for any other failure, and None
+    when the reason isn't known.  A hand entry is no wrong release, so
+    :func:`stays` keeps it."""
     reason = entry["reason"]
+    if reason.startswith(BY_HAND):
+        return HAND
     if reason.startswith(VERDICTS):
         return WRONG_RELEASE
     if reason == UNKNOWN or reason.startswith(f"{UNKNOWN}:"):
@@ -164,6 +178,9 @@ def reach(entry: dict) -> str:
     """What *entry* blocks, in words: its kind, and which copies."""
     if entry.get("kind") is None:
         return "why isn't known, so only this copy"
+    if entry["kind"] == HAND:
+        copies = "every copy of it, on any indexer" if entry["every_copy"] else "only this copy: its title isn't recorded"
+        return f"blocklisted by hand, so {copies}; no reset clears it"
     if entry["every_copy"]:
         if entry["kind"] == WRONG_RELEASE:
             return "a wrong release, so every copy of it, on any indexer"

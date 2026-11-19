@@ -12,6 +12,7 @@ dependencies = []
 music-ingest = "music_fetch.cli:main"
 music-album-reset = "music_fetch.albums:reset_main"
 music-album-requeue = "music_fetch.albums:requeue_main"
+music-album-blocklist = "music_fetch.blocklist_cli:main"
 music-album-resolve = "music_fetch.album_resolve:resolve_main"
 music-overrides = "music_fetch.overrides_cli:main"
 music-requests = "music_fetch.album_requests_cli:main"

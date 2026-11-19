@@ -105,6 +105,14 @@ KINDS: dict[str, Kind] = {
                   (*_RECORD, "before", "after", "reimport")),
     "requeued": Kind(ALBUM, "[REQUEUE]: an album requeued by hand (music-album-requeue, requeue_albums).",
                      (*_RECORD, "fell_back_at", "tracks")),
+    "blocklisted": Kind(ALBUM, "[BLOCKLIST]: a release blocklisted for an album by hand (music-album-blocklist, "
+                               "blocklist_release); data.reason begins 'by hand: ', so no reset clears it, and "
+                               "data.was is the entry's reason before, when it was on the blocklist already "
+                               "(homelab#2750).",
+                        (*_RECORD, "release", "guid", "size", "reason", "was")),
+    "unblocklisted": Kind(ALBUM, "[UNBLOCKLIST]: a release blocklisted by hand taken off its album's blocklist "
+                                 "(music-album-blocklist remove, unblocklist_release), with its reason.",
+                          (*_RECORD, "release", "guid", "reason")),
     # --- Requests, Later and the resolve pass ---
     "album_requested": Kind(ALBUM, "An album requested, or a request taking over a record (data.what).",
                             (*_RECORD, "requested_by", "preferred_release", "tracklist_release", "tracks", "what",
