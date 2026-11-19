@@ -97,6 +97,24 @@ def test_a_value_that_isnt_an_isrc_is_never_one() -> None:
     assert drop_bad_isrcs(item) == []
 
 
+def test_isrc_near_miss_is_one_lookalike_or_one_swap_with_the_digits_equal() -> None:
+    """homelab#2732's pairs."""
+    from music_scan.identity import isrc_near_miss
+
+    assert isrc_near_miss("USSM10104366", "USSMI0104366")  # 1 against I
+    assert isrc_near_miss("USSML0104366", "USSMI0104366")  # L against I
+    assert isrc_near_miss("FR0Q10900165", "FROQ10900165")  # 0 against O
+    assert isrc_near_miss("GBLAZ0500225", "GBALZ0500225")  # LA swapped
+    assert isrc_near_miss("gb-laz-05-00226", "GBALZ0500226")
+    assert not isrc_near_miss("FR0Q10900165", "FROQ10900142")  # the digits differ too
+    assert not isrc_near_miss("USSM10104366", "USSM10104366")  # one code
+    assert not isrc_near_miss("USSM10104366", "USSX10104366")  # not a look-alike
+    assert not isrc_near_miss("GBLAZ0500225", "GBZAL0500225")  # not neighbours
+    assert not isrc_near_miss("USSM10104366", "USSMI0104367")
+    assert not isrc_near_miss("PMEDIA", "PMEDIA")
+    assert not isrc_near_miss("USSM10104366", None)
+
+
 def test_item_index_ladder() -> None:
     by_id = _item("Song", spotify_ids="SID")
     by_isrc = _item("Song (Remastered)", isrc="GBAAA0000001;GBBBB0000002")

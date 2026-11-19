@@ -16,6 +16,10 @@ track ID) and, per playlist entry:
    (``mb_trackid``): one recording often has several ISRCs (editions,
    clean/explicit, labels), so that is the same recording, as in the
    duplicate hook (#191).  Only these candidates are looked up.
+   Nor when the two ISRCs are a near miss (homelab#2732: one look-alike
+   character or one swap apart, the digits equal, as a typo leaves them):
+   that is listed as ``[NEARMISS]``, never linked and never redownloaded,
+   until a recording or a fingerprint says which it is.
    Other matches by ID or ISRC get the entry's ID and ISRC.  A match by
    title+artist words alone (``[WORDS]``) is no identity (homelab#2731): the
    entry's ID goes in ``words_ids`` only, never in ``spotify_ids``, and its
@@ -64,6 +68,7 @@ from music_scan.identity import (
     PlaylistTrack,
     add_isrcs,
     add_to_list,
+    isrc_near_miss,
     item_isrcs,
     number_match,
     skip_note,
@@ -97,6 +102,8 @@ class Plan:
     disagree: int = 0
     compared: int = 0
     wrong: list[WrongVersion] = dataclasses.field(default_factory=list)
+    # Disjoint ISRCs one look-alike character or swap apart (homelab#2732): listed, never linked or redownloaded.
+    near_miss: list[WrongVersion] = dataclasses.field(default_factory=list)
     # Disjoint ISRCs, but MusicBrainz lists the entry's ISRC on the item's recording.
     same_recording: int = 0
     # (playlist, item.id) pairs that some entry rightly maps to.
@@ -160,6 +167,11 @@ def _record_words(plan: Plan, playlist: str, song: dict, item) -> None:
 def _contradicts(song: dict, item) -> bool:
     isrc, have = song.get("isrc"), item_isrcs(item)
     return bool(isrc and have and isrc not in have)
+
+
+def _near_miss(song: dict, item) -> bool:
+    """True when one of *item*'s ISRCs is a near miss of the entry's (:func:`isrc_near_miss`)."""
+    return any(isrc_near_miss(song.get("isrc"), code) for code in item_isrcs(item))
 
 
 class MusicBrainzRecordings:
@@ -263,6 +275,11 @@ def plan_backfill(
                         playlist, _label(song), song.get("isrc"), item.get("mb_trackid"), item.get("isrc"),
                     )
                     _record(plan, playlist, song, item)
+                elif _near_miss(song, item):
+                    # Maybe the entry's recording under a mistyped ISRC: no wrong version on that alone, and no
+                    # link either.  Claimed, so another entry's redownload leaves the item on the playlist.
+                    plan.claimed.add((playlist, item.id))
+                    plan.near_miss.append(WrongVersion(playlist, song, item))
                 else:
                     plan.wrong.append(WrongVersion(playlist, song, item))
             elif rung == BY_WORDS:
@@ -290,12 +307,20 @@ def report(plan: Plan) -> None:
             "[WRONG] %s: %s (%s, ISRC %s) is held by %s (ISRC %s)",
             w.playlist, _label(w.song), _song_id(w.song), w.song.get("isrc"), path, w.item.get("isrc"),
         )
+    for w in plan.near_miss:
+        path = w.item.path.decode() if isinstance(w.item.path, bytes) else w.item.path
+        logger.info(
+            "[NEARMISS] %s: %s (%s, ISRC %s) and %s (item %s, ISRC %s): the ISRCs are one look-alike character or "
+            "swap apart, so they don't say which; left as is until a recording or fingerprint settles it",
+            w.playlist, _label(w.song), _song_id(w.song), w.song.get("isrc"), path, w.item.id, w.item.get("isrc"),
+        )
     logger.info(
         "Backfill: %d item(s) to change — %d spotify_ids from spotify_url, %d Spotify ID(s) and %d ISRC(s) "
         "added by own entries and ID, ISRC or [SAME] matches; %d by title+artist only (words_ids, no ISRC); "
-        "%d wrong version(s), %d same recording by MusicBrainz; %d playlist entr(ies) with no library item",
+        "%d wrong version(s), %d near-miss ISRC(s), %d same recording by MusicBrainz; %d playlist entr(ies) with "
+        "no library item",
         len(plan.changed), plan.ids_from_url, plan.ids_added, plan.isrcs_added, plan.by_words,
-        len(plan.wrong), plan.same_recording, plan.missing,
+        len(plan.wrong), len(plan.near_miss), plan.same_recording, plan.missing,
     )
     logger.info(
         "ISRCs: Spotify and MusicBrainz disagree on %d of %d downloaded track(s) both tagged",

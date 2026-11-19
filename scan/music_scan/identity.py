@@ -178,6 +178,28 @@ def split_isrcs(value: str | None) -> list[str]:
     return list(dict.fromkeys(filter(None, map(isrc_code, split_list(value, ";")))))
 
 
+_LOOKALIKE = {"O": "0", "I": "1", "L": "1"}
+
+
+def isrc_near_miss(a: str | None, b: str | None) -> bool:
+    """True when ISRCs *a* and *b* differ, but only by one look-alike character
+    (``0``/``O``, ``1``/``I``/``L``) or one swap of neighbouring characters in
+    the country and registrant, their seven digits equal (homelab#2732):
+    ``USSM10104366`` and ``USSMI0104366``, ``GBLAZ0500225`` and
+    ``GBALZ0500225``.  A typo on one side, maybe, so the ISRCs alone don't
+    make the pair two recordings; they never make it one either: only an ID
+    that agrees does."""
+    a, b = isrc_code(a), isrc_code(b)
+    if not (a and b) or a == b or a[5:] != b[5:]:
+        return False
+    x, y = a[:5], b[:5]
+    diff = [i for i in range(5) if x[i] != y[i]]
+    if len(diff) == 1:
+        i = diff[0]
+        return _LOOKALIKE.get(x[i], x[i]) == _LOOKALIKE.get(y[i], y[i])
+    return len(diff) == 2 and diff[1] == diff[0] + 1 and (x[diff[0]], x[diff[1]]) == (y[diff[1]], y[diff[0]])
+
+
 def bad_isrcs(item) -> list[str]:
     """The entries of *item*'s ``isrc`` that aren't ISRCs (:func:`isrc_code`)."""
     return [c for c in split_list(item.get("isrc"), ";") if not isrc_code(c)]
@@ -349,6 +371,7 @@ def isrc_guess_refuted(isrc: str, item, recordings) -> bool:
 
 OTHER_TITLE, SEVERAL_ITEMS = "number, other title", "number, several items"
 OTHER_VERSION, OTHER_ISRC = "number, other version", "number, other isrc"
+NEAR_ISRC = "number, near-miss isrc"
 NO_ITEM, HELD_ELSEWHERE = "no item", "number, held by another item"
 
 
@@ -383,8 +406,10 @@ def number_match(track: PlaylistTrack, items, recordings) -> tuple[object | None
                       **where}
     have = item_isrcs(item)
     if track.isrc and have and track.isrc not in have and not isrc_guess_refuted(track.isrc, item, recordings):
-        return None, {"why": OTHER_ISRC, "item_id": item.id, "item_isrc": item.get("isrc"), "isrc": track.isrc,
-                      **where}
+        # A near miss (homelab#2732) doesn't link either: it is only no evidence of another recording.
+        near = any(isrc_near_miss(track.isrc, code) for code in have)
+        return None, {"why": NEAR_ISRC if near else OTHER_ISRC, "item_id": item.id, "item_isrc": item.get("isrc"),
+                      "isrc": track.isrc, **where}
     return item, None
 
 
@@ -397,6 +422,9 @@ def skip_note(skip: dict) -> str:
         OTHER_VERSION: f"item {skip.get('item_id')} at {slot} is another version ({skip.get('versions')})",
         OTHER_ISRC: f"item {skip.get('item_id')} at {slot} holds ISRC {skip.get('item_isrc')}, "
                     f"the entry {skip.get('isrc')}, and nothing says they are one recording",
+        NEAR_ISRC: f"item {skip.get('item_id')} at {slot} holds ISRC {skip.get('item_isrc')}, the entry "
+                   f"{skip.get('isrc')}, one look-alike character or swap apart: a recording or fingerprint "
+                   "settles it, not the ISRC",
         HELD_ELSEWHERE: f"item {skip.get('held_by')} already holds it, so {skip.get('item_id')} at {slot} doesn't",
     }.get(skip.get("why"), "no item by ISRC or at its disc/track")
 
