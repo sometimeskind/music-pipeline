@@ -43,6 +43,8 @@ One that matches none: `404 {"status": "not_found", "query": "..."}`.
 ```json
 {"status": "ok",
  "items": 10234,
+ "shapes": {"no_track": {"count": 21, "ids": [19630, 22861]}, "no_title": {"count": 33, "ids": [19630]},
+            "long": {"count": 4, "ids": [19214]}},
  "albums": {"total": 412, "by_status": {"imported": 300, "wanted": 80, "fallback": 20, "failed": 12}},
  "album_mode": "on",
  "quarantine": {"unmatched": 14, "rejected": 3, "replaced": 120, "keep": 1},
@@ -50,6 +52,10 @@ One that matches none: `404 {"status": "not_found", "query": "..."}`.
  "jobs": {"running": {"job_id": "…", "tool": "canon_albums", "status": "running"}, "queued": 1, "depth": 5,
           "long": {"job_id": "…", "tool": "recheck_recordings", "status": "running", "lane": "long"}}}
 ```
+
+`shapes` counts the items no playlist entry can link or that may hold more than one track: at track 0
+(`no_track`, homelab#2680), with a blank title (`no_title`, homelab#2687), and over 20 minutes (`long`, an
+unsplit disc image or a real long track, homelab#2688), each with its first 50 item IDs. Counts, not verdicts.
 
 ### `GET /mcp-api/albums?query=Q` (`find_albums`)
 

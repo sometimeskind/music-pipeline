@@ -91,7 +91,7 @@ import shutil
 import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Callable, Collection, Mapping, Protocol
+from typing import Callable, Collection, Mapping, NamedTuple, Protocol
 
 import psycopg
 
@@ -171,6 +171,10 @@ TRACKLISTS_PER_TICK = 10
 # single's one title proves little either way.  :func:`holds_none` still refuses
 # a release that holds none of them (homelab#2683).
 WRONG_ALBUM_MIN_TRACKS = 4
+# A release of under half the album's tracks in files whose mean length is over this
+# many times the album's mean track is unsplit disc images (:func:`disc_images`,
+# homelab#2688): Bee Gees *Greatest*, 2 files of 2,533 s for 27 tracks of 227 s.
+IMAGE_LENGTH_RATIO = 3
 
 
 def _env_int(name: str, default: int) -> int:
@@ -1766,11 +1770,20 @@ Identify = Callable[[Path], "dict | None"]
 # one_format(job dir, key): drop the lesser formats of a job holding the same tracks in
 # several (homelab#2671): {"kept": …, "dropped": […], "tracks": n}, or None if nothing went.
 OneFormat = Callable[[Path, str], "dict | None"]
+
+
+class Claimed(NamedTuple):
+    """One item a release's import claimed (:data:`Claim`): its title and length in seconds."""
+
+    title: str
+    length: float = 0.0
+
+
 # claim(playlist, since, key, release, job): stamp the release's fresh items (those
 # imported from inbox folder *job*, #284) with their album record and this import of
 # the release (``<guid>@<start>``: a release grabbed again after a reset is another
-# copy); returns their titles.
-Claim = Callable[[str, float, str, str, str], list[str]]
+# copy); returns each one's title and length.
+Claim = Callable[[str, float, str, str, str], list[Claimed]]
 # retire(key, record, keep, drop): quarantine the record's other copies whose
 # recording release *keep* holds, keeping the rest on the album as local-only
 # extras (#287), or release *drop*'s items.  Returns the count quarantined.
@@ -1820,6 +1833,45 @@ def holds_none(record: dict, titles: list[str]) -> bool:
     if not (wanted and have and all(wanted) and all(have)):
         return False
     return not any(f" {w} " in f" {h} " or f" {h} " in f" {w} " for w in wanted for h in have)
+
+
+def disc_images(record: dict, claimed: list[Claimed]) -> str | None:
+    """Why the *claimed* items are unsplit disc images rather than the album's tracks
+    (homelab#2688), or None: fewer than half as many files as the album's Spotify
+    tracks, whose mean length is over :data:`IMAGE_LENGTH_RATIO` times the album's mean
+    track.  The share of titles can't see it: an image carries one track's title.  A
+    single-track album or a DJ mix Spotify lists as one track has as many files as
+    tracks, so it passes; so does a release that only lacks tracks, its files being
+    tracks' length.  Unjudged without the album's track count and duration, or with a
+    file whose length beets didn't read."""
+    count, duration = record.get("tracks_count") or 0, record.get("duration") or 0
+    lengths = [c.length for c in claimed]
+    if not (claimed and count and duration and all(lengths)) or len(claimed) * 2 >= count:
+        return None
+    mean, track = sum(lengths) / len(lengths), duration / count
+    if mean <= IMAGE_LENGTH_RATIO * track:
+        return None
+    return (f"{len(claimed)} file(s) for the album's {count} tracks, {mean:.0f} s each against {track:.0f} s "
+            "a track: unsplit disc images")
+
+
+def untitled(claimed: list[Claimed]) -> str | None:
+    """Why the *claimed* items can't be the album's tracks for lack of titles
+    (homelab#2687), or None.  A file beets matched to nothing and imported as it is
+    keeps its own tags, and an untagged one has none: an item with no title or
+    artist, which no playlist entry can link, and whose path (``00 - .m4a``) every
+    other such item of the album clashes on.  Naming it would take a fingerprint
+    lookup the import doesn't make, so one such file fails the release, and the
+    next release is tried."""
+    blank = sum(1 for c in claimed if not c.title.strip())
+    return f"{blank} of its {len(claimed)} file(s) have no title" if blank else None
+
+
+def not_tracks(record: dict, claimed: list[Claimed]) -> str | None:
+    """Why the release's *claimed* items are no album's tracks, whichever album they are
+    (:func:`untitled`, :func:`disc_images`), as a blocklist reason, or None."""
+    why = untitled(claimed) or disc_images(record, claimed)
+    return f"{blocklist.NOT_TRACKS}{why}" if why else None
 
 
 def _counts(copy: dict) -> dict:
@@ -1882,6 +1934,11 @@ def complete(
     *claim* stamps the release's items with the album record and the release,
     and the import is judged:
 
+    - a release whose items are no album's tracks (:func:`not_tracks`): one
+      with no title (homelab#2687), or a few files each far longer than a
+      track, unsplit disc images (homelab#2688), fails like a broken download
+      (``[FAIL]``): its items are retired, and it is blocklisted as a wrong
+      release, every copy of it;
     - a release naming under half of the album's Spotify titles is another
       album (``[WRONG]``): its items are retired, and it is blocklisted;
     - a release missing tracks of its own MusicBrainz release is an incomplete
@@ -2005,12 +2062,16 @@ def complete(
         for field in IMPORT_FIELDS:
             record.pop(field, None)
         this = f"{guid}@{int(started)}"
-        titles = claim(first, started, key, this, job_name)
+        claimed = claim(first, started, key, this, job_name)
+        titles = [c.title for c in claimed]
         found, total = titles_found(record, titles)
         if gave_up:
             reason = gave_up
         elif not titles:
             reason = "beets imported none of its files"
+        elif unfit := not_tracks(record, claimed):
+            # The album's release, perhaps, but not as tracks: a [FAIL] below, like a broken download.
+            reason = unfit
         elif wrong_album(found, total) or holds_none(record, titles):
             reason = f"{blocklist.ANOTHER_ALBUM}{found} of the album's {total} titles in it"
             logger.warning("[WRONG] %s: %s is %s", label, job_name, reason)
@@ -2365,8 +2426,8 @@ def reset_notes(state: State, key: str, before: dict, after: dict) -> list[str]:
     verdicts = [_verdict(e, after, search, imported, still) for e in cleared]
     lines += [f"  {blocklist.describe(e)}; {note}" for e, (_, note) in zip(cleared, verdicts)]
     if kept:
-        lines.append("Stays on the blocklist (a reset clears only another album or an incomplete copy, and only "
-                     "reimport=true more than the last candidate):")
+        lines.append("Stays on the blocklist (a reset clears only a wrong release: another album, an incomplete copy "
+                     "or files that aren't tracks, and only reimport=true more than the last candidate):")
         lines += [f"  {blocklist.describe(e)}" for e in kept]
     accepted = sum(ok is True for ok, _ in verdicts)
     if accepted:
@@ -2421,9 +2482,9 @@ def reset_main() -> None:
                              "that matches exactly one album")
     parser.add_argument("--reimport", action="store_true",
                         help="start over from one release: clear the attempts and the blocklist, except a broken "
-                             "download or any failure but another album or an incomplete copy (homelab#2661), grab "
-                             "it although the library has its tracks, and on import retire the copies whose "
-                             "recording it holds, and "
+                             "download or any failure but a wrong release: another album, an incomplete copy or "
+                             "files that aren't tracks (homelab#2661), grab it although the library has its "
+                             "tracks, and on import retire the copies whose recording it holds, and "
                              "an old release that holds under half of the new one's titles (homelab#2662)")
     parser.add_argument("--apply", action="store_true", help="write the album store (default: dry run)")
     args = parser.parse_args()

@@ -21,6 +21,10 @@ PAGE_BYTES = 32 * 1024
 # keep/ holds the files a person moved out of replaced/, out of the purge's reach (homelab#2623).
 QUARANTINE_KINDS = ("unmatched", "rejected", "replaced", "keep")
 _SUBTREES = QUARANTINE_KINDS[1:]
+# library_status' item shapes (:meth:`Library.shapes`): an item over 20 minutes is
+# counted ``long``, and each shape lists this many of its item IDs.
+LONG_ITEM_SECONDS = 1200
+SHAPE_IDS = 50
 
 
 class LibraryBusy(Exception):
@@ -108,6 +112,20 @@ class Library:
             return str(p.relative_to(self.directory)) if p.is_absolute() else str(p)
         except ValueError:
             return str(p)
+
+    def shapes(self) -> dict[str, dict]:
+        """The items of the shapes no playlist entry can link or that hold more than one
+        track, each ``{"count": n, "ids": [the first SHAPE_IDS]}``: ``no_track``, at track 0
+        (homelab#2680); ``no_title``, with a blank title (homelab#2687); ``long``, over
+        :data:`LONG_ITEM_SECONDS`, an unsplit disc image or a real long track, a DJ mix
+        (homelab#2688).  Counts to read, not verdicts."""
+        where = {"no_track": "COALESCE(track, 0) = 0", "no_title": "TRIM(COALESCE(title, '')) = ''",
+                 "long": f"length > {LONG_ITEM_SECONDS}"}
+        out = {}
+        for shape, condition in where.items():
+            ids = [r[0] for r in self._q(f"SELECT id FROM items WHERE {condition} ORDER BY id")]  # noqa: S608
+            out[shape] = {"count": len(ids), "ids": ids[:SHAPE_IDS]}
+        return out
 
     def identities(self, keys: tuple[str, ...] = ("spotify_ids", "spotify_url", "isrc")) -> list[Item]:
         """Every item that has one of *keys* (by default the attributes a playlist

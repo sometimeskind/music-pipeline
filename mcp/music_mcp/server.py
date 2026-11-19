@@ -147,7 +147,9 @@ def build_server(
     @mcp.tool(annotations={"readOnlyHint": True})
     async def library_status() -> dict:
         """Counts of items, albums by status, quarantine by kind, the playlists, album mode, and
-        the job queue (what runs now, how many wait)."""
+        the job queue (what runs now, how many wait). shapes counts the items at track 0 (no_track),
+        with a blank title (no_title) and over 20 minutes (long: a disc image, or a real long
+        track), each with its first 50 item IDs for get_item."""
         return await call("library_status", lambda c: pipeline.get(c, "/library_status"))
 
     @mcp.tool(annotations={"readOnlyHint": True})
@@ -484,8 +486,8 @@ def build_server(
     async def reset_album(query: AlbumQuery, reimport: bool = False, apply: Apply = False) -> dict:
         """music-album-reset: start one album over. reimport=true grabs a single release on the
         next tick, and only it clears more of the blocklist than the last candidate. Neither clears a
-        broken download, or any release but another album or an incomplete copy: the album goes without
-        rather than grab it again. The import retires the old items whose recording the new release also holds, and with
+        broken download, or any release but a wrong one (another album, an incomplete copy, files that
+        aren't tracks): the album goes without rather than grab it again. The import retires the old items whose recording the new release also holds, and with
         reimport=true every item of the album's old release when it holds under half of the new
         release's titles; the rest stay on the album as local extras, which retire_item takes off. The dry run lists what it
         clears and why each was there, and which of those the matcher accepts, so the tick may grab
