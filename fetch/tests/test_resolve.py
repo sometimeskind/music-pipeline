@@ -57,6 +57,18 @@ def test_no_match_only_when_every_id_was_looked_up():
     assert resolve.judge({**_rec(), "names": ["a/b"]}, {}, {}).unresolved == state.PENDING
 
 
+def test_a_no_match_row_whose_files_name_a_release_group_takes_it():
+    """homelab#2802: a row flagged no-match (the cache found nothing for its
+    Spotify album) takes its import's release group at the next pass, and merges
+    into the row that has it.  594 stayed no-match because its import left no
+    release_files (beets named no release for its files), not because of this."""
+    deluxe = _rec("sp1", status="imported", unresolved=state.NO_MATCH, **_imported(RG))
+    standard = {**_rec("sp2", status="imported"), "release_group": RG, "unresolved": None}
+    rows = state.AlbumRows(albums={"sp2": standard, "sp1": deluxe}, mixed=[])
+    resolve.resolve(rows, {"sp1": _cached(None)}, {})
+    assert list(rows.albums) == ["sp2"] and rows.albums["sp2"]["spotify_album_ids"] == ["sp2", "sp1"]
+
+
 # --- resolve: rekeys and merges ---
 
 

@@ -746,6 +746,9 @@ def feed_library(state: State, library: LibraryAlbums, settings: Settings) -> No
     wanted, on any playlist or none (homelab#2403), as a record with
     ``origin: "library"`` whose ``playlists`` hold every store track on the
     album, so ``have`` and the import treat it as an album playlist's.
+    A held track whose recording another album's release import holds too
+    is no reference (homelab#2802): the library has that track on an album
+    already, and grabbing this one would bring the same release again.
 
     Skipped: albums the library holds whole (Spotify's track count, or placed
     by a release import), local keys, albums another record has (an album
