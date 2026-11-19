@@ -95,7 +95,12 @@ already joined by an ID, and says nothing about a pair that differs.
 ``--compare`` and ``--fingerprint ITEM_ID...`` read only the items they name, never
 the whole library, and hold no transaction while they work: beets' SQLite is in
 rollback-journal mode, so a reader's lock makes a writer's commit wait, and an
-import gives up after 5 seconds (homelab#2665).
+import gives up after 5 seconds (homelab#2665).  The other runs read every item:
+in one query that held the database for 30 s on a synthetic 35k-item library
+(2026-11-19), so they read it by ranges of 500 IDs
+(:meth:`music_scan.library.MusicLibrary.all_items_in_batches`), and an import
+commits between two batches.  The full audit also runs at the lowest CPU
+priority (:data:`AUDIT_NICE`), so the service beside it in the pod goes first.
 
 Each audit pushes ``music_dupes_groups{tier=...}`` to the Pushgateway.
 """
@@ -106,6 +111,7 @@ import argparse
 import dataclasses
 import http.client
 import logging
+import os
 import re
 import shutil
 import struct
@@ -295,6 +301,8 @@ class _Progress:
 
 # The fingerprint phase logs each time another share of its comparisons is done.
 PROGRESS_STEPS = 4
+# The full audit's niceness: the lowest priority, so it takes only CPU nothing else in the pod wants.
+AUDIT_NICE = 19
 
 
 def find_dupes(items: list, decoder: Callable[[str], list[int]] = decode,
@@ -883,7 +891,8 @@ def run(apply: bool = False, fingerprints: list[int] | None = None, merge_ids: l
         if fingerprints:
             fingerprint_missing(named(fingerprints), apply, fingerprints)
             return [], []
-        items = lib.all_items()
+        # A batch at a time, so an import's commit gets in between (homelab#2665).
+        items = lib.all_items_in_batches()
         if fingerprints is not None:
             fingerprint_missing(items, apply, fingerprints)
             return [], []
@@ -965,5 +974,9 @@ def main() -> None:
             parser.error(f"--unlink: {sid!r} is not a Spotify track ID")
         unlink = (int(item_id), sid)
     logging.basicConfig(level=logging.INFO, format="[%(asctime)s] %(message)s", datefmt="%Y-%m-%dT%H:%M:%S%z")
+    if all(a is None for a in (args.fingerprint, args.merge, args.unlink, args.compare)):
+        # The full audit is half an hour of pure-Python comparisons, beside the service
+        # that answers the pod's probes and runs the imports (homelab#2665).
+        os.nice(AUDIT_NICE)
     run(apply=args.apply, fingerprints=args.fingerprint, merge_ids=args.merge, allow_manual=args.allow_manual,
         unlink=unlink, compare=None if args.compare is None else tuple(args.compare))

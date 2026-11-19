@@ -332,8 +332,10 @@ def build_server(
         Spotify ID, recording) is certain only when the lengths agree within 2 s and the titles name
         one song and one version; otherwise it is uncertain with the reason. It reads the whole
         library and a full run takes about half an hour (31 min on ~32k items, homelab#2831): poll
-        get_job, whose output shows [PROGRESS] lines while it works. Imports running beside it have
-        died with "database is locked" (homelab#2665): for one pair use compare_items, not this.
+        get_job, whose output shows [PROGRESS] lines while it works. It reads the library a range
+        of items at a time (homelab#2665), so imports beside it commit as usual, and an album they
+        import meanwhile may be missing from its report: run it again after them. It runs at the
+        lowest CPU priority, so beside imports it takes longer. For one pair use compare_items.
         Merge a confirmed pair with merge_items."""
         return await run("audit_dupes", {})
 

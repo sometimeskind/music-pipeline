@@ -18,6 +18,8 @@ LIBRARY_DIR = Path("/root/Music/library")
 # mediafile's type names (Item.format) for lossless codecs. Matched by codec,
 # not extension, so ALAC inside .m4a counts too.
 LOSSLESS_FORMATS = frozenset({"FLAC", "ALAC", "APE", "WavPack", "AIFF", "WAVE", "DSD Stream File"})
+# The IDs :meth:`MusicLibrary.all_items_in_batches` reads per query.
+READ_BATCH = 500
 
 
 @functools.cache
@@ -97,6 +99,27 @@ class MusicLibrary:
 
     def all_items(self) -> list["Item"]:
         return list(self._lib.items())
+
+    def all_items_in_batches(self, size: int | None = None) -> list["Item"]:
+        """Every item, read by ranges of *size* (:data:`READ_BATCH`) IDs, for a long run
+        beside imports (homelab#2665).
+
+        beets' SQLite is in rollback-journal mode: while a reader holds the database, a
+        writer's COMMIT waits, and an import gives up after beets' 5 s busy timeout with
+        ``database is locked``.  :meth:`all_items` reads the library in one query, which
+        holds it past that.  On a synthetic library of 35k items (153 MB, pilot under
+        load, 2026-11-19) it took 41 s and 2 of 355 commits beside it failed; by ranges of
+        500 IDs the read took 45 s and no commit waited over 0.36 s.  A range, not a
+        LIMIT: beets sorts the whole rest of the table for each ``ORDER BY id LIMIT``.
+        The ranges are not one consistent state, and an item added past the highest ID
+        at the start isn't read."""
+        with self._lib.transaction() as tx:
+            ((top,),) = tx.query("SELECT coalesce(max(id), 0) FROM items")
+        size = size or READ_BATCH
+        items: list = []
+        for start in range(1, top + 1, size):
+            items += self._lib.items(f"id:{start}..{start + size - 1}")
+        return items
 
     def get_item(self, item_id: int) -> "Item | None":
         return self._lib.get_item(item_id)
