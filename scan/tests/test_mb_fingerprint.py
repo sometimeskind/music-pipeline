@@ -19,6 +19,8 @@ import pytest
 
 from music_scan import mb_fingerprint as mbf
 
+MUSICBRAINZ_RELEASES = mbf.musicbrainz_releases  # the real one: the autouse fixture stands in for it
+
 # fetch/tests in the repo (CI), /app/fetch_tests in the dev image (just test).
 _here = Path(__file__).resolve().parent
 sys.path.insert(0, str(next((p for p in (_here.parent.parent / "fetch" / "tests", _here.parent / "fetch_tests")
@@ -93,10 +95,31 @@ def _recordings(table=None, fails=()):
 
 @pytest.fixture(autouse=True)
 def musicbrainz(monkeypatch):
-    """No test reaches MusicBrainz: the refresh's lookups read :data:`RECORDINGS`."""
+    """No test reaches MusicBrainz: the refresh's lookups read :data:`RECORDINGS`,
+    the recheck's release lookups (homelab#2644) :data:`RELEASES`."""
     lookup = _recordings()
     monkeypatch.setattr(mbf, "musicbrainz_recordings", lambda: lookup)
+    monkeypatch.setattr(mbf, "musicbrainz_releases", lambda get=None: _releases())
     return lookup
+
+
+# MusicBrainz's releases (``release/<id>?inc=recordings``) by MBID: empty unless a test adds one.
+RELEASES: dict[str, dict] = {}
+
+
+def _releases(table=None, fails=()):
+    """A release lookup over *table* (by default :data:`RELEASES`), raising for the albums in *fails*."""
+    table = RELEASES if table is None else table
+    calls = []
+
+    def release(album):
+        calls.append(album)
+        if album in fails:
+            raise OSError("HTTP Error 502: Bad Gateway")
+        return table.get(album)
+
+    release.calls = calls
+    return release
 
 
 def _recheck(items, lookup, lib=None):
@@ -272,6 +295,120 @@ def test_progress_is_logged_every_so_many_items(monkeypatch, caplog):
     _recheck(_library(), _lookup())
     assert [r.getMessage() for r in caplog.records if r.getMessage().startswith("[PROGRESS]")] == [
         "[PROGRESS] 2/4, 2 flagged so far"]
+
+
+# --- several recordings: the one at the item's slot on its release (homelab#2644) ---
+
+PURPLE_RAIN = "purple-rain-deluxe"
+FIRST_AVENUE = "first-avenue-rec"
+
+
+def _release(album, *discs):
+    """A release with *discs*, each a list of (recording ID, title) in track order."""
+    return {"id": album, "media": [
+        {"position": d, "track-count": len(tracks),
+         "tracks": [{"id": f"{album}-{d}-{p}", "position": p, "title": title, "recording": {"id": rid, "title": title}}
+                    for p, (rid, title) in enumerate(tracks, 1)]}
+        for d, tracks in enumerate(discs, 1)]}
+
+
+def _purple_rain(at_9=(STUDIO, "Purple Rain")):
+    """The deluxe edition: Purple Rain at disc 1 #9, after eight other songs, and a second disc."""
+    return _release(PURPLE_RAIN, [*((f"song-{n}-rec", f"Song {n}") for n in range(1, 9)), at_9],
+                    [("bonus-rec", "Bonus")])
+
+
+def _5970(**fields):
+    """5970, *Purple Rain*: a studio file beets gave the 1992 live take (homelab#2644's issue)."""
+    return FakeItem(5970, "Purple Rain", mb_trackid=LIVE_1992,
+                    **{"mb_albumid": PURPLE_RAIN, "disc": 1, "track": 9, "tracktotal": 9, **fields})
+
+
+@pytest.mark.parametrize("at_9,fields,picked,score", [
+    ((STUDIO, "Purple Rain"), {}, STUDIO, 0.98),
+    ((REMASTER, "Purple Rain"), {}, REMASTER, 0.91),  # the slot's, not AcoustID's best
+    ((STUDIO, "Purple Rain"), {"disc": 0, "tracktotal": 0}, STUDIO, 0.98),  # no disc: counted across the release
+])
+def test_the_one_of_several_at_the_items_slot_replaces_the_guess(caplog, at_9, fields, picked, score):
+    caplog.set_level("INFO")
+    release = _releases({PURPLE_RAIN: _purple_rain(at_9)})
+    item = _5970(**fields)
+    counts, (f,) = mbf.recheck(FakeLib([item]), [5970], _lookup(), release=release)
+    assert f.replacement == picked and f.slot == picked and f.score == score
+    assert counts["replaceable"] == 1 and counts["slot"] == 1 and counts["ambiguous"] == 0
+    where = "disc 1 #9" if fields.get("disc", 1) else "track 9 counted across the release"
+    assert (f"[RECHECK] 5970 — Purple Rain: mb_trackid live-1992-rec is not among its AcoustID recordings "
+            f"(studio-rec 0.98): 2 recordings (studio-rec 0.98, remaster-rec 0.91): → {picked}, the recording "
+            f"at its {where} on its release") in caplog.text
+
+
+@pytest.mark.parametrize("release_table,fields,why", [
+    # No match: the slot's recording is the album version, which AcoustID doesn't name for this file.
+    ({PURPLE_RAIN: _purple_rain((FIRST_AVENUE, "Purple Rain"))}, {},
+     "the recording at its disc 1 #9 (first-avenue-rec) isn't among them"),
+    # A slot holding another song, though AcoustID names its recording: a collision, or a wrong track
+    # number (686's shape: its track says 4, its song sits at 5) whose slot holds a sibling's song.
+    ({PURPLE_RAIN: _purple_rain((REMASTER, "When Doves Cry"))}, {},
+     "its disc 1 #9 holds 'When Doves Cry', not the item's song"),
+    # A wrong track number whose slot holds another song AcoustID doesn't name.
+    ({PURPLE_RAIN: _purple_rain()}, {"track": 8}, "the recording at its disc 1 #8 (song-8-rec) isn't among them"),
+    # [VARIANT]: the item's disc and track don't fit its release.
+    ({PURPLE_RAIN: _purple_rain()}, {"track": 12, "tracktotal": 12},
+     "its disc 1 #12 doesn't fit its release purple-rain-deluxe (another release of the group?)"),
+    ({PURPLE_RAIN: _purple_rain()}, {"tracktotal": 17},
+     "its disc 1 #9 doesn't fit its release purple-rain-deluxe (another release of the group?)"),
+    ({}, {}, "MusicBrainz has no release purple-rain-deluxe"),
+    ({}, {"mb_albumid": ""}, "the item has no release (mb_albumid)"),
+])
+def test_several_recordings_with_no_slot_pick_are_left_alone(caplog, release_table, fields, why):
+    caplog.set_level("INFO")
+    item = _5970(**fields)
+    counts, (f,) = mbf.recheck(FakeLib([item]), [5970], _lookup(), release=_releases(release_table))
+    assert f.replacement is None and f.slot is None
+    assert counts["replaceable"] == 0 and counts["slot"] == 0 and counts["ambiguous"] == 1
+    assert ("[RECHECK] 5970 — Purple Rain: mb_trackid live-1992-rec is not among its AcoustID recordings "
+            f"(studio-rec 0.98): 2 recordings (studio-rec 0.98, remaster-rec 0.91), none chosen ({why}); "
+            "left alone") in caplog.text
+
+
+def test_a_failed_release_lookup_leaves_the_item_and_the_run_goes_on(caplog):
+    caplog.set_level("INFO")
+    items = [_5970(), FakeItem(6994, "Oh! Sweet Nuthin’ (5.1 mix)", mb_trackid=SURROUND)]
+    counts, flagged = mbf.recheck(FakeLib(items), [5970, 6994], _lookup(),
+                                  release=_releases({PURPLE_RAIN: _purple_rain()}, fails={PURPLE_RAIN}))
+    assert [f.replacement for f in flagged] == [None, STEREO] and counts["checked"] == 2 and counts["errors"] == 0
+    assert ("none chosen (the MusicBrainz lookup of its release failed (HTTP Error 502: Bad Gateway); recheck it "
+            "by ID); left alone") in caplog.text
+
+
+def test_only_an_item_with_several_recordings_looks_its_release_up():
+    items = [FakeItem(6994, "Oh! Sweet Nuthin’ (5.1 mix)", mb_trackid=SURROUND, mb_albumid="loaded"),
+             FakeItem(6995, "Head Held High", mb_trackid=STEREO, mb_albumid="loaded")]
+    release = _releases()
+    mbf.recheck(FakeLib(items), [6994, 6995], _lookup({6994: [(0.97, STEREO)], 6995: [(0.97, STEREO)]}),
+                release=release)
+    assert release.calls == []
+
+
+def test_musicbrainz_releases_reads_each_release_once():
+    calls = []
+
+    def get(path, **params):
+        calls.append((path, params))
+        return {"id": path}
+
+    release = MUSICBRAINZ_RELEASES(get)
+    assert release("a") == release("a") == {"id": "release/a"} and release("b")
+    assert calls == [("release/a", {"inc": "recordings"}), ("release/b", {"inc": "recordings"})]
+
+
+def test_a_stored_finding_keeps_its_slot_pick_and_an_older_one_stays_ambiguous():
+    row = {"item_id": 5970, "guess": LIVE_1992, "found": [[0.98, STUDIO], [0.91, REMASTER]], "keeper": False,
+           "file_path": "/lib/x.m4a", "file_size": 1, "file_mtime_ns": 2}
+    assert mbf._flagged({**row, "replacement": REMASTER}).replacement == REMASTER
+    assert mbf._flagged({**row, "replacement": None}).replacement is None  # recorded before homelab#2644
+    assert mbf._flagged({**row, "replacement": "elsewhere-rec"}).replacement is None  # not among its recordings
+    assert mbf._flagged({**row, "found": [[0.97, STEREO]], "replacement": STEREO}).slot is None
 
 
 def test_apply_refuses_without_the_database(monkeypatch):
@@ -534,6 +671,47 @@ def test_replace_run_previews_then_applies_a_recorded_run(pg_url, monkeypatch, c
     assert _rows(pg_url, "SELECT item_id, outcome, outcome_job FROM recheck_findings "
                          "WHERE replacement IS NOT NULL ORDER BY item_id") == [
         (5672, "replaced", "job-1"), (6930, "replaced", "job-1"), (6994, "replaced", "job-1")]
+
+
+@needs_pg
+def test_a_recorded_runs_slot_pick_is_applied_with_its_event(pg_url, monkeypatch, caplog):
+    """homelab#2644: the run stores the slot's recording as the finding's replacement, and its
+    apply replaces the guess with it like any other, refresh and [SUSPECT] check included."""
+    caplog.set_level("INFO")
+    monkeypatch.setitem(RELEASES, PURPLE_RAIN, _purple_rain())
+    monkeypatch.setitem(RECORDINGS, STUDIO, {"id": STUDIO, "title": "Purple Rain", "disambiguation": ""})
+    item = _5970(trackdisambig="live, 1992-05-28: Ahoy Arena")
+    _recorded_run(pg_url, monkeypatch, RunLib([item]))
+    assert _rows(pg_url, "SELECT item_id, replacement FROM recheck_findings") == [(5970, STUDIO)]
+    from music_scan import audit
+
+    monkeypatch.setattr(audit, "pipeline_lock", contextlib.nullcontext)
+    preview = mbf.replace_run("r1")
+    assert preview["replaceable"] == 1 and preview["ambiguous"] == 0
+    assert ("[WOULD-REPLACE] 5970 — Purple Rain: mb_trackid live-1992-rec → studio-rec (AcoustID 0.98, the one of "
+            "2 at its slot on its release)") in caplog.text
+    assert mbf.replace_run("r1", apply=True)["replaced"] == 1
+    assert item["mb_trackid"] == STUDIO and item["trackdisambig"] == "" and item.written
+    (kind, _, item_id, message, data), = _events(pg_url)
+    assert (kind, item_id) == ("recording_replaced", 5970)
+    assert message == ("[RECHECK] 5970 — Purple Rain: mb_trackid live-1992-rec → studio-rec (AcoustID 0.98, "
+                       "the one of 2 at its slot on its release)")
+    assert data["slot"] is True and data["old"] == LIVE_1992 and data["new"] == STUDIO and data["score"] == 0.98
+
+
+@needs_pg
+def test_a_slot_pick_naming_another_song_is_not_replaced(pg_url, monkeypatch, caplog):
+    """The apply's [SUSPECT] check holds for a slot pick too: MusicBrainz's recording, read at the
+    apply, names another song than the item (the release's track title and the recording's differ)."""
+    caplog.set_level("INFO")
+    monkeypatch.setitem(RELEASES, PURPLE_RAIN, _purple_rain())
+    monkeypatch.setitem(RECORDINGS, STUDIO, {"id": STUDIO, "title": "When Doves Cry", "disambiguation": ""})
+    item = _5970()
+    _, flagged = mbf.recheck(FakeLib([item]), [5970], _lookup(), release=_releases())
+    assert [f.replacement for f in flagged] == [STUDIO]
+    assert mbf.replace(FakeLib([item]), flagged) == 0
+    assert item["mb_trackid"] == LIVE_1992 and _events(pg_url) == []
+    assert "[SUSPECT] 5970 — Purple Rain" in caplog.text
 
 
 @needs_pg
