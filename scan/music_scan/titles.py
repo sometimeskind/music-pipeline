@@ -28,7 +28,12 @@ titled as a studio outtake flags on ``take``, not on ``live``.  A word in
 Spotify's album name counts as Spotify's, since a live album's tracks are
 often titled bare.
 
-The fix is the album's, not the track's: reset and reimport it.  Read-only:
+Most flagged items are a good file under a sibling recording's ID and title,
+which the recheck (``music-mb-fingerprint --recheck``) replaces with the
+recording at the item's slot, title included (homelab#2644), so the report
+names the recheck first.  A file that is really another take (its length
+doesn't fit its slot, ``--candidates``) is the album's to fix: reset and
+reimport it.  Read-only:
 the beets library, the playlist stores and the album store, no Spotify or
 MusicBrainz call, no writes, no events.
 """
@@ -188,25 +193,36 @@ def audit(items: Iterable, songs: Iterable[dict]) -> Report:
 
 
 def log_report(report: Report, records: dict[str, dict]) -> None:
-    """``[ALBUM]`` per album with its reset command when its record is known,
-    a ``[VERSION]`` line per item, then the counts."""
+    """``[ALBUM]`` per album with its items' recheck command, and its reset
+    command for another take when its record is known, a ``[VERSION]`` line per
+    item, then the counts.
+
+    The recheck comes first (homelab#2644): most items flagged are a good file
+    under a sibling recording's ID and title, which the recheck replaces
+    (title included) without a download, and ``--candidates`` shows whether a
+    file's length fits its slot.  The reset is for a file that is another take."""
     from music_scan.release import album_query  # noqa: PLC0415
 
     albums = report.albums()
     for key, items in albums:
         first = items[0]
         logger.info("[ALBUM] %s%s: %d item(s)", first.album_label, f" (record {key})" if key else "", len(items))
+        logger.info("    first: music-mb-fingerprint --recheck %s", " ".join(str(f.id) for f in items))
         if key and (record := records.get(key)):
             name = f"{record.get('artist')} — {record.get('name')}"
-            logger.info("    music-album-reset '%s' --reimport", album_query(records, key, name))
+            logger.info("    only for a file that is another take: music-album-reset '%s' --reimport",
+                        album_query(records, key, name))
         for f in items:
             notes = f" [trackdisambig: {f.trackdisambig}]" if f.trackdisambig else ""
             logger.info('  [VERSION] %d %d-%02d "%s"%s vs Spotify "%s": %s', f.id, f.disc, f.track, f.title, notes,
                         f.spotify, ", ".join(f.words))
     logger.info("%d item(s) on %d album(s) titled as a version Spotify's entry doesn't name, of %d compared; "
-                "not compared: %d with no Spotify ID, %d whose IDs no playlist store describes. Fix an album "
-                "whole: reset it with --reimport (dry run, then --apply)", len(report.flagged), len(albums),
-                report.compared, report.no_id, report.undescribed)
+                "not compared: %d with no Spotify ID, %d whose IDs no playlist store describes. Check the "
+                "recording first: recheck the items (recheck_recordings, then apply_recheck), which replaces a "
+                "sibling recording and its title on a good file; for an item it leaves, music-mb-fingerprint "
+                "--candidates (recording_candidates) shows whether the file's length fits its slot. Reset an "
+                "album with --reimport (dry run, then --apply) only when a file doesn't: another take",
+                len(report.flagged), len(albums), report.compared, report.no_id, report.undescribed)
 
 
 def run() -> Report:

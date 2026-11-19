@@ -14,8 +14,13 @@ AcoustID links to its fingerprint at :data:`MIN_SCORE` or more.
 
 - Among them: nothing is reported.
 - Not among them: ``[RECHECK]``.  With exactly one such recording, that one
-  replaces the guess on ``--apply``; with several, none is chosen and the item
-  is left alone (never guess).
+  replaces the guess on ``--apply``.  With several (usually one master on
+  several releases), the one that is the recording at the item's slot on its
+  own release replaces it (:func:`slot_recording`, homelab#2644): the audio
+  says it is one of them and the release says which.  When none of them is
+  (or the item has no release, its disc and track don't fit the release, or
+  the slot holds another song), none is chosen and the item is left alone
+  (never guess).  Only these items cost a MusicBrainz lookup.
 - No recording at :data:`MIN_SCORE`: ``[NOMATCH]``, left alone (some releases
   are unknown to AcoustID, homelab#2546).
 
@@ -168,11 +173,19 @@ class Flagged:
     # The file as it was at the lookup: the apply skips the item when it changed
     # since (replace_item swaps the audio and keeps mb_trackid, homelab#2553).
     file: FileStat = ("", None, None)
+    # With several confident recordings: the one at the item's slot on its release (homelab#2644).
+    slot: str | None = None
 
     @property
     def replacement(self) -> str | None:
-        """The one confident recording, or None when there are several (never guess)."""
-        return self.found[0][1] if len(self.found) == 1 else None
+        """The one confident recording; with several, the one at the item's slot
+        (:func:`slot_recording`), else None (never guess)."""
+        return self.found[0][1] if len(self.found) == 1 else self.slot
+
+    @property
+    def score(self) -> float:
+        """AcoustID's score for the replacement (the best score when there is none)."""
+        return next((s for s, r in self.found if r == self.replacement), self.found[0][0])
 
 
 def _label(item) -> str:
@@ -200,7 +213,64 @@ def _lookup(lookup: Callable[[str], Recordings], path: str) -> Recordings:
         return lookup(path)
 
 
-COUNTS = ("checked", "agree", "flagged", "replaceable", "ambiguous", "keepers", "nomatch", "errors", "gone",
+# A release by its MBID (``release/<id>?inc=recordings``), None when MusicBrainz has none.
+ReleaseLookup = Callable[[str], "dict | None"]
+RELEASES_CACHED = 32  # a run walks items in ID order, so an album's items mostly come together
+
+
+def musicbrainz_releases(get: MusicBrainzGet | None = None) -> ReleaseLookup:
+    """``release/<id>?inc=recordings`` through the pipeline's MusicBrainz client,
+    the last :data:`RELEASES_CACHED` releases kept (a failed lookup isn't)."""
+    if get is None:
+        from music_scan.mb_release import MusicBrainz  # noqa: PLC0415
+
+        get = MusicBrainz().get
+
+    @functools.lru_cache(maxsize=RELEASES_CACHED)
+    def release(album: str) -> dict | None:
+        return get(f"release/{album}", inc="recordings")
+
+    return release
+
+
+def slot_recording(item, found: Recordings, release: ReleaseLookup) -> tuple[str | None, str]:
+    """The recording of *found* (AcoustID's confident recordings for *item*'s
+    audio) that is the recording at *item*'s slot on its own release, and where
+    that is; or None and why not (homelab#2644).
+
+    The slot is the one :func:`music_scan.candidates.position_track` reads for
+    ``recording_candidates`` and ``set_recording``: the track at the item's disc
+    and track number on its ``mb_albumid`` (with no disc, its track counted
+    across the release).  Nothing is chosen when the item has no release, its
+    disc and track don't fit the release (``[VARIANT]``: its files are another
+    release of the group, :func:`~music_scan.candidates.fits`), the slot's
+    recording isn't among *found*, or the slot's title is another song than the
+    item's (a wrong track number, 686's shape).  Never by title or length
+    alone: the recording must be both AcoustID's and the release's at the slot.
+    Raises what *release* raises when MusicBrainz can't be asked."""
+    from music_scan.candidates import _int, _same_song, fits, position_track  # noqa: PLC0415
+
+    album = item.get("mb_albumid") or ""
+    if not album:
+        return None, "the item has no release (mb_albumid)"
+    on = release(album)
+    if not on:
+        return None, f"MusicBrainz has no release {album}"
+    disc, track, tracktotal = _int(item.get("disc")), _int(item.get("track")), _int(item.get("tracktotal"))
+    where = f"disc {disc} #{track}" if disc > 0 else f"track {track} counted across the release"
+    if not fits(on, disc, track, tracktotal):
+        return None, f"its {where} doesn't fit its release {album} (another release of the group?)"
+    at = position_track(on, disc, track) or {}
+    recording = at.get("recording") or {}
+    if recording.get("id") not in {r for _, r in found}:
+        return None, f"the recording at its {where} ({recording.get('id') or 'none'}) isn't among them"
+    title = recording.get("title") or at.get("title") or ""
+    if not _same_song(item.get("title") or "", title):
+        return None, f"its {where} holds {title!r}, not the item's song"
+    return recording["id"], f"the recording at its {where} on its release"
+
+
+COUNTS = ("checked", "agree", "flagged", "replaceable", "slot", "ambiguous", "keepers", "nomatch", "errors", "gone",
           "skipped", "set")
 # A recorded run (--run-id) stores its checkpoint every this many items: a restart repeats at most these lookups.
 CHECKPOINT_EVERY = 25
@@ -210,12 +280,15 @@ Checkpoint = Callable[[int, int, Counter, list[Flagged]], None]  # (position, la
 
 def recheck(lib, ids: Iterable[int], lookup: Callable[[str], Recordings], *, start: int = 0,
             total: int | None = None, counts: dict | None = None,
-            checkpoint: Checkpoint | None = None) -> tuple[Counter, list[Flagged]]:
+            checkpoint: Checkpoint | None = None,
+            release: ReleaseLookup | None = None) -> tuple[Counter, list[Flagged]]:
     """Check each item of *ids* that has an ``mb_trackid`` against *lookup* (the
     recordings for a file's audio, best first).  Each item is read from *lib*
     just before its lookup, so a tick that moved its file meanwhile doesn't leave
     a stale path.  Logs one line per finding and returns the counts and the
-    flagged items.
+    flagged items.  *release* (MusicBrainz's releases) lets an item with several
+    recordings take the one at its slot (:func:`slot_recording`); without it
+    such an item is left alone.
 
     A continued run passes *start* (the items walked before), *total* and the
     *counts* so far; *checkpoint* is called every :data:`CHECKPOINT_EVERY` items
@@ -232,7 +305,7 @@ def recheck(lib, ids: Iterable[int], lookup: Callable[[str], Recordings], *, sta
         if n > 1 and (n - 1) % PROGRESS_EVERY == 0:
             logger.info("[PROGRESS] %d/%d, %d flagged so far", n - 1, total, counts["flagged"])
         try:
-            f = _check(lib, item_id, lookup, counts)
+            f = _check(lib, item_id, lookup, counts, release)
         except LookupFailed as exc:
             failures += 1
             if failures >= MAX_FAILURES_IN_A_ROW:
@@ -259,10 +332,12 @@ def _counts(so_far: dict | None = None) -> Counter:
 _UNCHECKED = object()  # _check's answer for an item it didn't look up (gone, skipped, unreadable)
 
 
-def _check(lib, item_id: int, lookup: Callable[[str], Recordings], counts: Counter):
+def _check(lib, item_id: int, lookup: Callable[[str], Recordings], counts: Counter,
+           release: ReleaseLookup | None = None):
     """One item: its :class:`Flagged`, None (looked up, nothing to report) or
     :data:`_UNCHECKED`; raises :class:`LookupFailed` (counted) when AcoustID
-    couldn't be asked."""
+    couldn't be asked.  With *release*, an item AcoustID gives several
+    recordings gets the one at its slot (:func:`slot_recording`)."""
     item = lib.get_item(item_id)
     if item is None:
         counts["gone"] += 1
@@ -308,13 +383,21 @@ def _check(lib, item_id: int, lookup: Callable[[str], Recordings], counts: Count
     f = Flagged(item.id, guess, confident, keeper=bool(item.get(MERGED_FILES)), file=stat)
     counts["flagged"] += 1
     counts["keepers"] += f.keeper
+    several = f"{len(confident)} recordings (" + ", ".join(f"{r} {s:.2f}" for s, r in confident) + ")"
+    why = ""
+    if len(confident) > 1 and release is not None:
+        try:
+            f.slot, why = slot_recording(item, confident, release)
+        except (OSError, ValueError, http.client.HTTPException) as exc:  # urllib's errors, a cut or non-JSON body
+            why = f"the MusicBrainz lookup of its release failed ({exc}); recheck it by ID"
+    keeper = " (a merge keeper)" if f.keeper else ""
     if f.replacement is None:
         counts["ambiguous"] += 1
-        outcome = (f"{len(confident)} recordings ("
-                   + ", ".join(f"{r} {s:.2f}" for s, r in confident) + "), none chosen; left alone")
+        outcome = f"{several}, none chosen{f' ({why})' if why else ''}; left alone"
     else:
         counts["replaceable"] += 1
-        outcome = f"→ {f.replacement}" + (" (a merge keeper)" if f.keeper else "")
+        counts["slot"] += f.slot is not None
+        outcome = f"{several}: → {f.replacement}, {why}{keeper}" if f.slot else f"→ {f.replacement}{keeper}"
     logger.info("[RECHECK] %s: mb_trackid %s is not among its AcoustID recordings (%s %.2f): %s",
                 _label(item), guess, confident[0][1], confident[0][0], outcome)
     return f
@@ -486,8 +569,9 @@ def _store(conn, item, f: Flagged, job_id: str | None = None, run_id: str | None
 
     from music_scan import recheck_runs  # noqa: PLC0415
 
-    score = f.found[0][0]
-    message = f"[RECHECK] {_label(item)}: mb_trackid {f.guess} → {f.replacement} (AcoustID {score:.2f})"
+    score = f.score
+    message = (f"[RECHECK] {_label(item)}: mb_trackid {f.guess} → {f.replacement} (AcoustID {score:.2f}"
+               + (f", the one of {len(f.found)} at its slot on its release)" if f.slot else ")"))
     with conn.transaction():
         if event:
             events.insert(conn, EVENT_KIND, message, source=SOURCE,
@@ -495,6 +579,7 @@ def _store(conn, item, f: Flagged, job_id: str | None = None, run_id: str | None
                           release_group=item.get("mb_releasegroupid"), item_id=item.id,
                           data={**events.item_fields(item), "old": f.guess, "new": f.replacement,
                                 "score": score, "keeper": f.keeper, **({"run": run_id} if run_id else {}),
+                                **({"slot": True} if f.slot else {}),
                                 **({"refreshed": {k: list(v) for k, v in refresh.items()}} if refresh else {})})
         if run_id:
             recheck_runs.record_outcome(conn, run_id, item.id, "replaced", None, job_id)
@@ -545,8 +630,12 @@ def replace(lib, flagged: list[Flagged]) -> int:
 
 
 def _flagged(row: dict) -> Flagged:
-    return Flagged(row["item_id"], row["guess"], [(s, r) for s, r in row["found"]], row["keeper"],
-                   (row["file_path"] or "", row["file_size"], row["file_mtime_ns"]))
+    """A finding as its run stored it; with several recordings, its stored
+    replacement is the one at its slot (a run recorded before homelab#2644 stored none)."""
+    found = [(s, r) for s, r in row["found"]]
+    slot = row["replacement"] if len(found) > 1 and row["replacement"] in {r for _, r in found} else None
+    return Flagged(row["item_id"], row["guess"], found, row["keeper"],
+                   (row["file_path"] or "", row["file_size"], row["file_mtime_ns"]), slot)
 
 
 def replace_run(run_id: str, apply: bool = False, library_db: str = LIBRARY_DB,
@@ -614,8 +703,10 @@ def replace_run(run_id: str, apply: bool = False, library_db: str = LIBRARY_DB,
                         _log_refresh(item.id, changes)
                     continue
                 if not apply:
-                    logger.info("[WOULD-REPLACE] %s: mb_trackid %s → %s (AcoustID %.2f)%s", _label(item), f.guess,
-                                f.replacement, f.found[0][0], " (a merge keeper)" if f.keeper else "")
+                    logger.info("[WOULD-REPLACE] %s: mb_trackid %s → %s (AcoustID %.2f%s)%s", _label(item), f.guess,
+                                f.replacement, f.score,
+                                f", the one of {len(f.found)} at its slot on its release" if f.slot else "",
+                                " (a merge keeper)" if f.keeper else "")
                     continue
                 changes = refresh(item, f)
                 if why := unchecked(changes):
@@ -1145,9 +1236,12 @@ def utc_time(value: str) -> datetime:
 
 def run_recheck(apply: bool = False, ids: list[int] | None = None,
                 library_db: str = LIBRARY_DB, library_dir: str = LIBRARY_DIR,
-                lookup: Callable[[str], Recordings] | None = None, run_id: str | None = None) -> Counter:
+                lookup: Callable[[str], Recordings] | None = None, run_id: str | None = None,
+                release: ReleaseLookup | None = None) -> Counter:
     """``--recheck``: check every item with an ``mb_trackid`` (or the items *ids*),
-    and with *apply* replace the flagged guesses.  Returns the counts.
+    and with *apply* replace the flagged guesses.  Returns the counts.  An item
+    AcoustID gives several recordings looks its release up on MusicBrainz
+    (*release*, by default :func:`musicbrainz_releases`) for the one at its slot.
 
     With *run_id* (homelab#2553) the run is recorded: its checkpoint and findings
     go to the database, the same ID continues it after a restart, and
@@ -1166,21 +1260,22 @@ def run_recheck(apply: bool = False, ids: list[int] | None = None,
         if not api_key:
             raise SystemExit("ACOUSTID_APIKEY is not set")
         lookup = functools.partial(acoustid_recordings, api_key=api_key)
+    release = release or musicbrainz_releases()
 
     lib = beets.library.Library(library_db, directory=library_dir)
     try:
         if run_id:
-            counts = _recorded(lib, run_id, ids, lookup)
+            counts = _recorded(lib, run_id, ids, lookup, release)
         else:
-            counts, flagged = recheck(lib, _todo(lib, ids), lookup)
+            counts, flagged = recheck(lib, _todo(lib, ids), lookup, release=release)
             counts["replaced"] = replace(lib, flagged) if apply else 0
     finally:
         lib._close()
 
-    logger.info("[SUMMARY] checked %d: %d agree, %d flagged (%d replaceable, %d with several recordings, "
-                "%d merge keepers), %d no match, %d errors; %d gone during the run, %d request fallbacks and "
-                "%d set by hand skipped; %s",
-                counts["checked"], counts["agree"], counts["flagged"], counts["replaceable"],
+    logger.info("[SUMMARY] checked %d: %d agree, %d flagged (%d replaceable, %d of them the one of several at "
+                "their slot; %d with several recordings left alone, %d merge keepers), %d no match, %d errors; "
+                "%d gone during the run, %d request fallbacks and %d set by hand skipped; %s",
+                counts["checked"], counts["agree"], counts["flagged"], counts["replaceable"], counts["slot"],
                 counts["ambiguous"], counts["keepers"], counts["nomatch"], counts["errors"],
                 counts["gone"], counts["skipped"], counts["set"],
                 f"run {run_id} recorded, nothing replaced (preview it with --replace-run {run_id})" if run_id else
@@ -1202,7 +1297,8 @@ def _todo(lib, ids: list[int] | None, after: int | None = None) -> list[int]:
     return todo
 
 
-def _recorded(lib, run_id: str, ids: list[int] | None, lookup: Callable[[str], Recordings]) -> Counter:
+def _recorded(lib, run_id: str, ids: list[int] | None, lookup: Callable[[str], Recordings],
+              release: ReleaseLookup | None = None) -> Counter:
     """A recorded run: started, or continued after its checkpoint."""
     from music_fetch import db  # noqa: PLC0415
     from music_scan import recheck_runs  # noqa: PLC0415
@@ -1231,7 +1327,7 @@ def _recorded(lib, run_id: str, ids: list[int] | None, lookup: Callable[[str], R
 
         try:
             counts, _ = recheck(lib, todo, lookup, start=start, total=total,
-                                counts=run["counts"] if continued else None, checkpoint=save)
+                                counts=run["counts"] if continued else None, checkpoint=save, release=release)
         except SystemExit:
             recheck_runs.finish(conn, run_id, recheck_runs.FAILED)
             raise

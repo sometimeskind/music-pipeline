@@ -138,8 +138,9 @@ KINDS: dict[str, Kind] = {
                          ("what", "why", "playlist", "tracks", "kinds", "source", "updated", "entries", "local",
                           "snapshot_id", "items")),
     # --- Recordings (music_scan.mb_fingerprint, request_fill) ---
-    "recording_replaced": Kind(ITEM, "[RECHECK]: a guessed recording ID replaced by the one AcoustID names.",
-                               (*_ITEM, "old", "new", "score", "keeper", "run", "refreshed")),
+    "recording_replaced": Kind(ITEM, "[RECHECK]: a guessed recording ID replaced by the one AcoustID names "
+                                     "(data.slot: the one of several at the item's slot on its release).",
+                               (*_ITEM, "old", "new", "score", "keeper", "run", "slot", "refreshed")),
     "recording_refreshed": Kind(ITEM, "An item's title or trackdisambig refreshed from its replaced recording.",
                                 (*_ITEM, "recording", "refreshed")),
     "recording_set": Kind(ITEM, "[SETREC]: a recording set on an item by hand (set_recording).",
