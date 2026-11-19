@@ -4,10 +4,12 @@ from __future__ import annotations
 
 import logging
 import sys
+from datetime import datetime, timezone
 from unittest import mock
 
 import pytest
 
+from music_fetch import blocklist
 from music_fetch.usenet import size_range
 from music_scan import check_release
 
@@ -130,7 +132,8 @@ def test_no_override_is_said_and_the_plans_queries_shown(caplog) -> None:
     output = _output(caplog, _check(WALKMAN))
     assert "Override: none stored" in output
     assert 'Search: "harry nilsson nilsson schmilsson", then "harry nilsson"' in output
-    assert "Not covered: the blocklist" in output
+    assert "Blocklist: empty" in output
+    assert "Not covered: releases other albums took" in output
 
 
 def test_a_name_with_no_words_searches_the_artist_and_says_what_matches(caplog) -> None:
@@ -217,3 +220,46 @@ def test_an_override_has_no_credits(caplog) -> None:
     result = _check(APOLLO_TITLE, words="eno apollo atmospheres",
                     record=_apollo(artists=["Brian Eno", "Daniel Lanois", "Roger Eno"], artists_of="SPOTIFYID"))
     assert "Credits: none: with an override there is no artist" in _output(caplog, result)
+
+# ---------------------------------------------------------------------------
+# The album's blocklist (homelab#2750)
+# ---------------------------------------------------------------------------
+
+GUID = "https://indexer/details/walkman"
+AT = datetime(2026, 11, 4, 3, 0, tzinfo=timezone.utc)
+
+
+def _listed(reason: str, title: str = WALKMAN, guid: str = GUID) -> list[dict]:
+    """The album's blocklist as :func:`blocklist.entries` reads it: one grab of *title*, then *reason*."""
+    record = _record(blocklist=[guid])
+    return blocklist.entries(record, [(AT, "grab", {"guid": guid, "release": title, "size": 400_000_000}),
+                                      (AT, "blocklisted" if reason.startswith(blocklist.BY_HAND) else "failure",
+                                       {"guid": guid, "reason": reason})])
+
+
+def test_a_title_blocklisted_by_hand_is_refused_by_the_blocklist(caplog) -> None:
+    result = _check(WALKMAN, listed=_listed("by hand: another album in it"))
+    assert result.why is None  # the matcher alone accepts it
+    output = _output(caplog, result)
+    assert ("Verdict: refused by the blocklist (below); the matcher alone: accepted on the title; size not checked"
+            in output)
+    assert (f"Blocklist: refuses it: {WALKMAN} (400 MB): by hand: another album in it (blocklisted by hand, so every "
+            "copy of it, on any indexer; no reset clears it)") in output
+
+
+def test_a_repost_of_a_wrong_release_is_refused_too(caplog) -> None:
+    output = _output(caplog, _check(f"{WALKMAN}-1", listed=_listed("another album: 0 of the album's 12 titles in it")))
+    assert "Verdict: refused by the blocklist (below)" in output
+    assert "(a wrong release, so every copy of it, on any indexer)" in output
+
+
+def test_a_dead_copy_of_the_title_blocks_only_its_guid(caplog) -> None:
+    output = _output(caplog, _check(WALKMAN, listed=_listed("Repair failed, not enough repair blocks (5 short)")))
+    assert "Verdict: accepted on the title" in output
+    assert ("Blocklist: doesn't refuse it, but holds a copy of it that blocks only its own GUID, so another indexer's "
+            "copy may be grabbed: ") in output
+
+
+def test_an_entry_of_another_title_doesnt_refuse_it(caplog) -> None:
+    output = _output(caplog, _check(WALKMAN, listed=_listed("by hand: x", title=SON)))
+    assert "Verdict: accepted on the title" in output and "Blocklist: doesn't refuse it (1 entry)" in output
