@@ -715,3 +715,11 @@ class SpotifyPlaylists:
         from spotdl.utils.search import get_simple_songs  # noqa: PLC0415
 
         return [s.json for s in get_simple_songs([f"https://open.spotify.com/album/{album_id}"])]
+
+    def album_artists(self, album_id: str) -> list[str]:
+        """The album's artists, in Spotify's order (homelab#2783).  One call.
+        spotdl's songs keep the first only (``album_artist``), so album mode
+        reads the rest here: the album's other credited artists."""
+        from spotdl.utils.spotify import SpotifyClient  # noqa: PLC0415
+
+        return [a["name"] for a in SpotifyClient().album(album_id).get("artists") or () if a.get("name")]

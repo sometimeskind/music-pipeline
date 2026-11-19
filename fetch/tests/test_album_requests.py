@@ -575,6 +575,7 @@ def test_the_dry_run_then_the_apply_add_a_request(pg_url, caplog, monkeypatch):
         assert (request.release_group, request.tracklist_release, request.preferred_release,
                 request.requested_by) == (RG, R12, None, "sub-tom")
         assert len(request.tracks) == 12 and request.tracks[0][2] is None
+        assert request.artists == ["Band", "Friend"]  # homelab#2783
         event = conn.execute("SELECT kind, source, release_group::text, caller, data FROM events").fetchone()
         assert event[:4] == ("album_requested", "requests", RG, "sub-tom")
         assert event[4]["tracklist_release"] == R12 and event[4]["preferred_release"] is None
@@ -747,10 +748,11 @@ def test_the_tick_gives_older_requests_their_musicbrainz_type(pg_url, caplog):
         with state.connect() as conn:
             assert req.backfill_types(conn, mb, limit=1) == (1, 1, "")
         req.backfill_tick(mb, apply=True)
-    assert "[REQ-TYPES] 1 request(s) given their MusicBrainz type, 0 left" in caplog.text
+    assert "[REQ-TYPES] 1 request(s) given their MusicBrainz type and credit, 0 left" in caplog.text
     found = {r.release_group: r for r in req.album_requests()}
-    assert found[RG].data == {"album_type": "album", "primary_type": "EP"}
-    assert found[OTHER_RG].data["primary_type"] == ""  # MusicBrainz has no such group: not read again
+    assert found[RG].data == {"album_type": "album", "primary_type": "EP", "artists": ["Band", "Friend"]}
+    # MusicBrainz has no such group: not read again.
+    assert found[OTHER_RG].data["primary_type"] == "" and found[OTHER_RG].artists == []
     calls = len(mb.calls)
     req.backfill_tick(mb, apply=True)
     assert len(mb.calls) == calls
@@ -774,3 +776,119 @@ def test_a_musicbrainz_outage_stops_the_type_backfill(pg_url):
         filled, left, stopped = req.backfill_types(conn, down)
     assert (filled, left) == (0, 1) and stopped.startswith(f"reading release group {RG}")
     assert req.album_requests()[0].data == {}  # the next tick tries again
+
+
+# --- the release group's credited artists (homelab#2783) ---
+
+APOLLO_CREDIT = "Brian Eno with Daniel Lanois & Roger Eno"
+APOLLO_NAMES = ["Brian Eno", "Daniel Lanois", "Roger Eno"]
+APOLLO_TITLE = ("Brian Eno With Daniel Lanois and Roger Eno-Apollo Atmospheres And Soundtracks-REMASTERED-16BIT-WEB-"
+                "FLAC-2019-OBZEN")
+# The release crediting the first artist alone, as Spotify's records' releases do.
+APOLLO_ENO = "Brian Eno-Apollo Atmospheres and Soundtracks-Remastered-CD-FLAC-2009-BCC"
+
+
+def test_the_tracklist_keeps_the_credits_names():
+    found = req.tracklist(FakeMB(), RG)
+    assert found.artist == "Band & Friend" and found.artists == ["Band", "Friend"]
+    credit = [{"name": "Brian Eno", "joinphrase": " with "}, {"name": "Daniel Lanois", "joinphrase": " & "},
+              {"artist": {"name": "Roger Eno"}, "joinphrase": ""}]
+    assert req.credited(credit) == APOLLO_NAMES and req._credit(credit) == APOLLO_CREDIT
+    assert req.credited(None) == []
+
+
+def _apollo_request(artists: list[str] | None = APOLLO_NAMES) -> req.Request:
+    data = {"year": 1983, "album_type": "album", "duration": 3069, "primary_type": "Album"}
+    if artists is not None:
+        data["artists"] = artists
+    return req.Request(RG, R12, APOLLO_CREDIT, "Apollo: Atmospheres & Soundtracks",
+                       [[f"Song {i}", APOLLO_CREDIT, None, None, 1, i] for i in range(1, 13)], data)
+
+
+def _search_apollo(s: State, title: str = APOLLO_TITLE) -> dict:
+    from music_fetch.albums import Settings
+
+    low, high = usenet.size_range(12, 3069)
+    prowlarr = MagicMock()
+    prowlarr.blocked.return_value = []
+    prowlarr.search.return_value = [usenet.Release("obzen", title, (low + high) // 2, 1,
+                                                   "http://prowlarr/1/download?id=obzen", [3040])]
+    albums.top_up(s, Settings(mode="dry-run"), prowlarr, MagicMock(), lambda k, r: False, albums.TickResult(),
+                  overrides={})
+    return s.albums[RG]
+
+
+def test_a_request_credits_the_release_groups_other_artists(caplog):
+    """A request has no Spotify album: its MusicBrainz credit names the artist (the first) and the
+    album's other credited artists.  The record keeps the whole credit as its artist, and the queries too."""
+    s = State()
+    albums.feed_requests(s, [_apollo_request()])
+    record = s.albums[RG]
+    assert record["artist"] == APOLLO_CREDIT
+    assert record["artists"] == APOLLO_NAMES and record["artists_of"] == RG and albums.credits_due(record) is None
+    search = albums.plan(RG, record, {})
+    assert search.artist == "Brian Eno" and search.credits == ("Daniel Lanois", "Roger Eno", APOLLO_CREDIT)
+    assert search.queries[0] == "brian eno with daniel lanois and roger eno apollo atmospheres and soundtracks"
+    record = _search_apollo(s)
+    assert record["status"] == albums.DRY_RUN and record["candidate"]["title"] == APOLLO_TITLE
+    # A release crediting the first artist alone is the album too.
+    del record["dry_run"], record["candidate"]
+    record["status"] = albums.WANTED
+    assert _search_apollo(s, APOLLO_ENO)["candidate"]["title"] == APOLLO_ENO
+
+
+def test_a_request_made_before_the_credits_were_kept_reads_its_credit_as_the_artist(caplog):
+    """Its whole credit is the artist: only a title spelling all of it matches."""
+    caplog.set_level("INFO", logger="music_fetch.albums")
+    s = State()
+    albums.feed_requests(s, [_apollo_request(artists=None)])
+    assert "artists" not in s.albums[RG]
+    assert albums.plan(RG, s.albums[RG], {}).artist == APOLLO_CREDIT
+    assert _search_apollo(s, APOLLO_ENO)["status"] == albums.MISSING
+    assert "artist: doesn't start with " + APOLLO_CREDIT in caplog.text
+    # Backfilled (backfill_types), the next feed gives the record its credits.
+    albums.feed_requests(s, [_apollo_request()])
+    assert s.albums[RG]["artists"] == APOLLO_NAMES
+
+
+def test_a_request_crediting_its_artist_alone_matches_as_before():
+    s = State()
+    albums.feed_requests(s, [_request()])  # data without artists: an old request
+    albums.feed_requests(s, [req.Request(RG, R12, "Band", "The Album", _request().tracks,
+                                         {**_request().data, "artists": ["Band"]})])
+    record = s.albums[RG]
+    search = albums.plan(RG, record, {})
+    assert search.artist == "Band" and search.credits == () and search.queries[0] == "band the album"
+
+
+def test_a_request_with_a_spotify_album_takes_the_spotify_albums_artists():
+    """The MusicBrainz credit is for an album no Spotify album credits: one that has one reads Spotify's."""
+    s = State(albums={"sp1": _wants_record("sp1", status=albums.GRABBED)})
+    albums.feed_requests(s, [_apollo_request()])
+    record = s.albums["sp1"]
+    assert "artists" not in record and albums.credits_due(record) == "sp1"
+
+
+def test_a_title_spelling_a_requests_whole_credit_matches_whatever_its_join_phrases():
+    """The credit's own join phrases (``presents``) aren't the matcher's joining words, but
+    the whole credit is a credit too: what matched before the credits were kept still does."""
+    data = {"album_type": "album", "duration": 3000, "primary_type": "Album"}
+    tracks = [[f"Song {i}", "x", None, None, 1, i] for i in range(1, 11)]
+    old = req.Request(RG, R12, "Joe Smith presents Big Band Ensemble", "Night Music", tracks, data)
+    new = req.Request(RG, R12, old.artist, old.name, tracks,
+                      {**data, "artists": ["Joe Smith", "Big Band Ensemble"]})
+    title = "Joe Smith Presents Big Band Ensemble-Night Music-WEB-FLAC-2020-GRP"
+    size = sum(usenet.size_range(10, 3000)) // 2
+    for request in (old, new):
+        s = State()
+        albums.feed_requests(s, [request])
+        record = s.albums[RG]
+        search = albums.plan(RG, record, {})
+        release = usenet.Release("g", title, size, 1, "", [3040])
+        assert usenet.rejection(release, search.artist, search.album, 10, **albums.match_args(record, search)) is None
+    # The new one also takes a release crediting the first artist alone; and still refuses someone uncredited.
+    for title, ok in [("Joe Smith-Night Music-WEB-FLAC-2020-GRP", True),
+                      ("Joe Smith With London Symphony Orchestra-Night Music-WEB-FLAC-2020-GRP", False)]:
+        why = usenet.rejection(usenet.Release("g", title, size, 1, "", [3040]), search.artist, search.album, 10,
+                               **albums.match_args(record, search))
+        assert (why is None) is ok

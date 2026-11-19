@@ -135,6 +135,7 @@ class Tracklist:
     how: str = ""  # "preferred", or how the release was chosen
     release_label: str = ""  # the release as the dry run names it
     primary_type: str = ""  # MusicBrainz's: "Album", "EP", "Single"
+    artists: list[str] = dataclasses.field(default_factory=list)  # the credited names (:func:`credited`)
 
     def fields(self) -> dict:
         """The album record's fields the request sets (album mode's names)."""
@@ -146,6 +147,15 @@ def _credit(credits: Iterable[dict] | None) -> str:
     """An artist credit as MusicBrainz prints it: names and join phrases."""
     return "".join(f"{c.get('name') or (c.get('artist') or {}).get('name', '')}{c.get('joinphrase', '')}"
                    for c in credits or ())
+
+
+def credited(credits: Iterable[dict] | None) -> list[str]:
+    """An artist credit's names, without its join phrases (homelab#2783):
+    ``Brian Eno with Daniel Lanois & Roger Eno`` → ``["Brian Eno", "Daniel
+    Lanois", "Roger Eno"]``.  The album matcher reads the first as the artist
+    and the rest as the album's other credited artists."""
+    names = (c.get("name") or (c.get("artist") or {}).get("name", "") for c in credits or ())
+    return [n for n in names if n]
 
 
 def _audio(medium: Mapping) -> bool:
@@ -269,6 +279,7 @@ def tracklist(get: Get, group_id: str, preferred: str | None = None) -> Tracklis
     if of != group_id:
         raise Refused(f"release {preferred} is of release group {of}, not {group_id}")
     artist = _credit(group.get("artist-credit")) or _credit(release.get("artist-credit"))
+    artists = credited(group.get("artist-credit")) or credited(release.get("artist-credit"))
     tracks: list[list] = []
     seconds = 0
     for medium in release.get("media") or ():
@@ -286,7 +297,7 @@ def tracklist(get: Get, group_id: str, preferred: str | None = None) -> Tracklis
     album_type = "single" if group.get("primary-type") == "Single" else "album"
     return Tracklist(group_id, preferred, artist, group.get("title") or release.get("title") or "", tracks,
                      _year(group.get("first-release-date")), album_type, seconds, how, _release_label(release),
-                     group.get("primary-type") or "")
+                     group.get("primary-type") or "", artists)
 
 
 def recording_url(recording: str) -> str:
@@ -391,6 +402,14 @@ class Request:
                 "tracks_count": len(self.tracks), "album_type": self.data.get("album_type") or "album",
                 "duration": self.data.get("duration") or 0, "primary_type": self.data.get("primary_type") or ""}
 
+    @property
+    def artists(self) -> list[str] | None:
+        """The release group's credited names (:func:`credited`, homelab#2783);
+        None for a request made before they were kept, until
+        :func:`backfill_types` has read them."""
+        artists = self.data.get("artists")
+        return None if artists is None else list(artists)
+
 
 def load(conn: psycopg.Connection) -> list[Request]:
     """Every request, oldest first."""
@@ -416,7 +435,7 @@ def add(conn: psycopg.Connection, found: Tracklist, by: str, key: str | None = N
     reason, homelab#2535); *source* is the event's (``stranded`` for a
     stranded row's request, homelab#2602)."""
     data = {"year": found.year, "album_type": found.album_type, "duration": found.duration,
-            "primary_type": found.primary_type}
+            "primary_type": found.primary_type, "artists": found.artists}
     preferred = found.release if found.how == "preferred" else None
     with conn.transaction():
         row = conn.execute(
@@ -442,25 +461,31 @@ TYPES_PER_TICK = 25
 
 
 def backfill_types(conn: psycopg.Connection, get: Get, limit: int = TYPES_PER_TICK) -> tuple[int, int, str]:
-    """Give the first *limit* requests made before homelab#2568, which have no
-    ``primary_type`` in their data, MusicBrainz's (``""`` for a release group
-    MusicBrainz no longer has, so it isn't read again): until then an EP
-    request refuses every release tagged EP.  Returns how many were filled,
-    how many are left, and why it stopped early (MusicBrainz down), if it did."""
-    groups = [g for (g,) in conn.execute(
-        "SELECT release_group::text FROM album_requests WHERE NOT (data ? 'primary_type') "
-        "ORDER BY requested_at, id")]
+    """Give the first *limit* requests that lack them MusicBrainz's
+    ``primary_type`` (requests made before homelab#2568: until then an EP
+    request refuses every release tagged EP) and the release group's credited
+    names, ``artists`` (made before homelab#2783: until then a collaboration's
+    request reads its whole credit as the artist), from one read of the
+    release group.  A release group MusicBrainz no longer has gets ``""`` and
+    ``[]``, so it isn't read again; a field the request has is left as it is.
+    Returns how many were filled, how many are left, and why it stopped early
+    (MusicBrainz down), if it did."""
+    rows = list(conn.execute(
+        "SELECT release_group::text, data ? 'primary_type', data ? 'artists' FROM album_requests "
+        "WHERE NOT (data ? 'primary_type' AND data ? 'artists') ORDER BY requested_at, id"))
     filled = 0
-    for group in groups[:limit]:
+    for group, has_type, has_artists in rows[:limit]:
         try:
-            found = get(f"release-group/{group}")
+            found = get(f"release-group/{group}", inc="artist-credits") or {}
         except OSError as exc:  # urllib's errors: MusicBrainz down or refusing
-            return filled, len(groups) - filled, f"reading release group {group} from MusicBrainz failed: {exc}"
+            return filled, len(rows) - filled, f"reading release group {group} from MusicBrainz failed: {exc}"
+        data = {} if has_type else {"primary_type": found.get("primary-type") or ""}
+        if not has_artists:
+            data["artists"] = credited(found.get("artist-credit"))
         with conn.transaction():
-            conn.execute("UPDATE album_requests SET data = data || %s WHERE release_group = %s",
-                         (Jsonb({"primary_type": (found or {}).get("primary-type") or ""}), group))
+            conn.execute("UPDATE album_requests SET data = data || %s WHERE release_group = %s", (Jsonb(data), group))
         filled += 1
-    return filled, len(groups) - filled, ""
+    return filled, len(rows) - filled, ""
 
 
 def backfill_tick(get: Get | None, apply: bool) -> None:
@@ -473,10 +498,11 @@ def backfill_tick(get: Get | None, apply: bool) -> None:
         with statedb.session() as conn:
             filled, left, stopped = backfill_types(conn, get)
     except Exception:
-        logger.exception("[REQ-TYPES] reading the requests' MusicBrainz types failed; the next tick tries again")
+        logger.exception("[REQ-TYPES] reading the requests' MusicBrainz types and credits failed; the next tick "
+                         "tries again")
         return
     if filled or left:
-        logger.info("[REQ-TYPES] %d request(s) given their MusicBrainz type, %d left%s", filled, left,
+        logger.info("[REQ-TYPES] %d request(s) given their MusicBrainz type and credit, %d left%s", filled, left,
                     f"; stopped: {stopped}" if stopped else "")
 
 

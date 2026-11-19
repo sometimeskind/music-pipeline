@@ -253,6 +253,9 @@ class Spotify:
     def album_songs(self, album_id: str) -> list[dict]:
         return []
 
+    def album_artists(self, album_id: str) -> list[str]:
+        return []
+
 
 def test_the_album_tick_feeds_the_request_the_same_tick_and_keeps_later_off_the_fallback():
     _setup()

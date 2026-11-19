@@ -179,7 +179,12 @@ playlists' want list, so an album waiting on the tick isn't in it. A `fallback` 
 `set_search_override`. A `[MISS]` with results says which rule rejected them (`rejected: …;
 closest: "<title>" (<rule>: <detail>)`): `album words` on the closest means the release
 spells the title differently, which an override fixes; `size`, `single` or `leftover words`
-are about the release itself, which an override doesn't change. `artist words` (the title holds
+are about the release itself, which an override doesn't change. Leftover words that name
+collaborators in the artist part (`with daniel lanois roger`) are allowed only when the album
+credits them: its Spotify album's artists, or a request's MusicBrainz credit, never a playlist
+track's featured artists (homelab#2783). `check_release`'s `Credits:` line says whom the album
+credits; `not read yet` means the tick reads the Spotify album's artists at the album's next
+search with results, so a `missing` album's next weekly search decides it. `artist words` (the title holds
 an album word only as the artist's name, beside words of its own: `Curtis Mayfield-Live In Europe`
 for *Curtis Live!*) is another album by the artist, unless those words are only how the album's
 release spells it, which an override fixes. `other release` (a tour, live,

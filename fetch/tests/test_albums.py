@@ -50,10 +50,12 @@ def song(name: str, album_id: str, album: str = "Album", artist: str = "Artist",
 
 
 class FakeSpotify:
-    def __init__(self, snapshot: str, songs: list[dict]) -> None:
+    def __init__(self, snapshot: str, songs: list[dict], artists: dict[str, list[str]] | None = None) -> None:
         self.snapshot = snapshot
         self._songs = songs
         self.song_reads = 0
+        self.artists = artists or {}
+        self.artist_reads: list[str] = []
 
     def snapshot_id(self, url: str) -> str:
         return self.snapshot
@@ -64,6 +66,10 @@ class FakeSpotify:
 
     def album_songs(self, album_id: str) -> list[dict]:
         return []
+
+    def album_artists(self, album_id: str) -> list[str]:
+        self.artist_reads.append(album_id)
+        return self.artists.get(album_id, ["Artist"])
 
 
 def release(guid: str = "r1", title: str = "Artist-Album-WEB-FLAC-2020") -> Release:
@@ -2640,3 +2646,158 @@ def test_reset_and_requeue_record_an_event_on_apply_only(recorded, monkeypatch) 
     assert kind == "requeued" and message.startswith("[REQUEUE] ")
     assert message.endswith("wanted, 1 track(s) off the spotdl queue")
     assert kw["data"]["fell_back_at"] == "2026-10-10T23:15:02+00:00" and kw["data"]["tracks"] == 1
+
+
+# ---------------------------------------------------------------------------
+# The album's other credited artists (homelab#2783)
+# ---------------------------------------------------------------------------
+
+APOLLO_ID = "1Km58i317Pm5bQR3wPHKcO"
+APOLLO_NAME = "Apollo: Atmospheres And Soundtracks (Extended Edition)"
+APOLLO_ARTISTS = ["Brian Eno", "Daniel Lanois", "Roger Eno"]
+APOLLO_TITLE = ("Brian Eno With Daniel Lanois and Roger Eno-Apollo Atmospheres And Soundtracks-REMASTERED-16BIT-WEB-"
+                "FLAC-2019-OBZEN")
+
+
+def _apollo_state(**fields) -> State:
+    """The issue's album as its wants record had it: the artist is Spotify's first album artist only."""
+    record = {**statedb.new_record(APOLLO_ID, status=albums.WANTED, blocklist=[], origin=albums.WANTS,
+                                   name=APOLLO_NAME, artist="Brian Eno", tracks_count=23, album_type="album",
+                                   duration=5640, playlists={"calm": [["Capsule", "Brian Eno", "t1", None, 2, 2]]}),
+              **fields}
+    return State(albums={APOLLO_ID: record})
+
+
+def _sized(title: str, guid: str = "obzen", seconds: int = 5640) -> Release:
+    from music_fetch.usenet import size_range  # noqa: PLC0415
+
+    low, high = size_range(0, seconds)
+    return Release(guid=guid, title=title, size=(low + high) // 2, indexer_id=1,
+                   download_url=f"http://prowlarr/1/download?id={guid}", categories=[3040])
+
+
+def test_apollo_is_grabbed_once_the_tick_reads_its_spotify_artists(caplog) -> None:
+    """The issue's [MISS], end to end: the search finds the right release, the tick reads the
+    Spotify album's artists, and the release crediting Daniel Lanois and Roger Eno is grabbed."""
+    state = _apollo_state()
+    prowlarr, sab = fakes([_sized(APOLLO_TITLE)])
+    spotify = FakeSpotify("s", [], artists={APOLLO_ID: APOLLO_ARTISTS})
+    top_up(state, Settings(mode="on"), prowlarr, sab, never_have, albums.TickResult(), now=lambda: NOW,
+           overrides={}, album_artists=spotify.album_artists)
+    record = state.albums[APOLLO_ID]
+    assert spotify.artist_reads == [APOLLO_ID]
+    assert record["artists"] == APOLLO_ARTISTS and record["artists_of"] == APOLLO_ID
+    assert record["status"] == albums.GRABBED and record["candidate"]["title"] == APOLLO_TITLE
+    # The query is the record's artist and name, as before.
+    assert record["query"] == "brian eno apollo atmospheres and soundtracks"
+
+
+def test_apollo_without_its_artists_is_the_issues_miss(caplog) -> None:
+    caplog.set_level("INFO", logger="music_fetch.albums")
+    state = _apollo_state()
+    prowlarr, sab = fakes([_sized(APOLLO_TITLE)])
+    top_up(state, Settings(mode="on"), prowlarr, sab, never_have, albums.TickResult(), now=lambda: NOW, overrides={})
+    assert state.albums[APOLLO_ID]["status"] == albums.MISSING
+    assert "leftover words: with daniel lanois roger" in caplog.text
+
+
+def test_an_artist_the_album_doesnt_credit_is_still_refused(caplog) -> None:
+    """Spotify credits Daniel Lanois only: a release naming Roger Eno too names someone else."""
+    caplog.set_level("INFO", logger="music_fetch.albums")
+    state = _apollo_state()
+    prowlarr, sab = fakes([_sized(APOLLO_TITLE)])
+    spotify = FakeSpotify("s", [], artists={APOLLO_ID: ["Brian Eno", "Daniel Lanois"]})
+    top_up(state, Settings(mode="on"), prowlarr, sab, never_have, albums.TickResult(), now=lambda: NOW,
+           overrides={}, album_artists=spotify.album_artists)
+    assert state.albums[APOLLO_ID]["status"] == albums.MISSING
+    assert "leftover words: with daniel lanois roger" in caplog.text
+
+
+def test_an_album_crediting_no_one_else_matches_as_before() -> None:
+    state = wanted_state()
+    orchestra = release("r2", "Artist With London Symphony Orchestra-Album-WEB-FLAC-2020-GRP")
+    prowlarr, sab = fakes([orchestra, release()])
+    spotify = FakeSpotify("s", [])  # Spotify credits the artist alone
+    top_up(state, Settings(mode="on"), prowlarr, sab, never_have, albums.TickResult(), now=lambda: NOW,
+           overrides={}, album_artists=spotify.album_artists)
+    record = state.albums["a0"]
+    assert record["artists"] == ["Artist"] and albums.plan("a0", record, {}).credits == ()
+    assert record["candidate"]["guid"] == "r1"  # the orchestra's live album is still another release
+    assert usenet_rejected(record, orchestra.title) == "leftover words"
+
+
+def usenet_rejected(record: dict, title: str) -> str | None:
+    """The rule the tick's matcher refuses *title* by for *record*, as _verdict asks it."""
+    from music_fetch.usenet import rejection  # noqa: PLC0415
+
+    search = albums.plan("k", record, {})
+    why = rejection(Release("g", title, 60 * MB, 1, "", []), search.artist, search.album, albums.track_count(record),
+                    **albums.match_args(record, search))
+    return why.rule if why else None
+
+
+def test_the_artists_are_read_once_and_again_for_a_new_primary() -> None:
+    state = _apollo_state()
+    spotify = FakeSpotify("s", [], artists={APOLLO_ID: APOLLO_ARTISTS, "other": ["Brian Eno"]})
+    prowlarr, sab = fakes([_sized("Brian Eno-Something Else-WEB-FLAC-2019-GRP")])
+    settings = Settings(mode="on")
+    top_up(state, settings, prowlarr, sab, never_have, albums.TickResult(), now=lambda: NOW, overrides={},
+           album_artists=spotify.album_artists)
+    record = state.albums[APOLLO_ID]
+    assert record["status"] == albums.MISSING and spotify.artist_reads == [APOLLO_ID]
+    later = lambda: NOW + timedelta(days=8)  # noqa: E731 — the miss is searched again
+    top_up(state, settings, prowlarr, sab, never_have, albums.TickResult(), now=later, overrides={},
+           album_artists=spotify.album_artists)
+    assert spotify.artist_reads == [APOLLO_ID]
+    # Another edition became the primary (homelab#2410): its artists are the record's now.
+    record["spotify_album_ids"] = ["other", APOLLO_ID]
+    assert albums.credits_due(record) == "other"
+    top_up(state, settings, prowlarr, sab, never_have, albums.TickResult(), now=lambda: NOW + timedelta(days=16),
+           overrides={}, album_artists=spotify.album_artists)
+    assert spotify.artist_reads == [APOLLO_ID, "other"] and record["artists"] == ["Brian Eno"]
+
+
+def test_no_results_read_no_artists() -> None:
+    state = _apollo_state()
+    prowlarr, sab = fakes([])
+    spotify = FakeSpotify("s", [], artists={APOLLO_ID: APOLLO_ARTISTS})
+    top_up(state, Settings(mode="on"), prowlarr, sab, never_have, albums.TickResult(), now=lambda: NOW, overrides={},
+           album_artists=spotify.album_artists)
+    assert spotify.artist_reads == [] and albums.credits_due(state.albums[APOLLO_ID]) == APOLLO_ID
+
+
+def test_a_failed_read_matches_without_the_artists_and_stops_the_reads(caplog) -> None:
+    caplog.set_level("INFO", logger="music_fetch.albums")
+    state = wanted_state(2)
+    prowlarr, sab = fakes()
+    prowlarr.search.side_effect = [[release(f"r{i}", f"Artist-Album-WEB-FLAC-2020-GRP{i}")] for i in range(2)]
+    reads = []
+
+    def down(album_id: str) -> list[str]:
+        reads.append(album_id)
+        raise RuntimeError("Spotify rate-limited")
+
+    top_up(state, Settings(mode="on"), prowlarr, sab, never_have, albums.TickResult(), now=lambda: NOW, overrides={},
+           album_artists=down)
+    assert reads == ["a0"]  # the second album isn't read
+    assert [r["status"] for r in state.albums.values()] == [albums.GRABBED, albums.GRABBED]
+    assert all("artists_of" not in r for r in state.albums.values())  # read at their next search
+    assert "reading the album's Spotify artists failed, matched without them: Spotify rate-limited" in caplog.text
+
+
+def test_an_override_has_no_credits() -> None:
+    record = {**_apollo_state().albums[APOLLO_ID], "artists": APOLLO_ARTISTS, "artists_of": APOLLO_ID}
+    assert albums.plan(APOLLO_ID, record, {}).credits == ("Daniel Lanois", "Roger Eno")
+    search = albums.plan(APOLLO_ID, record, {APOLLO_ID: "eno apollo atmospheres"})
+    assert search.artist == "" and search.credits == () and albums.match_args(record, search)["credits"] == ()
+
+
+def test_the_tick_reads_the_artists_through_its_spotify_source() -> None:
+    state = _apollo_state()
+    seed(state)
+    prowlarr, sab = fakes([_sized(APOLLO_TITLE)])
+    spotify = FakeSpotify("s", [], artists={APOLLO_ID: APOLLO_ARTISTS})
+    tick([], spotify, prowlarr, sab, never_have, Settings(mode="dry-run"))
+    saved = State.load().albums[APOLLO_ID]
+    assert spotify.artist_reads == [APOLLO_ID]
+    assert saved["artists"] == APOLLO_ARTISTS and saved["candidate"]["title"] == APOLLO_TITLE
