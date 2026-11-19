@@ -939,3 +939,66 @@ def test_subtitle_is_what_clean_album_drops_after_the_dash(name: str, expected: 
 
 def test_any_album_has_no_subtitle_to_check() -> None:
     assert matches(rel(ARETHA_60S), "Aretha Franklin", "★ - The 70's", 16, album_type="album", any_album=True)
+
+
+# ---------------------------------------------------------------------------
+# The album's other credited artists in the artist part (homelab#2783)
+# ---------------------------------------------------------------------------
+
+APOLLO = ("Brian Eno", "Apollo: Atmospheres And Soundtracks (Extended Edition)")
+APOLLO_CREDITS = ("Daniel Lanois", "Roger Eno")
+APOLLO_TITLE = "Brian Eno With Daniel Lanois and Roger Eno-Apollo Atmospheres And Soundtracks-REMASTERED-16BIT-WEB-FLAC-2019-OBZEN"
+
+
+def test_apollo_is_refused_without_its_credits() -> None:
+    """The [MISS] the issue quotes: the record's artist is Spotify's first only."""
+    why = rejection(rel(APOLLO_TITLE), *APOLLO, 17, album_type="album")
+    assert why is not None and str(why) == "leftover words: with daniel lanois roger"
+
+
+@pytest.mark.parametrize("title", [
+    APOLLO_TITLE,
+    "Brian Eno with Daniel Lanois and Roger Eno - Apollo Atmospheres and Soundtracks (2019) [FLAC]",
+    # Naming some of the credited artists is naming them too.
+    "Brian Eno With Daniel Lanois-Apollo Atmospheres And Soundtracks-WEB-FLAC-2019-GRP",
+])
+def test_apollo_matches_with_its_credits(title: str) -> None:
+    assert rejection(rel(title), *APOLLO, 17, album_type="album", credits=APOLLO_CREDITS) is None
+    assert leftover(rel(title), *APOLLO, credits=APOLLO_CREDITS) == []
+    assert [r.title for r in rank([rel(title)], *APOLLO, 17, set(), credits=APOLLO_CREDITS)] == [title]
+
+
+@pytest.mark.parametrize("artist, album, credits, title", [
+    ("Artist", "Great Album", ["Tony Allen"], "Artist Feat Tony Allen-Great Album-WEB-FLAC-2020-GRP"),
+    ("Artist", "Great Album", ["Elysian Collective", "Chris Vatalaro"],
+     "Artist X Elysian Collective X Chris Vatalaro-Great Album-WEB-FLAC-2024-GRP"),
+    ("Floating Points", "Promises", ["Pharoah Sanders", "London Symphony Orchestra"],
+     "Floating Points Pharoah Sanders And The London Symphony Orchestra-Promises-WEB-FLAC-2021-GRP"),
+])
+def test_matches_a_credited_collaboration(artist: str, album: str, credits: list[str], title: str) -> None:
+    assert rejection(rel(title), artist, album, 10, album_type="album") is not None
+    assert rejection(rel(title), artist, album, 10, album_type="album", credits=credits) is None
+
+
+@pytest.mark.parametrize("artist, album, credits, title, rule", [
+    # Roger Eno isn't credited: the part names someone else, so it credits nobody.
+    (*APOLLO, ["Daniel Lanois"], APOLLO_TITLE, "leftover words"),
+    # An orchestra the album doesn't credit: the live version with one.
+    ("Artist", "Great Album", ["Other Person"],
+     "Artist With London Symphony Orchestra-Great Album-WEB-FLAC-2020-GRP", "leftover words"),
+    ("Artist", "Great Album", ["Other Person"],
+     "Artist With Other Person And London Symphony Orchestra-Great Album-WEB-FLAC-2020-GRP", "leftover words"),
+    # Half a credited name is not the name.
+    ("Artist", "Great Album", ["Tony Allen"], "Artist Feat Tony Jones Smith-Great Album-WEB-FLAC-2020-GRP",
+     "leftover words"),
+    # Credited names count in the artist part only.
+    ("Artist", "Great Album", ["Tony Allen"], "Artist-Great Album Tony Allen Club Remix-WEB-FLAC-2020-GRP",
+     "leftover words"),
+    # A credited collaboration's other release is still another release.
+    ("Artist", "Great Album", ["Other Person"], "Artist With Other Person-Great Album Live-WEB-FLAC-2020-GRP",
+     "other release"),
+])
+def test_credits_name_only_the_albums_collaborators(artist: str, album: str, credits: list[str], title: str,
+                                                    rule: str) -> None:
+    why = rejection(rel(title), artist, album, 10, album_type="album", credits=credits)
+    assert why is not None and why.rule == rule
