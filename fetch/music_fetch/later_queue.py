@@ -85,8 +85,11 @@ class Index:
         self.refs = rows.by_ref()
 
     def find(self, entry: Entry) -> tuple[str, dict] | None:
-        if entry.release_group:
-            return self.groups.get(entry.release_group)
+        """The entry's row by release group, else by ref: a row the resolver
+        moved to another release group (homelab#2691) is still found by the
+        ref the entry kept when it resolved."""
+        if entry.release_group and (found := self.groups.get(entry.release_group)) is not None:
+            return found
         key = self.refs.get(entry.ref or "")
         return None if key is None else (key, self.rows.albums[key])
 
