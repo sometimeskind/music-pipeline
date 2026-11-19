@@ -800,7 +800,7 @@ def aligned_isrcs(item, recording: dict, get: MusicBrainzGet | None) -> tuple[st
     by).  When the item then holds none of the recording's and the recording has exactly
     one, that one is added.  A recording looked up without its ISRCs leaves the field
     alone."""
-    from music_scan.identity import split_list  # noqa: PLC0415
+    from music_scan.identity import isrc_code, split_list  # noqa: PLC0415
 
     have = split_list(item.get("isrc"), ";")
     isrcs = recording.get("isrcs")
@@ -808,6 +808,9 @@ def aligned_isrcs(item, recording: dict, get: MusicBrainzGet | None) -> tuple[st
         return ";".join(have), []
     keep, notes = [], []
     for code in have:
+        if not isrc_code(code):
+            notes.append(f"{code} goes: it isn't an ISRC")  # a release's tag (homelab#2672)
+            continue
         if code in isrcs:
             keep.append(code)
             continue

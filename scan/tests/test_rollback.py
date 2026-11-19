@@ -61,21 +61,21 @@ def test_entry_keys_cover_every_playlist_store(tmp_path, monkeypatch) -> None:
     from music_fetch import store
 
     stores(tmp_path, monkeypatch,
-                       later=[{"song_id": "s1", "isrc": "GB1"}, {"url": "https://open.spotify.com/track/s2"}],
+                       later=[{"song_id": "s1", "isrc": "GBQQQ0000001"}, {"url": "https://open.spotify.com/track/s2"}],
                        keep=[{"song_id": "s3"}])
     # A local entry is no Spotify entry, and a .spotdl file is never read (homelab#1914).
     keep = store.load("keep")
     keep.entries.append({store.LOCAL: {"id": 7, "path": "/x.m4a", "title": "X", "artist": "Y"}})
     store.save(keep)
-    (tmp_path / "old.spotdl").write_text(json.dumps({"songs": [{"song_id": "s9", "isrc": "GB9"}]}))
-    assert entry_keys() == ({"s1", "s2", "s3"}, {"GB1"})
+    (tmp_path / "old.spotdl").write_text(json.dumps({"songs": [{"song_id": "s9", "isrc": "GBQQQ0000009"}]}))
+    assert entry_keys() == ({"s1", "s2", "s3"}, {"GBQQQ0000001"})
 
 
 def test_unmatched_by_spotify_id_or_isrc_only() -> None:
     by_id = item(1, "Once in a Lifetime", spotify_ids="s1")
-    by_isrc = item(2, "Houses in Motion", isrc="US1;GB1")
-    outtake = item(3, "Fela's Riff (Unfinished Outtake)", isrc="US9")
-    assert unmatched([by_id, by_isrc, outtake], {"s1"}, {"GB1"}) == [outtake]
+    by_isrc = item(2, "Houses in Motion", isrc="USQQQ0000001;GBQQQ0000001")
+    outtake = item(3, "Fela's Riff (Unfinished Outtake)", isrc="USQQQ0000009")
+    assert unmatched([by_id, by_isrc, outtake], {"s1"}, {"GBQQQ0000001"}) == [outtake]
 
 
 def test_quarantine_moves_the_file_and_drops_the_row(tmp_path) -> None:
@@ -232,9 +232,9 @@ def test_a_rolled_back_item_is_a_retire_event(monkeypatch) -> None:
 
     recorded = []
     monkeypatch.setattr(rollback.events, "record", lambda kind, message, **kw: recorded.append((kind, message, kw)))
-    once = item(7, "Once in a Lifetime", album="Remain in Light", sources="later", isrc="USWB10001")
+    once = item(7, "Once in a Lifetime", album="Remain in Light", sources="later", isrc="USWBQ0010001")
     rollback.record_rollback(once)
     (kind, message, kw), = recorded
     assert kind == "retire" and kw["item_id"] == 7 and kw["source"] == "rollback"
-    assert kw["data"]["origin"] == "rollback" and kw["data"]["isrc"] == "USWB10001"
+    assert kw["data"]["origin"] == "rollback" and kw["data"]["isrc"] == "USWBQ0010001"
     assert message.startswith("[ROLLBACK] 7 Talking Heads — Once in a Lifetime:")

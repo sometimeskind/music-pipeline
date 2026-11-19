@@ -184,8 +184,9 @@ from music_fetch.album_requests import url_recording
 from music_fetch.usenet import words
 
 from music_scan.identity import (
-    Credit, add_isrcs, add_to_list, artist_credit, compilation, different_artist, different_song, fingerprint,
-    item_isrcs, item_spotify_ids, same_mb_recording, split_list, spotify_id, use_fpcalc, version_clash,
+    Credit, add_isrcs, add_to_list, artist_credit, compilation, different_artist, different_song, drop_bad_isrcs,
+    fingerprint, item_isrcs, item_spotify_ids, same_mb_recording, split_isrcs, split_list, spotify_id, use_fpcalc,
+    version_clash,
 )
 from music_scan.pathfold import fold, library_paths
 
@@ -582,12 +583,15 @@ class MusicPipelinePlugin(BeetsPlugin):
         self._beside: dict[int, list[Beside]] = {}
         # IDs of library items handle_duplicates gave ISRCs, whose files are written at the import's end.
         self._unwritten: set[int] = set()
+        # id(item) of incoming items whose isrc held a value that isn't an ISRC (homelab#2672).
+        self._bad_isrcs: set[int] = set()
         self.register_listener("import_task_created", self.tag_source_on_created)
         self.register_listener("import_task_apply", self.restore_file_title)
         self.register_listener("import_task_apply", self.clear_singleton_release_track)
         self.register_listener("item_imported", self.tag_source_on_stored)
         self.register_listener("import_task_choice", self.handle_duplicates)
         self.register_listener("item_imported", self.fingerprint_if_missing)
+        self.register_listener("item_imported", self.write_dropped_isrcs)
         self.register_listener("import", self.write_merged_isrcs)
 
     def tag_source_on_created(self, session, task):
@@ -602,6 +606,11 @@ class MusicPipelinePlugin(BeetsPlugin):
         file.
         """
         for item in _items_from_task(task):
+            if bad := drop_bad_isrcs(item):
+                # A release's tag in the file's ISRC field (PMEDIA, homelab#2672): never stored, and
+                # write_dropped_isrcs takes it off the file.
+                self._bad_isrcs.add(id(item))
+                self._log.warning("[ISRC] {}: {} isn't an ISRC; not imported", item.path, "; ".join(bad))
             playlist = _playlist_from_path(item.path)
             if playlist is None:
                 continue
@@ -810,6 +819,22 @@ class MusicPipelinePlugin(BeetsPlugin):
         item.try_write()
         item.store()
 
+    def write_dropped_isrcs(self, lib, item):
+        """Write an item whose file's ISRC tag held a value that isn't an ISRC
+        (homelab#2672) once it is in the library: an as-is import writes no
+        tags, and the dropped tag field zeroed the stored mtime, so the next
+        scan's ``beet update`` would read the value back from the file.  Fires
+        from ``item_imported``, after the file's move."""
+        if id(item) not in self._bad_isrcs:
+            return
+        self._bad_isrcs.discard(id(item))
+        if item.mtime:  # written since: the import's own write, or tag_source_on_stored's
+            return
+        if not item.try_write():
+            self._log.warning("[ISRC] item {}: its file couldn't be written, so the next scan's beet update "
+                              "reads the tag back (ignored, as not an ISRC)", item.id)
+        item.store()
+
     def write_merged_isrcs(self, lib, paths=None):
         """Write the ISRCs :meth:`handle_duplicates` merged into library items to their files (homelab#2726).
 
@@ -860,7 +885,7 @@ class MusicPipelinePlugin(BeetsPlugin):
             # (homelab#2609) or another artist's (homelab#2649): its recording and
             # ISRCs aren't the file's, and import_task_apply drops them.
             info = {}
-        isrcs = {*split_list(tags.isrc, ";"), *split_list(info.get("isrc"), ";"), *item_isrcs(item)}
+        isrcs = {*split_isrcs(tags.isrc), *split_isrcs(info.get("isrc")), *item_isrcs(item)}
         mb_trackid = (info.get("track_id") or info.get("mb_trackid") or item.get("mb_trackid")
                       or url_recording(tags.url) or None)
         return Incoming(spotify_id(tags.url), frozenset(isrcs), mb_trackid, getattr(item, "length", None))

@@ -120,7 +120,7 @@ from music_fetch.usenet import clean_album, normalise, words
 from music_scan.audit import LIBRARY, REPLACED, item_path, pipeline_lock
 from music_scan.identity import (
     LENGTH_SLACK, MERGED_FILES, add_isrcs, add_merged_file, add_to_list, different_song, fingerprint,
-    item_isrcs, item_spotify_ids, lengths_agree, merged_files, spotify_id, split_list, version_clash,
+    item_isrcs, item_spotify_ids, lengths_agree, merged_files, spotify_id, split_isrcs, split_list, version_clash,
 )
 from music_scan.metrics import _gauge, _push
 from music_scan.supersede import MANAGED_VIA
@@ -624,7 +624,7 @@ def take_ids(keeper, loser) -> dict[str, list[str]]:
     for source in split_list(loser.get("sources")):
         if add_to_list(keeper, "sources", source):
             taken["sources"].append(source)
-    isrcs = [c for c in dict.fromkeys(split_list(loser.get("isrc"), ";")) if c and c not in item_isrcs(keeper)]
+    isrcs = [c for c in split_isrcs(loser.get("isrc")) if c not in item_isrcs(keeper)]
     if add_isrcs(keeper, isrcs):
         taken["isrc"] = isrcs
     return taken

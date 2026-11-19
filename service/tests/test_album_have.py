@@ -48,7 +48,7 @@ def test_have_and_missing_resolve_by_id_or_isrc_never_by_sources(tmp_path: Path)
     from music_scan.library import MusicLibrary
     from music_service.flows import _album_library_hooks
 
-    tracks = [["One", "Artist", "S1", None, 1, 1], ["Two", "Artist", "S2", "ISRC2", 1, 2]]
+    tracks = [["One", "Artist", "S1", None, 1, 1], ["Two", "Artist", "S2", "ISRCQ0000002", 1, 2]]
     record = {"name": "Album", "tracks_count": 2, "playlists": {"later": tracks}}
     with MusicLibrary(tmp_path / "library.db", tmp_path) as lib:
         _add(lib, "One", "/lib/a/one.m4a", album="Album", sources="later", spotify_ids="S1", spotify_album_id="ALB")
@@ -58,7 +58,7 @@ def test_have_and_missing_resolve_by_id_or_isrc_never_by_sources(tmp_path: Path)
         assert missing("later", tracks) == [tracks[1]]
 
     with MusicLibrary(tmp_path / "library.db", tmp_path) as lib:
-        _add(lib, "Two (Remastered)", "/lib/b/two.m4a", album="Album", isrc="ISRC2", spotify_album_id="ALB")
+        _add(lib, "Two (Remastered)", "/lib/b/two.m4a", album="Album", isrc="ISRCQ0000002", spotify_album_id="ALB")
         have, missing, _ = _album_library_hooks(lib)
         assert missing("later", tracks) == []
         assert have("ALB", record)

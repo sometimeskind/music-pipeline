@@ -162,25 +162,25 @@ def _says(lines: list[str], text: str) -> bool:
 
 
 BUSY = HTTPError("https://musicbrainz.org", 503, "Service Temporarily Unavailable", Message(), None)
-ENTRY = {"status": "imported", "playlists": {"fancy": [["Song 4", "Muse", "S1", "ENTRY", 1, 4]]}}
+ENTRY = {"status": "imported", "playlists": {"fancy": [["Song 4", "Muse", "S1", "GBENT0000001", 1, 4]]}}
 
 
 def test_backfills_real_output_hashes_alike_when_only_the_lookup_and_the_count_differ(caplog):
-    items, records = [_album_item(1, "10", 4, isrc="ITEM", mb_trackid="r1")], {"10": ENTRY}
-    told = _backfill_output(caplog, {"isrcs": ["ITEM"]}, items, records)
+    items, records = [_album_item(1, "10", 4, isrc="GBITM0000001", mb_trackid="r1")], {"10": ENTRY}
+    told = _backfill_output(caplog, {"isrcs": ["GBITM0000001"]}, items, records)
     busy = _backfill_output(caplog, BUSY, items, records)
     assert _says(told, "[NOID] 10 fancy") and _says(busy, "lookup of recording r1 failed")
     assert output_hash(busy) == output_hash(told)
 
     records = {**records, "11": {"status": "imported", "playlists": {}}}
-    more = _backfill_output(caplog, {"isrcs": ["ITEM"]}, [*items, _album_item(2, "11", 1)], records)
+    more = _backfill_output(caplog, {"isrcs": ["GBITM0000001"]}, [*items, _album_item(2, "11", 1)], records)
     assert _says(more, "Album IDs: 2 imported") and output_hash(more) == output_hash(told)
 
 
 def test_a_failed_lookup_that_loses_a_link_still_changes_the_hash(caplog):
     """A failed lookup refutes nothing, so the entry a good lookup would link shows as [NOID]."""
-    items, records = [_album_item(1, "10", 4, isrc="ITEM", mb_trackid="r1")], {"10": ENTRY}
-    linked = _backfill_output(caplog, {"isrcs": ["ITEM", "ENTRY"]}, items, records)
+    items, records = [_album_item(1, "10", 4, isrc="GBITM0000001", mb_trackid="r1")], {"10": ENTRY}
+    linked = _backfill_output(caplog, {"isrcs": ["GBITM0000001", "GBENT0000001"]}, items, records)
     lost = _backfill_output(caplog, BUSY, items, records)
     assert _says(linked, "[LINK] 10 fancy") and _says(lost, "[NOID] 10 fancy")
     assert output_hash(lost) != output_hash(linked)

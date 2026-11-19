@@ -60,8 +60,8 @@ def seed(root: Path) -> dict:
     db.unlink(missing_ok=True)
     lib = Library(str(db), directory=str(libdir))
     items = []
-    for n, (title, sid, isrc) in enumerate([("Come Together", "S1", "GB1"), ("Something", "S2", ""),
-                                            ("Loose", "", "GB9")], 1):
+    for n, (title, sid, isrc) in enumerate([("Come Together", "S1", "GBQQQ0000001"), ("Something", "S2", ""),
+                                            ("Loose", "", "GBQQQ0000009")], 1):
         item = Item(title=title, artist="The Beatles", album="Abbey Road", track=n,
                     path=str(libdir / "The Beatles" / "Abbey Road" / f"0{n} - {title}.m4a").encode())
         if sid:
@@ -82,8 +82,8 @@ def seed(root: Path) -> dict:
                                  "other": {"total": 0, "entries": []}}}
     chill = [
         {"song": {"name": "Come Together", "artists": ["The Beatles"], "album_name": "Abbey Road",
-                  "song_id": "S1", "isrc": "GB1"}},
-        {"song": {"name": "Loose one", "artists": ["The Beatles"], "song_id": "SX", "isrc": "GB9"}},
+                  "song_id": "S1", "isrc": "GBQQQ0000001"}},
+        {"song": {"name": "Loose one", "artists": ["The Beatles"], "song_id": "SX", "isrc": "GBQQQ0000009"}},
         {"song": {"name": "Absent", "artists": ["Someone"], "song_id": "SY"}},
         {"local": {"id": items[1].id, "title": "Something", "artist": "The Beatles"}},
     ]

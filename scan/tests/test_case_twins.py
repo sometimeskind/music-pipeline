@@ -41,9 +41,9 @@ def test_pairs_are_grouped_by_folded_path_and_judged_by_ids_and_audio(tmp_path, 
     usenet = add("Hot Chip/In Our Heads/04 - Look at Where We Are.m4a", via="usenet", album_record="17",
                  spotify_ids="T1", acoustid_fingerprint="AQAAsame2")
     master = add("Bob Dylan/Blood On The Tracks/02 - Simple Twist Of Fate.m4a", via="spotdl",
-                 isrc="USSM1", acoustid_fingerprint="AQAAsame")
+                 isrc="USSMQ0000001", acoustid_fingerprint="AQAAsame")
     other = add("Bob Dylan/Blood On The Tracks/02 - Simple Twist of Fate.m4a", via="usenet",
-                isrc="USSM1", acoustid_fingerprint="AQAAother")
+                isrc="USSMQ0000001", acoustid_fingerprint="AQAAother")
     folder = add("Magnetic Fields/Lose/01 - Song.m4a", acoustid_fingerprint="AQAAsame")
     folder_twin = add("Magnetic Fields/LOSE/01 - Song.m4a", length=260.0, mb_trackid="rec-1")
     add("Somebody/Else/01 - Song.m4a")  # no twin: not listed
@@ -55,7 +55,7 @@ def test_pairs_are_grouped_by_folded_path_and_judged_by_ids_and_audio(tmp_path, 
     assert set(groups) == {(spotdl, usenet), (master, other), (folder, folder_twin)}
     (dup,), (masters,), (apart,) = groups[(spotdl, usenet)], groups[(master, other)], groups[(folder, folder_twin)]
     assert dup.shared == ["Spotify ID T1"] and dup.same_audio is True and dup.verdict == "duplicate"
-    assert masters.shared == ["ISRC USSM1"] and masters.same_audio is False
+    assert masters.shared == ["ISRC USSMQ0000001"] and masters.same_audio is False
     assert masters.verdict == "same ID, different audio"
     assert apart.shared == [] and apart.same_audio is None and apart.verdict == "not compared"
     assert f"{folder_twin}  Magnetic Fields/LOSE/01 - Song.m4a  (manual, 260s" in caplog.text
@@ -67,8 +67,8 @@ def test_pairs_are_grouped_by_folded_path_and_judged_by_ids_and_audio(tmp_path, 
 
 def test_distinct_recordings_and_same_audio_without_an_id(tmp_path, library):
     _, add = library
-    a = add("A/B/01 - X.m4a", acoustid_fingerprint="AQAAsame", isrc="I1")
-    b = add("a/b/01 - x.m4a", acoustid_fingerprint="AQAAother", isrc="I2")
+    a = add("A/B/01 - X.m4a", acoustid_fingerprint="AQAAsame", isrc="GBIQQ0000001")
+    b = add("a/b/01 - x.m4a", acoustid_fingerprint="AQAAother", isrc="GBIQQ0000002")
     c = add("C/D/01 - Y.m4a", acoustid_fingerprint="AQAAsame")
     d = add("c/d/01 - y.m4a", acoustid_fingerprint="AQAAsame2")
     verdicts = {(p.a.id, p.b.id): p.verdict for g in _run(tmp_path).groups for p in g.pairs}

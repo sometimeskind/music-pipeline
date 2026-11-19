@@ -316,6 +316,7 @@ def _plugin():
     plugin._log = MagicMock()
     plugin._pending, plugin._file_tags, plugin._retitled, plugin._beside = {}, {}, {}, {}
     plugin._unwritten = set()
+    plugin._bad_isrcs = set()
     return plugin
 
 

@@ -92,11 +92,11 @@ def eligible(quarantine: Path) -> Iterator[Path]:
 def _incoming(item, path: Path):
     """The file's identity, as the plugin's duplicate hook reads it for an as-is import."""
     from music_fetch.album_requests import url_recording  # noqa: PLC0415
-    from music_scan.identity import item_isrcs, split_list, spotify_id  # noqa: PLC0415
+    from music_scan.identity import item_isrcs, split_isrcs, spotify_id  # noqa: PLC0415
     from music_scan.music_pipeline import Incoming, _read_spotdl_tags  # noqa: PLC0415
 
     tags = _read_spotdl_tags(str(path))
-    isrcs = {*split_list(tags.isrc, ";"), *item_isrcs(item)}
+    isrcs = {*split_isrcs(tags.isrc), *item_isrcs(item)}
     recording = item.get("mb_trackid") or url_recording(tags.url) or None
     return Incoming(spotify_id(tags.url), frozenset(isrcs), recording, item.get("length"))
 

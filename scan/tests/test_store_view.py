@@ -272,7 +272,7 @@ def test_regen_records_the_empty_slots(env) -> None:
 def test_store_listings_by_recording(env) -> None:
     from music_scan.scan import store_listings
 
-    store.save(store.Store("pl", [{"song": _song("Tagged", "T1")}, {"song": {**_song("Isrc", "I1"), "isrc": "GB1"}},
+    store.save(store.Store("pl", [{"song": _song("Tagged", "T1")}, {"song": {**_song("Isrc", "I1"), "isrc": "GBQQQ0000001"}},
                        {"song": {"name": "Url only", "artists": ["Artist"],
                                  "url": "https://open.spotify.com/track/U1"}},
                        _local(9, "Local")]))
@@ -280,7 +280,7 @@ def test_store_listings_by_recording(env) -> None:
     listed = store_listings()
     # A loose copy of T1 is listed by both stores, whichever item the index holds for T1.
     assert listed(_item("Copy", "/c.m4a", spotify_ids="T1")) == {"pl", "album"}
-    assert listed(_item("By ISRC", "/i.m4a", isrc="GB1")) == {"pl"}
+    assert listed(_item("By ISRC", "/i.m4a", isrc="GBQQQ0000001")) == {"pl"}
     assert listed(_item("By URL", "/u.m4a", spotify_ids="U1")) == {"pl"}
     local = _item("Local", "/l.m4a")
     local.id = 9

@@ -32,11 +32,11 @@ def _song(name, song_id=None, isrc=None, url=None):
 def test_entry_from_song_takes_the_id_from_the_url_when_song_id_is_absent() -> None:
     entry = Entry.from_song({"name": "Song", "artists": ["Artist"], "url": "https://open.spotify.com/track/ABC?si=1"})
     assert entry == Entry("Song", "Artist", "ABC", None)
-    assert Entry.from_song(_song("Song", "SID", "GBX1")) == Entry("Song", "Artist", "SID", "GBX1")
+    assert Entry.from_song(_song("Song", "SID", "GBXQQ0000001")) == Entry("Song", "Artist", "SID", "GBXQQ0000001")
 
 
 def test_entry_from_track_reads_an_album_record_entry() -> None:
-    assert Entry.from_track(PlaylistTrack.from_entry(["Song", "Artist", "SID", "GBX1", 1, 2])) == Entry("Song", "Artist", "SID", "GBX1")
+    assert Entry.from_track(PlaylistTrack.from_entry(["Song", "Artist", "SID", "GBXQQ0000001", 1, 2])) == Entry("Song", "Artist", "SID", "GBXQQ0000001")
     assert Entry.from_track(PlaylistTrack.from_entry(["Song", "Artist"])) == Entry("Song", "Artist", None, None)
 
 
@@ -51,14 +51,14 @@ def test_resolve_takes_the_source_index_first_then_the_whole_library() -> None:
     tagged_id = _item("Tagged by id", "tagged-id.m4a", spotify_ids="T1")
     tagged_words = _item("Only words", "tagged-words.m4a")
     elsewhere_id = _item("Elsewhere", "elsewhere.m4a", spotify_ids="E1")
-    elsewhere_isrc = _item("Elsewhere (remaster)", "elsewhere-isrc.m4a", isrc="GBX2")
+    elsewhere_isrc = _item("Elsewhere (remaster)", "elsewhere-isrc.m4a", isrc="GBXQQ0000002")
     twin_words = _item("Only words", "twin.m4a", spotify_ids="W1")  # same words, outside the playlist
     source = ItemIndex([tagged_id, tagged_words])
     library = ItemIndex([tagged_id, tagged_words, elsewhere_id, elsewhere_isrc, twin_words])
 
     entries = [Entry.from_song(s) for s in (
         _song("Tagged by id", "T1"), _song("Only words", "W1"), _song("Elsewhere", "E1"),
-        _song("Elsewhere", "E2", "GBX2"), _song("Nowhere", "N1", "GBX9"),
+        _song("Elsewhere", "E2", "GBXQQ0000002"), _song("Nowhere", "N1", "GBX9"),
     )]
     slots = resolve(entries, source, library)
 
@@ -89,9 +89,9 @@ def test_resolve_with_an_empty_source_is_the_store_view() -> None:
     """The store view (homelab#1914) resolves with an empty source index: every
     item comes from the whole library by ID or ISRC, a words-only item never."""
     by_id = _item("Song", "id.m4a", spotify_ids="S1")
-    by_isrc = _item("Other (remaster)", "isrc.m4a", isrc="GBX1")
+    by_isrc = _item("Other (remaster)", "isrc.m4a", isrc="GBXQQ0000001")
     words = _item("Words", "words.m4a")
-    slots = resolve([Entry("Song", "Artist", "S1", None), Entry("Other", "Artist", "O1", "GBX1"),
+    slots = resolve([Entry("Song", "Artist", "S1", None), Entry("Other", "Artist", "O1", "GBXQQ0000001"),
                      Entry("Words", "Artist", "W1", None)], ItemIndex([]), ItemIndex([by_id, by_isrc, words]))
     assert [(s.item, s.rung) for s in slots] == [(by_id, BY_SLOT_ID), (by_isrc, BY_SLOT_ISRC), (None, None)]
     assert all(s.filled_from_library for s in slots[:2])
@@ -100,6 +100,6 @@ def test_resolve_with_an_empty_source_is_the_store_view() -> None:
 
 def test_resolve_counts_source_rungs_on_the_source_index() -> None:
     """Callers that read ``ItemIndex.rungs`` (the [WORDS] rate) still can."""
-    source = ItemIndex([_item("Song", "s.m4a", isrc="GBX1"), _item("Words", "w.m4a")])
-    resolve([Entry("Song", "Artist", None, "GBX1"), Entry("Words", "Artist", "W1", None)], source, ItemIndex([]))
+    source = ItemIndex([_item("Song", "s.m4a", isrc="GBXQQ0000001"), _item("Words", "w.m4a")])
+    resolve([Entry("Song", "Artist", None, "GBXQQ0000001"), Entry("Words", "Artist", "W1", None)], source, ItemIndex([]))
     assert source.rungs == {BY_ISRC: 1, BY_WORDS: 1}

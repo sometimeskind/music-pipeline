@@ -36,31 +36,31 @@ def _song(sid, name="Song", isrc=None):
 
 def test_spotify_url_becomes_spotify_ids_and_own_entry_fills_isrc() -> None:
     item = _item(1, "Song", "a", spotify_url=URL + "S")
-    plan = plan_backfill([item], {"a": [_song("S", isrc="GBS1")]})
+    plan = plan_backfill([item], {"a": [_song("S", isrc="GBSQQ0000001")]})
     assert item.data["spotify_ids"] == "S"
-    assert item.data["isrc"] == "GBS1"
+    assert item.data["isrc"] == "GBSQQ0000001"
     assert (plan.ids_from_url, plan.isrcs_added, len(plan.changed)) == (1, 1, 1)
 
 
 def test_isrc_disagreement_is_counted_and_unioned() -> None:
-    tagged = _item(1, "Song", "a", spotify_url=URL + "S", isrc="USMB1")
-    agrees = _item(2, "Other", "a", spotify_url=URL + "O", isrc="USMB2;GBO1")
-    plan = plan_backfill([tagged, agrees], {"a": [_song("S", isrc="GBS1"), _song("O", "Other", isrc="GBO1")]})
+    tagged = _item(1, "Song", "a", spotify_url=URL + "S", isrc="USMBQ0000001")
+    agrees = _item(2, "Other", "a", spotify_url=URL + "O", isrc="USMBQ0000002;GBOQQ0000001")
+    plan = plan_backfill([tagged, agrees], {"a": [_song("S", isrc="GBSQQ0000001"), _song("O", "Other", isrc="GBOQQ0000001")]})
     assert (plan.disagree, plan.compared) == (1, 2)
-    assert tagged.data["isrc"] == "USMB1;GBS1"
+    assert tagged.data["isrc"] == "USMBQ0000001;GBSQQ0000001"
 
 
 def test_second_playlist_entry_of_a_merged_duplicate_gets_its_id() -> None:
     """The single (B) was merged into the album track (A): same ISRC, other track ID."""
     item = _item(1, "Song", "a,b", spotify_url=URL + "ALBUM")
-    plan = plan_backfill([item], {"a": [_song("ALBUM", isrc="GBS1")], "b": [_song("SINGLE", isrc="GBS1")]})
+    plan = plan_backfill([item], {"a": [_song("ALBUM", isrc="GBSQQ0000001")], "b": [_song("SINGLE", isrc="GBSQQ0000001")]})
     assert item.data["spotify_ids"] == "ALBUM,SINGLE"
     assert plan.wrong == []
 
 
 def test_live_entry_merged_into_studio_is_a_wrong_version() -> None:
     studio = _item(1, "Song", "a,b", spotify_url=URL + "STUDIO")
-    plan = plan_backfill([studio], {"a": [_song("STUDIO", isrc="GBSTUDIO")], "b": [_song("LIVE", isrc="GBLIVE")]})
+    plan = plan_backfill([studio], {"a": [_song("STUDIO", isrc="GBSTU0000000")], "b": [_song("LIVE", isrc="GBLIV0000000")]})
     assert [(w.playlist, w.song["song_id"], w.item) for w in plan.wrong] == [("b", "LIVE", studio)]
     assert "LIVE" not in studio.data["spotify_ids"]
 
@@ -91,8 +91,8 @@ def test_disjoint_isrcs_stay_wrong_when_musicbrainz_disagrees_or_fails() -> None
         return None
 
     for recordings in (other, failed, None):
-        studio = _item(1, "Song", "a", isrc="GBSTUDIO", mb_trackid="mb-studio")
-        plan = plan_backfill([studio], {"a": [_song("LIVE", isrc="GBLIVE")]}, recordings)
+        studio = _item(1, "Song", "a", isrc="GBSTU0000000", mb_trackid="mb-studio")
+        plan = plan_backfill([studio], {"a": [_song("LIVE", isrc="GBLIV0000000")]}, recordings)
         assert len(plan.wrong) == 1, recordings
         assert plan.same_recording == 0
 
@@ -125,7 +125,7 @@ def test_musicbrainz_lookup_reads_recordings_and_caches(monkeypatch) -> None:
 def test_wrong_version_merged_after_177_is_caught_through_its_id() -> None:
     """Merges since #177 recorded the live entry's ID on the studio item."""
     studio = _item(1, "Song", "a,b", spotify_url=URL + "STUDIO", spotify_ids="STUDIO,LIVE")
-    plan = plan_backfill([studio], {"a": [_song("STUDIO", isrc="GBSTUDIO")], "b": [_song("LIVE", isrc="GBLIVE")]})
+    plan = plan_backfill([studio], {"a": [_song("STUDIO", isrc="GBSTU0000000")], "b": [_song("LIVE", isrc="GBLIV0000000")]})
     assert len(plan.wrong) == 1
 
     unlink_wrong(plan, plan.wrong[0])
@@ -136,7 +136,7 @@ def test_wrong_version_merged_after_177_is_caught_through_its_id() -> None:
 def test_unlink_keeps_the_source_when_another_entry_wants_the_item() -> None:
     """Playlist b lists both versions: the studio item stays on b."""
     studio = _item(1, "Song", "b", spotify_url=URL + "STUDIO")
-    plan = plan_backfill([studio], {"b": [_song("STUDIO", isrc="GBSTUDIO"), _song("LIVE", isrc="GBLIVE")]})
+    plan = plan_backfill([studio], {"b": [_song("STUDIO", isrc="GBSTU0000000"), _song("LIVE", isrc="GBLIV0000000")]})
     unlink_wrong(plan, plan.wrong[0])
     assert studio.data["sources"] == "b"
 
@@ -158,7 +158,7 @@ def test_words_match_is_a_weak_link_only_and_a_second_run_changes_nothing(caplog
     An item with an ID of its own is reached too, and keeps it."""
     bare = _item(1, "Song", "a")
     owned = _item(2, "Other", "a", spotify_url=URL + "OWN")
-    songs = {"a": [_song("OWN", "Other"), _song("W1", isrc="XXWORDS0001"), _song("W2", "Other")]}
+    songs = {"a": [_song("OWN", "Other"), _song("W1", isrc="XXWOR0000001"), _song("W2", "Other")]}
     with caplog.at_level("INFO", logger="music_scan.backfill"):
         plan = plan_backfill([bare, owned], songs)
         report(plan)
@@ -181,8 +181,8 @@ def test_words_match_is_a_weak_link_only_and_a_second_run_changes_nothing(caplog
 def test_an_id_match_on_a_weakly_linked_item_still_gets_its_id_and_isrc() -> None:
     """A words link doesn't stand in for an ID: the entry that holds the item
     by ISRC still records its Spotify ID there."""
-    item = _item(1, "Song", "a", isrc="XXSTRONG001", words_ids="W1")
-    plan = plan_backfill([item], {"a": [_song("S", "Another Title", isrc="XXSTRONG001")]})
+    item = _item(1, "Song", "a", isrc="XXSTR0000001", words_ids="W1")
+    plan = plan_backfill([item], {"a": [_song("S", "Another Title", isrc="XXSTR0000001")]})
     assert item.data["spotify_ids"] == "S"
     assert item.data["words_ids"] == "W1"
     assert (plan.ids_added, plan.by_words) == (1, 0)
@@ -208,7 +208,7 @@ def _run(items, songs, apply=False, redownload=0, downloaded=True):
 
 def _studio_and_live():
     studio = _item(1, "Song", "a,b", spotify_url=URL + "STUDIO")
-    return studio, {"a": [_song("STUDIO", isrc="GBSTUDIO")], "b": [_song("LIVE", isrc="GBLIVE")]}
+    return studio, {"a": [_song("STUDIO", isrc="GBSTU0000000")], "b": [_song("LIVE", isrc="GBLIV0000000")]}
 
 
 def test_dry_run_writes_nothing() -> None:
@@ -278,11 +278,11 @@ def test_albums_links_what_the_rung_links_and_reports_the_rest() -> None:
 
 def test_albums_leaves_entries_an_item_holds_and_records_not_imported() -> None:
     by_id = _usenet(1, "One", 1, "10", spotify_ids="S1")
-    by_isrc = _usenet(2, "Two", 2, "10", isrc="GB2")
+    by_isrc = _usenet(2, "Two", 2, "10", isrc="GBQQQ0000002")
     other_copy = _item(3, "Three", "other", spotify_ids="S3", via="spotdl")
     third = _usenet(4, "Three", 3, "10")
     wanted = _usenet(5, "Five", 5, "11")
-    records = {"10": _record(["One", "A", "S1", None, 1, 1], ["Two", "A", "S2", "GB2", 1, 2],
+    records = {"10": _record(["One", "A", "S1", None, 1, 1], ["Two", "A", "S2", "GBQQQ0000002", 1, 2],
                              ["Three", "A", "S3", None, 1, 3]),
                "11": _record(["Five", "A", "S5", None, 1, 5], status="wanted")}
     plan = plan_album_ids([by_id, by_isrc, other_copy, third, wanted], records, lambda _: None)
@@ -383,11 +383,11 @@ def test_store_changed_records_each_items_written_fields(monkeypatch) -> None:
     monkeypatch.setattr(audit, "pipeline_lock", nullcontext)
     changed = _item(1, "Song", "a", spotify_url=URL + "S", artist="Artist")
     changed.data["title"] = "Song"  # the fake's get reads data only
-    same = _item(2, "Other", "a", spotify_ids="T", isrc="GBT1")
-    plan = plan_backfill([changed, same], {"a": [_song("S", isrc="GBS1")]})
+    same = _item(2, "Other", "a", spotify_ids="T", isrc="GBTQQ0000001")
+    plan = plan_backfill([changed, same], {"a": [_song("S", isrc="GBSQQ0000001")]})
     store_changed(plan)
     (kind, message, kw), = recorded
     assert kind == "ids_written" and kw["item_id"] == 1
-    assert kw["data"]["changed"] == {"spotify_ids": [None, "S"], "isrc": [None, "GBS1"]}
+    assert kw["data"]["changed"] == {"spotify_ids": [None, "S"], "isrc": [None, "GBSQQ0000001"]}
     assert kw["data"]["via"] == "music-backfill-ids"
     assert message == "[IDS] 1 Artist — Song: spotify_ids, isrc written by music-backfill-ids"

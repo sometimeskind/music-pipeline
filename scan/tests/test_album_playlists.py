@@ -177,17 +177,17 @@ def test_a_release_stamped_with_a_row_id_is_its_spotify_albums() -> None:
 
 REQUEST_RECORD = {"name": "Asked", "artist": "Artist", "tracks_count": 2, "release_group": "rg-1",
                   "spotify_album_ids": [], "origin": "request",
-                  "playlists": {"request": [["Ask One", "Artist", None, "ISRCA1", 1, 1],
-                                            ["Ask Two", "Artist", None, "ISRCA2", 1, 2]]}}
+                  "playlists": {"request": [["Ask One", "Artist", None, "ISRCA0000001", 1, 1],
+                                            ["Ask Two", "Artist", None, "ISRCA0000002", 1, 2]]}}
 
 
 def _asked(lib) -> list:
     """A request's release, imported and stamped with its row id 41: canon gives it no spotify_album_id."""
     return [
         _add(lib, "Ask Two", "/lib/Asked/02.m4a", album="Asked", disc=1, track=2, via="usenet", sources="request",
-             isrc="ISRCA2", album_record="41"),
+             isrc="ISRCA0000002", album_record="41"),
         _add(lib, "Ask One", "/lib/Asked/01.m4a", album="Asked", disc=1, track=1, via="usenet", sources="request",
-             isrc="ISRCA1", album_record="41"),
+             isrc="ISRCA0000001", album_record="41"),
     ]
 
 
@@ -196,7 +196,7 @@ def test_a_requests_release_is_found_by_its_stamp_alone(real_lib) -> None:
     from music_scan.scan import have_album
 
     _asked(real_lib)
-    _add(real_lib, "Ask One", "/lib/Other/01.m4a", album="Other", isrc="ISRCA1")  # another copy, not the release
+    _add(real_lib, "Ask One", "/lib/Other/01.m4a", album="Other", isrc="ISRCA0000001")  # another copy, not the release
     items = real_lib.all_items()
     assert [i.title for i in album_items(None, "Asked", [], by_album_id(items), "41", by_stamp(items))] == \
         ["Ask One", "Ask Two"]

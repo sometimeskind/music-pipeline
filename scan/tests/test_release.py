@@ -280,7 +280,7 @@ BOYS = {"name": "Boys and Girls in America", "artist": "The Hold Steady", "playl
 def _cd(release_id, n, **f):
     """Track *n* of a release import: ISRC USHS0600n, as MusicBrainz tags it."""
     return FakeItem(100 + n if release_id == "cd@2" else n, via="usenet", album_record="BOYS", release=release_id,
-                    isrc=f"USHS0600{n:02d}", title=f"Track {n}", **f)
+                    isrc=f"USHS0600{n:04d}", title=f"Track {n}", **f)
 
 
 def test_retire_keeps_the_recordings_a_smaller_edition_lacks_as_extras(quarantined) -> None:
@@ -330,7 +330,7 @@ def test_retire_keeps_a_copy_whose_recording_id_matches_only_at_another_length(q
 def test_retire_takes_every_copy_a_same_edition_reimport_holds(quarantined) -> None:
     old = [_cd("deluxe@1", n) for n in range(1, 12)]
     new = [_cd("cd@2", n) for n in range(1, 12)]
-    topup = FakeItem(52, via="spotdl", spotify_album_id="BOYS", isrc="USHS060005")
+    topup = FakeItem(52, via="spotdl", spotify_album_id="BOYS", isrc="USHS06000005")
     assert release.retire(FakeLib([*old, *new, topup]), "BOYS", BOYS, "cd@2", None, _listed({52: {"keep"}})) == 12
     assert quarantined == [*old, topup]
     assert not any(i.get(release.EXTRA) for i in [*old, *new])
@@ -339,7 +339,7 @@ def test_retire_takes_every_copy_a_same_edition_reimport_holds(quarantined) -> N
 def test_retire_extras_go_once_a_later_release_holds_them(quarantined) -> None:
     extra = _cd("deluxe@1", 12, album_extra="1")
     again = [_cd("cd@2", n) for n in range(1, 12)] + [FakeItem(200, album_record="BOYS", release="cd@2",
-                                                              isrc="USHS060012")]
+                                                              isrc="USHS06000012")]
     assert release.retire(FakeLib([extra, *again]), "BOYS", BOYS, "cd@2", None, _listed()) == 1
     assert quarantined == [extra]
 
@@ -558,9 +558,9 @@ def test_retire_held_leaves_extras_the_release_lacks_and_other_records_alone(qua
     bonus = _cd("deluxe@1", 12, album_extra="1")
     cd = [_cd("cd@2", n) for n in range(1, 12)]
     # Another record's release holds the bonus track's recording: not this album's.
-    other = FakeItem(300, album_record="OTHER", release="x@1", isrc="USHS060012")
+    other = FakeItem(300, album_record="OTHER", release="x@1", isrc="USHS06000012")
     # An extra of a record whose release is gone (rolled back): nothing holds it.
-    orphan = FakeItem(301, album_record="GONE", album_extra="1", isrc="USHS060012")
+    orphan = FakeItem(301, album_record="GONE", album_extra="1", isrc="USHS06000012")
     assert release.retire_held(FakeLib([bonus, *cd, other, orphan])) == 0
     assert quarantined == []
 
@@ -866,7 +866,7 @@ def test_retire_records_retire_and_local_events_under_the_kept_releases_group(qu
 def _on(release_id, titles, start=1, **fields):
     """A release's items on record CURTIS, each its own recording: no ID agrees with another release's."""
     return [FakeItem(start + n, via="usenet", album_record="CURTIS", release=release_id, title=title,
-                     isrc=f"{release_id[:3]}{n:03d}", **fields) for n, title in enumerate(titles)]
+                     isrc=f"XX{release_id[:3].upper()}{n:07d}", **fields) for n, title in enumerate(titles)]
 
 
 CURTIS = {"name": "Curtis Live!", "artist": "Curtis Mayfield", "playlists": {"fancy": []},
@@ -1055,8 +1055,8 @@ def _at(t: int) -> str:
 
 
 def _ed(id_, rel, n, **f):
-    """Track *n* of release *rel* on record 1470: ISRC USPR0000n."""
-    return FakeItem(id_, **{"via": "usenet", "album_record": "1470", "release": rel, "isrc": f"USPR0000{n:02d}",
+    """Track *n* of release *rel* on record 1470: ISRC USPR0000000n."""
+    return FakeItem(id_, **{"via": "usenet", "album_record": "1470", "release": rel, "isrc": f"USPR0000{n:04d}",
                             "title": f"Track {n}", "length": 200.0 + n, **f})
 
 

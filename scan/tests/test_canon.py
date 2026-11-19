@@ -504,14 +504,14 @@ def test_report_counts_every_name_an_album_merges(tmp_path, ffmpeg, lib, caplog)
 # ----------------------------------------------------------------------
 
 
-def _hit(album_id, name, album_type="album", artist="Artist", date="2020-01-01", track=4, isrc="ISRC1", tracks=12):
+def _hit(album_id, name, album_type="album", artist="Artist", date="2020-01-01", track=4, isrc="ISRCQ0000001", tracks=12):
     return {"album": {"id": album_id, "name": name, "album_type": album_type, "artists": [{"name": artist}],
                       "release_date": date, "total_tracks": tracks, "images": [{"url": COVER, "width": 640}]},
             "track_number": track, "disc_number": 1, "external_ids": {"isrc": isrc}}
 
 
 def _single_songs():
-    return [_song("SGL", "SINGLE", name="Munch", album_type="single", date="2022-08-01", tracks=1, isrc="ISRC1")]
+    return [_song("SGL", "SINGLE", name="Munch", album_type="single", date="2022-08-01", tracks=1, isrc="ISRCQ0000001")]
 
 
 def _finder(tmp_path, hits, **kw):
@@ -535,12 +535,12 @@ def test_single_moves_to_the_same_artists_album_and_keeps_the_current_one(tmp_pa
             _hit("OTHER", "Covers", artist="Someone Else", date="2018-01-01"),
             _hit("STD", "Like..?", date="2023-01-20", track=4),
             _hit("DLX", "Like..? (Deluxe)", date="2023-07-21", track=6),
-            _hit("WRONG", "Remix", isrc="ISRC9")]
+            _hit("WRONG", "Remix", isrc="ISRCQ0000009")]
     albums, searched = _finder(tmp_path, hits)
     assert albums.album_for(FakeItem(album="Munch"), p, placements).release.album_id == "STD"  # earliest
     deluxe = albums.album_for(FakeItem(album="Like..? (Deluxe)"), p, placements)
     assert (deluxe.release.album_id, deluxe.track, deluxe.release.artist) == ("DLX", 6, "Artist")
-    assert searched == ["ISRC1"]  # cached after the first search
+    assert searched == ["ISRCQ0000001"]  # cached after the first search
     albums.save()
 
     again, searched = _finder(tmp_path, [])
@@ -553,7 +553,7 @@ def test_single_with_no_album_stays_and_a_miss_is_retried_after_a_week(tmp_path)
     placements = placements_from([(_single_songs(), True)])
     albums, searched = _finder(tmp_path, [_hit("COMP", "Hits", album_type="compilation")])
     assert albums.album_for(FakeItem(), placements["SGL"], placements) is None
-    albums.cache["ISRC1"]["checked"] = (datetime.now(timezone.utc) - timedelta(days=8)).isoformat()
+    albums.cache["ISRCQ0000001"]["checked"] = (datetime.now(timezone.utc) - timedelta(days=8)).isoformat()
     albums.search = lambda isrc: [_hit("STD", "Heavy Metal")]
     assert albums.album_for(FakeItem(), placements["SGL"], placements).release.name == "Heavy Metal"
 
@@ -623,11 +623,11 @@ def test_an_older_cache_entry_is_searched_again(tmp_path):
     from music_scan.canon import placements_from
 
     placements = placements_from([(_single_songs(), True)])
-    (tmp_path / "isrc.json").write_text(json.dumps({"ISRC1": {"checked": datetime.now(timezone.utc).isoformat(),
+    (tmp_path / "isrc.json").write_text(json.dumps({"ISRCQ0000001": {"checked": datetime.now(timezone.utc).isoformat(),
                                                               "tracks": []}}), encoding="utf-8")
     albums, searched = _finder(tmp_path, [_hit("EP", "Like..?", album_type="single", tracks=6)])
     assert albums.album_for(FakeItem(album="Like..?"), placements["SGL"], placements).release.album_id == "EP"
-    assert searched == ["ISRC1"]
+    assert searched == ["ISRCQ0000001"]
 
 
 def test_a_move_onto_another_items_file_is_left_alone(tmp_path, ffmpeg, lib):
