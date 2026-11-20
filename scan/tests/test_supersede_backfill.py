@@ -94,7 +94,8 @@ def _title(rng: random.Random) -> str:
 def _noise(rng: random.Random, fields: dict, isrcs: list[str], sids: list[str]) -> dict:
     """Now and then an ID of another album's item, a second ISRC or a fingerprint: vetoes and ties."""
     if isrcs and rng.random() < 0.12:
-        fields["isrc"] = ";".join(filter(None, [fields.get("isrc"), rng.choice(isrcs)]))
+        # Some files join their codes with a comma: one ISRC entry holding two (homelab#2672).
+        fields["isrc"] = rng.choice([";", ";", ", "]).join(filter(None, [fields.get("isrc"), rng.choice(isrcs)]))
     if sids and rng.random() < 0.06:
         fields["spotify_ids"] = ",".join(filter(None, [fields.get("spotify_ids"), rng.choice(sids)]))
     if rng.random() < 0.05:
