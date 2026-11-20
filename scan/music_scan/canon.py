@@ -97,7 +97,8 @@ The album copy then supersedes loose items that predate it
 (:mod:`music_scan.supersede`).
 
 ``music-canon-albums`` backfills the library, supersedes included: dry run by
-default, ``--apply`` writes.  Safe to re-run.
+default, ``--apply`` writes.  Safe to re-run.  ``--album=<key>`` (repeated) runs
+it for those album records alone (:class:`Scope`, homelab#3025).
 """
 
 from __future__ import annotations
@@ -117,7 +118,7 @@ from datetime import datetime, timedelta, timezone
 import psycopg
 
 from music_fetch import events, state
-from music_scan.identity import item_spotify_ids, spotify_id
+from music_scan.identity import item_isrcs, item_spotify_ids, spotify_id
 from music_scan.mb_release import MB_ALBUM_FIELDS, Resolver, SpotifyAlbum
 from music_scan.pathfold import fold, library_paths
 
@@ -579,6 +580,77 @@ def _kind(diff: dict, write: bool) -> str:
     return "musicbrainz" if write else "beets-only"
 
 
+@dataclasses.dataclass(frozen=True)
+class Scope:
+    """The album records a scoped run is for (``--album``, homelab#3025), and
+    what of the library belongs to them.
+
+    Their Spotify albums are each record's ``spotify_album_ids`` and the twins
+    of those (:func:`twin_groups`).  An item reaches them when it is one of
+    the records' items (``album_record``; an item of another album record
+    belongs to that record alone), a release item :func:`record_homes` gives
+    one of them, an item filed on one of their Spotify albums, one whose
+    Spotify IDs a playlist entry places on one, or one holding one of their
+    ISRCs or placed by an entry with one (a single's track canon may move
+    onto the album): those of their playlist entries, and those the ISRC
+    search cache lists on them.  Canon
+    plans each of them as a whole-library run would, and keeps the change only
+    when the item ends on them (:meth:`keeps`): a track the scope reached that
+    canon files under another album, even one filed on these albums today, is
+    left to a run over that album.  Its move could otherwise take a path that
+    an item of that album, not planned here, takes in a whole-library run.  A single's track whose ISRC neither ties to the album
+    yet is left to a whole-library run, whose search finds it."""
+
+    keys: frozenset[str]
+    album_ids: frozenset[str]
+    isrcs: frozenset[str]
+    records: dict
+    homes: dict
+
+    @classmethod
+    def of(cls, keys: Iterable[str], records: dict[str, dict], placements: dict[str, Placement],
+           homes: dict[int, frozenset[str]], searched: dict[str, dict] | None = None) -> "Scope":
+        """*searched* is :class:`AlbumsByIsrc`'s cache: ISRC → the album tracks a search found."""
+        keys = frozenset(keys)
+        twins = twin_groups(placements)
+        album_ids: set[str] = set()
+        for key in keys:
+            for sid in records[key].get("spotify_album_ids") or ():
+                album_ids.add(sid)
+                album_ids.update(r.album_id for r in (twins[sid].releases if sid in twins else ()))
+        isrcs = {c.upper() for p in placements.values() if p.release.album_id in album_ids
+                 for c in (*p.release.isrcs, p.isrc) if c}
+        isrcs |= {isrc.upper() for isrc, entry in (searched or {}).items()
+                  if any((t.get("album") or {}).get("id") in album_ids for t in (entry or {}).get("tracks") or ())}
+        return cls(keys, frozenset(album_ids), frozenset(isrcs), records, homes)
+
+    def _belongs(self, item) -> bool | None:
+        """True or False for an album record's item, else None."""
+        key = item.get("album_record")
+        return key in self.keys if key and key in self.records else None
+
+    def _now_on(self, item) -> bool:
+        return bool(self.homes.get(item.id, frozenset()) & self.keys) or item.get("spotify_album_id") in self.album_ids
+
+    def reaches(self, item, placements: dict[str, Placement]) -> bool:
+        """Whether canon plans *item* in this scope."""
+        if (belongs := self._belongs(item)) is not None:
+            return belongs
+        if self._now_on(item):
+            return True
+        placed = [placements[s] for s in item_spotify_ids(item) if s in placements]
+        if any(p.release.album_id in self.album_ids for p in placed):
+            return True
+        # A single's track: the single step searches its entry's ISRC (Placement.isrc), and the twin step too.
+        return any(c.upper() in self.isrcs for c in [*item_isrcs(item), *(p.isrc for p in placed if p.isrc)])
+
+    def keeps(self, item, album_id: str) -> bool:
+        """Whether a change filing *item* under Spotify album *album_id* belongs to the scope."""
+        if (belongs := self._belongs(item)) is not None:
+            return belongs
+        return album_id in self.album_ids
+
+
 def plan_changes(
     items: Iterable,
     placements: dict[str, Placement],
@@ -586,12 +658,16 @@ def plan_changes(
     albums: AlbumsByIsrc | None = None,
     homes: dict[int, frozenset[str]] | None = None,
     records: dict[str, dict] | None = None,
+    scope: Scope | None = None,
 ) -> Plan:
     """What canonicalising *items* would change.  Leaves the items as they were.
 
     An item stamped with its album record (*records*, #279) takes the record's
     album (:func:`_plan_record_item`).  For older release items, *homes*
-    (:func:`record_homes`) keep them on their album record's album (#278)."""
+    (:func:`record_homes`) keep them on their album record's album (#278).
+    With *scope* (homelab#3025) an item's change is planned only when it
+    belongs to the scope's albums (:meth:`Scope.keeps`), and only those are
+    counted."""
     plan = Plan(twins=twin_groups(placements))
     # (album ID, ISRC) → a placement on that twin, to confirm a twin without a search.
     by_isrc = {(q.release.album_id, q.isrc.upper()): q for q in placements.values()
@@ -608,6 +684,8 @@ def plan_changes(
         plan.scanned += 1
         key = item.get("album_record")
         if key and key in (records or {}):
+            if scope is not None and not scope.keeps(item, ""):
+                continue
             _plan_record_item(item, key, records[key], releases, resolver, plan, dests, discs[key])
             continue
         if not item_spotify_ids(item):
@@ -620,10 +698,10 @@ def plan_changes(
             continue
         # On its album record's album: no single or twin step moves it off (#278).
         home = p.release.album_id in (homes or {}).get(item.id, ())
-        if home and item.get("spotify_album_id") not in (None, "", p.release.album_id):
-            plan.homed += 1
-            logger.info("  [HOME] %s %s: on %s, but a track of its album record's %s (%s); goes back",
-                        item.id, _path(item), item.get("spotify_album_id"), p.release.name, p.release.album_id)
+        homed = home and item.get("spotify_album_id") not in (None, "", p.release.album_id)
+        # What the single and twin steps count, added to the plan once the item is known to be planned.
+        counts: Counter[str] = Counter()
+        on_twin = None
         wait = False
         if albums is not None and not home and p.release.album_type == "single" and p.isrc:
             album = albums.album_for(item, p, placements)
@@ -633,10 +711,10 @@ def plan_changes(
                 logger.debug("  [ALBUM] %s: single %s → album %s by ISRC %s", _path(item), p.release.name,
                              album.release.name, p.isrc)
                 p = album
-                plan.singles += 1
+                counts["singles"] += 1
         group = plan.twins.get(p.release.album_id) if not wait and not home else None
         if group is not None:
-            plan.on_twin[p.release.album_id] += 1
+            on_twin = p.release.album_id
             if p.release.album_id == group.representative.album_id:
                 p = dataclasses.replace(p, release=group.representative)  # the group's ISRCs
             else:
@@ -645,9 +723,9 @@ def plan_changes(
                     twin = albums.twin_for(p, group)
                 if twin is False:
                     wait = True
-                    plan.twin_waiting += 1
+                    counts["twin_waiting"] += 1
                 elif twin is None:
-                    plan.apart += 1
+                    counts["apart"] += 1
                     # DEBUG: the same items every scan, nothing changes; the Twins line counts them (homelab#2590).
                     logger.debug("  [NOTWIN] %s: %s (%s) stays apart from %s: ISRC %s is not on it", _path(item),
                                  p.release.name, p.release.album_id, group.representative.album_id, p.isrc or "?")
@@ -655,7 +733,18 @@ def plan_changes(
                     logger.debug("  [TWIN] %s: %s → %s by ISRC %s", _path(item), p.release.album_id,
                                  twin.release.album_id, p.isrc)
                     p = twin
-                    plan.twinned += 1
+                    counts["twinned"] += 1
+        if scope is not None and not scope.keeps(item, p.release.album_id):
+            continue
+        # Logged here, not before the steps above: they don't run for an item on its home (no line between).
+        if homed:
+            plan.homed += 1
+            logger.info("  [HOME] %s %s: on %s, but a track of its album record's %s (%s); goes back",
+                        item.id, _path(item), item.get("spotify_album_id"), p.release.name, p.release.album_id)
+        if on_twin is not None:
+            plan.on_twin[on_twin] += 1
+        for name, n in counts.items():
+            setattr(plan, name, getattr(plan, name) + n)
         if wait:
             plan.waiting += 1
             here = _path(item)
@@ -979,13 +1068,14 @@ def canonicalize(
     homes: dict[int, frozenset[str]] | None = None,
     records: dict[str, dict] | None = None,
     phases: Phases | None = None,
+    scope: Scope | None = None,
 ) -> Plan:
-    """Plan, log and (with *apply*) write the canonical tags on *items*."""
+    """Plan, log and (with *apply*) write the canonical tags on *items* (those of *scope*'s albums)."""
     from music_scan import cover  # noqa: PLC0415
 
     phases = phases or Phases()
     fetch = fetch or cover.download
-    plan = plan_changes(items, placements, resolver, albums, homes, records)
+    plan = plan_changes(items, placements, resolver, albums, homes, records, scope)
     phases.lap("plan")
     images: dict[str, bytes | None] = {}
     done: list[Change] = []
@@ -1103,7 +1193,8 @@ def read_pages(refresh: bool = False) -> dict[str, list[dict]]:
     return pages
 
 
-def report(plan: Plan, resolver: Resolver | None, albums: AlbumsByIsrc | None = None) -> None:
+def report(plan: Plan, resolver: Resolver | None, albums: AlbumsByIsrc | None = None,
+           scope: Scope | None = None) -> None:
     by_album: dict[str, list[Change]] = {}
     for c in plan.changes:
         if WAIT in c.diff and c.diff[WAIT][1]:
@@ -1133,7 +1224,8 @@ def report(plan: Plan, resolver: Resolver | None, albums: AlbumsByIsrc | None = 
                     "this run (%.0fs apart%s), %d ISRC(s) cached, %d item(s) wait for a search",
                     plan.singles, albums.calls, albums.interval, ", stopped by a rate limit" if albums.limited else "",
                     len(albums.cache), plan.waiting)
-    groups = {id(g): g for g in plan.twins.values()}
+    groups = {id(g): g for g in plan.twins.values()
+              if scope is None or any(r.album_id in scope.album_ids for r in g.releases)}
     for g in sorted(groups.values(), key=lambda g: (g.representative.artist, g.representative.name)):
         shown = [f"{r.album_id} ({r.date or '?'}, {r.tracks_count} tracks, {g.entries.get(r.album_id, 0)} entries, "
                  f"{plan.on_twin.get(r.album_id, 0)} items)" for r in g.releases]
@@ -1149,7 +1241,10 @@ def report(plan: Plan, resolver: Resolver | None, albums: AlbumsByIsrc | None = 
 
 
 def run(apply: bool = False, refresh: bool = False, mb_budget: int | None = None,
-        search_budget: int | None = None) -> Plan:
+        search_budget: int | None = None, albums_only: Iterable[str] | None = None) -> Plan:
+    """The backfill: the whole library, or with *albums_only* (album record keys,
+    homelab#3025) only what belongs to those albums (:class:`Scope`); the supersede
+    phase then plans only their records, against the whole library read once."""
     from music_fetch import ingest  # noqa: PLC0415
     from music_fetch.albums import State  # noqa: PLC0415
     from music_scan import supersede  # noqa: PLC0415
@@ -1158,6 +1253,8 @@ def run(apply: bool = False, refresh: bool = False, mb_budget: int | None = None
     from music_scan.navidrome import trigger_scan  # noqa: PLC0415
     from music_scan.scan import regen_playlists  # noqa: PLC0415
 
+    keys = sorted(set(albums_only)) if albums_only else None
+    scope: Scope | None = None
     pages = read_pages(refresh)
     placements = placements_from(
         [(songs, True) for songs in pages.values()] + [(store_songs(), False)]
@@ -1169,12 +1266,27 @@ def run(apply: bool = False, refresh: bool = False, mb_budget: int | None = None
     # --apply moves and merges files (#266): no import may run meanwhile.
     with (pipeline_lock() if apply else contextlib.nullcontext()), MusicLibrary(LIBRARY_DB, LIBRARY_DIR) as lib:
         records = State.load().albums
-        # Items canon moved off their record's album before #278 go back: by import time too.
-        homes = record_homes(lib.all_items(), records, by_time=True)
-        plan = canonicalize(lib.all_items(), placements, resolver, apply=apply, albums=albums, homes=homes,
-                            records=records)
-        plan.supersedes = supersede.backfill(lib, records, apply=apply)
-    report(plan, resolver, albums)
+        if keys is None:
+            # Items canon moved off their record's album before #278 go back: by import time too.
+            homes = record_homes(lib.all_items(), records, by_time=True)
+            plan = canonicalize(lib.all_items(), placements, resolver, apply=apply, albums=albums, homes=homes,
+                                records=records)
+            plan.supersedes = supersede.backfill(lib, records, apply=apply)
+        else:
+            if unknown := [k for k in keys if k not in records]:
+                raise SystemExit(f"music-canon-albums: no album record {', '.join(map(repr, unknown))}")
+            everything = list(lib.all_items())
+            homes = record_homes(everything, records, by_time=True)
+            scope = Scope.of(keys, records, placements, homes, albums.cache)
+            for key in keys:
+                record = records[key]
+                logger.info("Scope: album %s, %s — %s (Spotify album(s) %s)", key, record.get("artist") or "?",
+                            record.get("name") or "?", ", ".join(record.get("spotify_album_ids") or ()) or "none")
+            logger.info("Scope: Spotify album(s) %s, twins included", ", ".join(sorted(scope.album_ids)) or "none")
+            plan = canonicalize([i for i in everything if scope.reaches(i, placements)], placements, resolver,
+                                apply=apply, albums=albums, homes=homes, records=records, scope=scope)
+            plan.supersedes = supersede.backfill(lib, records, apply=apply, keys=keys)
+    report(plan, resolver, albums, scope)
     moved = plan.moved
     superseded = sum(len(p.loose) for p in plan.supersedes)
     logger.info("Supersede: %d loose item(s) superseded by their album copy", superseded)
@@ -1205,6 +1317,10 @@ def main() -> None:
     parser.add_argument("--search-budget", type=int, default=None, metavar="N",
                         help="at most N Spotify ISRC searches for single tracks this run (default: all, "
                              f"{SPOTIFY_INTERVAL:g}s apart)")
+    parser.add_argument("--album", action="append", default=None, metavar="KEY", dest="albums",
+                        help="only this album record's items, retags and supersedes (its key; repeat for more; "
+                             "default: the whole library)")
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO, format="[%(asctime)s] %(message)s", datefmt="%Y-%m-%dT%H:%M:%S%z")
-    run(apply=args.apply, refresh=args.refresh, mb_budget=args.mb_budget, search_budget=args.search_budget)
+    run(apply=args.apply, refresh=args.refresh, mb_budget=args.mb_budget, search_budget=args.search_budget,
+        albums_only=args.albums)

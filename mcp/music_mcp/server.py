@@ -692,12 +692,22 @@ def build_server(
         refresh: bool = False,
         search_budget: Annotated[int | None, Field(ge=0)] = None,
         mb_budget: Annotated[int | None, Field(ge=0)] = None,
+        albums: Annotated[
+            list[str] | None,
+            Field(description="only these albums, by album query (key, Spotify album ID or URL, release group, "
+                              "'artist — album', or a part matching one album): their retags, moves, covers and "
+                              "the loose copies their release supersedes, in seconds; leave it out for the whole "
+                              "library", max_length=25),
+        ] = None,
         apply: Apply = False,
     ) -> dict:
         """music-canon-albums: give albums that split in two (one without a cover) one
-        canonical album identity. It runs over the whole library in the queue, and its apply
-        runs the dry run again first: get_guide's workflow says what to expect."""
-        body = {"refresh": refresh, "search_budget": search_budget, "mb_budget": mb_budget, "apply": apply}
+        canonical album identity. With albums, only those albums (an ambiguous or unknown query
+        returns "ambiguous" or "not_found" and does nothing); without, the whole library, in the
+        queue for minutes. Its apply runs the dry run again first: get_guide's workflow says what
+        to expect."""
+        body = {"refresh": refresh, "search_budget": search_budget, "mb_budget": mb_budget, "albums": albums or [],
+                "apply": apply}
         return await run("canon_albums", body, write=True)
 
     @mcp.tool(annotations={"destructiveHint": True})

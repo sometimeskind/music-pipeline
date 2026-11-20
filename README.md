@@ -569,7 +569,10 @@ kubectl exec -n <ns> deploy/music-pipeline -- music-embed-covers --apply   # emb
 ```bash
 kubectl exec -n <ns> deploy/music-pipeline -- music-canon-albums           # dry run: [ALBUM]/[RETAG] lines and totals
 kubectl exec -n <ns> deploy/music-pipeline -- music-canon-albums --apply   # retag, move, regenerate the .m3u files (#218), then rescan Navidrome
+kubectl exec -n <ns> deploy/music-pipeline -- music-canon-albums --album=582 --album=670   # only these album records (homelab#3025)
 ```
+
+`--album=<key>` (repeated) scopes a run to those album records (`music_scan.canon.Scope`): canon plans the items that reach their Spotify albums (a record's own items, loose items filed on the album or a twin, whose Spotify IDs a playlist entry places there, or that hold an ISRC the pages or the ISRC search cache tie to it) and keeps a change only when it files the item under the album (one filed there today that canon moves elsewhere is left to a run over that album); supersede plans only those records, against an index of the whole library, since a loose copy to supersede is by definition not on the album yet. A track on a single that a Spotify search not made yet would move onto the album is left to a whole run.
 The dry run still looks albums up on MusicBrainz (about 1–6 s each) and caches the results. `--mb-budget N` caps the lookups per run. The dry run also runs the single → album ISRC searches (one a second, cached for the `--apply`); `--search-budget N` caps them.
 
 **Recover after PVC loss:**

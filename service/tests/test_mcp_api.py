@@ -681,6 +681,48 @@ def test_remove_from_later_resolves_its_albums(client, env):
     assert len(env["commands"].ran) == before
 
 
+def test_canon_albums_scoped_to_named_albums(client, env):
+    """homelab#3025: album queries become their keys, an --album each, sorted, so two spellings are one call."""
+    resp = client.post("/mcp-api/run/canon_albums", headers=WRITE, json={"albums": ["pastel", "ALB2", "ALB3"]})
+    assert resp.status_code == 200, resp.json
+    assert resp.json["args"] == {"refresh": False, "search_budget": None, "mb_budget": None, "albums": ["ALB2", "ALB3"]}
+    assert env["commands"].ran[-1] == ["music-canon-albums", "--album=ALB2", "--album=ALB3"]
+    # Unscoped: the command as before.
+    client.post("/mcp-api/run/canon_albums", headers=WRITE, json={})
+    assert env["commands"].ran[-1] == ["music-canon-albums"]
+
+
+def test_canon_albums_with_an_ambiguous_or_unknown_album_does_nothing(client, env):
+    before = len(env["commands"].ran)
+    amb = client.post("/mcp-api/run/canon_albums", headers=WRITE, json={"albums": ["pastel", "abbey"]})
+    assert amb.status_code == 200 and amb.json["status"] == "ambiguous" and amb.json["query"] == "abbey"
+    assert len(amb.json["candidates"]) == 2
+    missing = client.post("/mcp-api/run/canon_albums", headers=WRITE, json={"albums": ["pastel", "zzz nothing"]})
+    assert missing.json["status"] == "not_found" and missing.json["query"] == "zzz nothing"
+    for body in ({"albums": "pastel"}, {"albums": [""]}, {"albums": [3]}, {"albums": ["pastel"] * 26}):
+        assert client.post("/mcp-api/run/canon_albums", json=body, headers=WRITE).status_code == 400, body
+    assert len(env["commands"].ran) == before and env["jobs"].jobs == {}
+
+
+def test_a_scoped_canon_apply_needs_a_dry_run_of_the_same_albums(client, env):
+    out = ["[2026-11-20T10:00:00+0000] Scope: album ALB3, Nina Simone — Pastel Blues (Spotify album(s) ALB3)",
+           "[2026-11-20T10:00:01+0000]   [RETAG] 7 x.m4a: track 0→3 (dry run)"]
+    env["commands"].outputs["music-canon-albums --album=ALB3"] = (out, 0)
+    client.post("/mcp-api/run/canon_albums", headers=WRITE, json={"albums": ["ALB2", "ALB3"]})
+    # Another scope's dry run doesn't count, nor does the whole library's.
+    resp = client.post("/mcp-api/run/canon_albums", headers=WRITE, json={"albums": ["pastel"], "apply": True})
+    assert resp.status_code == 409 and resp.json["reason"] == "no_dry_run"
+    client.post("/mcp-api/run/canon_albums", headers=WRITE, json={})
+    resp = client.post("/mcp-api/run/canon_albums", headers=WRITE, json={"albums": ["pastel"], "apply": True})
+    assert resp.status_code == 409
+    dry = client.post("/mcp-api/run/canon_albums", headers=WRITE, json={"albums": ["Nina Simone — Pastel Blues"]})
+    assert dry.json["status"] == "done" and dry.json["args"]["albums"] == ["ALB3"]
+    resp = client.post("/mcp-api/run/canon_albums", headers=WRITE, json={"albums": ["ALB3"], "apply": True})
+    assert resp.json["status"] == "done", resp.json
+    assert env["commands"].ran[-2:] == [["music-canon-albums", "--album=ALB3"],
+                                        ["music-canon-albums", "--album=ALB3", "--apply"]]
+
+
 @pytest.fixture
 def state_down(monkeypatch):
     """The music database, which holds the state, is down."""

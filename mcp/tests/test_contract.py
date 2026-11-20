@@ -226,7 +226,11 @@ async def test_the_other_write_tools_dry_run(pipeline_url):
             ("restore_kept", {"file": "keep/17052", "album": "pastel"},
              {"file": "17052", "album": "ALB3", "allow_held": False}),
             ("embed_covers", {}, {}),
-            ("canon_albums", {"mb_budget": 3}, {"refresh": False, "search_budget": None, "mb_budget": 3}),
+            ("canon_albums", {"mb_budget": 3}, {"refresh": False, "search_budget": None, "mb_budget": 3,
+                                                "albums": []}),
+            # homelab#3025: album queries become their keys.
+            ("canon_albums", {"albums": ["pastel", "ALB2"]}, {"refresh": False, "search_budget": None,
+                                                             "mb_budget": None, "albums": ["ALB2", "ALB3"]}),
         ]:
             job = await finish(c, (await c.call_tool(tool, args)).data)
             assert job["status"] == "done", (tool, job)

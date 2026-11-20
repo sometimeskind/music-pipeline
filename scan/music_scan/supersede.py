@@ -452,13 +452,18 @@ def _releases(items: list, records: dict[str, dict]) -> dict[str, list]:
     return out
 
 
-def backfill(lib, records: dict[str, dict], apply: bool, replaced_dir: Path | None = None) -> list[Pair]:
-    """Supersede for every album record's successful release; with *apply*, merge.
+def backfill(lib, records: dict[str, dict], apply: bool, replaced_dir: Path | None = None,
+             keys=None) -> list[Pair]:
+    """Supersede for every album record's successful release, or only those of
+    the records *keys* names; with *apply*, merge.
 
     The library is read and indexed once, and again only after a merge changed
     it: a read takes ~2 s in the pod, and once per record it took over an hour
     (homelab#2521); a plan that walked the whole library per record took hours
-    more (homelab#3025)."""
+    more (homelab#3025).  With *keys* the index is still the whole library's:
+    the loose copies a release supersedes are by definition not on its album
+    yet, and the index finds every one a rung of the release could match, so
+    a record's plan is the one a whole-library run makes for it."""
     from music_fetch.albums import album_tracks  # noqa: PLC0415
 
     from music_scan import dupes  # noqa: PLC0415
@@ -467,6 +472,8 @@ def backfill(lib, records: dict[str, dict], apply: bool, replaced_dir: Path | No
     reads = 1
     items = lib.all_items()
     index = Index(items)
+    if keys is not None:
+        records = {k: records[k] for k in keys if k in records}
     releases = _releases(items, records)
     # Keyed by item ID: a merge removes loose items and leaves the album item's fingerprint as it was.
     frames_of = dupes.frames_reader(dupes.decode)

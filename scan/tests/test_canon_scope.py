@@ -1,7 +1,11 @@
-"""``music-canon-albums`` over a generated library (homelab#3025).
+"""``music-canon-albums`` over a generated library, whole and scoped (homelab#3025).
 
-These tests pin what the whole-library run decides (its lines, in order, and
-the library after its apply), before a change to how a run picks its items.
+A whole-library run took hours, so a run can be scoped to named album records
+(``--album``).  These tests pin what the whole-library run decides (its lines,
+in order, and the library after its apply; the golden file was written by the
+implementation before the scope), and that a scoped run decides, for what
+belongs to its albums, exactly what the whole run decides, and touches nothing
+else.
 
 Every item is a copy of one short m4a.  MusicBrainz and Spotify's ISRC search
 are fakes.  The run reads the album records from the music database, so these
@@ -260,3 +264,147 @@ def test_the_whole_library_run_decides_as_before(tmp_path, lib, canon_env, caplo
         pytest.skip("golden file written")
     assert text == GOLDEN.read_text()
 
+
+# ----------------------------------------------------------------------
+# Scoped to named albums (homelab#3025)
+# ----------------------------------------------------------------------
+
+SCOPES = [["SA0"], ["SA3"], ["SA4", "SA9"], ["SA7"], ["SA10", "SA11"]]
+
+
+def _album_ids(gen, keys) -> set[str]:
+    """The scope's Spotify albums: each record's, and its twin's."""
+    own = {sid for k in keys for sid in gen.records[k]["spotify_album_ids"]}
+    return own | {f"SB{sid[2:]}" for sid in own if any(s["album_id"] == f"SB{sid[2:]}" for s in gen.pages)}
+
+
+def _belongs(change, gen, keys, ids) -> bool:
+    key = change.item.get("album_record")
+    if key in gen.records:
+        return key in keys
+    return change.placement.release.album_id in ids
+
+
+def _changes(plan) -> dict[int, tuple]:
+    return {c.item.id: (c.placement.release.album_id, sorted(c.diff.items()), c.dest) for c in plan.changes}
+
+
+def _pairs(pairs) -> set[tuple]:
+    return {(p.album.id, tuple(i.id for i in p.loose), tuple(p.how)) for p in pairs}
+
+
+def _released(lib, gen, keys) -> set[int]:
+    from music_scan.supersede import release_items
+
+    items = list(lib.all_items())
+    return {i.id for k in keys for i in release_items(items, gen.records[k])}
+
+
+def _supersede_lines(lines) -> list[str]:
+    marks = ("  [SUPERSEDE] ", "  [MOVE] ", "  [KEEP] ", "  [MANUAL] ")
+    return [x for x in lines if x.startswith(marks) or (x.startswith("[ALBUM] ") and "loose item(s) superseded" in x)]
+
+
+def _contains(whole: list, part: list) -> bool:
+    return any(whole[i:i + len(part)] == part for i in range(len(whole) - len(part) + 1))
+
+
+def test_a_scoped_dry_run_decides_what_the_whole_run_decides_for_its_albums(tmp_path, lib, canon_env, caplog):
+    gen = canon_env
+    whole, whole_lines = _run(tmp_path, caplog, apply=False)
+    whole_supersede = _supersede_lines(whole_lines)
+    for keys in SCOPES:
+        ids = _album_ids(gen, keys)
+        scoped, lines = _run(tmp_path, caplog, apply=False, albums_only=keys)
+        expected = {i: v for i, v in _changes(whole).items()
+                    if _belongs(next(c for c in whole.changes if c.item.id == i), gen, keys, ids)}
+        assert expected, keys  # each scope has something to do
+        assert _changes(scoped) == expected, keys
+        released = _released(lib, gen, keys)
+        assert _pairs(scoped.supersedes) == {p for p in _pairs(whole.supersedes) if p[0] in released}, keys
+        if len(keys) == 1:  # the record's supersede lines are the whole run's, in its order
+            assert _contains(whole_supersede, _supersede_lines(lines)), keys
+        assert f"Scope: album {keys[0]}, " in "\n".join(lines)
+    # The scopes between them reach records with every kind of step.
+    reached = "\n".join(_run(tmp_path, caplog, apply=False, albums_only=sorted({k for s in SCOPES for k in s}))[1])
+    for marker in ("[SUPERSEDE]", "[KEEP]", "[RETAG]", "item(s) on their album instead of a single"):
+        assert marker in reached, marker
+
+
+def _snapshot(lib) -> dict[int, dict]:
+    return {i.id: {k: i.get(k) for k in i.keys() if k != "mtime"} | {"path": os.fsdecode(i.path)}
+            for i in lib.all_items()}
+
+
+def test_a_scoped_apply_changes_its_albums_and_nothing_else(tmp_path, lib, canon_env, caplog):
+    gen = canon_env
+    keys = ["SA4", "SA9"]
+    ids = _album_ids(gen, keys)
+    whole, _ = _run(tmp_path, caplog, apply=False)
+    planned = {c.item.id for c in whole.changes if _belongs(c, gen, keys, ids)}
+    released = _released(lib, gen, keys)
+    pairs = [p for p in whole.supersedes if p.album.id in released]
+    assert planned and pairs
+    before = _snapshot(lib)
+
+    plan, _ = _run(tmp_path, caplog, apply=True, albums_only=keys)
+
+    after = _snapshot(lib)
+    gone = set(before) - set(after)
+    assert gone == {i.id for p in pairs for i in p.loose}
+    changed = {i for i in after if after[i] != before[i]}
+    assert changed <= planned | {p.album.id for p in pairs}
+    assert planned - {c.item.id for c in plan.changes if c.diff.keys() <= {"canon_wait"}} <= changed
+    # Done: the same scope has no retag left.  (A merged album item takes its loose copies' IDs, which
+    # can reach another loose copy: a supersede can follow on the next run, scoped or not.)
+    again, _ = _run(tmp_path, caplog, apply=False, albums_only=keys)
+    assert again.changes == []
+
+
+def test_a_scoped_dry_run_hashes_the_same_when_its_apply_runs_it_again(tmp_path, lib, canon_env, caplog):
+    """The apply re-runs the dry run and compares their hashes: the first run's lookups, which the
+    second reads from the cache, change no compared line."""
+    mcp_jobs = pytest.importorskip("music_service.mcp_jobs")
+    keys = ["SA0", "SA3", "SA7"]
+    _, first = _run(tmp_path, caplog, apply=False, albums_only=keys)
+    _, second = _run(tmp_path, caplog, apply=False, albums_only=keys)
+    assert any("[MB-URL]" in x or "[MB-NONE]" in x for x in first)
+    assert not any("[MB-URL]" in x or "[MB-NONE]" in x for x in second)
+    assert mcp_jobs.output_hash(first) == mcp_jobs.output_hash(second)
+
+
+def _filler(lib, root: Path, n: int, start: int) -> None:
+    """*n* spotdl items no scope reaches: other IDs, ISRCs and albums."""
+    from beets.library import Item
+
+    for k in range(start, start + n):
+        path = root / "Nobody" / f"Filler {k % 10}" / f"{k:04d} - Filler.m4a"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy(root.parent / "src.m4a", path)
+        item = Item(path=str(path), title=f"Filler {k}", artist="Nobody", albumartist="Nobody",
+                    album=f"Filler {k % 10}", spotify_ids=f"F{k}", isrc=f"ZZAAA26{k:05d}", via="spotdl",
+                    spotify_album_id=f"FA{k % 10}", track=k % 12 + 1, length=180.0)
+        lib._lib.add(item)
+
+
+def test_a_scoped_run_reads_the_library_once_not_once_per_album(tmp_path, lib, canon_env, caplog, monkeypatch):
+    """The supersede phase once read the whole library per album record (homelab#3025): what an
+    extra library item costs a scoped run doesn't grow with the albums in the scope."""
+    from beets.library import Item
+
+    reads = []
+    for name in ("get", "__getitem__"):
+        real = getattr(Item, name)
+        monkeypatch.setattr(Item, name, lambda self, *a, _real=real, **kw: reads.append(1) or _real(self, *a, **kw))
+    one, five = ["SA0"], ["SA0", "SA1", "SA2", "SA3", "SA4"]
+
+    def count(keys) -> int:
+        reads.clear()
+        _run(tmp_path, caplog, apply=False, albums_only=keys)
+        return len(reads)
+
+    small = count(one), count(five)
+    _filler(lib, tmp_path / "library", 300, 0)
+    large = count(one), count(five)
+    per_one, per_five = ((large[i] - small[i]) / 300 for i in (0, 1))
+    assert per_five < per_one + 3, (per_one, per_five)
