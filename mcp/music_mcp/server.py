@@ -695,7 +695,8 @@ def build_server(
         apply: Apply = False,
     ) -> dict:
         """music-canon-albums: give albums that split in two (one without a cover) one
-        canonical album identity."""
+        canonical album identity. It runs over the whole library in the queue, and its apply
+        runs the dry run again first: get_guide's workflow says what to expect."""
         body = {"refresh": refresh, "search_budget": search_budget, "mb_budget": mb_budget, "apply": apply}
         return await run("canon_albums", body, write=True)
 

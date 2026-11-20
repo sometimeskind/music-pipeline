@@ -58,6 +58,8 @@ is its latest `[PROGRESS]` line (`done`, `total`, `at`), so poll that rather tha
 output. A run that ends `failed` (AcoustID down) or `interrupted` continues with
 `recheck_recordings` and `resume` set to its `job_id`.
 
+**A whole-library `canon_albums`** runs in the queue, not the long lane: tools called after it wait until it ends, and a pod restart interrupts it (run it again). Its apply runs the dry run again before it writes, so allow for the dry run's time twice. The apply's comparison leaves out what the dry run itself cached or counted (the playlist pages, MusicBrainz lookups, Spotify searches, the items scanned), so a library that only grew doesn't refuse it; an import that changes a `[RETAG]`, `[SUPERSEDE]` or `[KEEP]` line still does, and the refused run is the new dry run to show. Before homelab#3025 its supersede phase (`[ALBUM]` … `[SUPERSEDE]` / `[KEEP]` lines, after the `[RETAG]` list) took hours on the whole library; a dry run that again spends long there is a regression to report.
+
 **Applying a recheck.** The finished run's `job_id` is its run ID. `apply_recheck` with it is a
 write like the others, dry run first. Its dry run reads the run's findings, not AcoustID, so it
 takes seconds and lists each replacement (`[WOULD-REPLACE]`) or why an item is skipped (it left
