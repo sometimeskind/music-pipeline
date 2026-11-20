@@ -616,6 +616,8 @@ TOOLS: dict[str, Tool] = {t.name: t for t in [
     Tool("audit_zero_wanted", READ, _none, lambda a, _: [["music-audit-zero-wanted"]]),
     # Items whose paths differ only in case, as Navidrome can't tell them apart (homelab#2742): no arguments.
     Tool("audit_case_twins", READ, _none, lambda a, _: [["music-audit-case-twins"]]),
+    # Items holding a same-titled item's Spotify ID or ISRC, from the import bug of homelab#2707: no arguments.
+    Tool("audit_swapped_ids", READ, _none, lambda a, _: [["music-audit-swapped-ids"]]),
     # The matcher's verdict on one release title for one album (homelab#2661).
     Tool("check_release", READ, _check_release, _check_release_argv),
     # homelab#2553: an hour-long AcoustID run in the long lane, resumed after a

@@ -445,6 +445,21 @@ def build_server(
         return await run("audit_case_twins", {})
 
     @mcp.tool(annotations={"readOnlyHint": True})
+    async def audit_swapped_ids() -> dict:
+        """music-audit-swapped-ids: items that hold a same-titled item's Spotify ID or ISRC, the
+        signature of an import bug before music-pipeline#474 (homelab#2707): of two files with one
+        title in one import, the first stored took the other's spotify_url, Spotify ID and ISRC on top
+        of its own. [SWAPPED] (certain): the IDs say which took the other's, and the two are plainly
+        two tracks (artists that share nothing, and lengths over 2 s apart or different MusicBrainz
+        recordings); each fix line is the exact unlink_spotify_id call, or says no tool can (the ID is
+        the item's spotify_url, or an ISRC). [SWAPCHECK] (check by hand): they could be one track,
+        which legitimately share IDs, or the IDs don't say which took the other's: compare_items first.
+        Pairs that look like one track with no side holding more are only counted (audit_dupes). Reads
+        only titles, then the same-titled items' IDs, by ranges: seconds, no fingerprints, safe beside
+        an import."""
+        return await run("audit_swapped_ids", {})
+
+    @mcp.tool(annotations={"readOnlyHint": True})
     async def check_release(
         album: AlbumQuery,
         title: Annotated[str, Field(description="the release title, as a [MISS] line or the album's record gives it",
