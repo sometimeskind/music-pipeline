@@ -10,10 +10,12 @@ following it and hand it to SABnzbd, which fetches it through its own proxy.
 from __future__ import annotations
 
 import dataclasses
+import itertools
 import logging
 import os
 import re
 import unicodedata
+from collections.abc import Sequence
 
 import requests
 
@@ -235,26 +237,61 @@ def _names_joined(title_words: list[str], artist: str, album: str) -> bool:
     return bool(one) and one in title_words and one not in words(artist)
 
 
-def leftover(release: Release, artist: str, album: str) -> list[str]:
+# Words a release's artist part joins collaborators with ("Brian Eno With
+# Daniel Lanois", "Artist Feat Tony Allen"); "and" and "x" too.
+_CREDIT_JOINS = {"with", "feat", "featuring", "ft", "x", "vs", "versus", "and"}
+
+
+def credited(release: Release, artist: str, album: str, credits: Sequence[str] = ()) -> set[str]:
+    """The words of the title's artist part that credit the album's other
+    artists (homelab#2783), *credits*: ``Brian Eno With Daniel Lanois and Roger
+    Eno-Apollo…`` → ``{daniel, lanois, roger, eno, with, and}`` when the album
+    credits Daniel Lanois and Roger Eno.  Each name counts only whole, and only
+    when the artist part holds nothing but the artist, credited names and the
+    words joining them: a part that also names someone the album doesn't credit
+    gets none, so it is refused as before.  The artist part is the title's
+    first segment, or with no unspaced hyphen the words before the album's first."""
+    if not credits:
+        return set()
+    title = _drop_group(release.title)
+    segments = re.split(r"(?<! )-(?! )", title)
+    if len(segments) >= 2:
+        part = set(words(segments[0]))
+    else:
+        album_words = set(words(search_title(album))) - _ARTICLES
+        part = set(itertools.takewhile(lambda w: w not in album_words, words(title)))
+    named: set[str] = set()
+    for name in credits:
+        if (name_words := set(words(name)) - _ARTICLES) and name_words <= part:
+            named |= name_words
+    if not named or not part <= set(words(artist)) | named | _CREDIT_JOINS | _ARTICLES:
+        return set()
+    return named | (part & _CREDIT_JOINS)
+
+
+def leftover(release: Release, artist: str, album: str, credits: Sequence[str] = ()) -> list[str]:
     """Title words that are not artist, album, a year or number, or a known tag.
 
     A word with a digit counts in the leading (artist) segment, where it is a
     name, not a year or catalogue number: ``Elvis27-Electronic-…`` (#200).  The
-    album's words run together are its name, not a leftover (homelab#2754).
+    album's words run together are its name, not a leftover (homelab#2754), and
+    so are the album's other credited artists named in the artist part
+    (:func:`credited`, homelab#2783).
     """
-    known = set(words(artist)) | set(words(album)) | {joined(album)} | _TAG_WORDS
+    known = (set(words(artist)) | set(words(album)) | {joined(album)} | _TAG_WORDS
+             | credited(release, artist, album, credits))
     title = _drop_group(release.title)
     segments = re.split(r"(?<! )-(?! )", title)
     lead = set(words(segments[0])) if len(segments) >= 2 else set()
     return [w for w in words(title) if w not in known and (w in lead or not any(c.isdigit() for c in w))]
 
 
-def other_release(release: Release, artist: str, album: str) -> list[str]:
+def other_release(release: Release, artist: str, album: str, credits: Sequence[str] = ()) -> list[str]:
     """Leftover title words that name another release (homelab#2604):
     ``Artist-The Album Tour 84-85-…`` → ``["tour"]``.  One followed by
     "edition" names an edition of the album ("Special Tour Edition", a
     reissue with bonus tracks), so it doesn't count."""
-    other = set(leftover(release, artist, album)) & _OTHER_RELEASE_WORDS
+    other = set(leftover(release, artist, album, credits)) & _OTHER_RELEASE_WORDS
     if not other:
         return []
     title_words = words(_drop_group(release.title))
@@ -387,7 +424,7 @@ def number_after_artist(title_words: list[str], artist: str) -> str:
     return after[0]
 
 
-def named_by_artist(release: Release, artist: str, album: str) -> str:
+def named_by_artist(release: Release, artist: str, album: str, credits: Sequence[str] = ()) -> str:
     """What the title adds to an album name it holds only through the artist's
     (homelab#2656), as "<album words>, beside <leftover words>"; empty when it
     doesn't.  ``Curtis Mayfield-Live In Europe-…`` holds *Curtis Live!* only
@@ -412,7 +449,7 @@ def named_by_artist(release: Release, artist: str, album: str) -> str:
     if _names_joined(rest, artist, album):
         return ""
     only = [w for w in dict.fromkeys(album_words) if w in names and w not in rest]
-    extra = [w for w in leftover(release, artist, album) if w not in _COLLECTION_WORDS]
+    extra = [w for w in leftover(release, artist, album, credits) if w not in _COLLECTION_WORDS]
     return f"{' '.join(only)}, beside {' '.join(extra)}" if only and extra else ""
 
 
@@ -421,7 +458,7 @@ def decades(text: str) -> set[str]:
     return {w[-3:] for w in words(text) if _DECADE.fullmatch(w)}
 
 
-def subtitle_clash(release: Release, artist: str, album: str) -> str:
+def subtitle_clash(release: Release, artist: str, album: str, credits: Sequence[str] = ()) -> str:
     """How the title says it is another album than the one the subtitle names
     (homelab#2662), which the album-name check can't see: it reads the name
     without its subtitle.  Empty when it doesn't.  ``Aretha Franklin-The Very Best
@@ -447,7 +484,7 @@ def subtitle_clash(release: Release, artist: str, album: str) -> str:
         return ""
     segments = re.split(r"(?<! )-(?! )", _drop_group(release.title))
     lead = set(words(segments[0])) if len(segments) >= 2 else set()
-    extra = [w for w in leftover(release, artist, album) if w not in lead]
+    extra = [w for w in leftover(release, artist, album, credits) if w not in lead]
     return f"lacks {' '.join(own)}, beside {' '.join(extra)}" if extra else ""
 
 
@@ -485,6 +522,7 @@ def rejection(
     album_type: str | None = None,
     seconds: int = 0,
     any_album: bool = False,
+    credits: Sequence[str] = (),
 ) -> Rejection | None:
     """None when the release title names this album, carries little else, and
     its size fits the album's duration (or, unknown, its track count); else the
@@ -492,6 +530,8 @@ def rejection(
 
     *any_album* is for a title with no readable words (#197): any release by
     the artist matches on size and type alone, and the pick is logged as such.
+    *credits* are the album's other credited artists, whom the title's artist
+    part may name beside the artist (homelab#2783, :func:`credited`).
     """
     bare = without_lead_number(release.title, artist)
     if bare != release.title:
@@ -511,7 +551,7 @@ def rejection(
         return Rejection(1, "artist", "doesn't start with " + (artist or "an album word"))
     if title & _REJECT_WORDS and not set(words(album)) & _REJECT_WORDS:
         return Rejection(2, "reject word", " ".join(sorted(title & _REJECT_WORDS)))
-    extra = [] if any_album else leftover(release, artist, album)
+    extra = [] if any_album else leftover(release, artist, album, credits)
     if len(extra) > MAX_LEFTOVER_WORDS:
         return Rejection(3, "leftover words", " ".join(extra), distance=len(extra))
     # Self-titled: the artist words already satisfy the album check, so the
@@ -523,13 +563,13 @@ def rejection(
             return Rejection(4, "self-titled", f"names another album after the artist: {number}")
         if not ({"self", "titled"} <= title or not extra):
             return Rejection(4, "self-titled", "names the album once, beside " + " ".join(extra))
-    borrowed = "" if any_album else named_by_artist(release, artist, album)
+    borrowed = "" if any_album else named_by_artist(release, artist, album, credits)
     if borrowed:
         return Rejection(5, "artist words", borrowed)
-    other = [] if any_album else other_release(release, artist, album)
+    other = [] if any_album else other_release(release, artist, album, credits)
     if other:
         return Rejection(6, "other release", " ".join(other))
-    clash = "" if any_album else subtitle_clash(release, artist, album)
+    clash = "" if any_album else subtitle_clash(release, artist, album, credits)
     if clash:
         return Rejection(7, "subtitle", clash)
     is_single = album_type == "single" if album_type else 0 < tracks <= 3
@@ -557,6 +597,7 @@ def why_none(
     album_type: str | None = None,
     seconds: int = 0,
     any_album: bool = False,
+    credits: Sequence[str] = (),
     shown: int = 3,
 ) -> str:
     """Why no release matched, for a [MISS] (homelab#2568): how many failed each
@@ -565,7 +606,8 @@ def why_none(
     blocklisted (or has no download link) counts as the closest."""
     found: list[tuple[Release, Rejection]] = []
     for r in releases:
-        why = rejection(r, artist, album, tracks, album_type=album_type, seconds=seconds, any_album=any_album)
+        why = rejection(r, artist, album, tracks, album_type=album_type, seconds=seconds, any_album=any_album,
+                        credits=credits)
         if why is None:
             why = Rejection(10, "blocklisted") if r.guid in blocklist else Rejection(10, "no download link")
         found.append((r, why))
@@ -591,6 +633,7 @@ def rank(
     album_type: str | None = None,
     seconds: int = 0,
     any_album: bool = False,
+    credits: Sequence[str] = (),
 ) -> list[Release]:
     """Matching releases, best first: the Spotify album's edition (#279: its
     deluxe, remaster or anniversary words, and no others), then tier, then
@@ -609,14 +652,15 @@ def rank(
     candidates = [
         r for r in releases
         if r.guid not in blocklist and r.download_url
-        and matches(r, artist, album, tracks, album_type=album_type, seconds=seconds, any_album=any_album)
+        and matches(r, artist, album, tracks, album_type=album_type, seconds=seconds, any_album=any_album,
+                   credits=credits)
     ]
     year_word = str(year) if year else None
 
     def other_year(r: Release) -> int:
         return 0 if year_word is None or year_word in words(r.title) else 1
 
-    ranked = sorted(candidates, key=lambda r: (edition_miss(r, album), tier(r), len(leftover(r, artist, album)),
+    ranked = sorted(candidates, key=lambda r: (edition_miss(r, album), tier(r), len(leftover(r, artist, album, credits)),
                                                other_year(r), -r.grabs, r.size, r.indexer_id, r.guid))
     first: dict[str, int] = {}
     for i, r in enumerate(ranked):

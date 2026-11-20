@@ -69,7 +69,7 @@ def test_the_arguments_are_the_ticks(monkeypatch) -> None:
     (release, artist, album, tracks), kwargs = spy.call_args
     assert (release.title, release.size) == (WALKMAN, 900_000_000)
     assert (artist, album, tracks) == ("Harry Nilsson", "Nilsson Schmilsson", 12)
-    assert kwargs == {"album_type": "album", "seconds": 2040, "any_album": False}
+    assert kwargs == {"album_type": "album", "seconds": 2040, "any_album": False, "credits": ()}
 
 
 def test_tracks_fall_back_to_the_longest_playlist_as_the_tick_counts_them() -> None:
@@ -180,3 +180,40 @@ def test_main_stops_when_the_album_isnt_one(monkeypatch, caplog) -> None:
     with pytest.raises(SystemExit) as stopped:
         _main(monkeypatch, "--album=nothing", f"--title={WALKMAN}")
     assert stopped.value.code == 1 and "0 album(s) match" in caplog.text
+
+
+# --- the album's other credited artists (homelab#2783) ---
+
+APOLLO_TITLE = ("Brian Eno With Daniel Lanois and Roger Eno-Apollo Atmospheres And Soundtracks-REMASTERED-16BIT-WEB-"
+                "FLAC-2019-OBZEN")
+
+
+def _apollo(**fields) -> dict:
+    return _record("Brian Eno", "Apollo: Atmospheres And Soundtracks (Extended Edition)", tracks_count=23,
+                   duration=5640, **fields)
+
+
+def test_the_albums_credited_artists_let_the_release_through(caplog) -> None:
+    result = _check(APOLLO_TITLE, record=_apollo(artists=["Brian Eno", "Daniel Lanois", "Roger Eno"],
+                                                 artists_of="SPOTIFYID"))
+    assert result.why is None
+    assert "Credits: Daniel Lanois, Roger Eno: the title's artist part may name them beside Brian Eno" in \
+        _output(caplog, result)
+
+
+def test_artists_not_read_yet_say_so(caplog) -> None:
+    result = _check(APOLLO_TITLE, record=_apollo())
+    assert str(result.why) == "leftover words: with daniel lanois roger"
+    assert "Credits: not read yet: the tick reads the Spotify album's artists" in _output(caplog, result)
+
+
+def test_an_album_crediting_no_one_else_says_so(caplog) -> None:
+    result = _check(APOLLO_TITLE, record=_apollo(artists=["Brian Eno"], artists_of="SPOTIFYID"))
+    assert result.why is not None and result.why.rule == "leftover words"
+    assert "Credits: none: the album credits no other artist" in _output(caplog, result)
+
+
+def test_an_override_has_no_credits(caplog) -> None:
+    result = _check(APOLLO_TITLE, words="eno apollo atmospheres",
+                    record=_apollo(artists=["Brian Eno", "Daniel Lanois", "Roger Eno"], artists_of="SPOTIFYID"))
+    assert "Credits: none: with an override there is no artist" in _output(caplog, result)

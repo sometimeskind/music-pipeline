@@ -75,7 +75,7 @@ def audit(records: Mapping[str, dict], search_words: Mapping[str, str]) -> Repor
             continue
         report.compared += 1
         release = Release(guid="", title=title, size=0, indexer_id=0, download_url="", categories=[])
-        why = named_by_artist(release, search.artist, search.album)
+        why = named_by_artist(release, search.artist, search.album, search.credits)
         if why:
             report.flagged.append(Flagged(key, record["artist"], record["name"], title, why))
     return report

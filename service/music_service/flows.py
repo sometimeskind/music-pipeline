@@ -1084,8 +1084,13 @@ def album_import_flow(nzo_id: str, ok: bool, path: str = "", fail_message: str =
     """A SABnzbd album job finished (/trigger-album-import): import it or
     blocklist the release, then grab the next album."""
     import music_fetch.albums as albums  # noqa: PLC0415
+    from music_fetch.spotdl_ops import SpotifyPlaylists  # noqa: PLC0415
     from music_fetch.usenet import Prowlarr, Sabnzbd  # noqa: PLC0415
     from music_scan.library import MusicLibrary  # noqa: PLC0415
+
+    def album_artists(album_id: str) -> list[str]:
+        # The client is made only when an album's artists are read (homelab#2783).
+        return SpotifyPlaylists(ingest.COOKIE_FILE).album_artists(album_id)
 
     logger = get_run_logger()
     settings = albums.Settings.from_env()
@@ -1098,7 +1103,8 @@ def album_import_flow(nzo_id: str, ok: bool, path: str = "", fail_message: str =
                 have, _, complete = _album_library_hooks(lib)
                 status = complete(state, albums.Completion(nzo_id=nzo_id, ok=ok, path=path, fail_message=fail_message))
                 if status is not None and settings.mode == "on":
-                    albums.top_up(state, settings, Prowlarr(), Sabnzbd(), have, albums.TickResult())
+                    albums.top_up(state, settings, Prowlarr(), Sabnzbd(), have, albums.TickResult(),
+                                  album_artists=album_artists)
             success = True
         finally:
             state.save()

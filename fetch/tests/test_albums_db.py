@@ -47,6 +47,9 @@ class _Spotify:
     def album_songs(self, album_id: str) -> list[dict]:
         return []
 
+    def album_artists(self, album_id: str) -> list[str]:
+        return ["Artist"]
+
 
 def _merged() -> State:
     s = State()

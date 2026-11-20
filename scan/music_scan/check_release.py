@@ -91,6 +91,21 @@ def _override(c: Check) -> str:
     return f'stored "{c.stored}" applied' if c.stored else "none stored"
 
 
+def _credits(c: Check) -> str:
+    """The album's other credited artists the title's artist part may name (homelab#2783)."""
+    if c.words or c.stored:
+        return "none: with an override there is no artist to credit beside"
+    if c.search.credits:
+        return f"{', '.join(c.search.credits)}: the title's artist part may name them beside {c.search.artist}"
+    if albums.credits_due(c.record):
+        return ("not read yet: the tick reads the Spotify album's artists at its next search with results, and "
+                "until then the artist part may name no one else")
+    if c.record.get("requested") and "artists" not in c.record:
+        return ("not read yet: the tick reads the request's MusicBrainz credit, and until then the matcher reads "
+                "the whole credit as the artist")
+    return "none: the album credits no other artist"
+
+
 def _size(c: Check) -> str:
     fits = f"this album takes {_megabytes(c.low)} to {_megabytes(c.high)}"
     if not c.high:
@@ -107,6 +122,7 @@ def log_check(c: Check) -> None:
     logger.info("Verdict: %s", _verdict(c))
     logger.info("Search: %s", _search(c))
     logger.info("Override: %s", _override(c))
+    logger.info("Credits: %s", _credits(c))
     if c.words or c.stored:
         logger.info("With an override there is no artist: a title must start with one of its words and hold them all "
                     "(a leading - excludes nothing), and the artist words and self-titled rules don't run")

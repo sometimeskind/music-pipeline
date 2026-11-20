@@ -320,12 +320,14 @@ def album_fixes(path: Path | None = None) -> list[overrides.AlbumOverride]:
 @dataclasses.dataclass
 class Plan:
     """How to search for an album: the queries in order (the second, the artist
-    alone, only when the first finds nothing) and what rank() matches on."""
+    alone, only when the first finds nothing) and what rank() matches on:
+    *artist*, and *credits*, the album's other credited artists (homelab#2783)."""
     queries: list[str]
     artist: str = ""
     album: str = ""
     any_album: bool = False
     note: str = ""
+    credits: tuple[str, ...] = ()
 
 
 def override_words(key: str, record: dict, overrides: dict[str, str]) -> str | None:
@@ -337,20 +339,45 @@ def override_words(key: str, record: dict, overrides: dict[str, str]) -> str | N
 def plan(key: str, record: dict, overrides: dict[str, str]) -> Plan:
     """The searches for an album (#197).  An override wins; a title with no
     readable words searches the artist alone and matches any of their releases
-    on size; with neither, there is nothing to search (``queries`` empty)."""
+    on size; with neither, there is nothing to search (``queries`` empty).
+
+    The album's credited artists (``artists``, homelab#2783: the Spotify
+    album's, or a request's MusicBrainz credit) give the matcher its artist,
+    the first, and the album's other credited artists, the rest.  A request's
+    ``artist`` is its whole credit (``Brian Eno with Daniel Lanois & Roger
+    Eno``), which the queries keep, and which is a credit too, so a title
+    spelling it whole matches as before whatever its join phrases.  An
+    override has neither."""
     words = override_words(key, record, overrides)
     if words:
         return Plan([words], album=words, note=" (override)")
     artist = record["artist"] if readable(record["artist"]) else ""
+    names = [n for n in record.get("artists") or () if n]
+    matched = names[0] if names and readable(names[0]) else artist
+    credits = tuple(names[1:]) if matched else ()
+    if credits and artist and artist not in names:
+        # A request's whole credit, join phrases and all (``presents``), names its artists too.
+        credits += (artist,)
     name = search_title(record["name"])
     if readable(name):
         first = normalise(f"{artist} {name}")
         # Retrying a compilation as "various artists" would only list compilations.
         retry = artist and artist.lower() != "various artists"
-        return Plan([first, normalise(artist)] if retry else [first], artist=artist, album=record["name"])
+        return Plan([first, normalise(artist)] if retry else [first], artist=matched, album=record["name"],
+                    credits=credits)
     if artist:
-        return Plan([normalise(artist)], artist=artist, album=record["name"], any_album=True, note=" (artist-only)")
+        return Plan([normalise(artist)], artist=matched, album=record["name"], any_album=True, note=" (artist-only)",
+                    credits=credits)
     return Plan([])
+
+
+def credits_due(record: dict) -> str | None:
+    """The Spotify album whose artists the record still has to read
+    (homelab#2783): its primary, when ``artists`` weren't read from it.  None
+    for an album with no Spotify album, whose credit is its request's
+    (:func:`feed_requests`)."""
+    primary = statedb.primary_spotify(record)
+    return primary if primary and record.get("artists_of") != primary else None
 
 
 def track_count(record: dict) -> int:
@@ -360,7 +387,8 @@ def track_count(record: dict) -> int:
 
 def match_args(record: dict, search: Plan) -> dict:
     """The album's keywords for :func:`~music_fetch.usenet.rejection` and :func:`~music_fetch.usenet.rank`."""
-    return dict(album_type=match_type(record), seconds=record.get("duration") or 0, any_album=search.any_album)
+    return dict(album_type=match_type(record), seconds=record.get("duration") or 0, any_album=search.any_album,
+                credits=search.credits)
 
 
 def match_type(record: dict) -> str | None:
@@ -439,6 +467,11 @@ class SpotifySource(Protocol):
     def snapshot_id(self, url: str) -> str: ...
     def songs(self, url: str) -> list[dict]: ...
     def album_songs(self, album_id: str) -> list[dict]: ...
+    def album_artists(self, album_id: str) -> list[str]: ...
+
+
+# album_artists(album_id): the Spotify album's artists, in order (homelab#2783).
+AlbumArtists = Callable[[str], list[str]]
 
 
 # have(key, record): the library holds the album whole (#268), so it needs no download.
@@ -906,6 +939,9 @@ def feed_requests(state: State, requests: list[album_requests.Request],
         record["requested"] = True
         # Whichever way the record came: what the matcher reads an EP request by (homelab#2568).
         record["primary_type"] = request.fields()["primary_type"]
+        if not statedb.primary_spotify(record) and request.artists is not None:
+            # No Spotify album credits it: the release group's credit does (homelab#2783).
+            record.update(artists=request.artists, artists_of=request.release_group)
         if album_requests.SOURCE in record.get("playlists", {}):
             # The release the tracks were read from: the fallback reads it again for its songs.
             record["tracklist_release"] = request.tracklist_release
@@ -1023,11 +1059,19 @@ def top_up(
     result: TickResult,
     now: Callable[[], datetime] = _now,
     overrides: dict[str, str] | None = None,
+    album_artists: AlbumArtists | None = None,
 ) -> None:
     """Search and grab wanted albums until the queue or a budget is full.
 
     *overrides* (search words by album key) default to :func:`album_fixes`,
     so every caller searches the same way (#202).
+
+    *album_artists* reads a Spotify album's artists (homelab#2783), which the
+    matcher reads the album's other credited artists from: once per album
+    (``artists``, ``artists_of``: :func:`credits_due`), when its search first
+    has results to match.  A failed read leaves the album matched without them
+    and stops the reads until the next call.  Without it, the albums whose
+    artists weren't read are matched without them.
 
     The indexers' status is checked before the tick's first search and after
     every empty result: one in backoff stops the tick like a failed search, so
@@ -1111,6 +1155,15 @@ def top_up(
             if record.get("edition") is not None and record.get("best_copy") else None
         blocked = {r.guid for r in releases
                    if r in barred and (r.guid in barred.guids or repost_name(r.title) != kept)}
+        if releases and album_artists is not None and (album_id := credits_due(record)):
+            try:
+                artists = [a for a in album_artists(album_id) if isinstance(a, str) and a]
+                record.update(artists=artists, artists_of=album_id)
+                search = plan(key, record, overrides)
+            except Exception as exc:
+                logger.warning("[ERR]  %s: reading the album's Spotify artists failed, matched without them: %s",
+                               label, exc)
+                album_artists = None  # Spotify is down or limiting: the next tick tries again.
         matching = match_args(record, search)
         ranked = rank(releases, search.artist, search.album, tracks, blocked, record.get("year"), **matching)
         other_edition = 0
@@ -1663,7 +1716,8 @@ def tick(
             except Exception:
                 # The library's side failed: grabbing what is wanted needn't wait for it.
                 logger.exception("Automatic reimports failed; the next tick tries again")
-        top_up(state, settings, prowlarr, sabnzbd, have, result, overrides=search)
+        top_up(state, settings, prowlarr, sabnzbd, have, result, overrides=search,
+               album_artists=spotify.album_artists)
         if settings.mode == "on" and missing is not None:
             fallbacks(state, missing, spotify.album_songs, request_songs, recordings, album_playlists)
         success = True
