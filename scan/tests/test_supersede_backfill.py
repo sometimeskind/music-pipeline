@@ -305,5 +305,5 @@ def test_backfill_reads_each_item_a_bounded_number_of_times(tmp_path, lib, fake_
     small = count()
     _filler(lib, tmp_path / "library", 400, start=100)
     large = count()
-    # About 15 reads per item (the index, the claim, the sort); the plan per record read ~50 per record.
+    # 20 reads an item (the index, the claim, the sort); a plan per record read 1,446 over these 20 records.
     assert (large - small) / 400 < 30
