@@ -1,0 +1,1394 @@
+# dry run
+  [MANUAL] 285 <tmp>/library/Arbor/Sorrel/07 - Harbour Lights.m4a: the same track as album item 3 (isrc), but imported by hand; kept
+  [MANUAL] 349 <tmp>/library/Arbor/Amber (Deluxe Edition)/12 - Tide - Remastered 2011.m4a: the same track as album item 4 (disc/track), but imported by hand; kept
+[ALBUM] Arbor — Amber: 7 loose item(s) superseded, 11 kept
+  [SUPERSEDE] 4 <tmp>/library/Arbor/Amber (Deluxe Edition)/12 - Tide.m4a ← 197 <tmp>/library/Arbor/Amber (Deluxe Edition)/02 - Tide.m4a (same audio, fingerprint ber=0.00, 0s apart; playlists pl0) (dry run)
+  [SUPERSEDE] 4 <tmp>/library/Arbor/Amber (Deluxe Edition)/12 - Tide.m4a ← 470 <tmp>/library/Arbor/Amber (Deluxe Edition)/01 - Tide.m4a (same audio, fingerprint ber=0.03, 2s apart; playlists pl0) (dry run)
+  [SUPERSEDE] 3 <tmp>/library/Arbor/Amber (Deluxe Edition)/03 - Northern.1.m4a ← 267 <tmp>/library/Ember/Vetch/08 - Paper Moon.m4a (isrc; playlists pl1) (dry run)
+  [SUPERSEDE] 3 <tmp>/library/Arbor/Amber (Deluxe Edition)/03 - Northern.1.m4a ← 535 <tmp>/library/Basalt/Bramble/08 - Ash.m4a (isrc; playlists pl3) (dry run)
+  [SUPERSEDE] 3 <tmp>/library/Arbor/Amber (Deluxe Edition)/03 - Northern.1.m4a ← 567 <tmp>/library/Arbor/Greatest Hits/08 - Ash.m4a (isrc; playlists pl1) (dry run)
+  [SUPERSEDE] 1 <tmp>/library/Arbor/Amber (Deluxe Edition)/11 - Ash (Demo).m4a ← 440 <tmp>/library/Arbor/Amber (Deluxe Edition)/05 - Glass - Remastered 2011.m4a (isrc; playlists pl3) (dry run)
+  [SUPERSEDE] 1 <tmp>/library/Arbor/Amber (Deluxe Edition)/11 - Ash (Demo).m4a ← 498 <tmp>/library/Cinder/Delta/09 - Ash.m4a (isrc; playlists pl2) (dry run)
+  [KEEP] 173 Arbor — Northern <tmp>/library/Arbor/Northern 34/05 - Northern.m4a: filed under Northern 34, but no release item has its audio (album item 3: the fingerprints differ); kept
+  [KEEP] 313 Arbor — Northern (Live) <tmp>/library/Arbor/Northern (Live) 174/09 - Northern (Live).m4a: filed under Northern (Live) 174, but it has no fingerprint, so the same-audio rung was skipped; kept
+  [KEEP] 323 Arbor — Ash - Extended Mix <tmp>/library/Arbor/Ash - Extended Mix 184/06 - Ash - Extended Mix.m4a: filed under Ash - Extended Mix 184, but it has no fingerprint, so the same-audio rung was skipped; kept
+  [KEEP] 355 Arbor — Northern (Live) <tmp>/library/Arbor/Static (Live) 216/03 - Northern (Live).m4a: filed under Static (Live) 216, but no release item has its audio (album item 3: the fingerprints differ); kept
+  [KEEP] 396 Arbor — Tide <tmp>/library/Arbor/Tide 257/00 - Tide.m4a: filed under Tide 257, but no release item has its audio (album item 2: fingerprint ber=0.03 but 58s apart; album item 4: the fingerprints differ); kept
+  [KEEP] 432 Arbor — Tide <tmp>/library/Arbor/Tide 293/01 - Tide.m4a: filed under Tide 293, but it has no fingerprint, so the same-audio rung was skipped; kept
+  [KEEP] 495 Arbor — Tide - Remastered 2011 <tmp>/library/Arbor/Orbit/02 - Tide - Remastered 2011.m4a: filed under Orbit, but no release item has its audio (album item 2: the fingerprints differ; album item 4: the fingerprints differ); kept
+  [KEEP] 506 Arbor — Tide (Demo) <tmp>/library/Arbor/Tide (Demo) 367/03 - Tide (Demo).m4a: filed under Tide (Demo) 367, but it has no fingerprint, so the same-audio rung was skipped; kept
+  [KEEP] 531 Arbor — Tide - Extended Mix <tmp>/library/Arbor/Tide - Extended Mix 392/10 - Tide - Extended Mix.m4a: filed under Tide - Extended Mix 392, but no release item has its audio (album item 2: the fingerprints differ; album item 4: the fingerprints differ); kept
+  [KEEP] 537 Arbor — Northern <tmp>/library/Arbor/Static (Demo) 398/05 - Northern.m4a: filed under Static (Demo) 398, but no release item has its audio (album item 3: the fingerprints differ); kept
+  [KEEP] 545 Arbor — Ash (Demo) <tmp>/library/Arbor/Amber (Deluxe Edition)/09 - Ash (Demo).m4a: on the album, but its Spotify ID is not on the album's tracklist (a twin release's?) and no entry sits at its disc/track 2-9; no release item has its audio (album item 1: the fingerprints differ); kept
+  [MANUAL] 208 <tmp>/library/Fjord/Birch/05 - Hollow (Demo).m4a: the same track as album item 6 (recording id), but imported by hand; kept
+[ALBUM] Fjord — Birch: 7 loose item(s) superseded, 9 kept
+  [SUPERSEDE] 8 <tmp>/library/Fjord/Birch/04 - Ash.m4a ← 160 <tmp>/library/Fjord/Birch/09 - Ash.m4a (same audio, fingerprint ber=0.03, 0s apart; playlists pl1) (dry run)
+  [SUPERSEDE] 8 <tmp>/library/Fjord/Birch/04 - Ash.m4a ← 309 <tmp>/library/Fjord/Cedar/09 - Ash (Live).m4a (same audio, fingerprint ber=0.00, 2s apart; playlists pl3) (dry run)
+  [SUPERSEDE] 8 <tmp>/library/Fjord/Birch/04 - Ash.m4a ← 440 <tmp>/library/Arbor/Amber (Deluxe Edition)/05 - Glass - Remastered 2011.m4a (isrc; playlists pl3) (dry run)
+  [SUPERSEDE] 8 <tmp>/library/Fjord/Birch/04 - Ash.m4a ← 498 <tmp>/library/Cinder/Delta/09 - Ash.m4a (isrc; playlists pl2) (dry run)
+  [SUPERSEDE] 8 <tmp>/library/Fjord/Birch/04 - Ash.m4a ← 537 <tmp>/library/Arbor/Static (Demo) 398/05 - Northern.m4a (isrc; playlists pl3) (dry run)
+  [SUPERSEDE] 7 <tmp>/library/Fjord/Birch/02 - Orbit - Extended Mix.m4a ← 380 <tmp>/library/Ember/Fern/06 - Northern - Remastered 2011 - Remastered 2011.m4a (spotify id; playlists pl0) (dry run)
+  [SUPERSEDE] 7 <tmp>/library/Fjord/Birch/02 - Orbit - Extended Mix.m4a ← 562 <tmp>/library/Arbor/Greatest Hits/04 - Orbit (Live).m4a (spotify id; playlists pl2) (dry run)
+  [KEEP] 145 Fjord — Orbit <tmp>/library/Fjord/Orbit/01 - Orbit.m4a: filed under Orbit, but no release item has its audio (album item 7: the fingerprints differ); kept
+  [KEEP] 225 Fjord — Orbit <tmp>/library/Fjord/Orbit 86/12 - Orbit.m4a: filed under Orbit 86, but it has no fingerprint, so the same-audio rung was skipped; kept
+  [KEEP] 264 Fjord — Ash - Remastered 2011 - Remastered 2011 <tmp>/library/Fjord/Vesper - Remastered 2011 125/04 - Ash - Remastered 2011 - Remastered 2011.m4a: filed under Vesper - Remastered 2011 125, but no release item has its audio (album item 8: the fingerprints differ); kept
+  [KEEP] 271 Fjord — Undertow - Remastered 2011 <tmp>/library/Fjord/Undertow - Remastered 2011/00 - Undertow - Remastered 2011.m4a: filed under Undertow - Remastered 2011, but no release item has its audio (album item 5: the fingerprints differ); kept
+  [KEEP] 324 Fjord — Ash <tmp>/library/Fjord/Vesper 185/04 - Ash.m4a: filed under Vesper 185, but no release item has its audio (album item 8: fingerprint ber=0.03 but 30s apart); kept
+  [KEEP] 374 Fjord — Orbit - Extended Mix <tmp>/library/Fjord/Birch/02 - Orbit - Extended Mix.1.m4a: on the album, but it has no Spotify ID; no release item has its audio (album item 7: the fingerprints differ); kept
+  [KEEP] 412 Fjord — Undertow <tmp>/library/Fjord/Undertow 273/07 - Undertow.m4a: filed under Undertow 273, but no release item has its audio (album item 5: the fingerprints differ); kept
+  [KEEP] 471 Fjord — Hollow (Demo) <tmp>/library/Fjord/Birch/11 - Hollow (Demo).m4a: on the album, but track 1-11 is 'Undertow (Live)' (album item 7), another title; it has no fingerprint, so the same-audio rung was skipped; kept
+  [KEEP] 557 Fjord — Hollow (Demo) <tmp>/library/Fjord/Birch/11 - Hollow (Demo).1.m4a: on the album, but track 1-11 is 'Undertow (Live)' (album item 7), another title; no release item has its audio (album item 6: the fingerprints differ); kept
+  [MANUAL] 285 <tmp>/library/Arbor/Sorrel/07 - Harbour Lights.m4a: the same track as album item 11 (spotify id), but imported by hand; kept
+[ALBUM] Dune — Coral: 5 loose item(s) superseded, 9 kept
+  [SUPERSEDE] 9 <tmp>/library/Dune/Coral/01 - Vesper.m4a ← 155 <tmp>/library/Ember/Vetch/07 - Hollow.m4a (isrc; playlists pl1) (dry run)
+  [SUPERSEDE] 10 <tmp>/library/Dune/Coral/02 - Lantern - Remastered 2011.m4a ← 174 <tmp>/library/Dune/Coral/03 - Lantern - Remastered 2011.m4a (spotify id; playlists pl2) (dry run)
+  [SUPERSEDE] 11 <tmp>/library/Dune/Coral/03 - Glass.m4a ← 205 <tmp>/library/Basalt/Garnet/09 - Lantern - Remastered 2011.m4a (spotify id; playlists pl3) (dry run)
+  [SUPERSEDE] 11 <tmp>/library/Dune/Coral/03 - Glass.m4a ← 350 <tmp>/library/Fjord/Undertow 211/02 - Undertow.m4a (isrc; playlists pl3) (dry run)
+  [SUPERSEDE] 11 <tmp>/library/Dune/Coral/03 - Glass.m4a ← 372 <tmp>/library/Dune/Coral/03 - Glass.1.m4a (tracklist disc/track; playlists pl3) (dry run)
+  [KEEP] 230 Dune — Lantern - Remastered 2011 <tmp>/library/Dune/Coral/02 - Lantern - Remastered 2011.1.m4a: on the album, but its Spotify ID is not on the album's tracklist (a twin release's?); track 1-2 is TW2x1, which no item of the release holds; no release item has its audio (album item(s) 10 have no fingerprint, so the same-audio rung skipped them); kept
+  [KEEP] 242 Basalt — Paper Moon (Demo) <tmp>/library/Basalt/Onyx/10 - Paper Moon (Demo).m4a: on the album, but its Spotify ID is not on the album's tracklist (a twin release's?) and no entry sits at its disc/track 2-10; no release item sits at its disc/track 2-10 or has its title; kept
+  [KEEP] 290 Dune — Glass <tmp>/library/Dune/Glass 151/03 - Glass.m4a: filed under Glass 151, but no release item has its audio (album item 11: the fingerprints differ); kept
+  [KEEP] 404 Dune — Lantern - Remastered 2011 <tmp>/library/Dune/Coral/06 - Lantern - Remastered 2011.m4a: on the album, but its Spotify ID is not on the album's tracklist (a twin release's?) and no entry sits at its disc/track 1-6; it has no fingerprint, so the same-audio rung was skipped; kept
+  [KEEP] 513 Dune — Vesper - Remastered 2011 <tmp>/library/Dune/Lantern - Extended Mix 374/01 - Vesper - Remastered 2011.m4a: filed under Lantern - Extended Mix 374, but no release item has its audio (album item(s) 9 have no fingerprint, so the same-audio rung skipped them); kept
+  [KEEP] 514 Dune — Vesper <tmp>/library/Dune/Coral/03 - Vesper.1.m4a: on the album, but track 1-3 is 'Glass' (album item 11), another title; no release item has its audio (album item 11: fingerprint ber=0.00, 2s apart, but the titles differ: wrong audio? (music-audit-lengths --replace); album item(s) 9 have no fingerprint, so the same-audio rung skipped them); kept
+  [KEEP] 522 Dune — Glass <tmp>/library/Dune/Coral/12 - Glass.m4a: on the album, but its Spotify ID is not on the album's tracklist (a twin release's?) and no entry sits at its disc/track 1-12; no release item has its audio (album item 11: the fingerprints differ); kept
+  [KEEP] 541 Dune — Glass <tmp>/library/Dune/Coral/03 - Glass.2.m4a: on the album, but its ISRCs USAAA2612000 differ from track 1-3's (GBBBB2602002;USAAA2602002, album item 11); no release item has its audio (album item 11: the fingerprints differ); kept
+  [KEEP] 561 Dune — Vesper <tmp>/library/Dune/Vesper/07 - Vesper.m4a: filed under Vesper, but no release item has its audio (album item(s) 9 have no fingerprint, so the same-audio rung skipped them); kept
+[ALBUM] Arbor — Elm: 7 loose item(s) superseded, 18 kept
+  [SUPERSEDE] 20 <tmp>/library/Arbor/Elm/06 - Tide (Demo).m4a ← 147 <tmp>/library/Arbor/Paper Moon/04 - Paper Moon.m4a (isrc; playlists pl1) (dry run)
+  [SUPERSEDE] 20 <tmp>/library/Arbor/Elm/06 - Tide (Demo).m4a ← 401 <tmp>/library/Arbor/Yarrow/02 - Harbour Lights - Remastered 2011.m4a (isrc; playlists pl0) (dry run)
+  [SUPERSEDE] 17 <tmp>/library/Arbor/Elm/03 - Undertow (Demo).m4a ← 161 <tmp>/library/Ember/Harbour Lights (Demo) 22/03 - Harbour Lights (Demo).m4a (isrc; playlists pl3) (dry run)
+  [SUPERSEDE] 17 <tmp>/library/Arbor/Elm/03 - Undertow (Demo).m4a ← 257 <tmp>/library/Dune/Hollow 118/07 - Hollow.m4a (isrc; playlists pl3) (dry run)
+  [SUPERSEDE] 17 <tmp>/library/Arbor/Elm/03 - Undertow (Demo).m4a ← 473 <tmp>/library/Arbor/Greatest Hits/01 - Ash (Live).m4a (isrc; playlists pl2) (dry run)
+  [SUPERSEDE] 17 <tmp>/library/Arbor/Elm/03 - Undertow (Demo).m4a ← 522 <tmp>/library/Dune/Coral/12 - Glass.m4a (isrc; playlists pl1) (dry run)
+  [SUPERSEDE] 15 <tmp>/library/Arbor/Elm/01 - Ash.m4a ← 300 <tmp>/library/Arbor/Elm/01 - Undertow.m4a (tracklist disc/track; playlists pl0) (dry run)
+  [KEEP] 173 Arbor — Northern <tmp>/library/Arbor/Northern 34/05 - Northern.m4a: filed under Northern 34, but no release item has its audio (album item 19: the fingerprints differ); kept
+  [KEEP] 195 Arbor — Static - Remastered 2011 <tmp>/library/Arbor/Elm/01 - Static - Remastered 2011.1.m4a: on the album, but its Spotify ID is not on the album's tracklist (a twin release's?); track 2-1 is TW4x3, which no item of the release holds; no release item sits at its disc/track 2-1 or has its title; kept
+  [KEEP] 200 Arbor — Undertow - Remastered 2011 <tmp>/library/Arbor/Undertow - Remastered 2011/04 - Undertow - Remastered 2011.m4a: filed under Undertow - Remastered 2011, but no release item has its audio (album item 17: the fingerprints differ); kept
+  [KEEP] 216 Arbor — Ash <tmp>/library/Arbor/Elm/08 - Ash.m4a: on the album, but its Spotify ID is not on the album's tracklist (a twin release's?) and no entry sits at its disc/track 1-8; no release item has its audio (album item(s) 15 have no fingerprint, so the same-audio rung skipped them); kept
+  [KEEP] 313 Arbor — Northern (Live) <tmp>/library/Arbor/Northern (Live) 174/09 - Northern (Live).m4a: filed under Northern (Live) 174, but it has no fingerprint, so the same-audio rung was skipped; kept
+  [KEEP] 323 Arbor — Ash - Extended Mix <tmp>/library/Arbor/Ash - Extended Mix 184/06 - Ash - Extended Mix.m4a: filed under Ash - Extended Mix 184, but it has no fingerprint, so the same-audio rung was skipped; kept
+  [KEEP] 344 Arbor — Ash <tmp>/library/Arbor/Elm/07 - Ash.m4a: on the album, but its Spotify ID is not on the album's tracklist (a twin release's?) and no entry sits at its disc/track 1-7; no release item has its audio (album item(s) 15 have no fingerprint, so the same-audio rung skipped them); kept
+  [KEEP] 355 Arbor — Northern (Live) <tmp>/library/Arbor/Static (Live) 216/03 - Northern (Live).m4a: filed under Static (Live) 216, but no release item has its audio (album item 19: the fingerprints differ); kept
+  [KEEP] 394 Arbor — Undertow - Remastered 2011 <tmp>/library/Arbor/Undertow - Remastered 2011 255/05 - Undertow - Remastered 2011.m4a: filed under Undertow - Remastered 2011 255, but no release item has its audio (album item 17: the fingerprints differ); kept
+  [KEEP] 396 Arbor — Tide <tmp>/library/Arbor/Tide 257/00 - Tide.m4a: filed under Tide 257, but no release item has its audio (album item 20: the fingerprints differ; album item(s) 16 have no fingerprint, so the same-audio rung skipped them); kept
+  [KEEP] 408 Arbor — Undertow <tmp>/library/Arbor/Elm/01 - Undertow.1.m4a: on the album, but it has no Spotify ID; no release item has its audio (album item 17: fingerprint ber=0.00 but 28s apart; album item(s) 15 have no fingerprint, so the same-audio rung skipped them); kept
+  [KEEP] 409 Arbor — Undertow <tmp>/library/Arbor/Fern/02 - Undertow.m4a: filed under Fern, but no release item has its audio (album item 17: the fingerprints differ); kept
+  [KEEP] 432 Arbor — Tide <tmp>/library/Arbor/Tide 293/01 - Tide.m4a: filed under Tide 293, but it has no fingerprint, so the same-audio rung was skipped; kept
+  [KEEP] 495 Arbor — Tide - Remastered 2011 <tmp>/library/Arbor/Orbit/02 - Tide - Remastered 2011.m4a: filed under Orbit, but no release item has its audio (album item 20: the fingerprints differ; album item(s) 16 have no fingerprint, so the same-audio rung skipped them); kept
+  [KEEP] 505 Arbor — Undertow <tmp>/library/Arbor/Undertow 366/09 - Undertow.m4a: filed under Undertow 366, but no release item has its audio (album item 17: fingerprint ber=0.03 but 30s apart); kept
+  [KEEP] 506 Arbor — Tide (Demo) <tmp>/library/Arbor/Tide (Demo) 367/03 - Tide (Demo).m4a: filed under Tide (Demo) 367, but it has no fingerprint, so the same-audio rung was skipped; kept
+  [KEEP] 531 Arbor — Tide - Extended Mix <tmp>/library/Arbor/Tide - Extended Mix 392/10 - Tide - Extended Mix.m4a: filed under Tide - Extended Mix 392, but no release item has its audio (album item 20: fingerprint ber=0.00 but 28s apart; album item(s) 16 have no fingerprint, so the same-audio rung skipped them); kept
+  [KEEP] 537 Arbor — Northern <tmp>/library/Arbor/Static (Demo) 398/05 - Northern.m4a: filed under Static (Demo) 398, but no release item has its audio (album item 19: fingerprint ber=0.00 but 30s apart); kept
+  [MANUAL] 381 <tmp>/library/Cinder/Garnet/01 - Harbour Lights.m4a: the same track as album item 21 (spotify id), but imported by hand; kept
+[ALBUM] Ember — Fern: 11 loose item(s) superseded, 12 kept
+  [SUPERSEDE] 23 <tmp>/library/Ember/Fern/03 - Orbit (Demo).m4a ← 147 <tmp>/library/Arbor/Paper Moon/04 - Paper Moon.m4a (isrc; playlists pl1) (dry run)
+  [SUPERSEDE] 23 <tmp>/library/Ember/Fern/03 - Orbit (Demo).m4a ← 401 <tmp>/library/Arbor/Yarrow/02 - Harbour Lights - Remastered 2011.m4a (isrc; playlists pl0) (dry run)
+  [SUPERSEDE] 25 <tmp>/library/Ember/Fern/00 - Lantern (Live).m4a ← 155 <tmp>/library/Ember/Vetch/07 - Hollow.m4a (isrc; playlists pl1) (dry run)
+  [SUPERSEDE] 26 <tmp>/library/Ember/Fern/06 - Northern - Remastered 2011.m4a ← 180 <tmp>/library/Arbor/Greatest Hits/01 - Northern - Remastered 2011.m4a (isrc; playlists pl1) (dry run)
+  [SUPERSEDE] 26 <tmp>/library/Ember/Fern/06 - Northern - Remastered 2011.m4a ← 351 <tmp>/library/Fjord/Kestrel/02 - Static (Live).3.m4a (isrc; playlists pl0) (dry run)
+  [SUPERSEDE] 26 <tmp>/library/Ember/Fern/06 - Northern - Remastered 2011.m4a ← 493 <tmp>/library/Arbor/Harbour Lights 354/03 - Harbour Lights.m4a (isrc; playlists pl3) (dry run)
+  [SUPERSEDE] 24 <tmp>/library/Ember/Fern/04 - Lantern - Remastered 2011.m4a ← 186 <tmp>/library/Ember/Fern/08 - Lantern - Remastered 2011.m4a (isrc; playlists pl3) (dry run)
+  [SUPERSEDE] 22 <tmp>/library/Ember/Fern/02 - Orbit - Remastered 2011.1.m4a ← 256 <tmp>/library/Arbor/Zinnia (Deluxe Edition)/04 - Paper Moon.m4a (isrc; playlists pl0) (dry run)
+  [SUPERSEDE] 22 <tmp>/library/Ember/Fern/02 - Orbit - Remastered 2011.1.m4a ← 258 <tmp>/library/Fjord/Kestrel/11 - Vesper - Extended Mix.m4a (isrc; playlists pl2) (dry run)
+  [SUPERSEDE] 21 <tmp>/library/Ember/Fern/01 - Orbit.1.m4a ← 530 <tmp>/library/Ember/Vetch/06 - Paper Moon.m4a (spotify id; playlists pl1) (dry run)
+  [SUPERSEDE] 28 <tmp>/library/Ember/Fern/08 - Northern.m4a ← 533 <tmp>/library/Dune/Pine/09 - Static (Demo).m4a (spotify id; playlists pl1) (dry run)
+  [KEEP] 166 Ember — Hollow - Remastered 2011 <tmp>/library/Ember/Fern/08 - Hollow - Remastered 2011.m4a: on the album, but no ID matches an item of the release, and the record has no tracklist; no release item has its audio (album item 28: the fingerprints differ); kept
+  [KEEP] 175 Ember — Northern <tmp>/library/Ember/Fern/00 - Northern.m4a: on the album, but album item 25 at its disc/track 1-0 is 'Lantern (Live)'; no ID matches an item of the release, and the record has no tracklist; it has no fingerprint, so the same-audio rung was skipped; kept
+  [KEEP] 199 Ember — Orbit - Remastered 2011 <tmp>/library/Ember/Fern/08 - Orbit - Remastered 2011.m4a: on the album, but no ID matches an item of the release, and the record has no tracklist; no release item has its audio (album item 28: the fingerprints differ; album item 21: the fingerprints differ; album item 22: fingerprint ber=0.00 but 30s apart; album item(s) 23 have no fingerprint, so the same-audio rung skipped them); kept
+  [KEEP] 233 Ember — Ash - Remastered 2011 <tmp>/library/Ember/Ash 94/02 - Ash - Remastered 2011.m4a: filed under Ash 94, but no release item has its audio (album item(s) 27 have no fingerprint, so the same-audio rung skipped them); kept
+  [KEEP] 280 Ember — Lantern - Extended Mix <tmp>/library/Ember/Dahlia/07 - Lantern - Extended Mix.m4a: filed under Dahlia, but no release item has its audio (album item(s) 24, 25 have no fingerprint, so the same-audio rung skipped them); kept
+  [KEEP] 297 Ember — Ash <tmp>/library/Ember/Ash 158/06 - Ash.m4a: filed under Ash 158, but no release item has its audio (album item(s) 27 have no fingerprint, so the same-audio rung skipped them); kept
+  [KEEP] 329 Ember — Ash - Remastered 2011 <tmp>/library/Ember/Bramble/03 - Ash - Remastered 2011.m4a: filed under Bramble, but it has no fingerprint, so the same-audio rung was skipped; kept
+  [KEEP] 380 Ember — Northern - Remastered 2011 - Remastered 2011 <tmp>/library/Ember/Fern/06 - Northern - Remastered 2011 - Remastered 2011.m4a: on the album, but no ID matches an item of the release, and the record has no tracklist; it has no fingerprint, so the same-audio rung was skipped; kept
+  [KEEP] 390 Ember — Glass <tmp>/library/Ember/Fern/07 - Glass.m4a: on the album, but no ID matches an item of the release, and the record has no tracklist; no release item sits at its disc/track 2-7 or has its title; kept
+  [KEEP] 429 Ember — Lantern - Remastered 2011 <tmp>/library/Ember/Lantern - Remastered 2011 290/03 - Lantern - Remastered 2011.m4a: filed under Lantern - Remastered 2011 290, but no release item has its audio (album item(s) 24, 25 have no fingerprint, so the same-audio rung skipped them); kept
+  [KEEP] 482 Ember — Ash <tmp>/library/Ember/Fern/06 - Ash.m4a: on the album, but no ID matches an item of the release, and the record has no tracklist; no release item has its audio (album item 26: the fingerprints differ; album item(s) 27 have no fingerprint, so the same-audio rung skipped them); kept
+  [KEEP] 511 Ember — Ash <tmp>/library/Ember/Fern/06 - Ash.1.m4a: on the album, but no ID matches an item of the release, and the record has no tracklist; it has no fingerprint, so the same-audio rung was skipped; kept
+[ALBUM] Cinder — Garnet: 7 loose item(s) superseded, 12 kept
+  [SUPERSEDE] 30 <tmp>/library/Cinder/Garnet/05 - Harbour Lights (Demo).m4a ← 161 <tmp>/library/Ember/Harbour Lights (Demo) 22/03 - Harbour Lights (Demo).m4a (isrc; playlists pl3) (dry run)
+  [SUPERSEDE] 30 <tmp>/library/Cinder/Garnet/05 - Harbour Lights (Demo).m4a ← 255 <tmp>/library/Cinder/Harbour Lights (Demo)/05 - Harbour Lights (Demo).m4a (recording id; playlists pl1) (dry run)
+  [SUPERSEDE] 30 <tmp>/library/Cinder/Garnet/05 - Harbour Lights (Demo).m4a ← 257 <tmp>/library/Dune/Hollow 118/07 - Hollow.m4a (isrc; playlists pl3) (dry run)
+  [SUPERSEDE] 30 <tmp>/library/Cinder/Garnet/05 - Harbour Lights (Demo).m4a ← 473 <tmp>/library/Arbor/Greatest Hits/01 - Ash (Live).m4a (isrc; playlists pl2) (dry run)
+  [SUPERSEDE] 30 <tmp>/library/Cinder/Garnet/05 - Harbour Lights (Demo).m4a ← 522 <tmp>/library/Dune/Coral/12 - Glass.m4a (isrc; playlists pl1) (dry run)
+  [SUPERSEDE] 32 <tmp>/library/Cinder/Garnet/04 - Static (Live).m4a ← 532 <tmp>/library/Cinder/Garnet/04 - Static (Live).1.m4a (disc/track; playlists pl1) (dry run)
+  [SUPERSEDE] 32 <tmp>/library/Cinder/Garnet/04 - Static (Live).m4a ← 568 <tmp>/library/Arbor/Dahlia (Deluxe Edition)/00 - Orbit - Extended Mix.m4a (isrc; playlists pl0) (dry run)
+  [KEEP] 176 Cinder — Undertow - Extended Mix <tmp>/library/Cinder/Undertow - Extended Mix 37/03 - Undertow - Extended Mix.m4a: filed under Undertow - Extended Mix 37, but no release item has its audio (album item 34: the fingerprints differ); kept
+  [KEEP] 181 Cinder — Lantern - Remastered 2011 <tmp>/library/Cinder/Lantern - Remastered 2011 42/12 - Lantern - Remastered 2011.m4a: filed under Lantern - Remastered 2011 42, but no release item has its audio (album item 35: the fingerprints differ); kept
+  [KEEP] 276 Cinder — Vesper <tmp>/library/Cinder/Garnet/05 - Vesper.1.m4a: on the album, but its Spotify ID is not on the album's tracklist (a twin release's?); track 1-5 is TW6x1, which no item of the release holds; it has no fingerprint, so the same-audio rung was skipped; kept
+  [KEEP] 317 Cinder — Tide <tmp>/library/Cinder/Garnet/01 - Tide.m4a: on the album, but track 1-1 is 'Harbour Lights' (album item 29), another title; it has no fingerprint, so the same-audio rung was skipped; kept
+  [KEEP] 319 Cinder — Paper Moon <tmp>/library/Cinder/Garnet/01 - Paper Moon.m4a: on the album, but track 1-1 is 'Harbour Lights' (album item 29), another title; no release item has its audio (album item 29: fingerprint ber=0.00, 0s apart, but the titles differ: wrong audio? (music-audit-lengths --replace)); kept
+  [KEEP] 358 Cinder — Static (Live) <tmp>/library/Cinder/Static (Live) 219/02 - Static (Live).m4a: filed under Static (Live) 219, but it has no fingerprint, so the same-audio rung was skipped; kept
+  [KEEP] 375 Cinder — Lantern - Remastered 2011 <tmp>/library/Cinder/Quartz/10 - Lantern - Remastered 2011.m4a: filed under Quartz, but it has no fingerprint, so the same-audio rung was skipped; kept
+  [KEEP] 381 Cinder — Harbour Lights <tmp>/library/Cinder/Garnet/01 - Harbour Lights.m4a: on the album, but its ISRCs USAAA2607003 differ from track 1-1's (USAAA2606000, album item 29); it has no fingerprint, so the same-audio rung was skipped; kept
+  [KEEP] 420 Cinder — Undertow (Live) <tmp>/library/Cinder/Undertow (Live) 281/04 - Undertow (Live).m4a: filed under Undertow (Live) 281, but it has no fingerprint, so the same-audio rung was skipped; kept
+  [KEEP] 509 Cinder — Harbour Lights (Demo) <tmp>/library/Cinder/Garnet/04 - Harbour Lights (Demo).m4a: on the album, but album item 32 at its disc/track 1-4 is 'Static (Live)'; its Spotify ID is the album's track 1-5, which no item of the release holds; it has no fingerprint, so the same-audio rung was skipped; kept
+  [KEEP] 519 Cinder — Vesper <tmp>/library/Cinder/Undertow 380/05 - Vesper.m4a: filed under Undertow 380, but no release item has its audio (album item 33: the fingerprints differ); kept
+  [KEEP] 579 Cinder — Harbour Lights <tmp>/library/Cinder/Garnet/10 - Harbour Lights.m4a: on the album, but its Spotify ID is not on the album's tracklist (a twin release's?) and no entry sits at its disc/track 1-10; no release item has its audio (album item 29: the fingerprints differ; album item 30: the fingerprints differ); kept
+  [MANUAL] 381 <tmp>/library/Cinder/Garnet/01 - Harbour Lights.m4a: the same track as album item 39 (isrc), but imported by hand; kept
+  [MANUAL] 435 <tmp>/library/Cinder/Heron/10 - Paper Moon.m4a: the same track as album item 37 (spotify id), but imported by hand; kept
+[ALBUM] Cinder — Heron: 9 loose item(s) superseded, 6 kept
+  [SUPERSEDE] 39 <tmp>/library/Cinder/Heron/04 - Paper Moon.1.m4a ← 213 <tmp>/library/Cinder/Heron/04 - Paper Moon.m4a (tracklist disc/track; playlists pl2) (dry run)
+  [SUPERSEDE] 39 <tmp>/library/Cinder/Heron/04 - Paper Moon.1.m4a ← 546 <tmp>/library/Arbor/Heron/12 - Paper Moon.m4a (recording id; playlists pl1) (dry run)
+  [MOVE] 39 <tmp>/library/Cinder/Heron/04 - Paper Moon.1.m4a → <tmp>/library/Cinder/Heron/04 - Paper Moon.m4a: the path its loose copy held (dry run)
+  [SUPERSEDE] 40 <tmp>/library/Cinder/Heron/01 - Harbour Lights (Live).1.m4a ← 255 <tmp>/library/Cinder/Harbour Lights (Demo)/05 - Harbour Lights (Demo).m4a (same audio, fingerprint ber=0.03, 0s apart; playlists pl1) (dry run)
+  [SUPERSEDE] 40 <tmp>/library/Cinder/Heron/01 - Harbour Lights (Live).1.m4a ← 436 <tmp>/library/Cinder/Heron/01 - Harbour Lights (Live).m4a (same audio, fingerprint ber=0.03, 0s apart; playlists pl3) (dry run)
+  [MOVE] 40 <tmp>/library/Cinder/Heron/01 - Harbour Lights (Live).1.m4a → <tmp>/library/Cinder/Heron/01 - Harbour Lights (Live).m4a: the path its loose copy held (dry run)
+  [SUPERSEDE] 38 <tmp>/library/Cinder/Heron/03 - Ash.m4a ← 292 <tmp>/library/Arbor/Glass (Demo) 153/04 - Glass (Demo).m4a (spotify id; playlists pl3) (dry run)
+  [SUPERSEDE] 38 <tmp>/library/Cinder/Heron/03 - Ash.m4a ← 336 <tmp>/library/Arbor/Jade (Deluxe Edition)/07 - Lantern.m4a (spotify id; playlists pl3) (dry run)
+  [SUPERSEDE] 41 <tmp>/library/Cinder/Heron/06 - Glass - Remastered 2011.1.m4a ← 326 <tmp>/library/Cinder/Hollow - Remastered 2011/12 - Hollow - Remastered 2011.m4a (spotify id; playlists pl0) (dry run)
+  [SUPERSEDE] 41 <tmp>/library/Cinder/Heron/06 - Glass - Remastered 2011.1.m4a ← 544 <tmp>/library/Cinder/Heron/00 - Hollow.m4a (spotify id; playlists pl3) (dry run)
+  [SUPERSEDE] 37 <tmp>/library/Cinder/Heron/02 - Paper Moon.m4a ← 500 <tmp>/library/Cinder/Paper Moon 361/01 - Paper Moon.m4a (recording id; playlists pl2) (dry run)
+  [KEEP] 194 Cinder — Glass <tmp>/library/Cinder/Vetch/05 - Glass.m4a: filed under Vetch, but no release item has its audio (album item 41: the fingerprints differ); kept
+  [KEEP] 354 Cinder — Undertow (Demo) <tmp>/library/Cinder/Thistle/03 - Undertow (Demo).m4a: on the album, but track 1-3 is 'Ash' (album item 38), another title; no release item has its audio (album item 38: the fingerprints differ); kept
+  [KEEP] 360 Cinder — Glass - Remastered 2011 <tmp>/library/Cinder/Glass - Remastered 2011 221/10 - Glass - Remastered 2011.m4a: filed under Glass - Remastered 2011 221, but no release item has its audio (album item 41: the fingerprints differ); kept
+  [KEEP] 365 Cinder — Glass - Extended Mix <tmp>/library/Cinder/Glass - Extended Mix 226/01 - Glass - Extended Mix.m4a: filed under Glass - Extended Mix 226, but no release item has its audio (album item 41: the fingerprints differ); kept
+  [KEEP] 391 Cinder — Paper Moon <tmp>/library/Cinder/Heron/01 - Paper Moon.m4a: on the album, but its Spotify ID is not on the album's tracklist (a twin release's?); track 1-1 is TW7x0, which no item of the release holds; it has no fingerprint, so the same-audio rung was skipped; kept
+  [KEEP] 405 Cinder — Ash <tmp>/library/Cinder/Heron/04 - Ash.m4a: on the album, but its Spotify ID is not on the album's tracklist (a twin release's?) and no entry sits at its disc/track 2-4; no release item has its audio (album item 38: the fingerprints differ); kept
+[ALBUM] Basalt — Iris: 2 loose item(s) superseded, 13 kept
+  [SUPERSEDE] 44 <tmp>/library/Basalt/Iris (Deluxe Edition)/03 - Vesper.1.m4a ← 210 <tmp>/library/Basalt/Iris (Deluxe Edition)/00 - Vesper.m4a (same audio, fingerprint ber=0.03, 0s apart; playlists pl0) (dry run)
+  [SUPERSEDE] 44 <tmp>/library/Basalt/Iris (Deluxe Edition)/03 - Vesper.1.m4a ← 419 <tmp>/library/Basalt/Harbour Lights 280/09 - Harbour Lights.m4a (recording id; playlists pl3) (dry run)
+  [KEEP] 167 Basalt — Vesper <tmp>/library/Basalt/Iris (Deluxe Edition)/05 - Vesper.m4a: on the album, but its Spotify ID is not on the album's tracklist (a twin release's?) and no entry sits at its disc/track 2-5; it has no fingerprint, so the same-audio rung was skipped; kept
+  [KEEP] 205 Basalt — Lantern - Remastered 2011 <tmp>/library/Basalt/Garnet/09 - Lantern - Remastered 2011.m4a: filed under Garnet, but no release item has its audio (album item 42: the fingerprints differ); kept
+  [KEEP] 252 Basalt — Vesper - Remastered 2011 <tmp>/library/Basalt/Lantern (Demo) 113/04 - Vesper - Remastered 2011.m4a: filed under Lantern (Demo) 113, but no release item has its audio (album item 44: the fingerprints differ); kept
+  [KEEP] 291 Basalt — Vesper <tmp>/library/Basalt/Vesper/03 - Vesper.m4a: filed under Vesper, but no release item has its audio (album item 44: the fingerprints differ); kept
+  [KEEP] 308 Basalt — Vesper - Remastered 2011 <tmp>/library/Basalt/Vesper 169/02 - Vesper - Remastered 2011.m4a: filed under Vesper 169, but no release item has its audio (album item 44: the fingerprints differ); kept
+  [KEEP] 356 Basalt — Vesper - Remastered 2011 <tmp>/library/Basalt/Lichen/07 - Vesper - Remastered 2011.m4a: filed under Lichen, but no release item has its audio (album item 44: fingerprint ber=0.03 but 29s apart); kept
+  [KEEP] 371 Basalt — Lantern (Demo) <tmp>/library/Basalt/Iris (Deluxe Edition)/03 - Lantern (Demo).m4a: on the album, but its Spotify ID is not on the album's tracklist (a twin release's?) and no entry sits at its disc/track 1-3; it has no fingerprint, so the same-audio rung was skipped; kept
+  [KEEP] 389 Basalt — Tide - Remastered 2011 <tmp>/library/Basalt/Iris (Deluxe Edition)/01 - Tide - Remastered 2011.m4a: on the album, but album item 42 at its disc/track 1-1 is 'Lantern (Demo)'; it has no Spotify ID; no release item has its audio (album item 42: the fingerprints differ); kept
+  [KEEP] 423 Basalt — Lantern (Demo) <tmp>/library/Basalt/Lantern (Demo) 284/11 - Lantern (Demo).m4a: filed under Lantern (Demo) 284, but it has no fingerprint, so the same-audio rung was skipped; kept
+  [KEEP] 447 Ember — Paper Moon - Extended Mix <tmp>/library/Ember/Vetch/11 - Paper Moon - Extended Mix.m4a: on the album, but its Spotify ID is not on the album's tracklist (a twin release's?); track 1-11 is TW8x0, which no item of the release holds; no release item sits at its disc/track 1-11 or has its title; kept
+  [KEEP] 466 Basalt — Lantern <tmp>/library/Basalt/Lantern 327/03 - Lantern.m4a: filed under Lantern 327, but no release item has its audio (album item 42: the fingerprints differ); kept
+  [KEEP] 496 Basalt — Tide - Remastered 2011 <tmp>/library/Basalt/Iris (Deluxe Edition)/01 - Tide - Remastered 2011.1.m4a: on the album, but album item 42 at its disc/track 1-1 is 'Lantern (Demo)'; its Spotify ID is not on the album's tracklist (a twin release's?); track 1-1 is TE8x1, which no item of the release holds; no release item has its audio (album item 42: the fingerprints differ); kept
+  [KEEP] 564 Basalt — Tide - Remastered 2011 <tmp>/library/Basalt/Iris (Deluxe Edition)/11 - Tide - Remastered 2011.m4a: on the album, but its Spotify ID is not on the album's tracklist (a twin release's?); track 1-11 is TW8x0, which no item of the release holds; no release item sits at its disc/track 1-11 or has its title; kept
+  [MANUAL] 169 <tmp>/library/Basalt/Tide - Remastered 2011 30/01 - Tide - Remastered 2011.m4a: the same track as album item 45 (isrc), but imported by hand; kept
+  [MANUAL] 215 <tmp>/library/Fjord/Jade/01 - Harbour Lights.m4a: the same track as album item 45 (isrc), but imported by hand; kept
+  [MANUAL] 307 <tmp>/library/Arbor/Jade (Deluxe Edition)/06 - Paper Moon - Extended Mix.1.m4a: the same track as album item 48 (same audio, acoustid aid-9-3, 0s apart), but imported by hand; kept
+[ALBUM] Arbor — Jade: 7 loose item(s) superseded, 16 kept
+  [SUPERSEDE] 48 <tmp>/library/Arbor/Jade (Deluxe Edition)/06 - Paper Moon - Extended Mix.m4a ← 152 <tmp>/library/Arbor/Jade (Deluxe Edition)/03 - Paper Moon - Extended Mix.m4a (spotify id; playlists pl1) (dry run)
+  [SUPERSEDE] 48 <tmp>/library/Arbor/Jade (Deluxe Edition)/06 - Paper Moon - Extended Mix.m4a ← 171 <tmp>/library/Arbor/Jade (Deluxe Edition)/09 - Paper Moon - Extended Mix.m4a (isrc; playlists pl3) (dry run)
+  [SUPERSEDE] 49 <tmp>/library/Arbor/Jade (Deluxe Edition)/05 - Vesper.m4a ← 173 <tmp>/library/Arbor/Northern 34/05 - Northern.m4a (recording id; playlists pl0) (dry run)
+  [SUPERSEDE] 45 <tmp>/library/Arbor/Jade (Deluxe Edition)/01 - Tide (Live).m4a ← 323 <tmp>/library/Arbor/Ash - Extended Mix 184/06 - Ash - Extended Mix.m4a (spotify id; playlists pl3) (dry run)
+  [SUPERSEDE] 45 <tmp>/library/Arbor/Jade (Deluxe Edition)/01 - Tide (Live).m4a ← 396 <tmp>/library/Arbor/Tide 257/00 - Tide.m4a (same audio, fingerprint ber=0.03, 2s apart; playlists pl3) (dry run)
+  [SUPERSEDE] 45 <tmp>/library/Arbor/Jade (Deluxe Edition)/01 - Tide (Live).m4a ← 446 <tmp>/library/Arbor/Jade (Deluxe Edition)/01 - Tide (Live).1.m4a (tracklist disc/track; playlists pl2) (dry run)
+  [SUPERSEDE] 47 <tmp>/library/Arbor/Jade (Deluxe Edition)/11 - Lantern.m4a ← 411 <tmp>/library/Dune/Quartz/02 - Undertow (Demo).m4a (spotify id; playlists pl3) (dry run)
+  [KEEP] 147 Arbor — Paper Moon <tmp>/library/Arbor/Paper Moon/04 - Paper Moon.m4a: filed under Paper Moon, but no release item has its audio (album item 48: fingerprint ber=0.00 but 60s apart); kept
+  [KEEP] 212 Arbor — Vesper - Extended Mix <tmp>/library/Arbor/Vesper - Extended Mix/11 - Vesper - Extended Mix.m4a: filed under Vesper - Extended Mix, but it has no fingerprint, so the same-audio rung was skipped; kept
+  [KEEP] 226 Arbor — Vesper <tmp>/library/Arbor/Vesper 87/02 - Vesper.m4a: filed under Vesper 87, but no release item has its audio (album item 49: the fingerprints differ); kept
+  [KEEP] 236 Arbor — Hollow <tmp>/library/Arbor/Jade (Deluxe Edition)/05 - Hollow.m4a: on the album, but its Spotify ID is not on the album's tracklist (a twin release's?); track 1-5 is TW9x4, which no item of the release holds; it has no fingerprint, so the same-audio rung was skipped; kept
+  [KEEP] 273 Arbor — Lantern - Remastered 2011 <tmp>/library/Arbor/Lantern - Remastered 2011 134/12 - Lantern - Remastered 2011.m4a: filed under Lantern - Remastered 2011 134, but no release item has its audio (album item 47: the fingerprints differ); kept
+  [KEEP] 283 Arbor — Lantern <tmp>/library/Arbor/Lantern/05 - Lantern.m4a: filed under Lantern, but no release item has its audio (album item 47: the fingerprints differ); kept
+  [KEEP] 331 Arbor — Lantern <tmp>/library/Arbor/Harbour Lights 192/05 - Lantern.m4a: filed under Harbour Lights 192, but no release item has its audio (album item 47: the fingerprints differ); kept
+  [KEEP] 339 Arbor — Vesper <tmp>/library/Arbor/Vesper 200/09 - Vesper.m4a: filed under Vesper 200, but no release item has its audio (album item 49: the fingerprints differ); kept
+  [KEEP] 341 Arbor — Vesper - Remastered 2011 <tmp>/library/Arbor/Vesper - Remastered 2011 202/05 - Vesper - Remastered 2011.m4a: filed under Vesper - Remastered 2011 202, but no release item has its audio (album item 49: the fingerprints differ); kept
+  [KEEP] 346 Arbor — Vesper <tmp>/library/Arbor/Northern (Demo) 207/06 - Vesper.m4a: filed under Northern (Demo) 207, but no release item has its audio (album item 49: the fingerprints differ); kept
+  [KEEP] 432 Arbor — Tide <tmp>/library/Arbor/Tide 293/01 - Tide.m4a: filed under Tide 293, but it has no fingerprint, so the same-audio rung was skipped; kept
+  [KEEP] 495 Arbor — Tide - Remastered 2011 <tmp>/library/Arbor/Orbit/02 - Tide - Remastered 2011.m4a: filed under Orbit, but no release item has its audio (album item 45: the fingerprints differ); kept
+  [KEEP] 506 Arbor — Tide (Demo) <tmp>/library/Arbor/Tide (Demo) 367/03 - Tide (Demo).m4a: filed under Tide (Demo) 367, but it has no fingerprint, so the same-audio rung was skipped; kept
+  [KEEP] 531 Arbor — Tide - Extended Mix <tmp>/library/Arbor/Tide - Extended Mix 392/10 - Tide - Extended Mix.m4a: filed under Tide - Extended Mix 392, but no release item has its audio (album item 45: the fingerprints differ); kept
+  [KEEP] 534 Arbor — Vesper - Extended Mix <tmp>/library/Arbor/Vesper - Extended Mix 395/05 - Vesper - Extended Mix.m4a: filed under Vesper - Extended Mix 395, but it has no fingerprint, so the same-audio rung was skipped; kept
+  [KEEP] 546 Arbor — Paper Moon <tmp>/library/Arbor/Heron/12 - Paper Moon.m4a: filed under Heron, but no release item has its audio (album item 48: the fingerprints differ); kept
+[ALBUM] Fjord — Kestrel: 3 loose item(s) superseded, 17 kept
+  [SUPERSEDE] 51 <tmp>/library/Fjord/Kestrel/02 - Static (Live).m4a ← 312 <tmp>/library/Fjord/Kestrel/02 - Static (Live).2.m4a (disc/track; playlists pl2) (dry run)
+  [SUPERSEDE] 51 <tmp>/library/Fjord/Kestrel/02 - Static (Live).m4a ← 370 <tmp>/library/Basalt/Bramble/05 - Hollow - Extended Mix.m4a (isrc; playlists pl1) (dry run)
+  [SUPERSEDE] 51 <tmp>/library/Fjord/Kestrel/02 - Static (Live).m4a ← 421 <tmp>/library/Cinder/Vesper - Remastered 2011 282/01 - Tide.m4a (isrc; playlists pl0) (dry run)
+  [KEEP] 158 Fjord — Static (Live) <tmp>/library/Fjord/Kestrel/02 - Static (Live).1.m4a: on the album, but it has no Spotify ID; no release item has its audio (album item 51: the fingerprints differ); kept
+  [KEEP] 184 Fjord — Paper Moon <tmp>/library/Fjord/Kestrel/02 - Paper Moon.m4a: on the album, but album item 51 at its disc/track 1-2 is 'Static (Live)'; it has no Spotify ID; no release item has its audio (album item 51: fingerprint ber=0.00, 0s apart, but the titles differ: wrong audio? (music-audit-lengths --replace)); kept
+  [KEEP] 190 Fjord — Glass <tmp>/library/Fjord/Glass 51/10 - Glass.m4a: filed under Glass 51, but no release item has its audio (album item 50: the fingerprints differ); kept
+  [KEEP] 217 Fjord — Static <tmp>/library/Fjord/Quartz/12 - Static.m4a: filed under Quartz, but no release item has its audio (album item 51: the fingerprints differ); kept
+  [KEEP] 258 Fjord — Vesper - Extended Mix <tmp>/library/Fjord/Kestrel/11 - Vesper - Extended Mix.m4a: on the album, but its Spotify ID is not on the album's tracklist (a twin release's?) and no entry sits at its disc/track 1-11; no release item sits at its disc/track 1-11 or has its title; kept
+  [KEEP] 338 Ember — Ash <tmp>/library/Ember/Fern/09 - Ash.m4a: on the album, but its Spotify ID is not on the album's tracklist (a twin release's?) and no entry sits at its disc/track 2-9; no release item sits at its disc/track 2-9 or has its title; kept
+  [KEEP] 351 Fjord — Static (Live) <tmp>/library/Fjord/Kestrel/02 - Static (Live).3.m4a: on the album, but its Spotify ID is not on the album's tracklist (a twin release's?); track 1-2 is TW10x1, which no item of the release holds; no release item has its audio (album item 51: fingerprint ber=0.03 but 30s apart); kept
+  [KEEP] 369 Fjord — Vesper - Extended Mix <tmp>/library/Fjord/Kestrel/12 - Vesper - Extended Mix.m4a: on the album, but its Spotify ID is not on the album's tracklist (a twin release's?) and no entry sits at its disc/track 1-12; no release item sits at its disc/track 1-12 or has its title; kept
+  [KEEP] 376 Fjord — Static (Live) <tmp>/library/Fjord/Vetch/01 - Static (Live).m4a: filed under Vetch, but no release item has its audio (album item 51: the fingerprints differ); kept
+  [KEEP] 398 Fjord — Glass <tmp>/library/Fjord/Kestrel/02 - Glass.m4a: on the album, but its Spotify ID is not on the album's tracklist (a twin release's?); track 1-2 is TW10x1, which no item of the release holds; it has no fingerprint, so the same-audio rung was skipped; kept
+  [KEEP] 399 Fjord — Glass (Demo) <tmp>/library/Fjord/Lantern 260/02 - Glass (Demo).m4a: filed under Lantern 260, but no release item has its audio (album item 50: the fingerprints differ); kept
+  [KEEP] 406 Fjord — Static (Live) <tmp>/library/Fjord/Kestrel/10 - Static (Live).m4a: on the album, but its Spotify ID is not on the album's tracklist (a twin release's?) and no entry sits at its disc/track 2-10; no release item has its audio (album item 51: the fingerprints differ); kept
+  [KEEP] 416 Fjord — Undertow <tmp>/library/Fjord/Kestrel/04 - Undertow.m4a: on the album, but its Spotify ID is not on the album's tracklist (a twin release's?); track 1-4 is TE10x1, which no item of the release holds; no release item sits at its disc/track 1-4 or has its title; kept
+  [KEEP] 434 Fjord — Lantern <tmp>/library/Fjord/Kestrel/00 - Lantern.m4a: on the album, but its Spotify ID is not on the album's tracklist (a twin release's?) and no entry sits at its disc/track 1-0; no release item sits at its disc/track 1-0 or has its title; kept
+  [KEEP] 445 Fjord — Static (Live) <tmp>/library/Fjord/Kestrel/10 - Static (Live).1.m4a: on the album, but its Spotify ID is the album's track 1-6, which no item of the release holds; it has no fingerprint, so the same-audio rung was skipped; kept
+  [KEEP] 488 Fjord — Static <tmp>/library/Fjord/Fern/02 - Static.m4a: filed under Fern, but no release item has its audio (album item 51: the fingerprints differ); kept
+  [KEEP] 570 Fjord — Vesper - Extended Mix <tmp>/library/Fjord/Kestrel/09 - Vesper - Extended Mix.m4a: on the album, but it has no Spotify ID; no release item sits at its disc/track 2-9 or has its title; kept
+[ALBUM] Basalt — Nettle: 1 loose item(s) superseded, 10 kept
+  [SUPERSEDE] 60 <tmp>/library/Basalt/Nettle/02 - Static.m4a ← 239 <tmp>/library/Basalt/Paper Moon 100/02 - Static.m4a (same audio, acoustid aid-13-1, 0s apart; playlists pl2) (dry run)
+  [KEEP] 144 Basalt — Undertow - Remastered 2011 <tmp>/library/Basalt/Nettle/02 - Undertow - Remastered 2011.m4a: on the album, but its Spotify ID is the album's track 1-1, which no item of the release holds; it has no fingerprint, so the same-audio rung was skipped; kept
+  [KEEP] 164 Basalt — Static (Live) <tmp>/library/Basalt/Static (Live) 25/05 - Static (Live).m4a: filed under Static (Live) 25, but no release item has its audio (album item 60: the fingerprints differ); kept
+  [KEEP] 209 Basalt — Glass (Live) <tmp>/library/Basalt/Nettle/05 - Glass (Live).m4a: on the album, but its Spotify ID is not on the album's tracklist (a twin release's?) and no entry sits at its disc/track 1-5; no release item sits at its disc/track 1-5 or has its title; kept
+  [KEEP] 245 Basalt — Glass (Live) <tmp>/library/Basalt/Nettle/04 - Glass (Live).m4a: on the album, but its Spotify ID is not on the album's tracklist (a twin release's?) and no entry sits at its disc/track 1-4; no release item sits at its disc/track 1-4 or has its title; kept
+  [KEEP] 259 Basalt — Ash (Live) <tmp>/library/Basalt/Nettle/09 - Ash (Live).m4a: on the album, but it has no Spotify ID; no release item sits at its disc/track 2-9 or has its title; kept
+  [KEEP] 260 Basalt — Static <tmp>/library/Basalt/Static 121/03 - Static.m4a: filed under Static 121, but it has no fingerprint, so the same-audio rung was skipped; kept
+  [KEEP] 364 Basalt — Paper Moon <tmp>/library/Basalt/Nettle/05 - Paper Moon.m4a: on the album, but its Spotify ID is not on the album's tracklist (a twin release's?) and no entry sits at its disc/track 1-5; no release item sits at its disc/track 1-5 or has its title; kept
+  [KEEP] 397 Basalt — Static <tmp>/library/Basalt/Nettle/07 - Static.m4a: on the album, but its Spotify ID is not on the album's tracklist (a twin release's?) and no entry sits at its disc/track 2-7; it has no fingerprint, so the same-audio rung was skipped; kept
+  [KEEP] 507 Basalt — Static - Remastered 2011 <tmp>/library/Basalt/Static - Remastered 2011 368/05 - Static - Remastered 2011.m4a: filed under Static - Remastered 2011 368, but no release item has its audio (album item 60: the fingerprints differ); kept
+  [KEEP] 565 Basalt — Paper Moon <tmp>/library/Basalt/Nettle/03 - Paper Moon.m4a: on the album, but its Spotify ID is not on the album's tracklist (a twin release's?); track 1-3 is S13x2, which no item of the release holds; no release item sits at its disc/track 1-3 or has its title; kept
+  [MANUAL] 141 <tmp>/library/Basalt/Onyx/06 - Lantern.m4a: the same track as album item 66 (isrc), but imported by hand; kept
+  [MANUAL] 201 <tmp>/library/Dune/Quartz/11 - Ash.m4a: the same track as album item 62 (isrc), but imported by hand; kept
+  [MANUAL] 242 <tmp>/library/Basalt/Onyx/10 - Paper Moon (Demo).m4a: the same track as album item 63 (spotify id), but imported by hand; kept
+  [MANUAL] 423 <tmp>/library/Basalt/Lantern (Demo) 284/11 - Lantern (Demo).m4a: the same track as album item 64 (isrc), but imported by hand; kept
+[ALBUM] Basalt — Onyx: 10 loose item(s) superseded, 18 kept
+  [SUPERSEDE] 67 <tmp>/library/Basalt/Onyx/06 - Glass.m4a ← 154 <tmp>/library/Basalt/Onyx/06 - Glass.1.m4a (disc/track; playlists pl3) (dry run)
+  [SUPERSEDE] 67 <tmp>/library/Basalt/Onyx/06 - Glass.m4a ← 322 <tmp>/library/Ember/Cedar/02 - Undertow (Demo).m4a (isrc; playlists pl1) (dry run)
+  [SUPERSEDE] 67 <tmp>/library/Basalt/Onyx/06 - Glass.m4a ← 477 <tmp>/library/Basalt/Onyx/08 - Glass.m4a (same audio, fingerprint ber=0.03, 0s apart; playlists pl0) (dry run)
+  [SUPERSEDE] 69 <tmp>/library/Basalt/Onyx/08 - Paper Moon (Live).m4a ← 173 <tmp>/library/Arbor/Northern 34/05 - Northern.m4a (isrc; playlists pl0) (dry run)
+  [SUPERSEDE] 69 <tmp>/library/Basalt/Onyx/08 - Paper Moon (Live).m4a ← 578 <tmp>/library/Arbor/Rowan (Deluxe Edition)/12 - Lantern (Demo).m4a (isrc; playlists pl2) (dry run)
+  [SUPERSEDE] 65 <tmp>/library/Basalt/Onyx/04 - Vesper - Remastered 2011.1.m4a ← 269 <tmp>/library/Basalt/Onyx/11 - Tide (Demo).m4a (spotify id; playlists pl0) (dry run)
+  [SUPERSEDE] 65 <tmp>/library/Basalt/Onyx/04 - Vesper - Remastered 2011.1.m4a ← 356 <tmp>/library/Basalt/Lichen/07 - Vesper - Remastered 2011.m4a (same audio, fingerprint ber=0.00, 0s apart; playlists pl3) (dry run)
+  [SUPERSEDE] 62 <tmp>/library/Basalt/Onyx/01 - Lantern.m4a ← 338 <tmp>/library/Ember/Fern/09 - Ash.m4a (isrc; playlists pl3) (dry run)
+  [SUPERSEDE] 62 <tmp>/library/Basalt/Onyx/01 - Lantern.m4a ← 466 <tmp>/library/Basalt/Lantern 327/03 - Lantern.m4a (same audio, fingerprint ber=0.00, 2s apart; playlists pl1) (dry run)
+  [SUPERSEDE] 66 <tmp>/library/Basalt/Onyx/05 - Hollow (Live).1.m4a ← 341 <tmp>/library/Arbor/Vesper - Remastered 2011 202/05 - Vesper - Remastered 2011.m4a (isrc; playlists pl0) (dry run)
+  [KEEP] 185 Basalt — Hollow (Live) <tmp>/library/Basalt/Onyx/11 - Hollow (Live).m4a: on the album, but no ID matches an item of the release, and the record has no tracklist; no release item has its audio (album item 66: the fingerprints differ); kept
+  [KEEP] 205 Basalt — Lantern - Remastered 2011 <tmp>/library/Basalt/Garnet/09 - Lantern - Remastered 2011.m4a: filed under Garnet, but no release item has its audio (album item 62: the fingerprints differ); kept
+  [KEEP] 214 Basalt — Glass <tmp>/library/Basalt/Onyx/04 - Glass.m4a: on the album, but it has no Spotify ID; no release item has its audio (album item 63: the fingerprints differ; album item 67: the fingerprints differ); kept
+  [KEEP] 249 Basalt — Glass <tmp>/library/Basalt/Onyx/02 - Glass.1.m4a: on the album, but no ID matches an item of the release, and the record has no tracklist; no release item has its audio (album item 63: the fingerprints differ; album item 67: the fingerprints differ); kept
+  [KEEP] 252 Basalt — Vesper - Remastered 2011 <tmp>/library/Basalt/Lantern (Demo) 113/04 - Vesper - Remastered 2011.m4a: filed under Lantern (Demo) 113, but no release item has its audio (album item 65: the fingerprints differ); kept
+  [KEEP] 278 Ember — Tide - Remastered 2011 - Remastered 2011 <tmp>/library/Ember/Cedar/05 - Tide - Remastered 2011 - Remastered 2011.m4a: on the album, but no ID matches an item of the release, and the record has no tracklist; it has no fingerprint, so the same-audio rung was skipped; kept
+  [KEEP] 291 Basalt — Vesper <tmp>/library/Basalt/Vesper/03 - Vesper.m4a: filed under Vesper, but no release item has its audio (album item 65: the fingerprints differ); kept
+  [KEEP] 308 Basalt — Vesper - Remastered 2011 <tmp>/library/Basalt/Vesper 169/02 - Vesper - Remastered 2011.m4a: filed under Vesper 169, but no release item has its audio (album item 65: the fingerprints differ); kept
+  [KEEP] 359 Basalt — Glass (Demo) <tmp>/library/Basalt/Amber/05 - Glass (Demo).m4a: filed under Amber, but it has no fingerprint, so the same-audio rung was skipped; kept
+  [KEEP] 402 Basalt — Lantern <tmp>/library/Basalt/Onyx/07 - Lantern.m4a: on the album, but it has no Spotify ID; no release item has its audio (album item 62: the fingerprints differ); kept
+  [KEEP] 410 Basalt — Hollow - Extended Mix <tmp>/library/Basalt/Onyx/05 - Hollow - Extended Mix.m4a: on the album, but no ID matches an item of the release, and the record has no tracklist; it has no fingerprint, so the same-audio rung was skipped; kept
+  [KEEP] 428 Basalt — Lantern <tmp>/library/Basalt/Onyx/01 - Lantern.1.m4a: on the album, but no ID matches an item of the release, and the record has no tracklist; it has no fingerprint, so the same-audio rung was skipped; kept
+  [KEEP] 461 Basalt — Glass <tmp>/library/Basalt/Harbour Lights - Extended Mix 322/02 - Glass.m4a: filed under Harbour Lights - Extended Mix 322, but no release item has its audio (album item 63: the fingerprints differ; album item 67: the fingerprints differ); kept
+  [KEEP] 485 Basalt — Ash - Remastered 2011 <tmp>/library/Basalt/Onyx/07 - Ash - Remastered 2011.m4a: on the album, but it has no Spotify ID; it has no fingerprint, so the same-audio rung was skipped; kept
+  [KEEP] 502 Basalt — Hollow <tmp>/library/Basalt/Kestrel/03 - Hollow.m4a: filed under Kestrel, but it has no fingerprint, so the same-audio rung was skipped; kept
+  [KEEP] 503 Basalt — Glass <tmp>/library/Basalt/Glass 364/12 - Glass.m4a: filed under Glass 364, but it has no fingerprint, so the same-audio rung was skipped; kept
+  [KEEP] 542 Basalt — Hollow (Demo) <tmp>/library/Basalt/Onyx/08 - Hollow (Demo).m4a: on the album, but album item 69 at its disc/track 1-8 is 'Paper Moon (Live)'; no ID matches an item of the release, and the record has no tracklist; no release item has its audio (album item 69: the fingerprints differ; album item 66: the fingerprints differ); kept
+  [KEEP] 584 Arbor — Vesper (Demo) <tmp>/library/Arbor/Zinnia (Deluxe Edition)/03 - Vesper (Demo).m4a: on the album, but no ID matches an item of the release, and the record has no tracklist; it has no fingerprint, so the same-audio rung was skipped; kept
+[ALBUM] Arbor — Rowan: 5 loose item(s) superseded, 21 kept
+  [SUPERSEDE] 83 <tmp>/library/Arbor/Rowan (Deluxe Edition)/07 - Paper Moon.m4a ← 173 <tmp>/library/Arbor/Northern 34/05 - Northern.m4a (isrc; playlists pl0) (dry run)
+  [SUPERSEDE] 83 <tmp>/library/Arbor/Rowan (Deluxe Edition)/07 - Paper Moon.m4a ← 578 <tmp>/library/Arbor/Rowan (Deluxe Edition)/12 - Lantern (Demo).m4a (isrc; playlists pl2) (dry run)
+  [SUPERSEDE] 85 <tmp>/library/Arbor/Rowan (Deluxe Edition)/05 - Orbit - Remastered 2011.m4a ← 317 <tmp>/library/Cinder/Garnet/01 - Tide.m4a (spotify id; playlists pl2) (dry run)
+  [SUPERSEDE] 85 <tmp>/library/Arbor/Rowan (Deluxe Edition)/05 - Orbit - Remastered 2011.m4a ← 394 <tmp>/library/Arbor/Undertow - Remastered 2011 255/05 - Undertow - Remastered 2011.m4a (spotify id; playlists pl0) (dry run)
+  [SUPERSEDE] 81 <tmp>/library/Arbor/Rowan (Deluxe Edition)/06 - Northern - Remastered 2011.m4a ← 468 <tmp>/library/Arbor/Dahlia (Deluxe Edition)/00 - Hollow.m4a (isrc; playlists pl2) (dry run)
+  [KEEP] 147 Arbor — Paper Moon <tmp>/library/Arbor/Paper Moon/04 - Paper Moon.m4a: filed under Paper Moon, but no release item has its audio (album item 83: the fingerprints differ); kept
+  [KEEP] 170 Arbor — Lantern <tmp>/library/Arbor/Rowan (Deluxe Edition)/11 - Lantern.m4a: on the album, but its Spotify ID is not on the album's tracklist (a twin release's?) and no entry sits at its disc/track 1-11; no release item has its audio (album item 87: the fingerprints differ); kept
+  [KEEP] 200 Arbor — Undertow - Remastered 2011 <tmp>/library/Arbor/Undertow - Remastered 2011/04 - Undertow - Remastered 2011.m4a: filed under Undertow - Remastered 2011, but no release item has its audio (album item 84: the fingerprints differ); kept
+  [KEEP] 235 Arbor — Harbour Lights <tmp>/library/Arbor/Rowan (Deluxe Edition)/06 - Harbour Lights.m4a: on the album, but album item 81 at its disc/track 1-6 is 'Northern - Remastered 2011'; its Spotify ID is not on the album's tracklist (a twin release's?); track 1-6 is TW17x0, which no item of the release holds; no release item has its audio (album item 81: the fingerprints differ); kept
+  [KEEP] 273 Arbor — Lantern - Remastered 2011 <tmp>/library/Arbor/Lantern - Remastered 2011 134/12 - Lantern - Remastered 2011.m4a: filed under Lantern - Remastered 2011 134, but no release item has its audio (album item 87: the fingerprints differ); kept
+  [KEEP] 283 Arbor — Lantern <tmp>/library/Arbor/Lantern/05 - Lantern.m4a: filed under Lantern, but no release item has its audio (album item 87: the fingerprints differ); kept
+  [KEEP] 286 Arbor — Lantern - Remastered 2011 <tmp>/library/Arbor/Rowan (Deluxe Edition)/07 - Lantern - Remastered 2011.m4a: on the album, but album item 83 at its disc/track 1-7 is 'Paper Moon'; its Spotify ID is not on the album's tracklist (a twin release's?); track 1-7 is TW17x2, which no item of the release holds; no release item has its audio (album item 83: fingerprint ber=0.03 but 28s apart; album item 87: the fingerprints differ); kept
+  [KEEP] 313 Arbor — Northern (Live) <tmp>/library/Arbor/Northern (Live) 174/09 - Northern (Live).m4a: filed under Northern (Live) 174, but it has no fingerprint, so the same-audio rung was skipped; kept
+  [KEEP] 331 Arbor — Lantern <tmp>/library/Arbor/Harbour Lights 192/05 - Lantern.m4a: filed under Harbour Lights 192, but no release item has its audio (album item 87: the fingerprints differ); kept
+  [KEEP] 355 Arbor — Northern (Live) <tmp>/library/Arbor/Static (Live) 216/03 - Northern (Live).m4a: filed under Static (Live) 216, but no release item has its audio (album item 81: the fingerprints differ); kept
+  [KEEP] 379 Arbor — Glass <tmp>/library/Arbor/Rowan (Deluxe Edition)/08 - Glass.m4a: on the album, but it has no Spotify ID; no release item sits at its disc/track 1-8 or has its title; kept
+  [KEEP] 393 Arbor — Hollow - Extended Mix <tmp>/library/Arbor/Rowan (Deluxe Edition)/02 - Hollow - Extended Mix.m4a: on the album, but its Spotify ID is not on the album's tracklist (a twin release's?); track 1-2 is S17x1, which no item of the release holds; no release item sits at its disc/track 1-2 or has its title; kept
+  [KEEP] 409 Arbor — Undertow <tmp>/library/Arbor/Fern/02 - Undertow.m4a: filed under Fern, but no release item has its audio (album item 84: the fingerprints differ); kept
+  [KEEP] 415 Arbor — Lantern <tmp>/library/Arbor/Rowan (Deluxe Edition)/07 - Lantern.m4a: on the album, but album item 83 at its disc/track 1-7 is 'Paper Moon'; its Spotify ID is not on the album's tracklist (a twin release's?); track 1-7 is TW17x2, which no item of the release holds; no release item has its audio (album item 83: the fingerprints differ; album item 87: the fingerprints differ); kept
+  [KEEP] 463 Arbor — Glass <tmp>/library/Arbor/Rowan (Deluxe Edition)/12 - Glass.m4a: on the album, but its Spotify ID is not on the album's tracklist (a twin release's?) and no entry sits at its disc/track 2-12; no release item sits at its disc/track 2-12 or has its title; kept
+  [KEEP] 505 Arbor — Undertow <tmp>/library/Arbor/Undertow 366/09 - Undertow.m4a: filed under Undertow 366, but no release item has its audio (album item 84: the fingerprints differ); kept
+  [KEEP] 524 Arbor — Lantern - Remastered 2011 <tmp>/library/Arbor/Rowan (Deluxe Edition)/02 - Lantern - Remastered 2011.m4a: on the album, but its Spotify ID is not on the album's tracklist (a twin release's?); track 1-2 is S17x1, which no item of the release holds; it has no fingerprint, so the same-audio rung was skipped; kept
+  [KEEP] 529 Arbor — Orbit <tmp>/library/Arbor/Orbit 390/01 - Orbit.m4a: filed under Orbit 390, but no release item has its audio (album item(s) 85 have no fingerprint, so the same-audio rung skipped them); kept
+  [KEEP] 537 Arbor — Northern <tmp>/library/Arbor/Static (Demo) 398/05 - Northern.m4a: filed under Static (Demo) 398, but no release item has its audio (album item 81: the fingerprints differ); kept
+  [KEEP] 538 Arbor — Northern (Demo) <tmp>/library/Arbor/Rowan (Deluxe Edition)/04 - Northern (Demo).m4a: on the album, but album item 84 at its disc/track 1-4 is 'Undertow - Remastered 2011'; its Spotify ID is not on the album's tracklist (a twin release's?) and no entry sits at its disc/track 1-4; no release item has its audio (album item 84: acoustid aid-17-3 but 30s apart; album item 81: the fingerprints differ); kept
+  [KEEP] 546 Arbor — Paper Moon <tmp>/library/Arbor/Heron/12 - Paper Moon.m4a: filed under Heron, but no release item has its audio (album item 83: the fingerprints differ); kept
+[ALBUM] Arbor — Sorrel: 2 loose item(s) superseded, 27 kept
+  [SUPERSEDE] 90 <tmp>/library/Arbor/Sorrel/03 - Glass.m4a ← 143 <tmp>/library/Arbor/Sorrel/03 - Glass - Remastered 2011.m4a (tracklist disc/track; playlists pl1) (dry run)
+  [SUPERSEDE] 89 <tmp>/library/Arbor/Sorrel/02 - Vesper.m4a ← 540 <tmp>/library/Arbor/Sorrel/06 - Vesper.m4a (same audio, acoustid aid-0, 0s apart; playlists pl0) (dry run)
+  [KEEP] 150 Arbor — Vesper <tmp>/library/Arbor/Sorrel/08 - Vesper.m4a: on the album, but its Spotify ID is not on the album's tracklist (a twin release's?) and no entry sits at its disc/track 1-8; no release item has its audio (album item 89: the fingerprints differ); kept
+  [KEEP] 172 Arbor — Static (Demo) - Remastered 2011 <tmp>/library/Arbor/Vesper 33/07 - Static (Demo) - Remastered 2011.m4a: filed under Vesper 33, but no release item has its audio (album item 88: the fingerprints differ); kept
+  [KEEP] 212 Arbor — Vesper - Extended Mix <tmp>/library/Arbor/Vesper - Extended Mix/11 - Vesper - Extended Mix.m4a: filed under Vesper - Extended Mix, but it has no fingerprint, so the same-audio rung was skipped; kept
+  [KEEP] 224 Arbor — Glass <tmp>/library/Arbor/Sorrel/03 - Glass.1.m4a: on the album, but another loose item already took track 1-3; it has no fingerprint, so the same-audio rung was skipped; kept
+  [KEEP] 226 Arbor — Vesper <tmp>/library/Arbor/Vesper 87/02 - Vesper.m4a: filed under Vesper 87, but no release item has its audio (album item 89: acoustid aid-0 but 30s apart); kept
+  [KEEP] 240 Arbor — Glass <tmp>/library/Arbor/Sorrel/07 - Glass.m4a: on the album, but track 1-7 is 'Static (Demo)' (album item 88), another title; no release item has its audio (album item 88: the fingerprints differ; album item 90: the fingerprints differ); kept
+  [KEEP] 285 Arbor — Harbour Lights <tmp>/library/Arbor/Sorrel/07 - Harbour Lights.m4a: on the album, but track 1-7 is 'Static (Demo)' (album item 88), another title; it has no fingerprint, so the same-audio rung was skipped; kept
+  [KEEP] 292 Arbor — Glass (Demo) <tmp>/library/Arbor/Glass (Demo) 153/04 - Glass (Demo).m4a: filed under Glass (Demo) 153, but it has no fingerprint, so the same-audio rung was skipped; kept
+  [KEEP] 327 Arbor — Glass <tmp>/library/Arbor/Garnet/10 - Glass.m4a: filed under Garnet, but no release item has its audio (album item 90: the fingerprints differ); kept
+  [KEEP] 335 Arbor — Glass <tmp>/library/Arbor/Glass 196/01 - Glass.m4a: filed under Glass 196, but no release item has its audio (album item 90: the fingerprints differ); kept
+  [KEEP] 339 Arbor — Vesper <tmp>/library/Arbor/Vesper 200/09 - Vesper.m4a: filed under Vesper 200, but no release item has its audio (album item 89: the fingerprints differ); kept
+  [KEEP] 341 Arbor — Vesper - Remastered 2011 <tmp>/library/Arbor/Vesper - Remastered 2011 202/05 - Vesper - Remastered 2011.m4a: filed under Vesper - Remastered 2011 202, but no release item has its audio (album item 89: the fingerprints differ); kept
+  [KEEP] 346 Arbor — Vesper <tmp>/library/Arbor/Northern (Demo) 207/06 - Vesper.m4a: filed under Northern (Demo) 207, but no release item has its audio (album item 89: the fingerprints differ); kept
+  [KEEP] 363 Arbor — Lantern (Live) <tmp>/library/Arbor/Sorrel/09 - Lantern (Live).m4a: on the album, but its Spotify ID is not on the album's tracklist (a twin release's?) and no entry sits at its disc/track 1-9; no release item sits at its disc/track 1-9 or has its title; kept
+  [KEEP] 417 Ember — Ash - Remastered 2011 <tmp>/library/Ember/Fern/07 - Ash - Remastered 2011.m4a: on the album, but track 1-7 is 'Static (Demo)' (album item 88), another title; no release item has its audio (album item 88: the fingerprints differ); kept
+  [KEEP] 433 Arbor — Static (Demo) <tmp>/library/Arbor/Sorrel/07 - Static (Demo).1.m4a: on the album, but it has no Spotify ID; it has no fingerprint, so the same-audio rung was skipped; kept
+  [KEEP] 435 Cinder — Paper Moon <tmp>/library/Cinder/Heron/10 - Paper Moon.m4a: on the album, but its Spotify ID is not on the album's tracklist (a twin release's?) and no entry sits at its disc/track 1-10; no release item sits at its disc/track 1-10 or has its title; kept
+  [KEEP] 453 Arbor — Glass - Extended Mix <tmp>/library/Arbor/Dahlia/07 - Glass - Extended Mix.m4a: filed under Dahlia, but no release item has its audio (album item 90: the fingerprints differ); kept
+  [KEEP] 469 Arbor — Glass <tmp>/library/Arbor/Sorrel/03 - Glass.2.m4a: on the album, but another loose item already took track 1-3; no release item has its audio (album item 90: fingerprint ber=0.00 but 30s apart); kept
+  [KEEP] 492 Arbor — Static - Remastered 2011 <tmp>/library/Arbor/Static - Remastered 2011 353/04 - Static - Remastered 2011.m4a: filed under Static - Remastered 2011 353, but no release item has its audio (album item 88: the fingerprints differ); kept
+  [KEEP] 504 Arbor — Glass <tmp>/library/Arbor/Glass 365/07 - Glass.m4a: filed under Glass 365, but no release item has its audio (album item 90: the fingerprints differ); kept
+  [KEEP] 521 Arbor — Northern - Extended Mix <tmp>/library/Arbor/Sorrel/02 - Northern - Extended Mix.m4a: on the album, but its Spotify ID is not on the album's tracklist (a twin release's?); track 1-2 is TW18x1, which no item of the release holds; it has no fingerprint, so the same-audio rung was skipped; kept
+  [KEEP] 534 Arbor — Vesper - Extended Mix <tmp>/library/Arbor/Vesper - Extended Mix 395/05 - Vesper - Extended Mix.m4a: filed under Vesper - Extended Mix 395, but it has no fingerprint, so the same-audio rung was skipped; kept
+  [KEEP] 559 Arbor — Static (Live) <tmp>/library/Arbor/Static (Live) 420/11 - Static (Live).m4a: filed under Static (Live) 420, but no release item has its audio (album item 88: the fingerprints differ); kept
+  [KEEP] 571 Arbor — Vesper <tmp>/library/Arbor/Sorrel/03 - Vesper.m4a: on the album, but track 1-3 is 'Glass' (album item 90), another title; no release item has its audio (album item 90: the fingerprints differ; album item 89: the fingerprints differ); kept
+  [KEEP] 577 Arbor — Static (Live) <tmp>/library/Arbor/Static (Live) 438/08 - Static (Live).m4a: filed under Static (Live) 438, but no release item has its audio (album item 88: the fingerprints differ); kept
+  [KEEP] 587 Arbor — Glass <tmp>/library/Arbor/Harbour Lights (Demo) 448/03 - Glass.m4a: filed under Harbour Lights (Demo) 448, but no release item has its audio (album item 90: the fingerprints differ); kept
+  [MANUAL] 520 <tmp>/library/Fjord/Garnet/04 - Lantern.m4a: the same track as album item 91 (spotify id), but imported by hand; kept
+[ALBUM] Cinder — Thistle: 6 loose item(s) superseded, 10 kept
+  [SUPERSEDE] 93 <tmp>/library/Cinder/Thistle/03 - Undertow (Demo).1.m4a ← 244 <tmp>/library/Cinder/Garnet/10 - Undertow.m4a (spotify id; playlists pl1) (dry run)
+  [SUPERSEDE] 93 <tmp>/library/Cinder/Thistle/03 - Undertow (Demo).1.m4a ← 422 <tmp>/library/Cinder/Tide (Live)/05 - Tide (Live).m4a (spotify id; playlists pl3) (dry run)
+  [SUPERSEDE] 93 <tmp>/library/Cinder/Thistle/03 - Undertow (Demo).1.m4a ← 489 <tmp>/library/Cinder/Thistle/10 - Undertow (Demo).m4a (spotify id; playlists pl1) (dry run)
+  [SUPERSEDE] 93 <tmp>/library/Cinder/Thistle/03 - Undertow (Demo).1.m4a ← 517 <tmp>/library/Cinder/Thistle/01 - Hollow - Extended Mix.m4a (spotify id; playlists pl3) (dry run)
+  [SUPERSEDE] 91 <tmp>/library/Cinder/Thistle/01 - Paper Moon.1.m4a ← 373 <tmp>/library/Cinder/Thistle/01 - Paper Moon.2.m4a (tracklist disc/track; playlists pl0) (dry run)
+  [SUPERSEDE] 91 <tmp>/library/Cinder/Thistle/01 - Paper Moon.1.m4a ← 588 <tmp>/library/Cinder/Thistle/00 - Paper Moon.m4a (spotify id; playlists pl0) (dry run)
+  [KEEP] 140 Cinder — Glass (Live) <tmp>/library/Cinder/Thistle/02 - Glass (Live).m4a: on the album, but its Spotify ID is the album's track 1-6, which no item of the release holds; no release item sits at its disc/track 1-2 or has its title; kept
+  [KEEP] 176 Cinder — Undertow - Extended Mix <tmp>/library/Cinder/Undertow - Extended Mix 37/03 - Undertow - Extended Mix.m4a: filed under Undertow - Extended Mix 37, but no release item has its audio (album item 93: the fingerprints differ); kept
+  [KEEP] 181 Cinder — Lantern - Remastered 2011 <tmp>/library/Cinder/Lantern - Remastered 2011 42/12 - Lantern - Remastered 2011.m4a: filed under Lantern - Remastered 2011 42, but no release item has its audio (album item 92: the fingerprints differ); kept
+  [KEEP] 229 Cinder — Glass (Demo) <tmp>/library/Cinder/Thistle/03 - Glass (Demo).m4a: on the album, but its Spotify ID is not on the album's tracklist (a twin release's?) and no entry sits at its disc/track 2-3; no release item sits at its disc/track 2-3 or has its title; kept
+  [KEEP] 261 Cinder — Paper Moon <tmp>/library/Cinder/Thistle/01 - Paper Moon.m4a: on the album, but it has no Spotify ID; no release item has its audio (album item 91: the fingerprints differ); kept
+  [KEEP] 375 Cinder — Lantern - Remastered 2011 <tmp>/library/Cinder/Quartz/10 - Lantern - Remastered 2011.m4a: filed under Quartz, but it has no fingerprint, so the same-audio rung was skipped; kept
+  [KEEP] 420 Cinder — Undertow (Live) <tmp>/library/Cinder/Undertow (Live) 281/04 - Undertow (Live).m4a: filed under Undertow (Live) 281, but it has no fingerprint, so the same-audio rung was skipped; kept
+  [KEEP] 500 Cinder — Paper Moon <tmp>/library/Cinder/Paper Moon 361/01 - Paper Moon.m4a: filed under Paper Moon 361, but it has no fingerprint, so the same-audio rung was skipped; kept
+  [KEEP] 512 Cinder — Northern <tmp>/library/Cinder/Thistle/08 - Northern.m4a: on the album, but it has no Spotify ID; no release item sits at its disc/track 1-8 or has its title; kept
+  [KEEP] 586 Cinder — Paper Moon <tmp>/library/Cinder/Thistle/01 - Paper Moon.3.m4a: on the album, but its ISRCs USAAA2608001 differ from track 1-1's (USAAA2619000, album item 91); no release item has its audio (album item 91: fingerprint ber=0.03 but 30s apart); kept
+[ALBUM] Ember — Vetch: 3 loose item(s) superseded, 8 kept
+  [SUPERSEDE] 100 <tmp>/library/Ember/Vetch/03 - Paper Moon.m4a ← 267 <tmp>/library/Ember/Vetch/08 - Paper Moon.m4a (same audio, fingerprint ber=0.03, 0s apart; playlists pl1) (dry run)
+  [SUPERSEDE] 99 <tmp>/library/Ember/Vetch/07 - Hollow.1.m4a ← 502 <tmp>/library/Basalt/Kestrel/03 - Hollow.m4a (isrc; playlists pl2) (dry run)
+  [SUPERSEDE] 98 <tmp>/library/Ember/Vetch/05 - Glass.m4a ← 539 <tmp>/library/Ember/Vetch/05 - Glass.1.m4a (tracklist disc/track; playlists pl0) (dry run)
+  [KEEP] 155 Ember — Hollow <tmp>/library/Ember/Vetch/07 - Hollow.m4a: on the album, but it has no Spotify ID; no release item has its audio (album item 99: fingerprint ber=0.03 but 60s apart); kept
+  [KEEP] 198 Ember — Hollow <tmp>/library/Ember/Vetch/07 - Hollow.2.m4a: on the album, but its Spotify ID is not on the album's tracklist (a twin release's?); track 2-7 is TW21x1, which no item of the release holds; no release item has its audio (album item 99: fingerprint ber=0.03 but 30s apart); kept
+  [KEEP] 268 Ember — Hollow <tmp>/library/Ember/Hollow 129/03 - Hollow.m4a: filed under Hollow 129, but no release item has its audio (album item 99: the fingerprints differ); kept
+  [KEEP] 295 Ember — Paper Moon <tmp>/library/Ember/Vetch/08 - Paper Moon.1.m4a: on the album, but its Spotify ID is not on the album's tracklist (a twin release's?) and no entry sits at its disc/track 1-8; no release item has its audio (album item 100: the fingerprints differ); kept
+  [KEEP] 386 Ember — Glass <tmp>/library/Ember/Glass 247/04 - Glass.m4a: filed under Glass 247, but no release item has its audio (album item 98: the fingerprints differ); kept
+  [KEEP] 450 Ember — Orbit - Remastered 2011 <tmp>/library/Ember/Vetch/04 - Orbit - Remastered 2011.m4a: on the album, but its Spotify ID is not on the album's tracklist (a twin release's?) and no entry sits at its disc/track 2-4; no release item sits at its disc/track 2-4 or has its title; kept
+  [KEEP] 525 Ember — Hollow (Live) <tmp>/library/Ember/Vetch/02 - Hollow (Live).m4a: on the album, but its Spotify ID is the album's track 2-7, which no item of the release holds; no release item has its audio (album item 99: the fingerprints differ); kept
+  [KEEP] 530 Ember — Paper Moon <tmp>/library/Ember/Vetch/06 - Paper Moon.m4a: on the album, but its Spotify ID is not on the album's tracklist (a twin release's?) and no entry sits at its disc/track 1-6; no release item has its audio (album item 100: the fingerprints differ); kept
+[ALBUM] Fjord — Willow: 3 loose item(s) superseded, 9 kept
+  [SUPERSEDE] 102 <tmp>/library/Fjord/Willow/05 - Ash - Remastered 2011.1.m4a ← 296 <tmp>/library/Fjord/Willow/05 - Ash - Remastered 2011.m4a (same audio, fingerprint ber=0.03, 2s apart; playlists pl2) (dry run)
+  [SUPERSEDE] 102 <tmp>/library/Fjord/Willow/05 - Ash - Remastered 2011.1.m4a ← 554 <tmp>/library/Dune/Zinnia/11 - Ash - Remastered 2011.m4a (spotify id; playlists pl3) (dry run)
+  [MOVE] 102 <tmp>/library/Fjord/Willow/05 - Ash - Remastered 2011.1.m4a → <tmp>/library/Fjord/Willow/05 - Ash - Remastered 2011.m4a: the path its loose copy held (dry run)
+  [SUPERSEDE] 103 <tmp>/library/Fjord/Willow/03 - Northern.m4a ← 522 <tmp>/library/Dune/Coral/12 - Glass.m4a (spotify id; playlists pl1) (dry run)
+  [KEEP] 204 Fjord — Ash - Remastered 2011 <tmp>/library/Fjord/Willow/03 - Ash - Remastered 2011.m4a: on the album, but its Spotify ID is not on the album's tracklist (a twin release's?) and no entry sits at its disc/track 2-3; no release item has its audio (album item 101: the fingerprints differ; album item 102: the fingerprints differ; album item(s) 104 have no fingerprint, so the same-audio rung skipped them); kept
+  [KEEP] 219 Fjord — Northern <tmp>/library/Fjord/Willow/03 - Northern.1.m4a: on the album, but its Spotify ID is the album's track 1-1, which no item of the release holds; it has no fingerprint, so the same-audio rung was skipped; kept
+  [KEEP] 220 Fjord — Glass <tmp>/library/Fjord/Willow/04 - Glass.m4a: on the album, but its Spotify ID is not on the album's tracklist (a twin release's?) and no entry sits at its disc/track 1-4; no release item sits at its disc/track 1-4 or has its title; kept
+  [KEEP] 241 Fjord — Glass <tmp>/library/Fjord/Willow/03 - Glass.m4a: on the album, but track 1-3 is 'Northern' (album item 103), another title; it has no fingerprint, so the same-audio rung was skipped; kept
+  [KEEP] 264 Fjord — Ash - Remastered 2011 - Remastered 2011 <tmp>/library/Fjord/Vesper - Remastered 2011 125/04 - Ash - Remastered 2011 - Remastered 2011.m4a: filed under Vesper - Remastered 2011 125, but no release item has its audio (album item 101: the fingerprints differ; album item 102: the fingerprints differ; album item(s) 104 have no fingerprint, so the same-audio rung skipped them); kept
+  [KEEP] 287 Arbor — Tide (Live) - Remastered 2011 <tmp>/library/Arbor/Jade (Deluxe Edition)/01 - Tide (Live) - Remastered 2011.m4a: on the album, but its Spotify ID is not on the album's tracklist (a twin release's?) and no entry sits at its disc/track 2-1; no release item sits at its disc/track 2-1 or has its title; kept
+  [KEEP] 302 Fjord — Northern <tmp>/library/Fjord/Willow/01 - Northern.m4a: on the album, but it has no Spotify ID; it has no fingerprint, so the same-audio rung was skipped; kept
+  [KEEP] 309 Fjord — Ash (Live) <tmp>/library/Fjord/Cedar/09 - Ash (Live).m4a: filed under Cedar, but no release item has its audio (album item 101: the fingerprints differ; album item 102: the fingerprints differ; album item(s) 104 have no fingerprint, so the same-audio rung skipped them); kept
+  [KEEP] 324 Fjord — Ash <tmp>/library/Fjord/Vesper 185/04 - Ash.m4a: filed under Vesper 185, but no release item has its audio (album item 101: the fingerprints differ; album item 102: the fingerprints differ; album item(s) 104 have no fingerprint, so the same-audio rung skipped them); kept
+  [MANUAL] 228 <tmp>/library/Arbor/Yarrow/02 - Harbour Lights.1.m4a: the same track as album item 106 (disc/track), but imported by hand; kept
+[ALBUM] Arbor — Yarrow: 4 loose item(s) superseded, 23 kept
+  [SUPERSEDE] 110 <tmp>/library/Arbor/Yarrow/06 - Hollow.1.m4a ← 218 <tmp>/library/Arbor/Glass (Live) 79/02 - Hollow - Extended Mix.m4a (same audio, fingerprint ber=0.03, 0s apart; playlists pl2) (dry run)
+  [SUPERSEDE] 107 <tmp>/library/Arbor/Yarrow/03 - Ash.m4a ← 231 <tmp>/library/Arbor/Yarrow/11 - Ash.m4a (spotify id; playlists pl0) (dry run)
+  [SUPERSEDE] 111 <tmp>/library/Arbor/Yarrow/07 - Glass.1.m4a ← 335 <tmp>/library/Arbor/Glass 196/01 - Glass.m4a (same audio, fingerprint ber=0.03, 2s apart; playlists pl1) (dry run)
+  [SUPERSEDE] 109 <tmp>/library/Arbor/Yarrow/05 - Tide.m4a ← 495 <tmp>/library/Arbor/Orbit/02 - Tide - Remastered 2011.m4a (same audio, fingerprint ber=0.03, 0s apart; playlists pl3) (dry run)
+  [KEEP] 157 Arbor — Hollow <tmp>/library/Arbor/Zinnia/02 - Hollow.m4a: filed under Zinnia, but no release item has its audio (album item 110: the fingerprints differ); kept
+  [KEEP] 232 Arbor — Hollow <tmp>/library/Arbor/Hollow 93/00 - Hollow.m4a: filed under Hollow 93, but no release item has its audio (album item 110: the fingerprints differ); kept
+  [KEEP] 292 Arbor — Glass (Demo) <tmp>/library/Arbor/Glass (Demo) 153/04 - Glass (Demo).m4a: filed under Glass (Demo) 153, but it has no fingerprint, so the same-audio rung was skipped; kept
+  [KEEP] 310 Arbor — Harbour Lights <tmp>/library/Arbor/Harbour Lights 171/08 - Harbour Lights.m4a: filed under Harbour Lights 171, but it has no fingerprint, so the same-audio rung was skipped; kept
+  [KEEP] 321 Arbor — Glass <tmp>/library/Arbor/Yarrow/07 - Glass.m4a: on the album, but its Spotify ID is not on the album's tracklist (a twin release's?); track 1-7 is TW23x6, which no item of the release holds; it has no fingerprint, so the same-audio rung was skipped; kept
+  [KEEP] 323 Arbor — Ash - Extended Mix <tmp>/library/Arbor/Ash - Extended Mix 184/06 - Ash - Extended Mix.m4a: filed under Ash - Extended Mix 184, but it has no fingerprint, so the same-audio rung was skipped; kept
+  [KEEP] 327 Arbor — Glass <tmp>/library/Arbor/Garnet/10 - Glass.m4a: filed under Garnet, but no release item has its audio (album item 111: the fingerprints differ); kept
+  [KEEP] 368 Arbor — Glass - Remastered 2011 <tmp>/library/Arbor/Yarrow/07 - Glass - Remastered 2011.m4a: on the album, but its Spotify ID is not on the album's tracklist (a twin release's?); track 1-7 is TW23x6, which no item of the release holds; no release item has its audio (album item 111: the fingerprints differ); kept
+  [KEEP] 387 Arbor — Tide <tmp>/library/Arbor/Yarrow/12 - Tide.m4a: on the album, but its Spotify ID is not on the album's tracklist (a twin release's?); track 1-12 is TE23x1, which no item of the release holds; no release item has its audio (album item 109: the fingerprints differ); kept
+  [KEEP] 396 Arbor — Tide <tmp>/library/Arbor/Tide 257/00 - Tide.m4a: filed under Tide 257, but no release item has its audio (album item 109: the fingerprints differ); kept
+  [KEEP] 401 Arbor — Harbour Lights - Remastered 2011 <tmp>/library/Arbor/Yarrow/02 - Harbour Lights - Remastered 2011.m4a: on the album, but its Spotify ID is not on the album's tracklist (a twin release's?); track 2-2 is TW23x1, which no item of the release holds; it has no fingerprint, so the same-audio rung was skipped; kept
+  [KEEP] 413 Arbor — Hollow <tmp>/library/Arbor/Yarrow/03 - Hollow.m4a: on the album, but its Spotify ID is the album's track 1-12, which no item of the release holds; no release item has its audio (album item 107: the fingerprints differ; album item 110: the fingerprints differ); kept
+  [KEEP] 418 Arbor — Harbour Lights <tmp>/library/Arbor/Willow/07 - Harbour Lights.m4a: filed under Willow, but no release item has its audio (album item 106: the fingerprints differ); kept
+  [KEEP] 432 Arbor — Tide <tmp>/library/Arbor/Tide 293/01 - Tide.m4a: filed under Tide 293, but it has no fingerprint, so the same-audio rung was skipped; kept
+  [KEEP] 453 Arbor — Glass - Extended Mix <tmp>/library/Arbor/Dahlia/07 - Glass - Extended Mix.m4a: filed under Dahlia, but no release item has its audio (album item 111: the fingerprints differ); kept
+  [KEEP] 480 Arbor — Glass (Demo) <tmp>/library/Arbor/Yarrow/09 - Glass (Demo).m4a: on the album, but its Spotify ID is not on the album's tracklist (a twin release's?) and no entry sits at its disc/track 1-9; it has no fingerprint, so the same-audio rung was skipped; kept
+  [KEEP] 493 Arbor — Harbour Lights <tmp>/library/Arbor/Harbour Lights 354/03 - Harbour Lights.m4a: filed under Harbour Lights 354, but it has no fingerprint, so the same-audio rung was skipped; kept
+  [KEEP] 499 Arbor — Glass - Extended Mix <tmp>/library/Arbor/Yarrow/00 - Glass - Extended Mix.m4a: on the album, but its Spotify ID is not on the album's tracklist (a twin release's?) and no entry sits at its disc/track 1-0; no release item has its audio (album item 111: the fingerprints differ); kept
+  [KEEP] 504 Arbor — Glass <tmp>/library/Arbor/Glass 365/07 - Glass.m4a: filed under Glass 365, but no release item has its audio (album item 111: the fingerprints differ); kept
+  [KEEP] 506 Arbor — Tide (Demo) <tmp>/library/Arbor/Tide (Demo) 367/03 - Tide (Demo).m4a: filed under Tide (Demo) 367, but it has no fingerprint, so the same-audio rung was skipped; kept
+  [KEEP] 531 Arbor — Tide - Extended Mix <tmp>/library/Arbor/Tide - Extended Mix 392/10 - Tide - Extended Mix.m4a: filed under Tide - Extended Mix 392, but no release item has its audio (album item 109: the fingerprints differ); kept
+  [KEEP] 553 Arbor — Glass - Extended Mix <tmp>/library/Arbor/Yarrow/06 - Glass - Extended Mix.m4a: on the album, but its ISRCs GBBBB2623000 differ from track 1-6's (USAAA2623005, album item 110); it has no fingerprint, so the same-audio rung was skipped; kept
+  [KEEP] 587 Arbor — Glass <tmp>/library/Arbor/Harbour Lights (Demo) 448/03 - Glass.m4a: filed under Harbour Lights (Demo) 448, but no release item has its audio (album item 111: the fingerprints differ); kept
+  [MANUAL] 392 <tmp>/library/Arbor/Zinnia (Deluxe Edition)/02 - Static (Live) - Remastered 2011.m4a: the same track as album item 113 (disc/track), but imported by hand; kept
+[ALBUM] Arbor — Zinnia: 1 loose item(s) superseded, 14 kept
+  [SUPERSEDE] 114 <tmp>/library/Arbor/Zinnia (Deluxe Edition)/03 - Northern (Live).m4a ← 548 <tmp>/library/Arbor/Zinnia (Deluxe Edition)/10 - Undertow.m4a (isrc; playlists pl1) (dry run)
+  [KEEP] 142 Arbor — Static - Remastered 2011 <tmp>/library/Arbor/Zinnia (Deluxe Edition)/08 - Static - Remastered 2011.m4a: on the album, but its Spotify ID is not on the album's tracklist (a twin release's?) and no entry sits at its disc/track 1-8; no release item has its audio (album item 113: the fingerprints differ); kept
+  [KEEP] 172 Arbor — Static (Demo) - Remastered 2011 <tmp>/library/Arbor/Vesper 33/07 - Static (Demo) - Remastered 2011.m4a: filed under Vesper 33, but no release item has its audio (album item 113: the fingerprints differ); kept
+  [KEEP] 173 Arbor — Northern <tmp>/library/Arbor/Northern 34/05 - Northern.m4a: filed under Northern 34, but no release item has its audio (album item 114: the fingerprints differ); kept
+  [KEEP] 211 Arbor — Static (Live) <tmp>/library/Arbor/Zinnia (Deluxe Edition)/12 - Static (Live).m4a: on the album, but its Spotify ID is not on the album's tracklist (a twin release's?) and no entry sits at its disc/track 2-12; no release item has its audio (album item 113: acoustid aid-24-1 but 30s apart); kept
+  [KEEP] 256 Arbor — Paper Moon <tmp>/library/Arbor/Zinnia (Deluxe Edition)/04 - Paper Moon.m4a: on the album, but its Spotify ID is not on the album's tracklist (a twin release's?) and no entry sits at its disc/track 1-4; no release item sits at its disc/track 1-4 or has its title; kept
+  [KEEP] 281 Arbor — Northern <tmp>/library/Arbor/Zinnia (Deluxe Edition)/05 - Northern.m4a: on the album, but its Spotify ID is the album's track 1-1, which no item of the release holds; it has no fingerprint, so the same-audio rung was skipped; kept
+  [KEEP] 313 Arbor — Northern (Live) <tmp>/library/Arbor/Northern (Live) 174/09 - Northern (Live).m4a: filed under Northern (Live) 174, but it has no fingerprint, so the same-audio rung was skipped; kept
+  [KEEP] 355 Arbor — Northern (Live) <tmp>/library/Arbor/Static (Live) 216/03 - Northern (Live).m4a: filed under Static (Live) 216, but no release item has its audio (album item 114: the fingerprints differ); kept
+  [KEEP] 378 Arbor — Northern (Live) <tmp>/library/Arbor/Zinnia (Deluxe Edition)/11 - Northern (Live).m4a: on the album, but its Spotify ID is not on the album's tracklist (a twin release's?) and no entry sits at its disc/track 1-11; no release item has its audio (album item 114: the fingerprints differ); kept
+  [KEEP] 492 Arbor — Static - Remastered 2011 <tmp>/library/Arbor/Static - Remastered 2011 353/04 - Static - Remastered 2011.m4a: filed under Static - Remastered 2011 353, but no release item has its audio (album item 113: the fingerprints differ); kept
+  [KEEP] 528 Arbor — Static (Live) <tmp>/library/Arbor/Zinnia (Deluxe Edition)/02 - Static (Live).m4a: on the album, but it has no Spotify ID; it has no fingerprint, so the same-audio rung was skipped; kept
+  [KEEP] 537 Arbor — Northern <tmp>/library/Arbor/Static (Demo) 398/05 - Northern.m4a: filed under Static (Demo) 398, but no release item has its audio (album item 114: the fingerprints differ); kept
+  [KEEP] 559 Arbor — Static (Live) <tmp>/library/Arbor/Static (Live) 420/11 - Static (Live).m4a: filed under Static (Live) 420, but no release item has its audio (album item 113: the fingerprints differ); kept
+  [KEEP] 577 Arbor — Static (Live) <tmp>/library/Arbor/Static (Live) 438/08 - Static (Live).m4a: filed under Static (Live) 438, but no release item has its audio (album item 113: the fingerprints differ); kept
+[ALBUM] Fjord — Aspen: 3 loose item(s) superseded, 13 kept
+  [SUPERSEDE] 115 <tmp>/library/Fjord/Aspen/01 - Paper Moon.1.m4a ← 191 <tmp>/library/Fjord/Aspen/09 - Paper Moon.m4a (same audio, fingerprint ber=0.00, 2s apart; playlists pl0) (dry run)
+  [SUPERSEDE] 115 <tmp>/library/Fjord/Aspen/01 - Paper Moon.1.m4a ← 414 <tmp>/library/Fjord/Aspen/01 - Paper Moon.m4a (disc/track; playlists pl3) (dry run)
+  [MOVE] 115 <tmp>/library/Fjord/Aspen/01 - Paper Moon.1.m4a → <tmp>/library/Fjord/Aspen/01 - Paper Moon.m4a: the path its loose copy held (dry run)
+  [SUPERSEDE] 116 <tmp>/library/Fjord/Aspen/00 - Undertow.1.m4a ← 385 <tmp>/library/Fjord/Aspen/00 - Undertow.m4a (disc/track; playlists pl2) (dry run)
+  [MOVE] 116 <tmp>/library/Fjord/Aspen/00 - Undertow.1.m4a → <tmp>/library/Fjord/Aspen/00 - Undertow.m4a: the path its loose copy held (dry run)
+  [KEEP] 151 Fjord — Tide - Remastered 2011 <tmp>/library/Fjord/Aspen/04 - Tide - Remastered 2011.m4a: on the album, but its Spotify ID is not on the album's tracklist (a twin release's?); track 1-4 is S25x3, which album item 118 holds by title words only (#255); no release item has its audio (album item 118: the fingerprints differ); kept
+  [KEEP] 168 Fjord — Lantern <tmp>/library/Fjord/Dahlia/09 - Lantern.m4a: filed under Dahlia, but no release item has its audio (album item 118: fingerprint ber=0.00 but 30s apart); kept
+  [KEEP] 243 Fjord — Lantern - Remastered 2011 <tmp>/library/Fjord/Pine/08 - Lantern - Remastered 2011.m4a: filed under Pine, but no release item has its audio (album item 118: the fingerprints differ); kept
+  [KEEP] 253 Fjord — Lantern - Remastered 2011 <tmp>/library/Fjord/Lantern - Remastered 2011 114/09 - Lantern - Remastered 2011.m4a: filed under Lantern - Remastered 2011 114, but no release item has its audio (album item 118: the fingerprints differ); kept
+  [KEEP] 262 Fjord — Paper Moon <tmp>/library/Fjord/Aspen/02 - Paper Moon.m4a: on the album, but its Spotify ID is not on the album's tracklist (a twin release's?) and no entry sits at its disc/track 2-2; it has no fingerprint, so the same-audio rung was skipped; kept
+  [KEEP] 270 Fjord — Lantern <tmp>/library/Fjord/Lantern/07 - Lantern.m4a: filed under Lantern, but no release item has its audio (album item 118: the fingerprints differ); kept
+  [KEEP] 271 Fjord — Undertow - Remastered 2011 <tmp>/library/Fjord/Undertow - Remastered 2011/00 - Undertow - Remastered 2011.m4a: filed under Undertow - Remastered 2011, but no release item has its audio (album item(s) 116 have no fingerprint, so the same-audio rung skipped them); kept
+  [KEEP] 277 Fjord — Lantern <tmp>/library/Fjord/Aspen/07 - Lantern.m4a: on the album, but its Spotify ID is not on the album's tracklist (a twin release's?) and no entry sits at its disc/track 1-7; it has no fingerprint, so the same-audio rung was skipped; kept
+  [KEEP] 412 Fjord — Undertow <tmp>/library/Fjord/Undertow 273/07 - Undertow.m4a: filed under Undertow 273, but no release item has its audio (album item(s) 116 have no fingerprint, so the same-audio rung skipped them); kept
+  [KEEP] 444 Fjord — Harbour Lights - Remastered 2011 <tmp>/library/Fjord/Harbour Lights - Remastered 2011/03 - Harbour Lights - Remastered 2011.m4a: filed under Harbour Lights - Remastered 2011, but no release item has its audio (album item 117: the fingerprints differ); kept
+  [KEEP] 451 Fjord — Harbour Lights - Remastered 2011 <tmp>/library/Fjord/Harbour Lights - Remastered 2011 312/03 - Harbour Lights - Remastered 2011.m4a: filed under Harbour Lights - Remastered 2011 312, but no release item has its audio (album item 117: the fingerprints differ); kept
+  [KEEP] 574 Fjord — Static <tmp>/library/Fjord/Aspen/09 - Static.m4a: on the album, but its Spotify ID is not on the album's tracklist (a twin release's?) and no entry sits at its disc/track 1-9; no release item sits at its disc/track 1-9 or has its title; kept
+  [KEEP] 580 Dune — Ash (Live) <tmp>/library/Dune/Quartz/12 - Ash (Live).m4a: on the album, but its Spotify ID is not on the album's tracklist (a twin release's?) and no entry sits at its disc/track 2-12; no release item sits at its disc/track 2-12 or has its title; kept
+[ALBUM] Basalt — Bramble: 5 loose item(s) superseded, 23 kept
+  [SUPERSEDE] 124 <tmp>/library/Basalt/Bramble/10 - Harbour Lights.1.m4a ← 166 <tmp>/library/Ember/Fern/08 - Hollow - Remastered 2011.m4a (spotify id; playlists pl1) (dry run)
+  [SUPERSEDE] 124 <tmp>/library/Basalt/Bramble/10 - Harbour Lights.1.m4a ← 276 <tmp>/library/Cinder/Garnet/05 - Vesper.1.m4a (spotify id; playlists pl3) (dry run)
+  [SUPERSEDE] 121 <tmp>/library/Basalt/Bramble/03 - Static (Live).m4a ← 275 <tmp>/library/Basalt/Bramble/09 - Harbour Lights - Extended Mix.m4a (tracklist isrc; playlists pl3) (dry run)
+  [SUPERSEDE] 121 <tmp>/library/Basalt/Bramble/03 - Static (Live).m4a ← 443 <tmp>/library/Basalt/Bramble/02 - Hollow.1.m4a (tracklist isrc; playlists pl1) (dry run)
+  [SUPERSEDE] 121 <tmp>/library/Basalt/Bramble/03 - Static (Live).m4a ← 560 <tmp>/library/Basalt/Bramble/04 - Harbour Lights.m4a (tracklist isrc; playlists pl3) (dry run)
+  [KEEP] 163 Basalt — Northern <tmp>/library/Basalt/Northern 24/03 - Northern.m4a: filed under Northern 24, but no release item has its audio (album item 126: the fingerprints differ); kept
+  [KEEP] 164 Basalt — Static (Live) <tmp>/library/Basalt/Static (Live) 25/05 - Static (Live).m4a: filed under Static (Live) 25, but no release item has its audio (album item 121: the fingerprints differ); kept
+  [KEEP] 221 Basalt — Northern <tmp>/library/Basalt/Bramble/08 - Northern.1.m4a: on the album, but its Spotify ID is not on the album's tracklist (a twin release's?); track 1-8 is S26x7, which album item 126 holds by title words only (#255); no release item has its audio (album item 126: fingerprint ber=0.03 but 30s apart); kept
+  [KEEP] 239 Basalt — Static <tmp>/library/Basalt/Paper Moon 100/02 - Static.m4a: filed under Paper Moon 100, but no release item has its audio (album item 121: the fingerprints differ); kept
+  [KEEP] 246 Basalt — Northern <tmp>/library/Basalt/Bramble/12 - Northern.m4a: on the album, but its Spotify ID is not on the album's tracklist (a twin release's?) and no entry sits at its disc/track 2-12; it has no fingerprint, so the same-audio rung was skipped; kept
+  [KEEP] 247 Ember — Paper Moon <tmp>/library/Ember/Vetch/12 - Paper Moon.m4a: on the album, but its Spotify ID is not on the album's tracklist (a twin release's?) and no entry sits at its disc/track 1-12; no release item sits at its disc/track 1-12 or has its title; kept
+  [KEEP] 260 Basalt — Static <tmp>/library/Basalt/Static 121/03 - Static.m4a: filed under Static 121, but it has no fingerprint, so the same-audio rung was skipped; kept
+  [KEEP] 289 Basalt — Northern <tmp>/library/Basalt/Northern 150/12 - Northern.m4a: filed under Northern 150, but it has no fingerprint, so the same-audio rung was skipped; kept
+  [KEEP] 345 Basalt — Tide <tmp>/library/Basalt/Bramble/07 - Tide.m4a: on the album, but its Spotify ID is the album's track 1-8, which album item 126 holds by title words only (#255); no release item sits at its disc/track 2-7 or has its title; kept
+  [KEEP] 359 Basalt — Glass (Demo) <tmp>/library/Basalt/Amber/05 - Glass (Demo).m4a: filed under Amber, but it has no fingerprint, so the same-audio rung was skipped; kept
+  [KEEP] 366 Basalt — Orbit - Extended Mix <tmp>/library/Basalt/Bramble/01 - Orbit - Extended Mix.m4a: on the album, but its Spotify ID is the album's track 1-2, which no item of the release holds; no release item sits at its disc/track 1-1 or has its title; kept
+  [KEEP] 370 Basalt — Hollow - Extended Mix <tmp>/library/Basalt/Bramble/05 - Hollow - Extended Mix.m4a: on the album, but its Spotify ID is not on the album's tracklist (a twin release's?); track 1-5 is TW26x4, which no item of the release holds; no release item has its audio (album item 123: the fingerprints differ; album item 120: the fingerprints differ); kept
+  [KEEP] 377 Basalt — Northern (Demo) <tmp>/library/Basalt/Bramble/06 - Northern (Demo).m4a: on the album, but its Spotify ID is not on the album's tracklist (a twin release's?) and no entry sits at its disc/track 1-6; no release item has its audio (album item 126: the fingerprints differ); kept
+  [KEEP] 449 Basalt — Static <tmp>/library/Basalt/Bramble/09 - Static.m4a: on the album, but its Spotify ID is the album's track 1-2, which no item of the release holds; it has no fingerprint, so the same-audio rung was skipped; kept
+  [KEEP] 454 Basalt — Static <tmp>/library/Basalt/Bramble/11 - Static.m4a: on the album, but its Spotify ID is not on the album's tracklist (a twin release's?) and no entry sits at its disc/track 1-11; no release item has its audio (album item 121: the fingerprints differ); kept
+  [KEEP] 460 Basalt — Northern - Remastered 2011 <tmp>/library/Basalt/Delta/01 - Northern - Remastered 2011.m4a: filed under Delta, but no release item has its audio (album item 126: the fingerprints differ); kept
+  [KEEP] 461 Basalt — Glass <tmp>/library/Basalt/Harbour Lights - Extended Mix 322/02 - Glass.m4a: filed under Harbour Lights - Extended Mix 322, but no release item has its audio (album item 125: the fingerprints differ); kept
+  [KEEP] 487 Basalt — Ash (Demo) <tmp>/library/Basalt/Bramble/03 - Ash (Demo).m4a: on the album, but track 1-3 is 'Static (Live)' (album item 121), another title; it has no fingerprint, so the same-audio rung was skipped; kept
+  [KEEP] 502 Basalt — Hollow <tmp>/library/Basalt/Kestrel/03 - Hollow.m4a: filed under Kestrel, but it has no fingerprint, so the same-audio rung was skipped; kept
+  [KEEP] 503 Basalt — Glass <tmp>/library/Basalt/Glass 364/12 - Glass.m4a: filed under Glass 364, but it has no fingerprint, so the same-audio rung was skipped; kept
+  [KEEP] 507 Basalt — Static - Remastered 2011 <tmp>/library/Basalt/Static - Remastered 2011 368/05 - Static - Remastered 2011.m4a: filed under Static - Remastered 2011 368, but no release item has its audio (album item 121: the fingerprints differ); kept
+  [KEEP] 518 Basalt — Harbour Lights - Extended Mix <tmp>/library/Basalt/Bramble/08 - Harbour Lights - Extended Mix.m4a: on the album, but its Spotify ID is not on the album's tracklist (a twin release's?); track 1-8 is S26x7, which album item 126 holds by title words only (#255); no release item has its audio (album item 126: fingerprint ber=0.00, 0s apart, but the titles differ: wrong audio? (music-audit-lengths --replace); album item 124: the fingerprints differ); kept
+  [KEEP] 535 Basalt — Ash <tmp>/library/Basalt/Bramble/08 - Ash.m4a: on the album, but its Spotify ID is not on the album's tracklist (a twin release's?); track 1-8 is S26x7, which album item 126 holds by title words only (#255); no release item has its audio (album item 126: the fingerprints differ); kept
+  [MANUAL] 146 <tmp>/library/Basalt/Elder/07 - Tide - Remastered 2011.m4a: the same track as album item 129 (spotify id), but imported by hand; kept
+  [MANUAL] 279 <tmp>/library/Ember/Cedar/06 - Tide - Remastered 2011.m4a: the same track as album item 129 (spotify id), but imported by hand; kept
+[ALBUM] Ember — Cedar: 7 loose item(s) superseded, 8 kept
+  [SUPERSEDE] 129 <tmp>/library/Ember/Cedar/05 - Tide - Remastered 2011.m4a ← 148 <tmp>/library/Ember/Cedar/05 - Tide - Remastered 2011.1.m4a (tracklist disc/track; playlists pl2) (dry run)
+  [SUPERSEDE] 129 <tmp>/library/Ember/Cedar/05 - Tide - Remastered 2011.m4a ← 452 <tmp>/library/Ember/Cedar/07 - Undertow (Demo).m4a (spotify id; playlists pl3) (dry run)
+  [SUPERSEDE] 128 <tmp>/library/Ember/Cedar/02 - Ash.m4a ← 305 <tmp>/library/Ember/Cedar/04 - Harbour Lights.m4a (spotify id; playlists pl1) (dry run)
+  [SUPERSEDE] 128 <tmp>/library/Ember/Cedar/02 - Ash.m4a ← 442 <tmp>/library/Ember/Cedar/08 - Orbit (Demo).m4a (tracklist isrc; playlists pl0) (dry run)
+  [SUPERSEDE] 128 <tmp>/library/Ember/Cedar/02 - Ash.m4a ← 475 <tmp>/library/Ember/Cedar/09 - Harbour Lights (Demo).m4a (spotify id; playlists pl1) (dry run)
+  [SUPERSEDE] 128 <tmp>/library/Ember/Cedar/02 - Ash.m4a ← 484 <tmp>/library/Ember/Cedar/12 - Ash.m4a (spotify id; playlists pl0) (dry run)
+  [SUPERSEDE] 128 <tmp>/library/Ember/Cedar/02 - Ash.m4a ← 525 <tmp>/library/Ember/Vetch/02 - Hollow (Live).m4a (isrc; playlists pl0) (dry run)
+  [KEEP] 233 Ember — Ash - Remastered 2011 <tmp>/library/Ember/Ash 94/02 - Ash - Remastered 2011.m4a: filed under Ash 94, but no release item has its audio (album item 128: the fingerprints differ); kept
+  [KEEP] 254 Arbor — Northern - Extended Mix <tmp>/library/Arbor/Amber (Deluxe Edition)/09 - Northern - Extended Mix.m4a: on the album, but its Spotify ID is not on the album's tracklist (a twin release's?) and no entry sits at its disc/track 2-9; no release item sits at its disc/track 2-9 or has its title; kept
+  [KEEP] 297 Ember — Ash <tmp>/library/Ember/Ash 158/06 - Ash.m4a: filed under Ash 158, but no release item has its audio (album item 128: the fingerprints differ); kept
+  [KEEP] 322 Ember — Undertow (Demo) <tmp>/library/Ember/Cedar/02 - Undertow (Demo).m4a: on the album, but it has no Spotify ID; it has no fingerprint, so the same-audio rung was skipped; kept
+  [KEEP] 329 Ember — Ash - Remastered 2011 <tmp>/library/Ember/Bramble/03 - Ash - Remastered 2011.m4a: filed under Bramble, but it has no fingerprint, so the same-audio rung was skipped; kept
+  [KEEP] 347 Ember — Undertow (Demo) <tmp>/library/Ember/Cedar/01 - Undertow (Demo).m4a: on the album, but its Spotify ID is not on the album's tracklist (a twin release's?); track 1-1 is S27x0, which no item of the release holds; no release item sits at its disc/track 1-1 or has its title; kept
+  [KEEP] 426 Ember — Tide <tmp>/library/Ember/Pine/06 - Tide.m4a: filed under Pine, but no release item has its audio (album item 129: the fingerprints differ); kept
+  [KEEP] 501 Ember — Ash <tmp>/library/Ember/Cedar/02 - Ash.1.m4a: on the album, but it has no Spotify ID; no release item has its audio (album item 128: fingerprint ber=0.03 but 30s apart); kept
+[ALBUM] Arbor — Dahlia: 5 loose item(s) superseded, 13 kept
+  [SUPERSEDE] 132 <tmp>/library/Arbor/Dahlia (Deluxe Edition)/03 - Harbour Lights.m4a ← 178 <tmp>/library/Arbor/Dahlia (Deluxe Edition)/03 - Harbour Lights.1.m4a (tracklist disc/track; playlists pl3) (dry run)
+  [SUPERSEDE] 132 <tmp>/library/Arbor/Dahlia (Deluxe Edition)/03 - Harbour Lights.m4a ← 418 <tmp>/library/Arbor/Willow/07 - Harbour Lights.m4a (spotify id; playlists pl3) (dry run)
+  [SUPERSEDE] 132 <tmp>/library/Arbor/Dahlia (Deluxe Edition)/03 - Harbour Lights.m4a ← 458 <tmp>/library/Ember/Lichen/10 - Undertow.m4a (spotify id; playlists pl2) (dry run)
+  [SUPERSEDE] 132 <tmp>/library/Arbor/Dahlia (Deluxe Edition)/03 - Harbour Lights.m4a ← 575 <tmp>/library/Arbor/Dahlia (Deluxe Edition)/03 - Harbour Lights.3.m4a (same audio, fingerprint ber=0.00, 0s apart; playlists pl1) (dry run)
+  [SUPERSEDE] 131 <tmp>/library/Arbor/Dahlia (Deluxe Edition)/02 - Static.m4a ← 437 <tmp>/library/Cinder/Delta/10 - Undertow - Extended Mix.m4a (isrc; playlists pl3) (dry run)
+  [KEEP] 172 Arbor — Static (Demo) - Remastered 2011 <tmp>/library/Arbor/Vesper 33/07 - Static (Demo) - Remastered 2011.m4a: filed under Vesper 33, but no release item has its audio (album item 131: the fingerprints differ); kept
+  [KEEP] 196 Arbor — Harbour Lights <tmp>/library/Arbor/Dahlia (Deluxe Edition)/00 - Harbour Lights.m4a: on the album, but its Spotify ID is not on the album's tracklist (a twin release's?) and no entry sits at its disc/track 2-0; it has no fingerprint, so the same-audio rung was skipped; kept
+  [KEEP] 310 Arbor — Harbour Lights <tmp>/library/Arbor/Harbour Lights 171/08 - Harbour Lights.m4a: filed under Harbour Lights 171, but it has no fingerprint, so the same-audio rung was skipped; kept
+  [KEEP] 314 Arbor — Harbour Lights (Demo) <tmp>/library/Arbor/Dahlia (Deluxe Edition)/00 - Harbour Lights (Demo).m4a: on the album, but its Spotify ID is not on the album's tracklist (a twin release's?); track 1-0 is S28x3, which no item of the release holds; no release item has its audio (album item 132: the fingerprints differ); kept
+  [KEEP] 348 Arbor — Static <tmp>/library/Arbor/Dahlia (Deluxe Edition)/02 - Static.1.m4a: on the album, but its Spotify ID is not on the album's tracklist (a twin release's?); track 1-2 is S28x0, which no item of the release holds; no release item has its audio (album item 131: the fingerprints differ); kept
+  [KEEP] 468 Arbor — Hollow <tmp>/library/Arbor/Dahlia (Deluxe Edition)/00 - Hollow.m4a: on the album, but its Spotify ID is not on the album's tracklist (a twin release's?); track 1-0 is S28x3, which no item of the release holds; no release item sits at its disc/track 1-0 or has its title; kept
+  [KEEP] 491 Arbor — Harbour Lights <tmp>/library/Arbor/Dahlia (Deluxe Edition)/03 - Harbour Lights.2.m4a: on the album, but another loose item already took track 1-3; it has no fingerprint, so the same-audio rung was skipped; kept
+  [KEEP] 492 Arbor — Static - Remastered 2011 <tmp>/library/Arbor/Static - Remastered 2011 353/04 - Static - Remastered 2011.m4a: filed under Static - Remastered 2011 353, but no release item has its audio (album item 131: the fingerprints differ); kept
+  [KEEP] 493 Arbor — Harbour Lights <tmp>/library/Arbor/Harbour Lights 354/03 - Harbour Lights.m4a: filed under Harbour Lights 354, but it has no fingerprint, so the same-audio rung was skipped; kept
+  [KEEP] 558 Arbor — Vesper - Extended Mix <tmp>/library/Arbor/Dahlia (Deluxe Edition)/01 - Vesper - Extended Mix.m4a: on the album, but its Spotify ID is not on the album's tracklist (a twin release's?); track 1-1 is TE28x1, which no item of the release holds; no release item sits at its disc/track 1-1 or has its title; kept
+  [KEEP] 559 Arbor — Static (Live) <tmp>/library/Arbor/Static (Live) 420/11 - Static (Live).m4a: filed under Static (Live) 420, but no release item has its audio (album item 131: the fingerprints differ); kept
+  [KEEP] 568 Arbor — Orbit - Extended Mix <tmp>/library/Arbor/Dahlia (Deluxe Edition)/00 - Orbit - Extended Mix.m4a: on the album, but it has no Spotify ID; no release item sits at its disc/track 1-0 or has its title; kept
+  [KEEP] 577 Arbor — Static (Live) <tmp>/library/Arbor/Static (Live) 438/08 - Static (Live).m4a: filed under Static (Live) 438, but no release item has its audio (album item 131: the fingerprints differ); kept
+  [MANUAL] 289 <tmp>/library/Basalt/Northern 150/12 - Northern.m4a: the same track as album item 134 (isrc), but imported by hand; kept
+[ALBUM] Basalt — Elder: 2 loose item(s) superseded, 5 kept
+  [SUPERSEDE] 135 <tmp>/library/Basalt/Elder/02 - Paper Moon.1.m4a ← 320 <tmp>/library/Basalt/Elder/09 - Paper Moon.m4a (isrc; playlists pl1) (dry run)
+  [SUPERSEDE] 137 <tmp>/library/Basalt/Elder/04 - Ash.1.m4a ← 548 <tmp>/library/Arbor/Zinnia (Deluxe Edition)/10 - Undertow.m4a (isrc; playlists pl1) (dry run)
+  [KEEP] 139 Basalt — Hollow - Extended Mix <tmp>/library/Basalt/Elder/05 - Hollow - Extended Mix.m4a: on the album, but it has no Spotify ID; no release item has its audio (album item 138: fingerprint ber=0.03 but 30s apart); kept
+  [KEEP] 165 Basalt — Harbour Lights <tmp>/library/Basalt/Elder/06 - Harbour Lights.m4a: on the album, but no ID matches an item of the release, and the record has no tracklist; it has no fingerprint, so the same-audio rung was skipped; kept
+  [KEEP] 272 Basalt — Lantern <tmp>/library/Basalt/Elder/03 - Lantern.m4a: on the album, but album item 136 at its disc/track 2-3 is 'Orbit'; no ID matches an item of the release, and the record has no tracklist; no release item has its audio (album item 136: the fingerprints differ); kept
+  [KEEP] 328 Basalt — Orbit (Live) <tmp>/library/Basalt/Iris/01 - Orbit (Live).m4a: filed under Iris, but it has no fingerprint, so the same-audio rung was skipped; kept
+  [KEEP] 502 Basalt — Hollow <tmp>/library/Basalt/Kestrel/03 - Hollow.m4a: filed under Kestrel, but it has no fingerprint, so the same-audio rung was skipped; kept
+  [MANUAL] 285 <tmp>/library/Arbor/Sorrel/07 - Harbour Lights.m4a: the same track as album item 3 (isrc), but imported by hand; kept
+[ALBUM] Arbor — Amber: 7 loose item(s) superseded, 12 kept
+  [SUPERSEDE] 4 <tmp>/library/Arbor/Amber (Deluxe Edition)/12 - Tide.m4a ← 197 <tmp>/library/Arbor/Amber (Deluxe Edition)/02 - Tide.m4a (same audio, fingerprint ber=0.00, 0s apart; playlists pl0) (dry run)
+  [SUPERSEDE] 4 <tmp>/library/Arbor/Amber (Deluxe Edition)/12 - Tide.m4a ← 470 <tmp>/library/Arbor/Amber (Deluxe Edition)/01 - Tide.m4a (same audio, fingerprint ber=0.03, 2s apart; playlists pl0) (dry run)
+  [SUPERSEDE] 3 <tmp>/library/Arbor/Amber (Deluxe Edition)/03 - Northern.1.m4a ← 267 <tmp>/library/Ember/Vetch/08 - Paper Moon.m4a (isrc; playlists pl1) (dry run)
+  [SUPERSEDE] 3 <tmp>/library/Arbor/Amber (Deluxe Edition)/03 - Northern.1.m4a ← 535 <tmp>/library/Basalt/Bramble/08 - Ash.m4a (isrc; playlists pl3) (dry run)
+  [SUPERSEDE] 3 <tmp>/library/Arbor/Amber (Deluxe Edition)/03 - Northern.1.m4a ← 567 <tmp>/library/Arbor/Greatest Hits/08 - Ash.m4a (isrc; playlists pl1) (dry run)
+  [SUPERSEDE] 1 <tmp>/library/Arbor/Amber (Deluxe Edition)/11 - Ash (Demo).m4a ← 440 <tmp>/library/Arbor/Amber (Deluxe Edition)/05 - Glass - Remastered 2011.m4a (isrc; playlists pl3) (dry run)
+  [SUPERSEDE] 1 <tmp>/library/Arbor/Amber (Deluxe Edition)/11 - Ash (Demo).m4a ← 498 <tmp>/library/Cinder/Delta/09 - Ash.m4a (isrc; playlists pl2) (dry run)
+  [KEEP] 173 Arbor — Northern <tmp>/library/Arbor/Northern 34/05 - Northern.m4a: filed under Northern 34, but no release item has its audio (album item 3: the fingerprints differ); kept
+  [KEEP] 313 Arbor — Northern (Live) <tmp>/library/Arbor/Northern (Live) 174/09 - Northern (Live).m4a: filed under Northern (Live) 174, but it has no fingerprint, so the same-audio rung was skipped; kept
+  [KEEP] 323 Arbor — Ash - Extended Mix <tmp>/library/Arbor/Ash - Extended Mix 184/06 - Ash - Extended Mix.m4a: filed under Ash - Extended Mix 184, but it has no fingerprint, so the same-audio rung was skipped; kept
+  [KEEP] 349 Arbor — Tide - Remastered 2011 <tmp>/library/Arbor/Amber (Deluxe Edition)/12 - Tide - Remastered 2011.m4a: on the album, but its Spotify ID is not on the album's tracklist (a twin release's?); track 1-12 is TW0x3, which no item of the release holds; it has no fingerprint, so the same-audio rung was skipped; kept
+  [KEEP] 355 Arbor — Northern (Live) <tmp>/library/Arbor/Static (Live) 216/03 - Northern (Live).m4a: filed under Static (Live) 216, but no release item has its audio (album item 3: the fingerprints differ); kept
+  [KEEP] 396 Arbor — Tide <tmp>/library/Arbor/Tide 257/00 - Tide.m4a: filed under Tide 257, but no release item has its audio (album item 2: fingerprint ber=0.03 but 58s apart; album item 4: the fingerprints differ); kept
+  [KEEP] 432 Arbor — Tide <tmp>/library/Arbor/Tide 293/01 - Tide.m4a: filed under Tide 293, but it has no fingerprint, so the same-audio rung was skipped; kept
+  [KEEP] 495 Arbor — Tide - Remastered 2011 <tmp>/library/Arbor/Orbit/02 - Tide - Remastered 2011.m4a: filed under Orbit, but no release item has its audio (album item 2: the fingerprints differ; album item 4: the fingerprints differ); kept
+  [KEEP] 506 Arbor — Tide (Demo) <tmp>/library/Arbor/Tide (Demo) 367/03 - Tide (Demo).m4a: filed under Tide (Demo) 367, but it has no fingerprint, so the same-audio rung was skipped; kept
+  [KEEP] 531 Arbor — Tide - Extended Mix <tmp>/library/Arbor/Tide - Extended Mix 392/10 - Tide - Extended Mix.m4a: filed under Tide - Extended Mix 392, but no release item has its audio (album item 2: the fingerprints differ; album item 4: the fingerprints differ); kept
+  [KEEP] 537 Arbor — Northern <tmp>/library/Arbor/Static (Demo) 398/05 - Northern.m4a: filed under Static (Demo) 398, but no release item has its audio (album item 3: the fingerprints differ); kept
+  [KEEP] 545 Arbor — Ash (Demo) <tmp>/library/Arbor/Amber (Deluxe Edition)/09 - Ash (Demo).m4a: on the album, but its Spotify ID is not on the album's tracklist (a twin release's?) and no entry sits at its disc/track 2-9; no release item has its audio (album item 1: the fingerprints differ); kept
+Supersede backfill: 32 record(s), 1 library read(s)
+pair 4 <- [197, 470] ['same audio, fingerprint ber=0.00, 0s apart', 'same audio, fingerprint ber=0.03, 2s apart']
+pair 3 <- [267, 535, 567] ['isrc', 'isrc', 'isrc']
+pair 1 <- [440, 498] ['isrc', 'isrc']
+pair 8 <- [160, 309, 440, 498, 537] ['same audio, fingerprint ber=0.03, 0s apart', 'same audio, fingerprint ber=0.00, 2s apart', 'isrc', 'isrc', 'isrc']
+pair 7 <- [380, 562] ['spotify id', 'spotify id']
+pair 9 <- [155] ['isrc']
+pair 10 <- [174] ['spotify id']
+pair 11 <- [205, 350, 372] ['spotify id', 'isrc', 'tracklist disc/track']
+pair 20 <- [147, 401] ['isrc', 'isrc']
+pair 17 <- [161, 257, 473, 522] ['isrc', 'isrc', 'isrc', 'isrc']
+pair 15 <- [300] ['tracklist disc/track']
+pair 23 <- [147, 401] ['isrc', 'isrc']
+pair 25 <- [155] ['isrc']
+pair 26 <- [180, 351, 493] ['isrc', 'isrc', 'isrc']
+pair 24 <- [186] ['isrc']
+pair 22 <- [256, 258] ['isrc', 'isrc']
+pair 21 <- [530] ['spotify id']
+pair 28 <- [533] ['spotify id']
+pair 30 <- [161, 255, 257, 473, 522] ['isrc', 'recording id', 'isrc', 'isrc', 'isrc']
+pair 32 <- [532, 568] ['disc/track', 'isrc']
+pair 39 <- [213, 546] ['tracklist disc/track', 'recording id']
+pair 40 <- [255, 436] ['same audio, fingerprint ber=0.03, 0s apart', 'same audio, fingerprint ber=0.03, 0s apart']
+pair 38 <- [292, 336] ['spotify id', 'spotify id']
+pair 41 <- [326, 544] ['spotify id', 'spotify id']
+pair 37 <- [500] ['recording id']
+pair 44 <- [210, 419] ['same audio, fingerprint ber=0.03, 0s apart', 'recording id']
+pair 48 <- [152, 171] ['spotify id', 'isrc']
+pair 49 <- [173] ['recording id']
+pair 45 <- [323, 396, 446] ['spotify id', 'same audio, fingerprint ber=0.03, 2s apart', 'tracklist disc/track']
+pair 47 <- [411] ['spotify id']
+pair 51 <- [312, 370, 421] ['disc/track', 'isrc', 'isrc']
+pair 60 <- [239] ['same audio, acoustid aid-13-1, 0s apart']
+pair 67 <- [154, 322, 477] ['disc/track', 'isrc', 'same audio, fingerprint ber=0.03, 0s apart']
+pair 69 <- [173, 578] ['isrc', 'isrc']
+pair 65 <- [269, 356] ['spotify id', 'same audio, fingerprint ber=0.00, 0s apart']
+pair 62 <- [338, 466] ['isrc', 'same audio, fingerprint ber=0.00, 2s apart']
+pair 66 <- [341] ['isrc']
+pair 83 <- [173, 578] ['isrc', 'isrc']
+pair 85 <- [317, 394] ['spotify id', 'spotify id']
+pair 81 <- [468] ['isrc']
+pair 90 <- [143] ['tracklist disc/track']
+pair 89 <- [540] ['same audio, acoustid aid-0, 0s apart']
+pair 93 <- [244, 422, 489, 517] ['spotify id', 'spotify id', 'spotify id', 'spotify id']
+pair 91 <- [373, 588] ['tracklist disc/track', 'spotify id']
+pair 100 <- [267] ['same audio, fingerprint ber=0.03, 0s apart']
+pair 99 <- [502] ['isrc']
+pair 98 <- [539] ['tracklist disc/track']
+pair 102 <- [296, 554] ['same audio, fingerprint ber=0.03, 2s apart', 'spotify id']
+pair 103 <- [522] ['spotify id']
+pair 110 <- [218] ['same audio, fingerprint ber=0.03, 0s apart']
+pair 107 <- [231] ['spotify id']
+pair 111 <- [335] ['same audio, fingerprint ber=0.03, 2s apart']
+pair 109 <- [495] ['same audio, fingerprint ber=0.03, 0s apart']
+pair 114 <- [548] ['isrc']
+pair 115 <- [191, 414] ['same audio, fingerprint ber=0.00, 2s apart', 'disc/track']
+pair 116 <- [385] ['disc/track']
+pair 124 <- [166, 276] ['spotify id', 'spotify id']
+pair 121 <- [275, 443, 560] ['tracklist isrc', 'tracklist isrc', 'tracklist isrc']
+pair 129 <- [148, 452] ['tracklist disc/track', 'spotify id']
+pair 128 <- [305, 442, 475, 484, 525] ['spotify id', 'tracklist isrc', 'spotify id', 'spotify id', 'isrc']
+pair 132 <- [178, 418, 458, 575] ['tracklist disc/track', 'spotify id', 'spotify id', 'same audio, fingerprint ber=0.00, 0s apart']
+pair 131 <- [437] ['isrc']
+pair 135 <- [320] ['isrc']
+pair 137 <- [548] ['isrc']
+pair 4 <- [197, 470] ['same audio, fingerprint ber=0.00, 0s apart', 'same audio, fingerprint ber=0.03, 2s apart']
+pair 3 <- [267, 535, 567] ['isrc', 'isrc', 'isrc']
+pair 1 <- [440, 498] ['isrc', 'isrc']
+# apply
+  [MANUAL] 285 <tmp>/library/Arbor/Sorrel/07 - Harbour Lights.m4a: the same track as album item 3 (isrc), but imported by hand; kept
+  [MANUAL] 349 <tmp>/library/Arbor/Amber (Deluxe Edition)/12 - Tide - Remastered 2011.m4a: the same track as album item 4 (disc/track), but imported by hand; kept
+[ALBUM] Arbor — Amber: 7 loose item(s) superseded, 11 kept
+  [SUPERSEDE] 4 <tmp>/library/Arbor/Amber (Deluxe Edition)/12 - Tide.m4a ← 197 <tmp>/library/Arbor/Amber (Deluxe Edition)/02 - Tide.m4a (same audio, fingerprint ber=0.00, 0s apart; playlists pl0)
+  [SUPERSEDE] 4 <tmp>/library/Arbor/Amber (Deluxe Edition)/12 - Tide.m4a ← 470 <tmp>/library/Arbor/Amber (Deluxe Edition)/01 - Tide.m4a (same audio, fingerprint ber=0.03, 2s apart; playlists pl0)
+  [SUPERSEDE] 3 <tmp>/library/Arbor/Amber (Deluxe Edition)/03 - Northern.1.m4a ← 267 <tmp>/library/Ember/Vetch/08 - Paper Moon.m4a (isrc; playlists pl1)
+  [SUPERSEDE] 3 <tmp>/library/Arbor/Amber (Deluxe Edition)/03 - Northern.1.m4a ← 535 <tmp>/library/Basalt/Bramble/08 - Ash.m4a (isrc; playlists pl3)
+  [SUPERSEDE] 3 <tmp>/library/Arbor/Amber (Deluxe Edition)/03 - Northern.1.m4a ← 567 <tmp>/library/Arbor/Greatest Hits/08 - Ash.m4a (isrc; playlists pl1)
+  [SUPERSEDE] 1 <tmp>/library/Arbor/Amber (Deluxe Edition)/11 - Ash (Demo).m4a ← 440 <tmp>/library/Arbor/Amber (Deluxe Edition)/05 - Glass - Remastered 2011.m4a (isrc; playlists pl3)
+  [SUPERSEDE] 1 <tmp>/library/Arbor/Amber (Deluxe Edition)/11 - Ash (Demo).m4a ← 498 <tmp>/library/Cinder/Delta/09 - Ash.m4a (isrc; playlists pl2)
+[MERGE] keep 4 ← 197; old file → <tmp>/replaced/197-02 - Tide.m4a
+[MERGE] keep 4 ← 470; old file → <tmp>/replaced/470-01 - Tide.m4a
+[MERGE] keep 3 ← 267; old file → <tmp>/replaced/267-08 - Paper Moon.m4a
+[MERGE] keep 3 ← 535; old file → <tmp>/replaced/535-08 - Ash.m4a
+[MERGE] keep 3 ← 567; old file → <tmp>/replaced/567-08 - Ash.m4a
+[MERGE] keep 1 ← 440; old file → <tmp>/replaced/440-05 - Glass - Remastered 2011.m4a
+[MERGE] keep 1 ← 498; old file → <tmp>/replaced/498-09 - Ash.m4a
+  [MANUAL] 208 <tmp>/library/Fjord/Birch/05 - Hollow (Demo).m4a: the same track as album item 6 (recording id), but imported by hand; kept
+[ALBUM] Fjord — Birch: 5 loose item(s) superseded, 9 kept
+  [SUPERSEDE] 8 <tmp>/library/Fjord/Birch/04 - Ash.m4a ← 160 <tmp>/library/Fjord/Birch/09 - Ash.m4a (same audio, fingerprint ber=0.03, 0s apart; playlists pl1)
+  [SUPERSEDE] 8 <tmp>/library/Fjord/Birch/04 - Ash.m4a ← 309 <tmp>/library/Fjord/Cedar/09 - Ash (Live).m4a (same audio, fingerprint ber=0.00, 2s apart; playlists pl3)
+  [SUPERSEDE] 8 <tmp>/library/Fjord/Birch/04 - Ash.m4a ← 537 <tmp>/library/Arbor/Static (Demo) 398/05 - Northern.m4a (isrc; playlists pl3)
+  [SUPERSEDE] 7 <tmp>/library/Fjord/Birch/02 - Orbit - Extended Mix.m4a ← 380 <tmp>/library/Ember/Fern/06 - Northern - Remastered 2011 - Remastered 2011.m4a (spotify id; playlists pl0)
+  [SUPERSEDE] 7 <tmp>/library/Fjord/Birch/02 - Orbit - Extended Mix.m4a ← 562 <tmp>/library/Arbor/Greatest Hits/04 - Orbit (Live).m4a (spotify id; playlists pl2)
+[MERGE] keep 8 ← 160; old file → <tmp>/replaced/160-09 - Ash.m4a
+[MERGE] keep 8 ← 309; old file → <tmp>/replaced/309-09 - Ash (Live).m4a
+[MERGE] keep 8 ← 537; old file → <tmp>/replaced/537-05 - Northern.m4a
+[MERGE] keep 7 ← 380; old file → <tmp>/replaced/380-06 - Northern - Remastered 2011 - Remastered 2011.m4a
+[MERGE] keep 7 ← 562; old file → <tmp>/replaced/562-04 - Orbit (Live).m4a
+  [MANUAL] 285 <tmp>/library/Arbor/Sorrel/07 - Harbour Lights.m4a: the same track as album item 11 (spotify id), but imported by hand; kept
+[ALBUM] Dune — Coral: 5 loose item(s) superseded, 9 kept
+  [SUPERSEDE] 9 <tmp>/library/Dune/Coral/01 - Vesper.m4a ← 155 <tmp>/library/Ember/Vetch/07 - Hollow.m4a (isrc; playlists pl1)
+  [SUPERSEDE] 10 <tmp>/library/Dune/Coral/02 - Lantern - Remastered 2011.m4a ← 174 <tmp>/library/Dune/Coral/03 - Lantern - Remastered 2011.m4a (spotify id; playlists pl2)
+  [SUPERSEDE] 11 <tmp>/library/Dune/Coral/03 - Glass.m4a ← 205 <tmp>/library/Basalt/Garnet/09 - Lantern - Remastered 2011.m4a (spotify id; playlists pl3)
+  [SUPERSEDE] 11 <tmp>/library/Dune/Coral/03 - Glass.m4a ← 350 <tmp>/library/Fjord/Undertow 211/02 - Undertow.m4a (isrc; playlists pl3)
+  [SUPERSEDE] 11 <tmp>/library/Dune/Coral/03 - Glass.m4a ← 372 <tmp>/library/Dune/Coral/03 - Glass.1.m4a (tracklist disc/track; playlists pl3)
+[MERGE] keep 9 ← 155; old file → <tmp>/replaced/155-07 - Hollow.m4a
+[MERGE] keep 10 ← 174; old file → <tmp>/replaced/174-03 - Lantern - Remastered 2011.m4a
+[MERGE] keep 11 ← 205; old file → <tmp>/replaced/205-09 - Lantern - Remastered 2011.m4a
+[MERGE] keep 11 ← 350; old file → <tmp>/replaced/350-02 - Undertow.m4a
+[MERGE] keep 11 ← 372; old file → <tmp>/replaced/372-03 - Glass.1.m4a
+[ALBUM] Arbor — Elm: 7 loose item(s) superseded, 17 kept
+  [SUPERSEDE] 20 <tmp>/library/Arbor/Elm/06 - Tide (Demo).m4a ← 147 <tmp>/library/Arbor/Paper Moon/04 - Paper Moon.m4a (isrc; playlists pl1)
+  [SUPERSEDE] 20 <tmp>/library/Arbor/Elm/06 - Tide (Demo).m4a ← 401 <tmp>/library/Arbor/Yarrow/02 - Harbour Lights - Remastered 2011.m4a (isrc; playlists pl0)
+  [SUPERSEDE] 17 <tmp>/library/Arbor/Elm/03 - Undertow (Demo).m4a ← 161 <tmp>/library/Ember/Harbour Lights (Demo) 22/03 - Harbour Lights (Demo).m4a (isrc; playlists pl3)
+  [SUPERSEDE] 17 <tmp>/library/Arbor/Elm/03 - Undertow (Demo).m4a ← 257 <tmp>/library/Dune/Hollow 118/07 - Hollow.m4a (isrc; playlists pl3)
+  [SUPERSEDE] 17 <tmp>/library/Arbor/Elm/03 - Undertow (Demo).m4a ← 473 <tmp>/library/Arbor/Greatest Hits/01 - Ash (Live).m4a (isrc; playlists pl2)
+  [SUPERSEDE] 17 <tmp>/library/Arbor/Elm/03 - Undertow (Demo).m4a ← 522 <tmp>/library/Dune/Coral/12 - Glass.m4a (isrc; playlists pl1)
+  [SUPERSEDE] 15 <tmp>/library/Arbor/Elm/01 - Ash.m4a ← 300 <tmp>/library/Arbor/Elm/01 - Undertow.m4a (tracklist disc/track; playlists pl0)
+[MERGE] keep 20 ← 147; old file → <tmp>/replaced/147-04 - Paper Moon.m4a
+[MERGE] keep 20 ← 401; old file → <tmp>/replaced/401-02 - Harbour Lights - Remastered 2011.m4a
+[MERGE] keep 17 ← 161; old file → <tmp>/replaced/161-03 - Harbour Lights (Demo).m4a
+[MERGE] keep 17 ← 257; old file → <tmp>/replaced/257-07 - Hollow.m4a
+[MERGE] keep 17 ← 473; old file → <tmp>/replaced/473-01 - Ash (Live).m4a
+[MERGE] keep 17 ← 522; old file → <tmp>/replaced/522-12 - Glass.m4a
+[MERGE] keep 15 ← 300; old file → <tmp>/replaced/300-01 - Undertow.m4a
+  [MANUAL] 381 <tmp>/library/Cinder/Garnet/01 - Harbour Lights.m4a: the same track as album item 21 (spotify id), but imported by hand; kept
+[ALBUM] Ember — Fern: 8 loose item(s) superseded, 11 kept
+  [SUPERSEDE] 26 <tmp>/library/Ember/Fern/06 - Northern - Remastered 2011.m4a ← 180 <tmp>/library/Arbor/Greatest Hits/01 - Northern - Remastered 2011.m4a (isrc; playlists pl1)
+  [SUPERSEDE] 26 <tmp>/library/Ember/Fern/06 - Northern - Remastered 2011.m4a ← 351 <tmp>/library/Fjord/Kestrel/02 - Static (Live).3.m4a (isrc; playlists pl0)
+  [SUPERSEDE] 26 <tmp>/library/Ember/Fern/06 - Northern - Remastered 2011.m4a ← 493 <tmp>/library/Arbor/Harbour Lights 354/03 - Harbour Lights.m4a (isrc; playlists pl3)
+  [SUPERSEDE] 24 <tmp>/library/Ember/Fern/04 - Lantern - Remastered 2011.m4a ← 186 <tmp>/library/Ember/Fern/08 - Lantern - Remastered 2011.m4a (isrc; playlists pl3)
+  [SUPERSEDE] 22 <tmp>/library/Ember/Fern/02 - Orbit - Remastered 2011.1.m4a ← 256 <tmp>/library/Arbor/Zinnia (Deluxe Edition)/04 - Paper Moon.m4a (isrc; playlists pl0)
+  [SUPERSEDE] 22 <tmp>/library/Ember/Fern/02 - Orbit - Remastered 2011.1.m4a ← 258 <tmp>/library/Fjord/Kestrel/11 - Vesper - Extended Mix.m4a (isrc; playlists pl2)
+  [SUPERSEDE] 21 <tmp>/library/Ember/Fern/01 - Orbit.1.m4a ← 530 <tmp>/library/Ember/Vetch/06 - Paper Moon.m4a (spotify id; playlists pl1)
+  [SUPERSEDE] 28 <tmp>/library/Ember/Fern/08 - Northern.m4a ← 533 <tmp>/library/Dune/Pine/09 - Static (Demo).m4a (spotify id; playlists pl1)
+[MERGE] keep 26 ← 180; old file → <tmp>/replaced/180-01 - Northern - Remastered 2011.m4a
+[MERGE] keep 26 ← 351; old file → <tmp>/replaced/351-02 - Static (Live).3.m4a
+[MERGE] keep 26 ← 493; old file → <tmp>/replaced/493-03 - Harbour Lights.m4a
+[MERGE] keep 24 ← 186; old file → <tmp>/replaced/186-08 - Lantern - Remastered 2011.m4a
+[MERGE] keep 22 ← 256; old file → <tmp>/replaced/256-04 - Paper Moon.m4a
+[MERGE] keep 22 ← 258; old file → <tmp>/replaced/258-11 - Vesper - Extended Mix.m4a
+[MERGE] keep 21 ← 530; old file → <tmp>/replaced/530-06 - Paper Moon.m4a
+[MERGE] keep 28 ← 533; old file → <tmp>/replaced/533-09 - Static (Demo).m4a
+[ALBUM] Cinder — Garnet: 3 loose item(s) superseded, 12 kept
+  [SUPERSEDE] 30 <tmp>/library/Cinder/Garnet/05 - Harbour Lights (Demo).m4a ← 255 <tmp>/library/Cinder/Harbour Lights (Demo)/05 - Harbour Lights (Demo).m4a (recording id; playlists pl1)
+  [SUPERSEDE] 32 <tmp>/library/Cinder/Garnet/04 - Static (Live).m4a ← 532 <tmp>/library/Cinder/Garnet/04 - Static (Live).1.m4a (disc/track; playlists pl1)
+  [SUPERSEDE] 32 <tmp>/library/Cinder/Garnet/04 - Static (Live).m4a ← 568 <tmp>/library/Arbor/Dahlia (Deluxe Edition)/00 - Orbit - Extended Mix.m4a (isrc; playlists pl0)
+[MERGE] keep 30 ← 255; old file → <tmp>/replaced/255-05 - Harbour Lights (Demo).m4a
+[MERGE] keep 32 ← 532; old file → <tmp>/replaced/532-04 - Static (Live).1.m4a
+[MERGE] keep 32 ← 568; old file → <tmp>/replaced/568-00 - Orbit - Extended Mix.m4a
+  [MANUAL] 381 <tmp>/library/Cinder/Garnet/01 - Harbour Lights.m4a: the same track as album item 39 (isrc), but imported by hand; kept
+  [MANUAL] 435 <tmp>/library/Cinder/Heron/10 - Paper Moon.m4a: the same track as album item 37 (spotify id), but imported by hand; kept
+[ALBUM] Cinder — Heron: 8 loose item(s) superseded, 6 kept
+  [SUPERSEDE] 39 <tmp>/library/Cinder/Heron/04 - Paper Moon.1.m4a ← 213 <tmp>/library/Cinder/Heron/04 - Paper Moon.m4a (tracklist disc/track; playlists pl2)
+  [SUPERSEDE] 39 <tmp>/library/Cinder/Heron/04 - Paper Moon.1.m4a ← 546 <tmp>/library/Arbor/Heron/12 - Paper Moon.m4a (recording id; playlists pl1)
+  [MOVE] 39 <tmp>/library/Cinder/Heron/04 - Paper Moon.1.m4a → <tmp>/library/Cinder/Heron/04 - Paper Moon.m4a: the path its loose copy held
+  [SUPERSEDE] 38 <tmp>/library/Cinder/Heron/03 - Ash.m4a ← 292 <tmp>/library/Arbor/Glass (Demo) 153/04 - Glass (Demo).m4a (spotify id; playlists pl3)
+  [SUPERSEDE] 38 <tmp>/library/Cinder/Heron/03 - Ash.m4a ← 336 <tmp>/library/Arbor/Jade (Deluxe Edition)/07 - Lantern.m4a (spotify id; playlists pl3)
+  [SUPERSEDE] 41 <tmp>/library/Cinder/Heron/06 - Glass - Remastered 2011.1.m4a ← 326 <tmp>/library/Cinder/Hollow - Remastered 2011/12 - Hollow - Remastered 2011.m4a (spotify id; playlists pl0)
+  [SUPERSEDE] 41 <tmp>/library/Cinder/Heron/06 - Glass - Remastered 2011.1.m4a ← 544 <tmp>/library/Cinder/Heron/00 - Hollow.m4a (spotify id; playlists pl3)
+  [SUPERSEDE] 40 <tmp>/library/Cinder/Heron/01 - Harbour Lights (Live).1.m4a ← 436 <tmp>/library/Cinder/Heron/01 - Harbour Lights (Live).m4a (same audio, fingerprint ber=0.03, 0s apart; playlists pl3)
+  [MOVE] 40 <tmp>/library/Cinder/Heron/01 - Harbour Lights (Live).1.m4a → <tmp>/library/Cinder/Heron/01 - Harbour Lights (Live).m4a: the path its loose copy held
+  [SUPERSEDE] 37 <tmp>/library/Cinder/Heron/02 - Paper Moon.m4a ← 500 <tmp>/library/Cinder/Paper Moon 361/01 - Paper Moon.m4a (recording id; playlists pl2)
+[MERGE] keep 39 ← 213; old file → <tmp>/replaced/213-04 - Paper Moon.m4a
+[MERGE] keep 39 ← 546; old file → <tmp>/replaced/546-12 - Paper Moon.m4a
+[MERGE] keep 38 ← 292; old file → <tmp>/replaced/292-04 - Glass (Demo).m4a
+[MERGE] keep 38 ← 336; old file → <tmp>/replaced/336-07 - Lantern.m4a
+[MERGE] keep 41 ← 326; old file → <tmp>/replaced/326-12 - Hollow - Remastered 2011.m4a
+[MERGE] keep 41 ← 544; old file → <tmp>/replaced/544-00 - Hollow.m4a
+[MERGE] keep 40 ← 436; old file → <tmp>/replaced/436-01 - Harbour Lights (Live).m4a
+[MERGE] keep 37 ← 500; old file → <tmp>/replaced/500-01 - Paper Moon.m4a
+[ALBUM] Basalt — Iris: 2 loose item(s) superseded, 12 kept
+  [SUPERSEDE] 44 <tmp>/library/Basalt/Iris (Deluxe Edition)/03 - Vesper.1.m4a ← 210 <tmp>/library/Basalt/Iris (Deluxe Edition)/00 - Vesper.m4a (same audio, fingerprint ber=0.03, 0s apart; playlists pl0)
+  [SUPERSEDE] 44 <tmp>/library/Basalt/Iris (Deluxe Edition)/03 - Vesper.1.m4a ← 419 <tmp>/library/Basalt/Harbour Lights 280/09 - Harbour Lights.m4a (recording id; playlists pl3)
+[MERGE] keep 44 ← 210; old file → <tmp>/replaced/210-00 - Vesper.m4a
+[MERGE] keep 44 ← 419; old file → <tmp>/replaced/419-09 - Harbour Lights.m4a
+  [MANUAL] 169 <tmp>/library/Basalt/Tide - Remastered 2011 30/01 - Tide - Remastered 2011.m4a: the same track as album item 45 (isrc), but imported by hand; kept
+  [MANUAL] 215 <tmp>/library/Fjord/Jade/01 - Harbour Lights.m4a: the same track as album item 45 (isrc), but imported by hand; kept
+  [MANUAL] 307 <tmp>/library/Arbor/Jade (Deluxe Edition)/06 - Paper Moon - Extended Mix.1.m4a: the same track as album item 48 (same audio, acoustid aid-9-3, 0s apart), but imported by hand; kept
+[ALBUM] Arbor — Jade: 7 loose item(s) superseded, 14 kept
+  [SUPERSEDE] 48 <tmp>/library/Arbor/Jade (Deluxe Edition)/06 - Paper Moon - Extended Mix.m4a ← 152 <tmp>/library/Arbor/Jade (Deluxe Edition)/03 - Paper Moon - Extended Mix.m4a (spotify id; playlists pl1)
+  [SUPERSEDE] 48 <tmp>/library/Arbor/Jade (Deluxe Edition)/06 - Paper Moon - Extended Mix.m4a ← 171 <tmp>/library/Arbor/Jade (Deluxe Edition)/09 - Paper Moon - Extended Mix.m4a (isrc; playlists pl3)
+  [SUPERSEDE] 49 <tmp>/library/Arbor/Jade (Deluxe Edition)/05 - Vesper.m4a ← 173 <tmp>/library/Arbor/Northern 34/05 - Northern.m4a (recording id; playlists pl0)
+  [SUPERSEDE] 45 <tmp>/library/Arbor/Jade (Deluxe Edition)/01 - Tide (Live).m4a ← 323 <tmp>/library/Arbor/Ash - Extended Mix 184/06 - Ash - Extended Mix.m4a (spotify id; playlists pl3)
+  [SUPERSEDE] 45 <tmp>/library/Arbor/Jade (Deluxe Edition)/01 - Tide (Live).m4a ← 396 <tmp>/library/Arbor/Tide 257/00 - Tide.m4a (same audio, fingerprint ber=0.03, 2s apart; playlists pl3)
+  [SUPERSEDE] 45 <tmp>/library/Arbor/Jade (Deluxe Edition)/01 - Tide (Live).m4a ← 446 <tmp>/library/Arbor/Jade (Deluxe Edition)/01 - Tide (Live).1.m4a (tracklist disc/track; playlists pl2)
+  [SUPERSEDE] 47 <tmp>/library/Arbor/Jade (Deluxe Edition)/11 - Lantern.m4a ← 411 <tmp>/library/Dune/Quartz/02 - Undertow (Demo).m4a (spotify id; playlists pl3)
+[MERGE] keep 48 ← 152; old file → <tmp>/replaced/152-03 - Paper Moon - Extended Mix.m4a
+[MERGE] keep 48 ← 171; old file → <tmp>/replaced/171-09 - Paper Moon - Extended Mix.m4a
+[MERGE] keep 49 ← 173; old file → <tmp>/replaced/173-05 - Northern.m4a
+[MERGE] keep 45 ← 323; old file → <tmp>/replaced/323-06 - Ash - Extended Mix.m4a
+[MERGE] keep 45 ← 396; old file → <tmp>/replaced/396-00 - Tide.m4a
+[MERGE] keep 45 ← 446; old file → <tmp>/replaced/446-01 - Tide (Live).1.m4a
+[MERGE] keep 47 ← 411; old file → <tmp>/replaced/411-02 - Undertow (Demo).m4a
+[ALBUM] Fjord — Kestrel: 3 loose item(s) superseded, 15 kept
+  [SUPERSEDE] 51 <tmp>/library/Fjord/Kestrel/02 - Static (Live).m4a ← 312 <tmp>/library/Fjord/Kestrel/02 - Static (Live).2.m4a (disc/track; playlists pl2)
+  [SUPERSEDE] 51 <tmp>/library/Fjord/Kestrel/02 - Static (Live).m4a ← 370 <tmp>/library/Basalt/Bramble/05 - Hollow - Extended Mix.m4a (isrc; playlists pl1)
+  [SUPERSEDE] 51 <tmp>/library/Fjord/Kestrel/02 - Static (Live).m4a ← 421 <tmp>/library/Cinder/Vesper - Remastered 2011 282/01 - Tide.m4a (isrc; playlists pl0)
+[MERGE] keep 51 ← 312; old file → <tmp>/replaced/312-02 - Static (Live).2.m4a
+[MERGE] keep 51 ← 370; old file → <tmp>/replaced/370-05 - Hollow - Extended Mix.m4a
+[MERGE] keep 51 ← 421; old file → <tmp>/replaced/421-01 - Tide.m4a
+[ALBUM] Basalt — Nettle: 1 loose item(s) superseded, 10 kept
+  [SUPERSEDE] 60 <tmp>/library/Basalt/Nettle/02 - Static.m4a ← 239 <tmp>/library/Basalt/Paper Moon 100/02 - Static.m4a (same audio, acoustid aid-13-1, 0s apart; playlists pl2)
+[MERGE] keep 60 ← 239; old file → <tmp>/replaced/239-02 - Static.m4a
+  [MANUAL] 141 <tmp>/library/Basalt/Onyx/06 - Lantern.m4a: the same track as album item 66 (isrc), but imported by hand; kept
+  [MANUAL] 201 <tmp>/library/Dune/Quartz/11 - Ash.m4a: the same track as album item 62 (isrc), but imported by hand; kept
+  [MANUAL] 242 <tmp>/library/Basalt/Onyx/10 - Paper Moon (Demo).m4a: the same track as album item 63 (spotify id), but imported by hand; kept
+  [MANUAL] 423 <tmp>/library/Basalt/Lantern (Demo) 284/11 - Lantern (Demo).m4a: the same track as album item 64 (isrc), but imported by hand; kept
+[ALBUM] Basalt — Onyx: 9 loose item(s) superseded, 17 kept
+  [SUPERSEDE] 67 <tmp>/library/Basalt/Onyx/06 - Glass.m4a ← 154 <tmp>/library/Basalt/Onyx/06 - Glass.1.m4a (disc/track; playlists pl3)
+  [SUPERSEDE] 67 <tmp>/library/Basalt/Onyx/06 - Glass.m4a ← 322 <tmp>/library/Ember/Cedar/02 - Undertow (Demo).m4a (isrc; playlists pl1)
+  [SUPERSEDE] 67 <tmp>/library/Basalt/Onyx/06 - Glass.m4a ← 477 <tmp>/library/Basalt/Onyx/08 - Glass.m4a (same audio, fingerprint ber=0.03, 0s apart; playlists pl0)
+  [SUPERSEDE] 65 <tmp>/library/Basalt/Onyx/04 - Vesper - Remastered 2011.1.m4a ← 269 <tmp>/library/Basalt/Onyx/11 - Tide (Demo).m4a (spotify id; playlists pl0)
+  [SUPERSEDE] 65 <tmp>/library/Basalt/Onyx/04 - Vesper - Remastered 2011.1.m4a ← 356 <tmp>/library/Basalt/Lichen/07 - Vesper - Remastered 2011.m4a (same audio, fingerprint ber=0.00, 0s apart; playlists pl3)
+  [SUPERSEDE] 62 <tmp>/library/Basalt/Onyx/01 - Lantern.m4a ← 338 <tmp>/library/Ember/Fern/09 - Ash.m4a (isrc; playlists pl3)
+  [SUPERSEDE] 62 <tmp>/library/Basalt/Onyx/01 - Lantern.m4a ← 466 <tmp>/library/Basalt/Lantern 327/03 - Lantern.m4a (same audio, fingerprint ber=0.00, 2s apart; playlists pl1)
+  [SUPERSEDE] 66 <tmp>/library/Basalt/Onyx/05 - Hollow (Live).1.m4a ← 341 <tmp>/library/Arbor/Vesper - Remastered 2011 202/05 - Vesper - Remastered 2011.m4a (isrc; playlists pl0)
+  [SUPERSEDE] 69 <tmp>/library/Basalt/Onyx/08 - Paper Moon (Live).m4a ← 578 <tmp>/library/Arbor/Rowan (Deluxe Edition)/12 - Lantern (Demo).m4a (isrc; playlists pl2)
+[MERGE] keep 67 ← 154; old file → <tmp>/replaced/154-06 - Glass.1.m4a
+[MERGE] keep 67 ← 322; old file → <tmp>/replaced/322-02 - Undertow (Demo).m4a
+[MERGE] keep 67 ← 477; old file → <tmp>/replaced/477-08 - Glass.m4a
+[MERGE] keep 65 ← 269; old file → <tmp>/replaced/269-11 - Tide (Demo).m4a
+[MERGE] keep 65 ← 356; old file → <tmp>/replaced/356-07 - Vesper - Remastered 2011.m4a
+[MERGE] keep 62 ← 338; old file → <tmp>/replaced/338-09 - Ash.m4a
+[MERGE] keep 62 ← 466; old file → <tmp>/replaced/466-03 - Lantern.m4a
+[MERGE] keep 66 ← 341; old file → <tmp>/replaced/341-05 - Vesper - Remastered 2011.m4a
+[MERGE] keep 69 ← 578; old file → <tmp>/replaced/578-12 - Lantern (Demo).m4a
+[ALBUM] Arbor — Rowan: 3 loose item(s) superseded, 18 kept
+  [SUPERSEDE] 85 <tmp>/library/Arbor/Rowan (Deluxe Edition)/05 - Orbit - Remastered 2011.m4a ← 317 <tmp>/library/Cinder/Garnet/01 - Tide.m4a (spotify id; playlists pl2)
+  [SUPERSEDE] 85 <tmp>/library/Arbor/Rowan (Deluxe Edition)/05 - Orbit - Remastered 2011.m4a ← 394 <tmp>/library/Arbor/Undertow - Remastered 2011 255/05 - Undertow - Remastered 2011.m4a (spotify id; playlists pl0)
+  [SUPERSEDE] 81 <tmp>/library/Arbor/Rowan (Deluxe Edition)/06 - Northern - Remastered 2011.m4a ← 468 <tmp>/library/Arbor/Dahlia (Deluxe Edition)/00 - Hollow.m4a (isrc; playlists pl2)
+[MERGE] keep 85 ← 317; old file → <tmp>/replaced/317-01 - Tide.m4a
+[MERGE] keep 85 ← 394; old file → <tmp>/replaced/394-05 - Undertow - Remastered 2011.m4a
+[MERGE] keep 81 ← 468; old file → <tmp>/replaced/468-00 - Hollow.m4a
+[ALBUM] Arbor — Sorrel: 2 loose item(s) superseded, 25 kept
+  [SUPERSEDE] 90 <tmp>/library/Arbor/Sorrel/03 - Glass.m4a ← 143 <tmp>/library/Arbor/Sorrel/03 - Glass - Remastered 2011.m4a (tracklist disc/track; playlists pl1)
+  [SUPERSEDE] 89 <tmp>/library/Arbor/Sorrel/02 - Vesper.m4a ← 540 <tmp>/library/Arbor/Sorrel/06 - Vesper.m4a (same audio, acoustid aid-0, 0s apart; playlists pl0)
+[MERGE] keep 90 ← 143; old file → <tmp>/replaced/143-03 - Glass - Remastered 2011.m4a
+[MERGE] keep 89 ← 540; old file → <tmp>/replaced/540-06 - Vesper.m4a
+  [MANUAL] 520 <tmp>/library/Fjord/Garnet/04 - Lantern.m4a: the same track as album item 91 (spotify id), but imported by hand; kept
+[ALBUM] Cinder — Thistle: 6 loose item(s) superseded, 9 kept
+  [SUPERSEDE] 93 <tmp>/library/Cinder/Thistle/03 - Undertow (Demo).1.m4a ← 244 <tmp>/library/Cinder/Garnet/10 - Undertow.m4a (spotify id; playlists pl1)
+  [SUPERSEDE] 93 <tmp>/library/Cinder/Thistle/03 - Undertow (Demo).1.m4a ← 422 <tmp>/library/Cinder/Tide (Live)/05 - Tide (Live).m4a (spotify id; playlists pl3)
+  [SUPERSEDE] 93 <tmp>/library/Cinder/Thistle/03 - Undertow (Demo).1.m4a ← 489 <tmp>/library/Cinder/Thistle/10 - Undertow (Demo).m4a (spotify id; playlists pl1)
+  [SUPERSEDE] 93 <tmp>/library/Cinder/Thistle/03 - Undertow (Demo).1.m4a ← 517 <tmp>/library/Cinder/Thistle/01 - Hollow - Extended Mix.m4a (spotify id; playlists pl3)
+  [SUPERSEDE] 91 <tmp>/library/Cinder/Thistle/01 - Paper Moon.1.m4a ← 373 <tmp>/library/Cinder/Thistle/01 - Paper Moon.2.m4a (tracklist disc/track; playlists pl0)
+  [SUPERSEDE] 91 <tmp>/library/Cinder/Thistle/01 - Paper Moon.1.m4a ← 588 <tmp>/library/Cinder/Thistle/00 - Paper Moon.m4a (spotify id; playlists pl0)
+[MERGE] keep 93 ← 244; old file → <tmp>/replaced/244-10 - Undertow.m4a
+[MERGE] keep 93 ← 422; old file → <tmp>/replaced/422-05 - Tide (Live).m4a
+[MERGE] keep 93 ← 489; old file → <tmp>/replaced/489-10 - Undertow (Demo).m4a
+[MERGE] keep 93 ← 517; old file → <tmp>/replaced/517-01 - Hollow - Extended Mix.m4a
+[MERGE] keep 91 ← 373; old file → <tmp>/replaced/373-01 - Paper Moon.2.m4a
+[MERGE] keep 91 ← 588; old file → <tmp>/replaced/588-00 - Paper Moon.m4a
+[ALBUM] Ember — Vetch: 2 loose item(s) superseded, 6 kept
+  [SUPERSEDE] 99 <tmp>/library/Ember/Vetch/07 - Hollow.1.m4a ← 502 <tmp>/library/Basalt/Kestrel/03 - Hollow.m4a (isrc; playlists pl2)
+  [SUPERSEDE] 98 <tmp>/library/Ember/Vetch/05 - Glass.m4a ← 539 <tmp>/library/Ember/Vetch/05 - Glass.1.m4a (tracklist disc/track; playlists pl0)
+[MERGE] keep 99 ← 502; old file → <tmp>/replaced/502-03 - Hollow.m4a
+[MERGE] keep 98 ← 539; old file → <tmp>/replaced/539-05 - Glass.1.m4a
+[ALBUM] Fjord — Willow: 2 loose item(s) superseded, 8 kept
+  [SUPERSEDE] 102 <tmp>/library/Fjord/Willow/05 - Ash - Remastered 2011.1.m4a ← 296 <tmp>/library/Fjord/Willow/05 - Ash - Remastered 2011.m4a (same audio, fingerprint ber=0.03, 2s apart; playlists pl2)
+  [SUPERSEDE] 102 <tmp>/library/Fjord/Willow/05 - Ash - Remastered 2011.1.m4a ← 554 <tmp>/library/Dune/Zinnia/11 - Ash - Remastered 2011.m4a (spotify id; playlists pl3)
+  [MOVE] 102 <tmp>/library/Fjord/Willow/05 - Ash - Remastered 2011.1.m4a → <tmp>/library/Fjord/Willow/05 - Ash - Remastered 2011.m4a: the path its loose copy held
+[MERGE] keep 102 ← 296; old file → <tmp>/replaced/296-05 - Ash - Remastered 2011.m4a
+[MERGE] keep 102 ← 554; old file → <tmp>/replaced/554-11 - Ash - Remastered 2011.m4a
+  [MANUAL] 228 <tmp>/library/Arbor/Yarrow/02 - Harbour Lights.1.m4a: the same track as album item 106 (disc/track), but imported by hand; kept
+[ALBUM] Arbor — Yarrow: 4 loose item(s) superseded, 18 kept
+  [SUPERSEDE] 110 <tmp>/library/Arbor/Yarrow/06 - Hollow.1.m4a ← 218 <tmp>/library/Arbor/Glass (Live) 79/02 - Hollow - Extended Mix.m4a (same audio, fingerprint ber=0.03, 0s apart; playlists pl2)
+  [SUPERSEDE] 107 <tmp>/library/Arbor/Yarrow/03 - Ash.m4a ← 231 <tmp>/library/Arbor/Yarrow/11 - Ash.m4a (spotify id; playlists pl0)
+  [SUPERSEDE] 111 <tmp>/library/Arbor/Yarrow/07 - Glass.1.m4a ← 335 <tmp>/library/Arbor/Glass 196/01 - Glass.m4a (same audio, fingerprint ber=0.03, 2s apart; playlists pl1)
+  [SUPERSEDE] 109 <tmp>/library/Arbor/Yarrow/05 - Tide.m4a ← 495 <tmp>/library/Arbor/Orbit/02 - Tide - Remastered 2011.m4a (same audio, fingerprint ber=0.03, 0s apart; playlists pl3)
+[MERGE] keep 110 ← 218; old file → <tmp>/replaced/218-02 - Hollow - Extended Mix.m4a
+[MERGE] keep 107 ← 231; old file → <tmp>/replaced/231-11 - Ash.m4a
+[MERGE] keep 111 ← 335; old file → <tmp>/replaced/335-01 - Glass.m4a
+[MERGE] keep 109 ← 495; old file → <tmp>/replaced/495-02 - Tide - Remastered 2011.m4a
+  [MANUAL] 392 <tmp>/library/Arbor/Zinnia (Deluxe Edition)/02 - Static (Live) - Remastered 2011.m4a: the same track as album item 113 (disc/track), but imported by hand; kept
+[ALBUM] Arbor — Zinnia: 1 loose item(s) superseded, 11 kept
+  [SUPERSEDE] 114 <tmp>/library/Arbor/Zinnia (Deluxe Edition)/03 - Northern (Live).m4a ← 548 <tmp>/library/Arbor/Zinnia (Deluxe Edition)/10 - Undertow.m4a (isrc; playlists pl1)
+[MERGE] keep 114 ← 548; old file → <tmp>/replaced/548-10 - Undertow.m4a
+[ALBUM] Fjord — Aspen: 3 loose item(s) superseded, 13 kept
+  [SUPERSEDE] 115 <tmp>/library/Fjord/Aspen/01 - Paper Moon.1.m4a ← 191 <tmp>/library/Fjord/Aspen/09 - Paper Moon.m4a (same audio, fingerprint ber=0.00, 2s apart; playlists pl0)
+  [SUPERSEDE] 115 <tmp>/library/Fjord/Aspen/01 - Paper Moon.1.m4a ← 414 <tmp>/library/Fjord/Aspen/01 - Paper Moon.m4a (disc/track; playlists pl3)
+  [MOVE] 115 <tmp>/library/Fjord/Aspen/01 - Paper Moon.1.m4a → <tmp>/library/Fjord/Aspen/01 - Paper Moon.m4a: the path its loose copy held
+  [SUPERSEDE] 116 <tmp>/library/Fjord/Aspen/00 - Undertow.1.m4a ← 385 <tmp>/library/Fjord/Aspen/00 - Undertow.m4a (disc/track; playlists pl2)
+  [MOVE] 116 <tmp>/library/Fjord/Aspen/00 - Undertow.1.m4a → <tmp>/library/Fjord/Aspen/00 - Undertow.m4a: the path its loose copy held
+[MERGE] keep 115 ← 191; old file → <tmp>/replaced/191-09 - Paper Moon.m4a
+[MERGE] keep 115 ← 414; old file → <tmp>/replaced/414-01 - Paper Moon.m4a
+[MERGE] keep 116 ← 385; old file → <tmp>/replaced/385-00 - Undertow.m4a
+[ALBUM] Basalt — Bramble: 5 loose item(s) superseded, 19 kept
+  [SUPERSEDE] 124 <tmp>/library/Basalt/Bramble/10 - Harbour Lights.1.m4a ← 166 <tmp>/library/Ember/Fern/08 - Hollow - Remastered 2011.m4a (spotify id; playlists pl1)
+  [SUPERSEDE] 124 <tmp>/library/Basalt/Bramble/10 - Harbour Lights.1.m4a ← 276 <tmp>/library/Cinder/Garnet/05 - Vesper.1.m4a (spotify id; playlists pl3)
+  [SUPERSEDE] 121 <tmp>/library/Basalt/Bramble/03 - Static (Live).m4a ← 275 <tmp>/library/Basalt/Bramble/09 - Harbour Lights - Extended Mix.m4a (tracklist isrc; playlists pl3)
+  [SUPERSEDE] 121 <tmp>/library/Basalt/Bramble/03 - Static (Live).m4a ← 443 <tmp>/library/Basalt/Bramble/02 - Hollow.1.m4a (tracklist isrc; playlists pl1)
+  [SUPERSEDE] 121 <tmp>/library/Basalt/Bramble/03 - Static (Live).m4a ← 560 <tmp>/library/Basalt/Bramble/04 - Harbour Lights.m4a (tracklist isrc; playlists pl3)
+[MERGE] keep 124 ← 166; old file → <tmp>/replaced/166-08 - Hollow - Remastered 2011.m4a
+[MERGE] keep 124 ← 276; old file → <tmp>/replaced/276-05 - Vesper.1.m4a
+[MERGE] keep 121 ← 275; old file → <tmp>/replaced/275-09 - Harbour Lights - Extended Mix.m4a
+[MERGE] keep 121 ← 443; old file → <tmp>/replaced/443-02 - Hollow.1.m4a
+[MERGE] keep 121 ← 560; old file → <tmp>/replaced/560-04 - Harbour Lights.m4a
+  [MANUAL] 146 <tmp>/library/Basalt/Elder/07 - Tide - Remastered 2011.m4a: the same track as album item 129 (spotify id), but imported by hand; kept
+  [MANUAL] 279 <tmp>/library/Ember/Cedar/06 - Tide - Remastered 2011.m4a: the same track as album item 129 (spotify id), but imported by hand; kept
+[ALBUM] Ember — Cedar: 7 loose item(s) superseded, 7 kept
+  [SUPERSEDE] 129 <tmp>/library/Ember/Cedar/05 - Tide - Remastered 2011.m4a ← 148 <tmp>/library/Ember/Cedar/05 - Tide - Remastered 2011.1.m4a (tracklist disc/track; playlists pl2)
+  [SUPERSEDE] 129 <tmp>/library/Ember/Cedar/05 - Tide - Remastered 2011.m4a ← 452 <tmp>/library/Ember/Cedar/07 - Undertow (Demo).m4a (spotify id; playlists pl3)
+  [SUPERSEDE] 128 <tmp>/library/Ember/Cedar/02 - Ash.m4a ← 305 <tmp>/library/Ember/Cedar/04 - Harbour Lights.m4a (spotify id; playlists pl1)
+  [SUPERSEDE] 128 <tmp>/library/Ember/Cedar/02 - Ash.m4a ← 442 <tmp>/library/Ember/Cedar/08 - Orbit (Demo).m4a (tracklist isrc; playlists pl0)
+  [SUPERSEDE] 128 <tmp>/library/Ember/Cedar/02 - Ash.m4a ← 475 <tmp>/library/Ember/Cedar/09 - Harbour Lights (Demo).m4a (spotify id; playlists pl1)
+  [SUPERSEDE] 128 <tmp>/library/Ember/Cedar/02 - Ash.m4a ← 484 <tmp>/library/Ember/Cedar/12 - Ash.m4a (spotify id; playlists pl0)
+  [SUPERSEDE] 128 <tmp>/library/Ember/Cedar/02 - Ash.m4a ← 525 <tmp>/library/Ember/Vetch/02 - Hollow (Live).m4a (isrc; playlists pl0)
+[MERGE] keep 129 ← 148; old file → <tmp>/replaced/148-05 - Tide - Remastered 2011.1.m4a
+[MERGE] keep 129 ← 452; old file → <tmp>/replaced/452-07 - Undertow (Demo).m4a
+[MERGE] keep 128 ← 305; old file → <tmp>/replaced/305-04 - Harbour Lights.m4a
+[MERGE] keep 128 ← 442; old file → <tmp>/replaced/442-08 - Orbit (Demo).m4a
+[MERGE] keep 128 ← 475; old file → <tmp>/replaced/475-09 - Harbour Lights (Demo).m4a
+[MERGE] keep 128 ← 484; old file → <tmp>/replaced/484-12 - Ash.m4a
+[MERGE] keep 128 ← 525; old file → <tmp>/replaced/525-02 - Hollow (Live).m4a
+[ALBUM] Arbor — Dahlia: 5 loose item(s) superseded, 10 kept
+  [SUPERSEDE] 132 <tmp>/library/Arbor/Dahlia (Deluxe Edition)/03 - Harbour Lights.m4a ← 178 <tmp>/library/Arbor/Dahlia (Deluxe Edition)/03 - Harbour Lights.1.m4a (tracklist disc/track; playlists pl3)
+  [SUPERSEDE] 132 <tmp>/library/Arbor/Dahlia (Deluxe Edition)/03 - Harbour Lights.m4a ← 418 <tmp>/library/Arbor/Willow/07 - Harbour Lights.m4a (spotify id; playlists pl3)
+  [SUPERSEDE] 132 <tmp>/library/Arbor/Dahlia (Deluxe Edition)/03 - Harbour Lights.m4a ← 458 <tmp>/library/Ember/Lichen/10 - Undertow.m4a (spotify id; playlists pl2)
+  [SUPERSEDE] 132 <tmp>/library/Arbor/Dahlia (Deluxe Edition)/03 - Harbour Lights.m4a ← 575 <tmp>/library/Arbor/Dahlia (Deluxe Edition)/03 - Harbour Lights.3.m4a (same audio, fingerprint ber=0.00, 0s apart; playlists pl1)
+  [SUPERSEDE] 131 <tmp>/library/Arbor/Dahlia (Deluxe Edition)/02 - Static.m4a ← 437 <tmp>/library/Cinder/Delta/10 - Undertow - Extended Mix.m4a (isrc; playlists pl3)
+[MERGE] keep 132 ← 178; old file → <tmp>/replaced/178-03 - Harbour Lights.1.m4a
+[MERGE] keep 132 ← 418; old file → <tmp>/replaced/418-07 - Harbour Lights.m4a
+[MERGE] keep 132 ← 458; old file → <tmp>/replaced/458-10 - Undertow.m4a
+[MERGE] keep 132 ← 575; old file → <tmp>/replaced/575-03 - Harbour Lights.3.m4a
+[MERGE] keep 131 ← 437; old file → <tmp>/replaced/437-10 - Undertow - Extended Mix.m4a
+  [MANUAL] 289 <tmp>/library/Basalt/Northern 150/12 - Northern.m4a: the same track as album item 134 (isrc), but imported by hand; kept
+[ALBUM] Basalt — Elder: 1 loose item(s) superseded, 4 kept
+  [SUPERSEDE] 135 <tmp>/library/Basalt/Elder/02 - Paper Moon.1.m4a ← 320 <tmp>/library/Basalt/Elder/09 - Paper Moon.m4a (isrc; playlists pl1)
+[MERGE] keep 135 ← 320; old file → <tmp>/replaced/320-09 - Paper Moon.m4a
+  [MANUAL] 285 <tmp>/library/Arbor/Sorrel/07 - Harbour Lights.m4a: the same track as album item 3 (isrc), but imported by hand; kept
+[ALBUM] Arbor — Amber: 1 loose item(s) superseded, 7 kept
+  [SUPERSEDE] 4 <tmp>/library/Arbor/Amber (Deluxe Edition)/12 - Tide.m4a ← 310 <tmp>/library/Arbor/Harbour Lights 171/08 - Harbour Lights.m4a (isrc; playlists pl2)
+[MERGE] keep 4 ← 310; old file → <tmp>/replaced/310-08 - Harbour Lights.m4a
+Supersede backfill: 32 record(s), 26 library read(s)
+pair 4 <- [197, 470] ['same audio, fingerprint ber=0.00, 0s apart', 'same audio, fingerprint ber=0.03, 2s apart']
+pair 3 <- [267, 535, 567] ['isrc', 'isrc', 'isrc']
+pair 1 <- [440, 498] ['isrc', 'isrc']
+pair 8 <- [160, 309, 537] ['same audio, fingerprint ber=0.03, 0s apart', 'same audio, fingerprint ber=0.00, 2s apart', 'isrc']
+pair 7 <- [380, 562] ['spotify id', 'spotify id']
+pair 9 <- [155] ['isrc']
+pair 10 <- [174] ['spotify id']
+pair 11 <- [205, 350, 372] ['spotify id', 'isrc', 'tracklist disc/track']
+pair 20 <- [147, 401] ['isrc', 'isrc']
+pair 17 <- [161, 257, 473, 522] ['isrc', 'isrc', 'isrc', 'isrc']
+pair 15 <- [300] ['tracklist disc/track']
+pair 26 <- [180, 351, 493] ['isrc', 'isrc', 'isrc']
+pair 24 <- [186] ['isrc']
+pair 22 <- [256, 258] ['isrc', 'isrc']
+pair 21 <- [530] ['spotify id']
+pair 28 <- [533] ['spotify id']
+pair 30 <- [255] ['recording id']
+pair 32 <- [532, 568] ['disc/track', 'isrc']
+pair 39 <- [213, 546] ['tracklist disc/track', 'recording id']
+pair 38 <- [292, 336] ['spotify id', 'spotify id']
+pair 41 <- [326, 544] ['spotify id', 'spotify id']
+pair 40 <- [436] ['same audio, fingerprint ber=0.03, 0s apart']
+pair 37 <- [500] ['recording id']
+pair 44 <- [210, 419] ['same audio, fingerprint ber=0.03, 0s apart', 'recording id']
+pair 48 <- [152, 171] ['spotify id', 'isrc']
+pair 49 <- [173] ['recording id']
+pair 45 <- [323, 396, 446] ['spotify id', 'same audio, fingerprint ber=0.03, 2s apart', 'tracklist disc/track']
+pair 47 <- [411] ['spotify id']
+pair 51 <- [312, 370, 421] ['disc/track', 'isrc', 'isrc']
+pair 60 <- [239] ['same audio, acoustid aid-13-1, 0s apart']
+pair 67 <- [154, 322, 477] ['disc/track', 'isrc', 'same audio, fingerprint ber=0.03, 0s apart']
+pair 65 <- [269, 356] ['spotify id', 'same audio, fingerprint ber=0.00, 0s apart']
+pair 62 <- [338, 466] ['isrc', 'same audio, fingerprint ber=0.00, 2s apart']
+pair 66 <- [341] ['isrc']
+pair 69 <- [578] ['isrc']
+pair 85 <- [317, 394] ['spotify id', 'spotify id']
+pair 81 <- [468] ['isrc']
+pair 90 <- [143] ['tracklist disc/track']
+pair 89 <- [540] ['same audio, acoustid aid-0, 0s apart']
+pair 93 <- [244, 422, 489, 517] ['spotify id', 'spotify id', 'spotify id', 'spotify id']
+pair 91 <- [373, 588] ['tracklist disc/track', 'spotify id']
+pair 99 <- [502] ['isrc']
+pair 98 <- [539] ['tracklist disc/track']
+pair 102 <- [296, 554] ['same audio, fingerprint ber=0.03, 2s apart', 'spotify id']
+pair 110 <- [218] ['same audio, fingerprint ber=0.03, 0s apart']
+pair 107 <- [231] ['spotify id']
+pair 111 <- [335] ['same audio, fingerprint ber=0.03, 2s apart']
+pair 109 <- [495] ['same audio, fingerprint ber=0.03, 0s apart']
+pair 114 <- [548] ['isrc']
+pair 115 <- [191, 414] ['same audio, fingerprint ber=0.00, 2s apart', 'disc/track']
+pair 116 <- [385] ['disc/track']
+pair 124 <- [166, 276] ['spotify id', 'spotify id']
+pair 121 <- [275, 443, 560] ['tracklist isrc', 'tracklist isrc', 'tracklist isrc']
+pair 129 <- [148, 452] ['tracklist disc/track', 'spotify id']
+pair 128 <- [305, 442, 475, 484, 525] ['spotify id', 'tracklist isrc', 'spotify id', 'spotify id', 'isrc']
+pair 132 <- [178, 418, 458, 575] ['tracklist disc/track', 'spotify id', 'spotify id', 'same audio, fingerprint ber=0.00, 0s apart']
+pair 131 <- [437] ['isrc']
+pair 135 <- [320] ['isrc']
+pair 4 <- [310] ['isrc']
+# library after the apply
+1 keep,pl3,pl2 S0x0,TX359 USAAA2600000 -
+2 keep - USAAA2600001 -
+3 keep,pl1,pl3 S0x2,TX396 USAAA2600002 -
+4 keep,pl0,pl2 TX58,TX331,TX171 USAAA2600003;GBBBB2600002 -
+5 keep S1x0 - rec-1-0
+6 keep S1x1 - rec-1-1
+7 keep,pl0,pl2 S1x2 - -
+8 keep,pl1,pl3 S1x3,TX21,S27x0,TX170,TX398 USAAA2601003;USAAA2600000 rec-1-3
+9 keep,pl1 S2x0 USAAA2602000 -
+10 keep,pl2 S2x1 USAAA2602001 -
+11 keep,pl3 S2x2,S12x1,TX233 USAAA2602002 rec-2-2
+12 keep S3x0 - -
+13 keep S3x1 - rec-3-1
+14 keep S3x2 - -
+15 keep,pl0 S2x0,TX161 - -
+16 keep S4x1,S1x1 USAAA2604001 -
+17 keep,pl3,pl2,pl1 S4x2,TX22,S22x2,TX383 USAAA2604002 -
+18 keep - - rec-4-3
+19 keep S2x0 USAAA2604004 rec-4-4
+20 keep,pl1,pl0 TX262 USAAA2604005 -
+21 keep,pl1 S5x0,TX391 - -
+22 keep,pl0,pl2 S5x1,TX117,TX119 USAAA2605001;GBBBB2610001 rec-5-1
+23 keep S5x2 USAAA2605002;USAAA2604005 rec-5-2
+24 keep,pl3 S5x3 USAAA2605003 rec-5-3
+25 keep - USAAA2602000 -
+26 keep,pl1,pl0,pl3 S5x5,TX212,TX354 USAAA2605005 rec-5-5
+27 keep S5x6 USAAA2605006 -
+28 keep,pl1 S5x7,TX394 - -
+29 keep S6x0 USAAA2606000 -
+30 keep,pl1 - USAAA2604002 rec-6-1
+31 keep S6x2 USAAA2606002 -
+32 keep,pl1,pl0 TX393 USAAA2606003;GBBBB2628003 rec-6-3
+33 keep S6x4 USAAA2606004 -
+34 keep S6x5 - rec-6-5
+35 keep - - -
+36 keep S7x0 - -
+37 keep,pl2 S7x1 - rec-7-1
+38 keep,pl3 S7x2,TE9x1 USAAA2607002;GBBBB2600002 rec-7-2
+39 keep,pl2,pl1 S7x3,TX74 USAAA2607003 rec-7-3
+40 keep,pl3 S7x4,TX297 - -
+41 keep,pl0,pl3 S7x5 - rec-7-5
+42 keep - - -
+43 keep S8x1 USAAA2608001 -
+44 keep,pl0,pl3 TX71 - rec-8-2
+45 keep,pl3,pl2 S9x0,TX257,TX307 USAAA2609000;USAAA2620002 -
+46 keep S9x1 USAAA2609001 -
+47 keep,pl3 S9x2,S3x0 - rec-9-2
+48 keep,pl1,pl3 S9x3 USAAA2609003 rec-9-3
+49 keep,pl0 S9x4 USAAA2614007 rec-9-4
+50 keep - - -
+51 keep,pl2,pl1,pl0 TX173,TX231,TX282 USAAA2610001 -
+52 keep S10x2 USAAA2610002;USAAA2609003 rec-10-2
+53 keep S11x0,S5x2 - rec-11-0
+54 keep S1x0 USAAA2611001 rec-11-1
+55 keep S11x2 - -
+56 keep S12x0 USAAA2612000 -
+57 keep S12x1 - rec-12-1
+58 keep S12x2 - rec-12-2
+59 keep S13x0 USAAA2613000 -
+60 keep,pl2 S13x1,TX100 USAAA2613001 rec-13-1
+61 keep S13x2 - -
+62 keep,pl3,pl1 S5x6 USAAA2614000 -
+63 keep S14x1 USAAA2614001 rec-14-1
+64 keep - USAAA2614002 -
+65 keep,pl0,pl3 S14x3,TX217 - rec-14-3
+66 keep,pl0 S14x4,TX202 USAAA2614004 rec-14-4
+67 keep,pl3,pl1,pl0 TX15,TX338 USAAA2614005;USAAA2627000 -
+68 keep S14x6,S3x2 - rec-14-6
+69 keep,pl2 - USAAA2614007 -
+70 keep S15x0 USAAA2615000 rec-15-0
+71 keep - - rec-15-1
+72 keep S15x2 - -
+73 keep - USAAA2615003 rec-15-3
+74 keep S15x4 USAAA2615004 -
+75 keep - - -
+76 keep S15x6 USAAA2615006 rec-15-6
+77 keep S15x7 USAAA2615007 rec-15-7
+78 keep S3x0 USAAA2604002 rec-16-0
+79 keep - - rec-16-1
+80 keep S16x2 USAAA2616002 -
+81 keep,pl2 TX329 USAAA2617000 rec-17-0
+82 keep S17x1 - -
+83 keep - USAAA2614007 -
+84 keep - - -
+85 keep,pl2,pl0 S10x2,TX178 USAAA2617004 rec-17-4
+86 keep S17x5 USAAA2617005 -
+87 keep - - rec-17-6
+88 keep S18x0 - -
+89 keep,pl0 TX401 USAAA2610002 -
+90 keep,pl1 S18x2,TX4 - rec-18-2
+91 keep,pl0 S19x0,TX234 USAAA2619000 -
+92 keep S19x1 - -
+93 keep,pl1,pl3 S6x2,S11x0 - -
+94 keep - USAAA2620000 rec-20-0
+95 keep S20x1 - -
+96 keep - USAAA2620002 -
+97 keep - USAAA2620003 rec-20-3
+98 keep,pl0 S21x0,TX400 - rec-21-0
+99 keep,pl2 - USAAA2621001;USAAA2613000 -
+100 keep S21x2 - rec-21-2
+101 keep - USAAA2622000 -
+102 keep,pl2,pl3 S22x1 GBBBB2622000 rec-22-1
+103 keep S22x2 - -
+104 keep S22x3 - -
+105 keep S23x0 USAAA2623000 -
+106 keep - USAAA2623001 -
+107 keep,pl0 S23x2 - -
+108 keep - - -
+109 keep,pl3 S23x4,TX356 USAAA2623004 -
+110 keep,pl2 S23x5 USAAA2623005 rec-23-5
+111 keep,pl1 S23x6,TX196 USAAA2623006 -
+112 keep S24x0 - rec-24-0
+113 keep - - rec-24-1
+114 keep,pl1 S24x2 USAAA2624002 -
+115 keep,pl0,pl3 TX52,TX275 GBBBB2625000 rec-25-0
+116 keep,pl2 TX246 USAAA2625001 rec-25-1
+117 keep S25x2 - rec-25-2
+118 keep S25x3 - rec-25-3
+119 keep - - rec-26-0
+120 keep - USAAA2626001 -
+121 keep,pl3,pl1 S26x2,TX136,TX304,TX421 GBBBB2626002 -
+122 keep S26x3 - rec-26-3
+123 keep - USAAA2626004 -
+124 keep,pl1,pl3 S26x5,S13x2,TX137 - rec-5-3
+125 keep S26x3 USAAA2626006 rec-26-6
+126 keep S26x7 - rec-26-7
+127 keep S27x0 USAAA2627000;USAAA2614005 rec-27-0
+128 keep,pl1,pl0 S27x1,TX303,TW21x1 USAAA2627001;GBBBB2627001 -
+129 keep,pl2,pl3 S27x2,TX9 - -
+130 keep S28x0 USAAA2628000 rec-28-0
+131 keep,pl3 S28x1 USAAA2628001;GBBBB2603000 -
+132 keep,pl3,pl2,pl1 S28x2,TX39,TX319,TX436 - -
+133 keep S28x3 USAAA2628003 -
+134 keep S29x0 USAAA2629000 rec-29-0
+135 keep,pl1 - USAAA2629001 -
+136 keep - - -
+137 keep - USAAA2624002 rec-29-3
+138 keep S29x4 - -
+139 pl1 - - -
+140 pl0 TE19x0 - -
+141 pl2 TX2 USAAA2614004 -
+142 pl1 TX3 - -
+144 pl3 S13x0 - -
+145 pl3 - - -
+146 pl0 S27x2 - -
+149 pl0 TX10 - -
+150 pl2 TX11 - -
+151 pl2 TX12 - -
+153 pl3 - USAAA2627000;USAAA2614005 -
+156 pl0 TX17 - -
+157 pl0 TX18 - -
+158 pl3 - USAAA2628003 -
+159 pl1 - - rec-12-1
+162 pl1 TX23 - -
+163 pl0 TX24 GBBBB2626002 -
+164 pl3 TX25 GBBBB2626002 -
+165 pl0 TX26 - -
+167 pl2 TX28 - -
+168 pl3 - - -
+169 pl0 TX30 USAAA2609000 -
+170 pl3 TX31 - -
+172 pl3 TX33 - -
+175 pl3 TX36 - -
+176 pl3 TX37 - -
+177 pl3 TX38 - -
+179 pl3 TX40,S25x2 - -
+181 pl3 S23x4 GBBBB2603000 -
+182 pl3 S1x3 - -
+183 pl1 TX44 - -
+184 pl0 - - -
+185 pl1 TX46 - -
+187 pl2 TX48 - -
+188 pl1 - - -
+189 pl1 S20x1 - -
+190 pl2 S12x2 - -
+192 pl3 TX53 - -
+193 pl3 TX54 - -
+194 pl3 TX55 - -
+195 pl0 TX56 - -
+196 pl2 TX57 - -
+198 pl2 TX59 - -
+199 pl1 TX60 - -
+200 pl1 TX61 - -
+201 pl2 TX62 USAAA2614000 -
+202 pl1 TX63 - -
+203 pl3 TX64 - -
+204 pl2 TX65 GBBBB2622000 -
+206 pl3 TX67 - -
+207 pl3 TX68 - -
+208 pl1 - - rec-1-1
+209 pl1 TX70 - -
+211 pl1 TX72 - -
+212 pl1 TX73 - -
+214 pl3 - - -
+215 pl1 TX76 USAAA2609000 -
+216 pl1 TX77 - -
+217 pl1 TX78 - -
+219 pl1 TW22x0 - -
+220 pl1 TX81 - -
+221 pl1 TX82 - -
+222 pl3 TX83 - -
+223 pl3 TX84,S28x3 - -
+224 pl2 TX85 USAAA2613000 -
+225 pl2 - USAAA2612000 -
+226 pl0 TX87 - -
+227 pl1 - USAAA2611001 -
+228 pl0 TX89,S8x1 - -
+229 pl0 TX90 - -
+230 pl0 TX91 - -
+232 pl3 - - -
+233 pl1 - - -
+234 pl0 TX95 - -
+235 pl2 TX96 - -
+236 pl3 TX97 GBBBB2609003 -
+237 pl1 TX98 GBBBB2606001 -
+238 pl1 - - -
+240 pl2 TX101 - -
+241 pl1 TX102 - -
+242 pl3 S14x1 - -
+243 pl2 - - -
+245 pl0 TX106 - -
+246 pl3 TX107 GBBBB2626004 -
+247 pl1 TE21x2 - -
+248 pl0 - USAAA2615000 -
+249 pl0 TX110 - -
+250 pl0 TX111 - -
+251 pl3 TX112 - -
+252 pl1 TX113 - -
+253 pl0 - - -
+254 pl3 TW0x2 - -
+259 pl0 - - -
+260 pl3 S4x1 - rec-26-0
+261 pl0 - - -
+262 pl0 TX123,S9x1 - -
+263 pl3 TX124 - -
+264 pl0 TX125 - -
+265 pl1 - USAAA2623000 -
+266 pl1 TX127 - -
+268 pl3 TX129 - -
+270 pl0 TX131 GBBBB2609004 -
+271 pl1 - - -
+272 pl3 TX133 - -
+273 pl3 - - -
+274 pl1 - - rec-21-2
+277 pl2 TX138 - -
+278 pl0 TX139 - -
+279 pl2 S27x2 - -
+280 pl1 TX141 - -
+281 pl2 S24x0 - -
+282 pl0 TX143 - -
+283 pl3 - - rec-17-6
+284 pl3 TX145 - -
+285 pl1 TX146,S2x2 USAAA2600002 -
+286 pl2 TX147 - -
+287 pl0 TX148 - -
+288 pl1 TW19x2 - -
+289 pl0 TX150 USAAA2629000 -
+290 pl0 TX151 - -
+291 pl3 TX152 - -
+293 pl0 TX154 - -
+294 pl3 TX155 - -
+295 pl2 TX156 - -
+297 pl2 TX158 - -
+298 pl1 TX159 - -
+299 pl1 TW0x2 - -
+301 pl3 TX162 - -
+302 pl3 - - -
+303 pl1 TX164 - -
+304 pl1 TX165 - -
+306 pl3 TX167 GBBBB2602000 -
+307 pl3 TX168 - -
+308 pl1 TX169 - -
+311 pl0 - - rec-16-1
+313 pl3 TX174 - -
+314 pl1 TX175,S8x1 - -
+315 pl0 TX176 - -
+316 pl1 S28x0 - -
+318 pl1 TX179 - -
+319 pl0 TX180 - -
+321 pl3 TX182 - -
+324 pl3 TX185 - -
+325 pl1 TX186 - -
+327 pl1 TX188 - -
+328 pl0 TX189 - -
+329 pl3 S12x1 - -
+330 pl0 TX191 - -
+331 pl0 TX192 - -
+332 pl0 - GBBBB2603000 -
+333 pl3 TX194 - -
+334 pl2 - - -
+337 pl0 S15x2 - -
+339 pl0 TX200 - -
+340 pl1 - - rec-11-0
+342 pl3 S15x2 - -
+343 pl0 TX204 - -
+344 pl3 TX205 - -
+345 pl1 S26x7 - -
+346 pl3 TX207 - -
+347 pl2 TX208 - -
+348 pl0 TX209 - -
+349 pl2 TX210 - -
+352 pl0 S15x4 - -
+353 pl0 TX214 - -
+354 pl1 TX215 - -
+355 pl3 TX216 USAAA2617005 -
+357 pl1 TX218 GBBBB2627001 -
+358 pl0 TX219 - -
+359 pl3 TX220 - -
+360 pl0 - - -
+361 pl0 TX222 - -
+362 pl1 TX223 - -
+363 pl3 TX224 - -
+364 pl2 TX225 - -
+365 pl1 TX226 - -
+366 pl0 TW26x1 - -
+367 pl1 - - -
+368 pl2 TX229 - -
+369 pl1 TX230 - -
+371 pl2 TX232 - -
+374 pl3 - - -
+375 pl2 TX236 GBBBB2603000 -
+376 pl0 TX237 - -
+377 pl2 TX238 USAAA2609001 -
+378 pl1 TX239 - -
+379 pl2 - - -
+381 pl1 TX242,S5x0 USAAA2607003 -
+382 pl0 - - -
+383 pl1 S20x1 - -
+384 pl1 - - -
+386 pl2 - - rec-21-0
+387 pl1 TX248 - -
+388 pl2 - USAAA2620000 -
+389 pl3 - USAAA2608001 -
+390 pl0 TX251 - -
+391 pl1 TX252 - -
+392 pl1 TX253 - -
+393 pl2 TX254 - -
+395 pl3 TX256 - -
+397 pl1 TX258 GBBBB2613002 -
+398 pl1 TX259 - -
+399 pl1 TX260 - -
+400 pl2 - - -
+402 pl1 - - -
+403 pl1 S2x0 - -
+404 pl2 TX265 - -
+405 pl0 TX266 - -
+406 pl0 TX267 - -
+407 pl0 TX268 - -
+408 pl1 - - -
+409 pl1 - - -
+410 pl2 TX271 - -
+412 pl1 S12x1 - -
+413 pl0 TE23x1 - -
+415 pl3 TX276 - -
+416 pl1 TX277 - -
+417 pl1 TX278 - -
+420 pl3 TX281 - -
+423 pl0 TX284 USAAA2614002 -
+424 pl1 - - rec-25-0
+425 pl0 TX286 - -
+426 pl2 S15x6 - -
+427 pl2 TX288 - -
+428 pl0 S14x6,S3x2 USAAA2615000 -
+429 pl3 S5x3 - -
+430 pl0 TX291 - -
+431 pl1 TX292 - -
+432 pl0 TW0x1 - -
+433 pl1 - - -
+434 pl2 TX295 - -
+435 pl3 S7x1 - -
+438 pl1 TX299 - -
+439 pl1 TX300 USAAA2610002 -
+441 pl0 TX302 - -
+444 pl2 TX305 - -
+445 pl1 TE10x0,S13x1 - -
+447 pl2 TX308 - -
+448 pl2 TX309 - -
+449 pl2 TW26x1 - -
+450 pl3 TX311 - -
+451 pl1 TX312 - -
+453 pl3 TX314 - -
+454 pl2 TX315 - -
+455 pl2 TX316 - -
+456 pl1 TX317 - -
+457 pl0 TX318 - -
+459 pl1 TX320 - -
+460 pl3 - - -
+461 pl2 TX322 - -
+462 pl2 - USAAA2600001 -
+463 pl3 TX324 - -
+464 pl0 TX325 - -
+465 pl0 TX326 GBBBB2603000 -
+467 pl0 TX328 - -
+469 pl1 TX330 - -
+471 pl2 TX332 - -
+472 pl1 TX333 - -
+474 pl2 TX335 - -
+476 pl1 TX337 - -
+478 pl2 TX339 - -
+479 pl0 TX340,S8x1 - -
+480 pl3 TX341 - -
+481 pl1 TX342 - -
+482 pl2 TX343 - -
+483 pl0 - - -
+485 pl0 - - -
+486 pl1 TX347 - -
+487 pl2 TX348 - -
+488 pl0 TX349 - -
+490 pl1 TX351 - -
+491 pl3 TX352 - -
+492 pl1 TX353 GBBBB2604001 -
+494 pl1 - - rec-11-0
+496 pl1 TX357 - -
+497 pl2 TX358 - -
+499 pl3 TX360 GBBBB2623000 -
+501 pl2 - - -
+503 pl1 TX364 GBBBB2613002 -
+504 pl1 TX365 - -
+505 pl0 S24x0 - -
+506 pl2 - - -
+507 pl1 TX368 - -
+508 pl0 TW17x2 - -
+509 pl0 TW6x1 - -
+510 pl1 TW4x5 - -
+511 pl2 TX372 - -
+512 pl0 - - -
+513 pl0 TX374 - -
+514 pl1 TX375 - -
+515 pl0 TX376 - -
+516 pl1 TX377 - -
+518 pl0 TX379 - -
+519 pl0 - - -
+520 pl1 S19x0 - -
+521 pl0 TX382 - -
+523 pl2 TX384 - -
+524 pl2 TX385 - -
+526 pl2 TX387 - -
+527 pl1 TX388 - -
+528 pl0 - - -
+529 pl0 TX390 - -
+531 pl0 - GBBBB2617000 -
+534 pl0 - - -
+536 pl3 TX397 - -
+538 pl1 TX399 - -
+541 pl0 TX402 USAAA2612000 -
+542 pl0 TX403 - -
+543 pl2 TX404 GBBBB2609004 -
+545 pl0 TX406 - -
+547 pl0 TX408 - -
+549 pl0 TX410 - -
+550 pl2 TX411 GBBBB2625000 -
+551 pl0 TX412 - -
+552 pl3 TX413,S7x0 GBBBB2623000;USAAA2620002 -
+553 pl0 TX414 GBBBB2623000 -
+555 pl2 TX416 - -
+556 pl2 TX417,S20x1 - -
+557 pl1 TX418 - -
+558 pl1 TX419 GBBBB2628003 -
+559 pl3 TX420 - -
+561 pl3 TX422 - -
+563 pl2 TX424 - -
+564 pl3 TX425 - -
+565 pl1 TX426 - -
+566 pl0 - - -
+569 pl3 TX430 - -
+570 pl1 - - rec-10-2
+571 pl2 TX432 - -
+572 pl1 TX433 GBBBB2604001 -
+573 pl3 S11x0 - -
+574 pl1 TX435 - -
+576 pl2 TX437 - -
+577 pl3 TX438 - -
+579 pl2 TX440 - -
+580 pl3 TX441 USAAA2620000 -
+581 pl3 TX442 - -
+582 pl1 TX443 USAAA2620003 -
+583 pl1 TX444 - -
+584 pl2 TX445 - -
+585 pl0 TX446 - -
+586 pl3 TX447 USAAA2608001 -
+587 pl3 TX448 - -
