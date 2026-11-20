@@ -34,6 +34,7 @@ from __future__ import annotations
 import dataclasses
 import logging
 import os
+import re
 import sqlite3
 from collections.abc import Iterable, Mapping
 from datetime import datetime, timezone
@@ -386,6 +387,7 @@ def library_items(track: str, isrc: str | None, db_path: Path = LIBRARY_DB) -> l
                 found.add(item_id)
         if isrc:
             for item_id, codes in conn.execute("SELECT id, isrc FROM items WHERE isrc LIKE ?", (f"%{isrc}%",)):
-                if isrc in (codes or "").split(";"):
+                # ;-joined, and an entry may be several joined by a comma (homelab#2672)
+                if isrc in (c.strip() for c in re.split(r"[;,]", codes or "")):
                     found.add(item_id)
     return sorted(found)

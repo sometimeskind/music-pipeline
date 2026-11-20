@@ -185,8 +185,8 @@ from music_fetch.usenet import words
 
 from music_scan.identity import (
     Credit, add_isrcs, add_to_list, artist_credit, compilation, different_artist, different_song, drop_bad_isrcs,
-    fingerprint, item_isrcs, item_spotify_ids, same_mb_recording, split_isrcs, split_list, spotify_id, use_fpcalc,
-    version_clash,
+    fingerprint, isrc_entries, item_isrcs, item_spotify_ids, same_mb_recording, split_isrcs, split_list, spotify_id,
+    use_fpcalc, version_clash,
 )
 from music_scan.pathfold import fold, library_paths
 
@@ -870,7 +870,7 @@ class MusicPipelinePlugin(BeetsPlugin):
         elif tags.url:
             item["spotify_url"] = tags.url
             add_to_list(item, "spotify_ids", spotify_id(tags.url))
-        add_isrcs(item, split_list(tags.isrc, ";"))
+        add_isrcs(item, isrc_entries(tags.isrc))
 
     def _incoming_identity(self, task, item) -> Incoming:
         """Spotify ID and ISRC from spotdl, plus ISRCs and recording ID from the

@@ -891,12 +891,12 @@ def aligned_isrcs(item, recording: dict, get: MusicBrainzGet | None) -> tuple[st
     by).  When the item then holds none of the recording's and the recording has exactly
     one, that one is added.  A recording looked up without its ISRCs leaves the field
     alone."""
-    from music_scan.identity import isrc_code, split_list  # noqa: PLC0415
+    from music_scan.identity import isrc_code, isrc_entries, split_list  # noqa: PLC0415
 
-    have = split_list(item.get("isrc"), ";")
     isrcs = recording.get("isrcs")
     if isrcs is None:
-        return ";".join(have), []
+        return ";".join(split_list(item.get("isrc"), ";")), []
+    have = isrc_entries(item.get("isrc"))  # a comma-joined entry is its ISRCs, each judged alone
     keep, notes = [], []
     for code in have:
         if not isrc_code(code):
@@ -1135,13 +1135,15 @@ def _aligned(lib, item, recording: dict, new: str, get: MusicBrainzGet,
              songs: dict[str, list[dict]] | None) -> Changes:
     """The ``isrc`` and ``mb_releasetrackid`` changes that go with *new*, logged with why;
     raises :class:`Refused` when a playlist entry would lose its item."""
+    from music_scan.identity import isrc_entries  # noqa: PLC0415
+
     changes: Changes = {}
     before = item.get("isrc") or ""
     after, notes = aligned_isrcs(item, recording, get)
     for note in notes:
         logger.info("    [ISRC] %s", note)
     if after != before:
-        lost = set(filter(None, before.split(";"))) - set(filter(None, after.split(";")))
+        lost = set(isrc_entries(before)) - set(isrc_entries(after))
         if lost:
             if songs is None:
                 raise Refused("the item's ISRC would change and the playlists couldn't be checked "

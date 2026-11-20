@@ -14,7 +14,7 @@ from __future__ import annotations
 
 from collections import Counter
 
-from music_scan.identity import split_list
+from music_scan.identity import isrc_entries
 
 FIELDS = ("items", "unreadable", "isrc differs", "file lacks some of the database's ISRCs",
           "mb_trackid differs", "mtime 0")
@@ -35,7 +35,7 @@ def drift(items) -> Counter:
         except Exception:  # noqa: BLE001 — a missing or unreadable file is counted, not fatal
             counts["unreadable"] += 1
             continue
-        db, file = set(split_list(item.get("isrc"), ";")), set(split_list(tags.isrc, ";"))
+        db, file = set(isrc_entries(item.get("isrc"))), set(isrc_entries(tags.isrc))
         if db != file:
             counts["isrc differs"] += 1
             if db - file:

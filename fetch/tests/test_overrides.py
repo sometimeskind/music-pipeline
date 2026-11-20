@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import logging
 import os
+import sqlite3
 import sys
 from pathlib import Path
 
@@ -61,6 +62,18 @@ def _record(key: str, name: str = "Album", **fields) -> dict:
 
 
 # --- the files ---
+
+
+def test_library_items_finds_an_isrc_in_a_comma_joined_entry(tmp_path: Path):
+    """homelab#2672: some items hold two ISRCs joined by a comma in one entry."""
+    path = tmp_path / "library.db"
+    with sqlite3.connect(path) as conn:
+        conn.execute("CREATE TABLE items (id INTEGER PRIMARY KEY, isrc TEXT)")
+        conn.execute("CREATE TABLE item_attributes (id INTEGER PRIMARY KEY, entity_id INTEGER, key TEXT, value TEXT)")
+        conn.executemany("INSERT INTO items VALUES (?, ?)", [
+            (1, "ZZAAA2600001, ZZAAA2600002"), (2, "ZZBBB2600003;ZZAAA2600002"), (3, "ZZAAA26000021")])
+    assert overrides.library_items("track", "ZZAAA2600002", path) == [1, 2]
+    assert overrides.library_items("track", "ZZAAA2600001", path) == [1]
 
 
 def test_album_entries_take_the_comment_block_above_them_as_their_reason(tmp_path: Path):

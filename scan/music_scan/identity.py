@@ -172,10 +172,18 @@ def isrc_code(value: str | None) -> str | None:
     return code if ISRC_FORM.fullmatch(code) else None
 
 
+def isrc_entries(value: str | None) -> list[str]:
+    """The entries of a ``;``-joined ISRC field, as written.  An entry that is
+    several codes joined by a comma (``AAAAA0000001, AAAAA0000002``, as some
+    files' tags hold them) is each of them, so every reader sees its ISRCs and
+    no clear takes them for a value that isn't one."""
+    return [c.strip() for entry in split_list(value, ";") for c in entry.split(",") if c.strip()]
+
+
 def split_isrcs(value: str | None) -> list[str]:
-    """The ISRCs of a ``;``-joined field, in order and once each, as
-    :func:`isrc_code` gives them: an entry that isn't one is dropped."""
-    return list(dict.fromkeys(filter(None, map(isrc_code, split_list(value, ";")))))
+    """The ISRCs of an ISRC field (:func:`isrc_entries`), in order and once
+    each, as :func:`isrc_code` gives them: an entry that isn't one is dropped."""
+    return list(dict.fromkeys(filter(None, map(isrc_code, isrc_entries(value)))))
 
 
 _LOOKALIKE = {"O": "0", "I": "1", "L": "1"}
@@ -201,15 +209,22 @@ def isrc_near_miss(a: str | None, b: str | None) -> bool:
 
 
 def bad_isrcs(item) -> list[str]:
-    """The entries of *item*'s ``isrc`` that aren't ISRCs (:func:`isrc_code`)."""
-    return [c for c in split_list(item.get("isrc"), ";") if not isrc_code(c)]
+    """The entries of *item*'s ``isrc`` (:func:`isrc_entries`) that aren't
+    ISRCs (:func:`isrc_code`)."""
+    return [c for c in isrc_entries(item.get("isrc")) if not isrc_code(c)]
 
 
 def drop_bad_isrcs(item) -> list[str]:
-    """Take :func:`bad_isrcs` off *item*'s ``isrc`` (its ISRCs stay as
-    written) and return them; the caller stores it."""
+    """Take :func:`bad_isrcs` off *item*'s ``isrc`` and return them; the
+    caller stores it.  Its ISRCs stay as written, once each and ``;``-joined,
+    those of a comma-joined entry too.  An item with none leaves the field
+    untouched, a comma-joined one included."""
     if bad := bad_isrcs(item):
-        item["isrc"] = ";".join(c for c in split_list(item.get("isrc"), ";") if isrc_code(c))
+        kept: dict[str, str] = {}
+        for entry in isrc_entries(item.get("isrc")):
+            if (code := isrc_code(entry)) and code not in kept:
+                kept[code] = entry
+        item["isrc"] = ";".join(kept.values())
     return bad
 
 
@@ -220,7 +235,8 @@ def item_isrcs(item) -> set[str]:
 
 def add_isrcs(item, codes) -> bool:
     """Union *codes* into the item's ``;``-joined ISRCs. True when it changed.
-    A code that isn't an ISRC (:func:`isrc_code`) is never added."""
+    A code that isn't an ISRC (:func:`isrc_code`) is never added, nor one the
+    item holds already, in a comma-joined entry too (:func:`split_isrcs`)."""
     have = split_list(item.get("isrc"), ";")
     held = set(split_isrcs(item.get("isrc")))
     new = [c for c in dict.fromkeys(filter(None, map(isrc_code, codes))) if c not in held]
