@@ -44,6 +44,16 @@ goes through ``tag_album_ids``' number rung
 Only ``spotify_ids`` and ``words_ids`` change, in the database and not in the
 file, and the ``.m3u`` files are regenerated.  An entry nothing holds has no
 item sharing its ID, so no retire, supersede or merge follows from a link.
+
+Before the rung, the release items at track 0 (a release whose files carry no
+numbers, homelab#2680) are looked up on AcoustID and placed on the release
+their files were matched to (:func:`plan_unnumbered`,
+:mod:`music_scan.unnumbered`), as the import now does: an item whose
+fingerprint names exactly one track of it takes that track's disc, number and
+recording, in the database and the file's tags, with a ``track_placed`` event.
+The dry run lists each as ``[WOULD-PLACE]`` and plans the links as if placed;
+an item left at track 0 is ``[NOPLACE]`` with why.  Only these items cost a
+lookup.
 """
 
 from __future__ import annotations
@@ -60,6 +70,7 @@ from collections import Counter
 from collections.abc import Callable
 
 from music_fetch import events
+from music_scan import unnumbered
 from music_scan.identity import (
     BY_ISRC,
     BY_WORDS,
@@ -426,7 +437,18 @@ def run_albums(apply: bool = False) -> AlbumPlan:
     with state.session() as conn:
         records = state.load_albums(conn).albums
     with MusicLibrary(LIBRARY_DB) as lib:
-        plan = plan_album_ids(lib.all_items(), records, mb_recordings())
+        items = lib.all_items()
+        placing = plan_unnumbered(items, records)
+        unnumbered.report(placing, dry_run=not apply)
+        placed: list[int] = []
+        if not apply:
+            # What the apply would link once the items are placed: in memory only.
+            unnumbered.overlay(items, placing.placed)
+        elif placing.placed:
+            placed = unnumbered.store(lib, placing.placed, lock=pipeline_lock, source="backfill")
+            if placed:
+                items = lib.all_items()  # the links are planned on what was stored
+        plan = plan_album_ids(items, records, mb_recordings())
         report_albums(plan)
         if not apply:
             logger.info("Dry run — nothing written. Re-run with --apply to write.")
@@ -437,8 +459,37 @@ def run_albums(apply: bool = False) -> AlbumPlan:
                 counts = regen_playlists()
             logger.info("Linked %d; playlists regenerated: %s", len(plan.links),
                         ", ".join(f"{k} {v}" for k, v in sorted(counts.items())))
+        if plan.links or placed:
             trigger_scan()
     return plan
+
+
+def plan_unnumbered(items: list, records: dict[str, dict], lookup=None, release_lookup=None) -> unnumbered.Placing:
+    """The imported albums' release items at track 0, placed by their fingerprint
+    on the release their files were matched to (the record's ``release_files``),
+    else their own ``mb_albumid`` (homelab#2680, :mod:`music_scan.unnumbered`).
+    Changes nothing; looks nothing up when no item is at track 0."""
+    imported = {k for k, r in records.items() if r.get("status") == "imported"}
+    by_key = unnumbered.release_items(items)
+    todo = unnumbered.unnumbered(i for k, group in by_key.items() if k in imported for i in group)
+    if not todo:
+        return unnumbered.Placing()
+    lookup = lookup or unnumbered.acoustid()
+    if lookup is None:
+        logger.warning("[NOPLACE] %d album item(s) at track 0, and ACOUSTID_APIKEY is unset; left at track 0",
+                       len(todo))
+        return unnumbered.Placing(unnumbered=len(todo))
+
+    def release_of(item) -> str | None:
+        files = records.get(str(item.get("album_record")), {}).get("release_files") or {}
+        return files.get("mb_albumid") or item.get("mb_albumid") or None
+
+    if release_lookup is None:
+        from music_scan.mb_fingerprint import musicbrainz_releases  # noqa: PLC0415
+
+        release_lookup = musicbrainz_releases()
+    siblings = [i for k, group in by_key.items() if k in imported for i in group]
+    return unnumbered.plan(todo, release_of, lookup, release_lookup, siblings=siblings)
 
 
 def run(apply: bool = False, redownload: int = 0) -> Plan:

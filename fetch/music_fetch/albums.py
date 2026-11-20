@@ -1973,6 +1973,7 @@ def complete(
     import_rest: Callable[[str, str], int] | None = None,
     save: Callable[[], None] | None = None,
     one_format: OneFormat | None = None,
+    place: Callable[[str, str, float, str | None], None] | None = None,
     complete_root: Path = USENET_COMPLETE,
     inbox_root: Path = USENET_INBOX,
     quarantine_root: Path = USENET_QUARANTINE,
@@ -2015,7 +2016,10 @@ def complete(
     ``quarantine/replaced/``; a copy of a recording it lacks stays on the album
     as a local-only extra (#287).  A reimport's old release that holds under half
     of the kept release's titles goes whole (:func:`music_scan.release.retire`,
-    homelab#2662): ``reimport`` is still on the record when *retire* runs.  Then *tag_ids* (playlist, tracks, start,
+    homelab#2662): ``reimport`` is still on the record when *retire* runs.  Before the IDs, *place*
+    (playlist, record key, start, the files' release) gives the release's items imported with no
+    track number the disc, track and recording their fingerprint names on that release
+    (``music_scan.unnumbered``, homelab#2680), so the number rung can link them.  Then *tag_ids* (playlist, tracks, start,
     track count, record key) gives
     the kept copy Spotify track IDs as a best effort, retires the extras
     whose recording those IDs show the kept copy holds (#294), and
@@ -2160,6 +2164,8 @@ def complete(
             def tag() -> None:
                 # After retire (#283): the copies it quarantined no longer hold the
                 # canonical paths, so canon can move every new item onto them.
+                if place is not None:
+                    place(first, key, started, (identity or {}).get("mb_albumid"))
                 for playlist in playlists:
                     tag_ids(playlist, record["playlists"][playlist], started, record.get("tracks_count") or 0, key)
 
