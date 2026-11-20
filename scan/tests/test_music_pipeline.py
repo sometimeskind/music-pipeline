@@ -208,6 +208,22 @@ def test_tag_source_on_created_drops_a_value_that_isnt_an_isrc() -> None:
     assert not plugin._bad_isrcs
 
 
+def test_isrcs_joined_by_a_comma_are_imported() -> None:
+    """homelab#2672: a file's two ISRCs joined by a comma are no value to drop at import,
+    and spotdl's tag in that form adds each ISRC once."""
+    one, two, three = "ZZAAA2600001", "ZZAAA2600002", "ZZBBB2600003"
+    plugin = _make_plugin()
+    item = _item("/root/Music/inbox/spotdl/pop/a.m4a")
+    item["isrc"] = f"{one}, {two}"
+    with patch("music_scan.music_pipeline._read_spotdl_tags", return_value=SpotdlTags()):
+        plugin.tag_source_on_created(session=MagicMock(), task=_task(items=[item]))
+    assert item.get("isrc") == f"{one}, {two}"
+    assert not plugin._bad_isrcs
+
+    MusicPipelinePlugin._apply_spotdl_tags(item, SpotdlTags(isrc=f"{two},{three}"))
+    assert item.get("isrc") == f"{one}, {two};{three}"
+
+
 # ---------------------------------------------------------------------------
 # MusicPipelinePlugin.tag_source_on_created — pending-source cache
 # ---------------------------------------------------------------------------

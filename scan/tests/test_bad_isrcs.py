@@ -90,6 +90,50 @@ def test_clear_apply_writes_the_file_and_records_each_item(monkeypatch) -> None:
     assert bad_isrcs.clear(items, apply=True) == 0  # safe to re-run
 
 
+ONE, TWO, THREE = "ZZAAA2600001", "ZZAAA2600002", "ZZBBB2600003"
+"""Made-up ISRCs in the ISRC form."""
+
+
+def _comma_items() -> list[FakeItem]:
+    return [FakeItem(1, "Both", isrc=f"{ONE}, {TWO}"), FakeItem(2, "Packed", isrc=f"{ONE},{TWO};{THREE}"),
+            FakeItem(3, "Mixed", isrc=f"{ONE}, PMEDIA"), FakeItem(4, "Twice", isrc=f"{TWO}, qobuz_9;{TWO}")]
+
+
+def test_clear_dry_run_neither_lists_nor_counts_isrcs_joined_by_a_comma(caplog) -> None:
+    """homelab#2672: two ISRCs in one entry, joined by a comma, were listed whole as a
+    value that isn't an ISRC, and an apply would have deleted both."""
+    items = _comma_items()
+    caplog.set_level("INFO")
+    assert bad_isrcs.clear(items, apply=False) == 2
+    assert not any(i.stored or i.written for i in items)
+    lines = [r.getMessage() for r in caplog.records if r.getMessage().startswith("[ISRC]")]
+    assert lines == ["[ISRC] 3 Artist — Mixed: PMEDIA isn't an ISRC, would be cleared",
+                     "[ISRC] 4 Artist — Twice: qobuz_9 isn't an ISRC, would be cleared"]
+    assert "2 item(s) hold a value in isrc that isn't an ISRC" in caplog.text
+
+
+def test_clear_apply_keeps_isrcs_joined_by_a_comma(monkeypatch) -> None:
+    recorded = []
+    monkeypatch.setattr(bad_isrcs.events, "record", lambda kind, message, **kw: recorded.append((kind, message, kw)))
+    items = _comma_items()
+    assert bad_isrcs.clear(items, apply=True) == 2
+    assert [i.get("isrc") for i in items] == [f"{ONE}, {TWO}", f"{ONE},{TWO};{THREE}", ONE, TWO]
+    assert [(i.written, i.stored) for i in items] == [(False, False), (False, False), (True, True), (True, True)]
+    assert [(kw["item_id"], kw["data"]["changed"]) for _, _, kw in recorded] == [
+        (3, {"isrc": [f"{ONE}, PMEDIA", ONE]}), (4, {"isrc": [f"{TWO}, qobuz_9;{TWO}", TWO]})]
+    assert bad_isrcs.clear(items, apply=True) == 0
+
+
+def test_aligning_a_recording_reads_isrcs_joined_by_a_comma() -> None:
+    """Each ISRC of a comma-joined entry is judged alone: the recording's stays, none
+    goes as "not an ISRC"."""
+    item = FakeItem(1, "Both", isrc=f"{ONE}, {TWO}")
+    isrc, notes = aligned_isrcs(item, {"id": "rec", "isrcs": [ONE]}, None)
+    assert isrc == f"{ONE};{TWO}"
+    assert notes == [f"{TWO} stays: not checked"]
+    assert aligned_isrcs(item, {"id": "rec"}, None) == (f"{ONE}, {TWO}", [])  # looked up without ISRCs
+
+
 def test_run_takes_the_pipeline_lock_only_to_apply(monkeypatch) -> None:
     from music_scan import audit, library
 

@@ -97,6 +97,47 @@ def test_a_value_that_isnt_an_isrc_is_never_one() -> None:
     assert drop_bad_isrcs(item) == []
 
 
+def test_isrcs_joined_by_a_comma_are_those_isrcs() -> None:
+    """homelab#2672: some files' tags hold two ISRCs in one entry, joined by a comma
+    (and a space). Each is an ISRC wherever ISRCs are read, and the entry isn't a
+    value to clear; only the junk around a comma is."""
+    from music_scan.identity import bad_isrcs, drop_bad_isrcs, isrc_entries, item_isrcs, split_isrcs
+
+    one, two, three = "ZZAAA2600001", "ZZAAA2600002", "ZZBBB2600003"
+    assert split_isrcs(f"{one}, {two}") == [one, two]
+    assert split_isrcs(f"{one},{two}") == [one, two]
+    assert split_isrcs(f"{one}, {two};{three}") == [one, two, three]
+    assert split_isrcs(f"{one},{two};{one} , zz-bbb-26-00003;{two}") == [one, two, three]  # once each
+    assert isrc_entries(f" {one} ,{two};; PMEDIA ,") == [one, two, "PMEDIA"]
+
+    item = _item(isrc=f"{one}, {two}")
+    assert item_isrcs(item) == {one, two}
+    assert ItemIndex([item]).match(None, two, "Another", "Artist")[1] == BY_ISRC
+    assert bad_isrcs(item) == []
+    assert drop_bad_isrcs(item) == []
+    assert item.data["isrc"] == f"{one}, {two}"  # nothing to clear, so the field is left as written
+
+    item = _item(isrc=f"{one}, PMEDIA;qobuz_7,{two}")
+    assert item_isrcs(item) == {one, two}
+    assert bad_isrcs(item) == ["PMEDIA", "qobuz_7"]
+    assert drop_bad_isrcs(item) == ["PMEDIA", "qobuz_7"]
+    assert item.data["isrc"] == f"{one};{two}"
+    assert drop_bad_isrcs(item) == []
+
+    item = _item(isrc="PMEDIA, qobuz_7")
+    assert bad_isrcs(item) == ["PMEDIA", "qobuz_7"] and not item_isrcs(item)
+    assert drop_bad_isrcs(item) == ["PMEDIA", "qobuz_7"] and item.data["isrc"] == ""
+
+
+def test_add_isrcs_skips_a_code_held_in_a_comma_joined_entry() -> None:
+    one, two, three = "ZZAAA2600001", "ZZAAA2600002", "ZZBBB2600003"
+    item = _item(isrc=f"{one}, {two}")
+    assert not add_isrcs(item, [two, "zz-aaa-26-00001", "PMEDIA"])
+    assert item.data["isrc"] == f"{one}, {two}"
+    assert add_isrcs(item, [three])
+    assert item.data["isrc"] == f"{one}, {two};{three}"
+
+
 def test_isrc_near_miss_is_one_lookalike_or_one_swap_with_the_digits_equal() -> None:
     """homelab#2732's pairs."""
     from music_scan.identity import isrc_near_miss

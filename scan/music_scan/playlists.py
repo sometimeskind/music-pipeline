@@ -24,7 +24,7 @@ from pathlib import Path
 from typing import NamedTuple
 
 from music_scan.identity import (
-    BY_ID, BY_ISRC, BY_WORDS, ItemIndex, PlaylistTrack, name_words, recording_ids,
+    BY_ID, BY_ISRC, BY_WORDS, ItemIndex, PlaylistTrack, isrc_entries, name_words, recording_ids,
     spotify_id,
 )
 
@@ -252,7 +252,7 @@ def _file_tags(path: Path) -> ReplacedFile | None:
         mf = MediaFile(str(path))
         spotdl = _read_spotdl_tags(str(path))
         ids = {sid for sid in (spotify_id(spotdl.url),) if sid}
-        isrcs = {c.strip() for c in (mf.isrc or "").split(";") if c.strip()}
+        isrcs = set(isrc_entries(mf.isrc))
         if spotdl.isrc:
             isrcs.add(spotdl.isrc)
         return ReplacedFile(path, mf.title or "", mf.artist or mf.albumartist or "", frozenset(ids), frozenset(isrcs),
