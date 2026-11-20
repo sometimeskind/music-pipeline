@@ -1,0 +1,592 @@
+# dry run
+79 Spotify track(s) placed on 21 release(s)
+  [MB-URL] Amber (SA0) → rel-SA0
+  [MB-URL] Iris (SA8) → rel-SA8
+  [HOME] 10 <tmp>/library/Basalt/Birch/00 - Northern.m4a: on SA0, but a track of its album record's Birch (SA1); goes back
+  [MB-NONE] Birch (SA1): no MusicBrainz release; add it with https://harmony.pulsewidth.org.uk/release?url=https%3A%2F%2Fopen.spotify.com%2Falbum%2FSA1
+  [MB-NONE] Jade (SA9): no MusicBrainz release; add it with https://harmony.pulsewidth.org.uk/release?url=https%3A%2F%2Fopen.spotify.com%2Falbum%2FSA9
+  [MB-NONE] Fern (SA5): no MusicBrainz release; add it with https://harmony.pulsewidth.org.uk/release?url=https%3A%2F%2Fopen.spotify.com%2Falbum%2FSA5
+  [MB-NONE] Elm (SA4): no MusicBrainz release; add it with https://harmony.pulsewidth.org.uk/release?url=https%3A%2F%2Fopen.spotify.com%2Falbum%2FSA4
+  [MB-URL] Coral (SA2) → rel-SA2
+  [MB-NONE] Garnet (SA6): no MusicBrainz release; add it with https://harmony.pulsewidth.org.uk/release?url=https%3A%2F%2Fopen.spotify.com%2Falbum%2FSA6
+  [MB-NONE] Garnet (SA6): no MusicBrainz release; add it with https://harmony.pulsewidth.org.uk/release?url=https%3A%2F%2Fopen.spotify.com%2Falbum%2FSA6
+  [HOME] 44 <tmp>/library/Cinder/Garnet/00 - Ash.m4a: on SA4, but a track of its album record's Garnet (SA6); goes back
+  [HOME] 43 <tmp>/library/Cinder/Garnet/07 - Tide.m4a: on SA4, but a track of its album record's Garnet (SA6); goes back
+  [MB-URL] Kestrel (SA10) → rel-SA10
+  [MB-NONE] Garnet (SA6): no MusicBrainz release; add it with https://harmony.pulsewidth.org.uk/release?url=https%3A%2F%2Fopen.spotify.com%2Falbum%2FSA6
+  [MB-NONE] Hits (COMP): no MusicBrainz release; add it with https://harmony.pulsewidth.org.uk/release?url=https%3A%2F%2Fopen.spotify.com%2Falbum%2FCOMP
+  [MB-URL] Delta (SA3) → rel-SA3
+  [MB-URL] Lichen (SA11) → rel-SA11
+  [MB-URL] Heron (SA7) → rel-SA7
+  [RETAG] 1 <tmp>/library/Arbor/Amber/01 - Harbour.m4a: year 0→2010, month 0→1, day 0→10, mb_albumid ''→'files-0', mb_album_via None→'files', cover (dry run)
+  [RETAG] 2 <tmp>/library/Arbor/Amber/02 - Paper.m4a: year 0→2010, month 0→1, day 0→10, mb_albumid ''→'files-0', mb_album_via None→'files', cover (dry run)
+  [RETAG] 3 <tmp>/library/Arbor/Amber/03 - Static.m4a: year 0→2010, month 0→1, day 0→10, mb_albumid ''→'files-0', mb_album_via None→'files', spotify_album_id None→'SA0', cover (dry run)
+  [RETAG] 4 <tmp>/library/Arbor/Amber (Deluxe Edition)/00 - Undertow.m4a: album 'Amber (Deluxe Edition)'→'Amber', year 0→2010, month 0→1, day 0→10, mb_albumid ''→'files-0', mb_album_via None→'files', spotify_album_id None→'SA0', cover → <tmp>/library/Arbor/Amber/00 - Undertow.m4a (dry run)
+  [RETAG] 30 <tmp>/library/Arbor/Elm/00 - Paper.m4a: year 0→2014, month 0→5, day 0→14, mb_albumid ''→'files-4', mb_album_via None→'files', spotify_album_id None→'SA4', cover (dry run)
+  [RETAG] 29 <tmp>/library/Arbor/Elm/01 - Harbour.m4a: year 0→2014, month 0→5, day 0→14, mb_albumid ''→'files-4', mb_album_via None→'files', spotify_album_id 'SA0'→'SA4', cover (dry run)
+  [RETAG] 32 <tmp>/library/Arbor/Elm/04 - Undertow.m4a: year 0→2014, month 0→5, day 0→14, mb_albumid ''→'files-4', mb_album_via None→'files', spotify_album_id 'SA1'→'SA4', cover (dry run)
+  [RETAG] 33 <tmp>/library/Arbor/Elm/05 - Glass.m4a: year 0→2014, month 0→5, day 0→14, mb_albumid ''→'files-4', mb_album_via None→'files', spotify_album_id None→'SA4', cover (dry run)
+  [RETAG] 31 <tmp>/library/Arbor/Elm (Deluxe Edition)/03 - Static.m4a: album 'Elm (Deluxe Edition)'→'Elm', year 0→2014, month 0→5, day 0→14, mb_albumid ''→'files-4', mb_album_via None→'files', cover → <tmp>/library/Arbor/Elm/03 - Static.m4a (dry run)
+  [RETAG] 106 <tmp>/library/Arbor/Glass - Single/06 - Glass.m4a: album 'Glass - Single'→'Amber', year 0→2010, month 0→1, day 0→10, track 6→5, tracktotal 0→6, disc 0→1, disctotal 0→1, mb_albumid ''→'rel-SA0', mb_album_via None→'url', spotify_album_id 'SA6'→'SA0', cover → <tmp>/library/Arbor/Amber/05 - Glass.m4a (dry run)
+  [RETAG] 87 <tmp>/library/Various/Hits/06 - Harbour.m4a: album 'Hits'→'Iris', albumartist 'Various'→'Arbor', year 0→2018, month 0→9, day 0→18, track 6→1, tracktotal 0→6, disc 0→1, disctotal 0→1, mb_albumid ''→'rel-SA8', mb_album_via None→'url', spotify_album_id 'COMP'→'SA8', cover → <tmp>/library/Arbor/Iris/01 - Harbour.m4a (dry run)
+  [RETAG] 73 <tmp>/library/Various/Hits/12 - Glass.m4a: album 'Hits'→'Iris', albumartist 'Various'→'Arbor', year 0→2018, month 0→9, day 0→18, track 12→5, tracktotal 0→6, disc 0→1, disctotal 0→1, mb_albumid ''→'rel-SA8', mb_album_via None→'url', spotify_album_id 'SG8'→'SA8', cover → <tmp>/library/Arbor/Iris/05 - Glass.m4a (dry run)
+  [RETAG] 52 <tmp>/library/Arbor/Iris/00 - Harbour.m4a: year 0→2018, month 0→9, day 0→18, mb_albumid ''→'files-8', mb_album_via None→'files', spotify_album_id None→'SA8', cover (dry run)
+  [RETAG] 56 <tmp>/library/Arbor/Iris/00 - Glass.m4a: year 0→2018, month 0→9, day 0→18, mb_albumid ''→'files-8', mb_album_via None→'files', cover (dry run)
+  [RETAG] 57 <tmp>/library/Arbor/Iris/00 - Northern.m4a: year 0→2018, month 0→9, day 0→18, mb_albumid ''→'files-8', mb_album_via None→'files', spotify_album_id None→'SA8', cover (dry run)
+  [RETAG] 53 <tmp>/library/Arbor/Iris/02 - Paper.m4a: year 0→2018, month 0→9, day 0→18, mb_albumid ''→'files-8', mb_album_via None→'files', spotify_album_id None→'SA8', cover (dry run)
+  [RETAG] 55 <tmp>/library/Arbor/Iris/04 - Undertow.m4a: year 0→2018, month 0→9, day 0→18, mb_albumid ''→'files-8', mb_album_via None→'files', spotify_album_id None→'SA8', cover (dry run)
+  [RETAG] 54 <tmp>/library/Arbor/Iris (Deluxe Edition)/03 - Static.m4a: album 'Iris (Deluxe Edition)'→'Iris', year 0→2018, month 0→9, day 0→18, mb_albumid ''→'files-8', mb_album_via None→'files', spotify_album_id None→'SA8', cover → <tmp>/library/Arbor/Iris/03 - Static.m4a (dry run)
+  [RETAG] 10 <tmp>/library/Basalt/Birch/00 - Northern.m4a: year 0→2011, month 0→2, day 0→11, track 0→6, disctotal 0→1, mb_album_via None→'none', spotify_album_id 'SA0'→'SA1', cover → <tmp>/library/Basalt/Birch/06 - Northern.m4a (dry run)
+  [RETAG] 6 <tmp>/library/Basalt/Birch/02 - Paper.m4a: year 0→2011, month 0→2, day 0→11, disctotal 0→1, mb_album_via None→'none', cover (dry run)
+  [RETAG] 7 <tmp>/library/Basalt/Birch/03 - Static.m4a: year 0→2011, month 0→2, day 0→11, disctotal 0→1, mb_album_via None→'none', cover (dry run)
+  [RETAG] 13 <tmp>/library/Basalt/Birch/09 - Vesper.m4a: year 0→2011, month 0→2, day 0→11, disctotal 0→1, mb_album_via None→'none', cover (dry run)
+  [RETAG] 9 <tmp>/library/Basalt/Birch (Deluxe Edition)/05 - Glass.m4a: album 'Birch (Deluxe Edition)'→'Birch', year 0→2011, month 0→2, day 0→11, disctotal 0→1, mb_album_via None→'none', spotify_album_id None→'SA1', cover → <tmp>/library/Basalt/Birch/05 - Glass.m4a (dry run)
+  [RETAG] 12 <tmp>/library/Basalt/Birch (Deluxe Edition)/08 - Ash.m4a: album 'Birch (Deluxe Edition)'→'Birch', year 0→2011, month 0→2, day 0→11, disctotal 0→1, mb_album_via None→'none', spotify_album_id None→'SA1', cover → <tmp>/library/Basalt/Birch/08 - Ash.m4a (dry run)
+  [RETAG] 111 <tmp>/library/Basalt/Glass - Single/10 - Glass.m4a: album 'Glass - Single'→'Jade', year 0→2019, month 0→1, day 0→10, track 10→4, tracktotal 0→6, disc 0→1, disctotal 0→1, mb_album_via None→'none', spotify_album_id None→'SA9', cover → <tmp>/library/Basalt/Jade/04 - Glass.m4a (dry run)
+  [RETAG] 74 <tmp>/library/Various/Hits/05 - Undertow.m4a: album 'Hits'→'Fern', albumartist 'Various'→'Basalt', year 0→2015, month 0→6, day 0→15, track 5→4, tracktotal 0→6, disc 0→1, disctotal 0→1, mb_album_via None→'none', spotify_album_id None→'SA5', cover → <tmp>/library/Basalt/Fern/04 - Undertow.m4a (dry run)
+  [RETAG] 120 <tmp>/library/Various/Hits/07 - Undertow.1.m4a: album 'Hits'→'Jade', albumartist 'Various'→'Basalt', year 0→2019, month 0→1, day 0→10, track 7→4, tracktotal 0→6, disc 0→1, disctotal 0→1, mb_album_via None→'none', spotify_album_id 'SG9'→'SA9', cover → <tmp>/library/Basalt/Jade/04 - Undertow.m4a (dry run)
+  [RETAG] 92 <tmp>/library/Various/Hits/09 - Glass.m4a: album 'Hits'→'Jade', albumartist 'Various'→'Basalt', year 0→2019, month 0→1, day 0→10, track 9→5, tracktotal 0→6, disc 0→1, disctotal 0→1, mb_album_via None→'none', spotify_album_id 'SG9'→'SA9', cover → <tmp>/library/Basalt/Jade/05 - Glass.m4a (dry run)
+  [RETAG] 135 <tmp>/library/Various/Hits/12 - Undertow.m4a: album 'Hits'→'Elm', albumartist 'Various'→'Arbor', year 0→2014, month 0→5, day 0→14, track 12→6, tracktotal 0→8, disc 0→1, disctotal 0→1, mb_album_via None→'none', spotify_album_id 'SA5'→'SA4', cover → <tmp>/library/Arbor/Elm/06 - Undertow.m4a (dry run)
+  [RETAG] 58 <tmp>/library/Basalt/Jade/00 - Harbour.m4a: year 0→2019, month 0→1, day 0→10, mb_albumid ''→'files-9', mb_album_via None→'files', cover (dry run)
+  [RETAG] 59 <tmp>/library/Basalt/Jade/02 - Paper.m4a: year 0→2019, month 0→1, day 0→10, mb_albumid ''→'files-9', mb_album_via None→'files', spotify_album_id None→'SA9', cover (dry run)
+  [RETAG] 60 <tmp>/library/Basalt/Jade (Deluxe Edition)/00 - Static.m4a: album 'Jade (Deluxe Edition)'→'Jade', year 0→2019, month 0→1, day 0→10, mb_albumid ''→'files-9', mb_album_via None→'files', spotify_album_id None→'SA9', cover → <tmp>/library/Basalt/Jade/00 - Static.m4a (dry run)
+  [RETAG] 115 <tmp>/library/Basalt/Northern - Single/09 - Northern.m4a: album 'Northern - Single'→'Fern', year 0→2015, month 0→6, day 0→15, track 9→6, tracktotal 0→6, disc 0→1, disctotal 0→1, mb_album_via None→'none', spotify_album_id 'SG5'→'SA5', cover → <tmp>/library/Basalt/Fern/06 - Northern.m4a (dry run)
+  [RETAG] 108 <tmp>/library/Basalt/Paper - Single/11 - Paper.m4a: album 'Paper - Single'→'Iris', albumartist 'Basalt'→'Arbor', year 0→2018, month 0→9, day 0→18, track 11→5, tracktotal 0→6, disc 0→1, disctotal 0→1, mb_albumid ''→'rel-SA8', mb_album_via None→'url', spotify_album_id 'COMP'→'SA8', cover → <tmp>/library/Arbor/Iris/05 - Paper.m4a (dry run)
+  [RETAG] 142 <tmp>/library/Basalt/Undertow - Single/07 - Undertow.m4a: album 'Undertow - Single'→'Fern', year 0→2015, month 0→6, day 0→15, track 7→6, tracktotal 0→6, disc 0→1, disctotal 0→1, mb_album_via None→'none', spotify_album_id 'COMP'→'SA5', cover → <tmp>/library/Basalt/Fern/06 - Undertow.m4a (dry run)
+  [RETAG] 14 <tmp>/library/Cinder/Coral/00 - Harbour.m4a: year 0→2012, month 0→3, day 0→12, mb_albumid ''→'rel-SA2', mb_album_via None→'url', spotify_album_id 'SA1'→'SA2', cover (dry run)
+  [RETAG] 16 <tmp>/library/Cinder/Coral/00 - Static.m4a: year 0→2012, month 0→3, day 0→12, mb_albumid ''→'rel-SA2', mb_album_via None→'url', spotify_album_id 'SA1'→'SA2', cover (dry run)
+  [RETAG] 19 <tmp>/library/Cinder/Coral/00 - Northern.m4a: year 0→2012, month 0→3, day 0→12, mb_albumid ''→'rel-SA2', mb_album_via None→'url', spotify_album_id None→'SA2', cover (dry run)
+  [RETAG] 17 <tmp>/library/Cinder/Coral/04 - Undertow.m4a: year 0→2012, month 0→3, day 0→12, mb_albumid ''→'rel-SA2', mb_album_via None→'url', spotify_album_id None→'SA2', cover (dry run)
+  [RETAG] 18 <tmp>/library/Cinder/Coral/05 - Glass.m4a: year 0→2012, month 0→3, day 0→12, mb_albumid ''→'rel-SA2', mb_album_via None→'url', spotify_album_id None→'SA2', cover (dry run)
+  [RETAG] 15 <tmp>/library/Cinder/Coral (Deluxe Edition)/02 - Paper.m4a: album 'Coral (Deluxe Edition)'→'Coral', year 0→2012, month 0→3, day 0→12, mb_albumid ''→'rel-SA2', mb_album_via None→'url', cover → <tmp>/library/Cinder/Coral/02 - Paper.m4a (dry run)
+  [RETAG] 83 <tmp>/library/Cinder/Fern/12 - Harbour.m4a: albumartist 'Cinder'→'Basalt', year 0→2015, month 0→6, day 0→15, track 12→6, tracktotal 0→6, disc 0→1, disctotal 0→1, mb_album_via None→'none', spotify_album_id 'SA10'→'SA5', cover → <tmp>/library/Basalt/Fern/06 - Harbour.m4a (dry run)
+  [RETAG] 140 <tmp>/library/Cinder/Garnet/03 - Orbit.m4a: year 0→2016, month 0→7, day 0→16, track 3→10, tracktotal 0→10, disc 0→1, disctotal 0→1, mb_album_via None→'none', spotify_album_id 'SG6'→'SA6', cover → <tmp>/library/Cinder/Garnet/10 - Orbit.m4a (dry run)
+  [RETAG] 39 <tmp>/library/Cinder/Garnet/00 - Static.m4a: year 0→2016, month 0→7, day 0→16, track 0→3, disctotal 0→1, mb_album_via None→'none', spotify_album_id None→'SA6', cover → <tmp>/library/Cinder/Garnet/03 - Static.m4a (dry run)
+  [RETAG] 44 <tmp>/library/Cinder/Garnet/00 - Ash.m4a: year 0→2016, month 0→7, day 0→16, track 0→8, disctotal 0→1, mb_album_via None→'none', spotify_album_id 'SA4'→'SA6', cover → <tmp>/library/Cinder/Garnet/08 - Ash.m4a (dry run)
+  [RETAG] 38 <tmp>/library/Cinder/Garnet/02 - Paper.m4a: year 0→2016, month 0→7, day 0→16, disctotal 0→1, mb_album_via None→'none', spotify_album_id None→'SA6', cover (dry run)
+  [RETAG] 41 <tmp>/library/Cinder/Garnet/05 - Glass.m4a: year 0→2016, month 0→7, day 0→16, disctotal 0→1, mb_album_via None→'none', cover (dry run)
+  [RETAG] 42 <tmp>/library/Cinder/Garnet/06 - Northern.m4a: year 0→2016, month 0→7, day 0→16, disctotal 0→1, mb_album_via None→'none', spotify_album_id None→'SA6', cover (dry run)
+  [RETAG] 43 <tmp>/library/Cinder/Garnet/07 - Tide.m4a: year 0→2016, month 0→7, day 0→16, disctotal 0→1, mb_album_via None→'none', spotify_album_id 'SA4'→'SA6', cover (dry run)
+  [RETAG] 117 <tmp>/library/Cinder/Kestrel/02 - Paper.1.m4a: album 'Kestrel'→'Hits', albumartist 'Cinder'→'Various', year 0→2005, month 0→1, day 0→1, track 2→4, tracktotal 0→20, disc 0→1, disctotal 0→1, mb_album_via None→'none', spotify_album_id 'SA0'→'COMP', cover → <tmp>/library/Various/Hits/04 - Paper.m4a (dry run)
+  [RETAG] 66 <tmp>/library/Cinder/Kestrel/00 - Northern.m4a: year 0→2020, month 0→2, day 0→11, mb_albumid ''→'rel-SA10', mb_album_via None→'url', spotify_album_id None→'SA10', cover (dry run)
+  [RETAG] 62 <tmp>/library/Cinder/Kestrel/02 - Paper.m4a: year 0→2020, month 0→2, day 0→11, mb_albumid ''→'rel-SA10', mb_album_via None→'url', spotify_album_id 'SA4'→'SA10', cover (dry run)
+  [RETAG] 63 <tmp>/library/Cinder/Kestrel/03 - Static.m4a: year 0→2020, month 0→2, day 0→11, mb_albumid ''→'rel-SA10', mb_album_via None→'url', spotify_album_id None→'SA10', cover (dry run)
+  [RETAG] 64 <tmp>/library/Cinder/Kestrel/04 - Undertow.m4a: year 0→2020, month 0→2, day 0→11, mb_albumid ''→'rel-SA10', mb_album_via None→'url', spotify_album_id 'SA7'→'SA10', cover (dry run)
+  [RETAG] 65 <tmp>/library/Cinder/Kestrel/05 - Glass.m4a: year 0→2020, month 0→2, day 0→11, mb_albumid ''→'rel-SA10', mb_album_via None→'url', spotify_album_id None→'SA10', cover (dry run)
+  [RETAG] 61 <tmp>/library/Cinder/Kestrel (Deluxe Edition)/00 - Harbour.m4a: album 'Kestrel (Deluxe Edition)'→'Kestrel', year 0→2020, month 0→2, day 0→11, mb_albumid ''→'rel-SA10', mb_album_via None→'url', spotify_album_id 'SA4'→'SA10', cover → <tmp>/library/Cinder/Kestrel/00 - Harbour.m4a (dry run)
+  [RETAG] 95 <tmp>/library/Dune/Delta/01 - Undertow.m4a: year 0→2013, month 0→4, day 0→13, track 1→4, tracktotal 0→10, disc 0→1, disctotal 0→1, mb_albumid ''→'rel-SA3', mb_album_via None→'url', spotify_album_id None→'SA3', cover → <tmp>/library/Dune/Delta/04 - Undertow.m4a (dry run)
+  [RETAG] 21 <tmp>/library/Dune/Delta/00 - Paper.m4a: year 0→2013, month 0→4, day 0→13, mb_albumid ''→'rel-SA3', mb_album_via None→'url', spotify_album_id 'SA0'→'SA3', cover (dry run)
+  [RETAG] 25 <tmp>/library/Dune/Delta/00 - Northern.m4a: year 0→2013, month 0→4, day 0→13, mb_albumid ''→'rel-SA3', mb_album_via None→'url', spotify_album_id 'SA2'→'SA3', cover (dry run)
+  [RETAG] 20 <tmp>/library/Dune/Delta/01 - Harbour.m4a: year 0→2013, month 0→4, day 0→13, mb_albumid ''→'rel-SA3', mb_album_via None→'url', spotify_album_id None→'SA3', cover (dry run)
+  [RETAG] 22 <tmp>/library/Dune/Delta/03 - Static.m4a: year 0→2013, month 0→4, day 0→13, mb_albumid ''→'rel-SA3', mb_album_via None→'url', spotify_album_id 'SA2'→'SA3', cover (dry run)
+  [RETAG] 26 <tmp>/library/Dune/Delta/07 - Tide.m4a: year 0→2013, month 0→4, day 0→13, mb_albumid ''→'rel-SA3', mb_album_via None→'url', spotify_album_id 'SA1'→'SA3', cover (dry run)
+  [RETAG] 27 <tmp>/library/Dune/Delta/08 - Ash.m4a: year 0→2013, month 0→4, day 0→13, mb_albumid ''→'rel-SA3', mb_album_via None→'url', spotify_album_id 'SA1'→'SA3', cover (dry run)
+  [RETAG] 28 <tmp>/library/Dune/Delta/09 - Vesper.m4a: year 0→2013, month 0→4, day 0→13, mb_albumid ''→'rel-SA3', mb_album_via None→'url', spotify_album_id None→'SA3', cover (dry run)
+  [RETAG] 24 <tmp>/library/Dune/Delta (Deluxe Edition)/00 - Glass.m4a: album 'Delta (Deluxe Edition)'→'Delta', year 0→2013, month 0→4, day 0→13, mb_albumid ''→'rel-SA3', mb_album_via None→'url', cover → <tmp>/library/Dune/Delta/00 - Glass.m4a (dry run)
+  [RETAG] 23 <tmp>/library/Dune/Delta (Deluxe Edition)/04 - Undertow.m4a: album 'Delta (Deluxe Edition)'→'Delta', year 0→2013, month 0→4, day 0→13, mb_albumid ''→'rel-SA3', mb_album_via None→'url', spotify_album_id None→'SA3', cover (dry run)
+  [RETAG] 45 <tmp>/library/Dune/Heron/01 - Harbour.m4a: year 0→2017, month 0→8, day 0→17, mb_albumid ''→'rel-SA7', mb_album_via None→'url', cover (dry run)
+  [RETAG] 47 <tmp>/library/Dune/Heron/03 - Static.m4a: year 0→2017, month 0→8, day 0→17, mb_albumid ''→'rel-SA7', mb_album_via None→'url', cover (dry run)
+  [RETAG] 48 <tmp>/library/Dune/Heron/04 - Undertow.m4a: year 0→2017, month 0→8, day 0→17, mb_albumid ''→'rel-SA7', mb_album_via None→'url', cover (dry run)
+  [RETAG] 49 <tmp>/library/Dune/Heron/05 - Glass.m4a: year 0→2017, month 0→8, day 0→17, mb_albumid ''→'rel-SA7', mb_album_via None→'url', spotify_album_id None→'SA7', cover (dry run)
+  [RETAG] 50 <tmp>/library/Dune/Heron/06 - Northern.m4a: year 0→2017, month 0→8, day 0→17, mb_albumid ''→'rel-SA7', mb_album_via None→'url', cover (dry run)
+  [RETAG] 51 <tmp>/library/Dune/Heron/07 - Tide.m4a: year 0→2017, month 0→8, day 0→17, mb_albumid ''→'rel-SA7', mb_album_via None→'url', spotify_album_id 'SA2'→'SA7', cover (dry run)
+  [RETAG] 46 <tmp>/library/Dune/Heron (Deluxe Edition)/00 - Paper.m4a: album 'Heron (Deluxe Edition)'→'Heron', year 0→2017, month 0→8, day 0→17, mb_albumid ''→'rel-SA7', mb_album_via None→'url', spotify_album_id None→'SA7', cover → <tmp>/library/Dune/Heron/00 - Paper.m4a (dry run)
+  [RETAG] 81 <tmp>/library/Various/Hits/01 - Northern.m4a: album 'Hits'→'Heron', albumartist 'Various'→'Dune', year 0→2017, month 0→8, day 0→17, track 1→8, tracktotal 0→8, disc 0→1, disctotal 0→1, mb_albumid ''→'rel-SA7', mb_album_via None→'url', spotify_album_id None→'SA7', cover → <tmp>/library/Dune/Heron/08 - Northern.m4a (dry run)
+  [RETAG] 138 <tmp>/library/Various/Hits/06 - Static.m4a: album 'Hits'→'Amber', albumartist 'Various'→'Arbor', year 0→2010, month 0→1, day 0→10, track 6→5, tracktotal 0→6, disc 0→1, disctotal 0→1, mb_albumid ''→'rel-SA0', mb_album_via None→'url', spotify_album_id 'COMP'→'SA0', cover → <tmp>/library/Arbor/Amber/05 - Static.m4a (dry run)
+  [RETAG] 71 <tmp>/library/Dune/Lichen/00 - Glass.m4a: year 0→2021, month 0→3, day 0→12, mb_albumid ''→'rel-SA11', mb_album_via None→'url', spotify_album_id None→'SA11', cover (dry run)
+  [RETAG] 67 <tmp>/library/Dune/Lichen/01 - Harbour.m4a: year 0→2021, month 0→3, day 0→12, mb_albumid ''→'rel-SA11', mb_album_via None→'url', cover (dry run)
+  [RETAG] 68 <tmp>/library/Dune/Lichen/02 - Paper.m4a: year 0→2021, month 0→3, day 0→12, mb_albumid ''→'rel-SA11', mb_album_via None→'url', cover (dry run)
+  [RETAG] 69 <tmp>/library/Dune/Lichen/03 - Static.m4a: year 0→2021, month 0→3, day 0→12, mb_albumid ''→'rel-SA11', mb_album_via None→'url', cover (dry run)
+  [RETAG] 70 <tmp>/library/Dune/Lichen/04 - Undertow.m4a: year 0→2021, month 0→3, day 0→12, mb_albumid ''→'rel-SA11', mb_album_via None→'url', spotify_album_id None→'SA11', cover (dry run)
+  [RETAG] 143 <tmp>/library/Dune/Northern - Single/01 - Northern.m4a: album 'Northern - Single'→'Garnet', albumartist 'Dune'→'Cinder', year 0→2016, month 0→7, day 0→16, track 1→3, tracktotal 0→10, disc 0→1, disctotal 0→1, mb_album_via None→'none', cover → <tmp>/library/Cinder/Garnet/03 - Northern.m4a (dry run)
+  [RETAG] 97 <tmp>/library/Dune/Northern - Single/10 - Northern.m4a: album 'Northern - Single'→'Delta', year 0→2013, month 0→4, day 0→13, track 10→6, tracktotal 0→10, disc 0→1, disctotal 0→1, mb_albumid ''→'rel-SA3', mb_album_via None→'url', spotify_album_id 'COMP'→'SA3', cover → <tmp>/library/Dune/Delta/06 - Northern.m4a (dry run)
+  [RETAG] 124 <tmp>/library/Dune/Tide - Single/12 - Tide.m4a: album 'Tide - Single'→'Lichen', year 0→2021, month 0→3, day 0→12, track 12→7, tracktotal 0→8, disc 0→1, disctotal 0→1, mb_albumid ''→'rel-SA11', mb_album_via None→'url', spotify_album_id 'COMP'→'SA11', cover → <tmp>/library/Dune/Lichen/07 - Tide.m4a (dry run)
+[ALBUM] Arbor — Amber: 2 loose item(s) superseded, 1 kept
+  [SUPERSEDE] 2 <tmp>/library/Arbor/Amber/02 - Paper.m4a ← 117 <tmp>/library/Cinder/Kestrel/02 - Paper.1.m4a (tracklist disc/track; playlists pl0) (dry run)
+  [SUPERSEDE] 1 <tmp>/library/Arbor/Amber/01 - Harbour.m4a ← 139 <tmp>/library/Arbor/Harbour - Single/07 - Harbour.m4a (spotify id; playlists pl1) (dry run)
+  [KEEP] 119 Arbor — Undertow <tmp>/library/Arbor/Undertow - Single/02 - Undertow.m4a: on the album, but track 1-2 is 'Paper' (album item 2), another title; it has no fingerprint, so the same-audio rung was skipped; kept
+[ALBUM] Basalt — Birch: 0 loose item(s) superseded, 7 kept
+  [KEEP] 108 Basalt — Paper <tmp>/library/Basalt/Paper - Single/11 - Paper.m4a: filed under Paper - Single, but it has no fingerprint, so the same-audio rung was skipped; kept
+  [KEEP] 111 Basalt — Glass <tmp>/library/Basalt/Glass - Single/10 - Glass.m4a: filed under Glass - Single, but it has no fingerprint, so the same-audio rung was skipped; kept
+  [KEEP] 113 Dune — Glass <tmp>/library/Dune/Glass - Single/10 - Glass.m4a: on the album, but its Spotify ID is not on the album's tracklist (a twin release's?); track 1-10 is S1x10, which no item of the release holds; it has no fingerprint, so the same-audio rung was skipped; kept
+  [KEEP] 115 Basalt — Northern <tmp>/library/Basalt/Northern - Single/09 - Northern.m4a: filed under Northern - Single, but it has no fingerprint, so the same-audio rung was skipped; kept
+  [KEEP] 118 Basalt — Paper <tmp>/library/Basalt/Fern/09 - Paper.m4a: on the album, but track 1-9 is 'Vesper' (album item 13), another title; it has no fingerprint, so the same-audio rung was skipped; kept
+  [KEEP] 127 Basalt — Undertow <tmp>/library/Basalt/Heron/07 - Undertow.m4a: filed under Heron, but it has no fingerprint, so the same-audio rung was skipped; kept
+  [KEEP] 142 Basalt — Undertow <tmp>/library/Basalt/Undertow - Single/07 - Undertow.m4a: filed under Undertow - Single, but it has no fingerprint, so the same-audio rung was skipped; kept
+[ALBUM] Cinder — Coral: 1 loose item(s) superseded, 6 kept
+  [SUPERSEDE] 17 <tmp>/library/Cinder/Coral/04 - Undertow.m4a ← 72 <tmp>/library/Cinder/Garnet/07 - Undertow.m4a (spotify id; playlists pl0) (dry run)
+  [KEEP] 83 Cinder — Harbour <tmp>/library/Cinder/Fern/12 - Harbour.m4a: filed under Fern, but it has no fingerprint, so the same-audio rung was skipped; kept
+  [KEEP] 86 Cinder — Northern <tmp>/library/Cinder/Northern - Single/07 - Northern.m4a: filed under Northern - Single, but it has no fingerprint, so the same-audio rung was skipped; kept
+  [KEEP] 110 Cinder — Undertow <tmp>/library/Cinder/Undertow - Single/09 - Undertow.m4a: filed under Undertow - Single, but it has no fingerprint, so the same-audio rung was skipped; kept
+  [KEEP] 113 Dune — Glass <tmp>/library/Dune/Glass - Single/10 - Glass.m4a: on the album, but its Spotify ID is not on the album's tracklist (a twin release's?) and no entry sits at its disc/track 1-10; it has no fingerprint, so the same-audio rung was skipped; kept
+  [KEEP] 118 Basalt — Paper <tmp>/library/Basalt/Fern/09 - Paper.m4a: on the album, but its Spotify ID is not on the album's tracklist (a twin release's?) and no entry sits at its disc/track 1-9; it has no fingerprint, so the same-audio rung was skipped; kept
+  [KEEP] 136 Cinder — Harbour <tmp>/library/Cinder/Harbour - Single/11 - Harbour.m4a: filed under Harbour - Single, but it has no fingerprint, so the same-audio rung was skipped; kept
+[ALBUM] Dune — Delta: 4 loose item(s) superseded, 8 kept
+  [SUPERSEDE] 22 <tmp>/library/Dune/Delta/03 - Static.m4a ← 72 <tmp>/library/Cinder/Garnet/07 - Undertow.m4a (spotify id; playlists pl0) (dry run)
+  [SUPERSEDE] 23 <tmp>/library/Dune/Delta (Deluxe Edition)/04 - Undertow.m4a ← 95 <tmp>/library/Dune/Delta/01 - Undertow.m4a (spotify id; playlists pl2) (dry run)
+  [SUPERSEDE] 25 <tmp>/library/Dune/Delta/00 - Northern.m4a ← 97 <tmp>/library/Dune/Northern - Single/10 - Northern.m4a (spotify id; playlists pl1) (dry run)
+  [SUPERSEDE] 26 <tmp>/library/Dune/Delta/07 - Tide.m4a ← 129 <tmp>/library/Dune/Lichen/02 - Tide.m4a (spotify id; playlists pl0) (dry run)
+  [KEEP] 89 Dune — Static <tmp>/library/Dune/Jade/10 - Static.m4a: filed under Jade, but it has no fingerprint, so the same-audio rung was skipped; kept
+  [KEEP] 90 Dune — Harbour <tmp>/library/Dune/Harbour - Single/07 - Harbour.m4a: filed under Harbour - Single, but it has no fingerprint, so the same-audio rung was skipped; kept
+  [KEEP] 113 Dune — Glass <tmp>/library/Dune/Glass - Single/10 - Glass.m4a: on the album, but its Spotify ID is the album's track 1-5, which no item of the release holds; it has no fingerprint, so the same-audio rung was skipped; kept
+  [KEEP] 114 Dune — Ash <tmp>/library/Dune/Ash - Single/03 - Ash.m4a: filed under Ash - Single, but it has no fingerprint, so the same-audio rung was skipped; kept
+  [KEEP] 118 Basalt — Paper <tmp>/library/Basalt/Fern/09 - Paper.m4a: on the album, but track 1-9 is 'Vesper' (album item 28), another title; it has no fingerprint, so the same-audio rung was skipped; kept
+  [KEEP] 123 Dune — Static <tmp>/library/Dune/Static - Single/08 - Static.m4a: filed under Static - Single, but it has no fingerprint, so the same-audio rung was skipped; kept
+  [KEEP] 124 Dune — Tide <tmp>/library/Dune/Tide - Single/12 - Tide.m4a: filed under Tide - Single, but it has no fingerprint, so the same-audio rung was skipped; kept
+  [KEEP] 134 Dune — Glass <tmp>/library/Dune/Birch/09 - Glass.m4a: filed under Birch, but it has no fingerprint, so the same-audio rung was skipped; kept
+[ALBUM] Arbor — Elm: 0 loose item(s) superseded, 4 kept
+  [KEEP] 106 Arbor — Glass <tmp>/library/Arbor/Glass - Single/06 - Glass.m4a: filed under Glass - Single, but it has no fingerprint, so the same-audio rung was skipped; kept
+  [KEEP] 117 Cinder — Paper <tmp>/library/Cinder/Kestrel/02 - Paper.1.m4a: on the album, but its Spotify ID is not on the album's tracklist (a twin release's?) and no entry sits at its disc/track 1-2; it has no fingerprint, so the same-audio rung was skipped; kept
+  [KEEP] 119 Arbor — Undertow <tmp>/library/Arbor/Undertow - Single/02 - Undertow.m4a: on the album, but its Spotify ID is not on the album's tracklist (a twin release's?) and no entry sits at its disc/track 1-2; it has no fingerprint, so the same-audio rung was skipped; kept
+  [KEEP] 139 Arbor — Harbour <tmp>/library/Arbor/Harbour - Single/07 - Harbour.m4a: on the album, but its Spotify ID is not on the album's tracklist (a twin release's?); track 1-7 is S4x7, which no item of the release holds; it has no fingerprint, so the same-audio rung was skipped; kept
+[ALBUM] Basalt — Fern: 0 loose item(s) superseded, 3 kept
+  [KEEP] 103 Basalt — Glass <tmp>/library/Basalt/Fern/03 - Glass.m4a: on the album, but its Spotify ID is not on the album's tracklist (a twin release's?) and no entry sits at its disc/track 1-3; no release item sits at its disc/track 1-3 or has its title; kept
+  [KEEP] 108 Basalt — Paper <tmp>/library/Basalt/Paper - Single/11 - Paper.m4a: filed under Paper - Single, but it has no fingerprint, so the same-audio rung was skipped; kept
+  [KEEP] 135 Basalt — Undertow <tmp>/library/Various/Hits/12 - Undertow.m4a: on the album, but its Spotify ID is the album's track 1-4, which no item of the release holds; no release item sits at its disc/track 1-12 or has its title; kept
+[ALBUM] Cinder — Garnet: 4 loose item(s) superseded, 7 kept
+  [SUPERSEDE] 42 <tmp>/library/Cinder/Garnet/06 - Northern.m4a ← 116 <tmp>/library/Various/Hits/07 - Northern.m4a (spotify id; playlists pl2) (dry run)
+  [SUPERSEDE] 42 <tmp>/library/Cinder/Garnet/06 - Northern.m4a ← 132 <tmp>/library/Cinder/Garnet/01 - Northern.m4a (spotify id; playlists pl0) (dry run)
+  [SUPERSEDE] 43 <tmp>/library/Cinder/Garnet/07 - Tide.m4a ← 135 <tmp>/library/Various/Hits/12 - Undertow.m4a (spotify id; playlists pl0) (dry run)
+  [SUPERSEDE] 39 <tmp>/library/Cinder/Garnet/00 - Static.m4a ← 143 <tmp>/library/Dune/Northern - Single/01 - Northern.m4a (spotify id; playlists pl2) (dry run)
+  [KEEP] 83 Cinder — Harbour <tmp>/library/Cinder/Fern/12 - Harbour.m4a: filed under Fern, but it has no fingerprint, so the same-audio rung was skipped; kept
+  [KEEP] 86 Cinder — Northern <tmp>/library/Cinder/Northern - Single/07 - Northern.m4a: filed under Northern - Single, but it has no fingerprint, so the same-audio rung was skipped; kept
+  [KEEP] 99 Cinder — Paper <tmp>/library/Various/Hits/12 - Paper.m4a: on the album, but its Spotify ID is not on the album's tracklist (a twin release's?) and no entry sits at its disc/track 1-12; it has no fingerprint, so the same-audio rung was skipped; kept
+  [KEEP] 102 Basalt — Undertow <tmp>/library/Basalt/Elm/07 - Undertow.m4a: on the album, but it has no Spotify ID; it has no fingerprint, so the same-audio rung was skipped; kept
+  [KEEP] 110 Cinder — Undertow <tmp>/library/Cinder/Undertow - Single/09 - Undertow.m4a: filed under Undertow - Single, but it has no fingerprint, so the same-audio rung was skipped; kept
+  [KEEP] 133 Arbor — Northern <tmp>/library/Arbor/Kestrel/01 - Northern.m4a: on the album, but its Spotify ID is not on the album's tracklist (a twin release's?) and no entry sits at its disc/track 1-1; it has no fingerprint, so the same-audio rung was skipped; kept
+  [KEEP] 136 Cinder — Harbour <tmp>/library/Cinder/Harbour - Single/11 - Harbour.m4a: filed under Harbour - Single, but it has no fingerprint, so the same-audio rung was skipped; kept
+[ALBUM] Dune — Heron: 7 loose item(s) superseded, 5 kept
+  [SUPERSEDE] 51 <tmp>/library/Dune/Heron/07 - Tide.m4a ← 72 <tmp>/library/Cinder/Garnet/07 - Undertow.m4a (spotify id; playlists pl0) (dry run)
+  [SUPERSEDE] 51 <tmp>/library/Dune/Heron/07 - Tide.m4a ← 85 <tmp>/library/Dune/Heron/04 - Tide.m4a (spotify id; playlists pl1) (dry run)
+  [SUPERSEDE] 51 <tmp>/library/Dune/Heron/07 - Tide.m4a ← 88 <tmp>/library/Various/Hits/07 - Tide.m4a (spotify id; playlists pl1) (dry run)
+  [SUPERSEDE] 47 <tmp>/library/Dune/Heron/03 - Static.m4a ← 89 <tmp>/library/Dune/Jade/10 - Static.m4a (spotify id; playlists pl2) (dry run)
+  [SUPERSEDE] 47 <tmp>/library/Dune/Heron/03 - Static.m4a ← 123 <tmp>/library/Dune/Static - Single/08 - Static.m4a (spotify id; playlists pl0) (dry run)
+  [SUPERSEDE] 47 <tmp>/library/Dune/Heron/03 - Static.m4a ← 138 <tmp>/library/Various/Hits/06 - Static.m4a (spotify id; playlists pl0) (dry run)
+  [SUPERSEDE] 50 <tmp>/library/Dune/Heron/06 - Northern.m4a ← 143 <tmp>/library/Dune/Northern - Single/01 - Northern.m4a (spotify id; playlists pl2) (dry run)
+  [KEEP] 90 Dune — Harbour <tmp>/library/Dune/Harbour - Single/07 - Harbour.m4a: filed under Harbour - Single, but it has no fingerprint, so the same-audio rung was skipped; kept
+  [KEEP] 124 Dune — Tide <tmp>/library/Dune/Tide - Single/12 - Tide.m4a: filed under Tide - Single, but it has no fingerprint, so the same-audio rung was skipped; kept
+  [KEEP] 127 Basalt — Undertow <tmp>/library/Basalt/Heron/07 - Undertow.m4a: on the album, but track 1-7 is 'Tide' (album item 51), another title; it has no fingerprint, so the same-audio rung was skipped; kept
+  [KEEP] 128 Basalt — Static <tmp>/library/Basalt/Static - Single/11 - Static.m4a: on the album, but its Spotify ID is not on the album's tracklist (a twin release's?) and no entry sits at its disc/track 1-11; it has no fingerprint, so the same-audio rung was skipped; kept
+  [KEEP] 134 Dune — Glass <tmp>/library/Dune/Birch/09 - Glass.m4a: filed under Birch, but it has no fingerprint, so the same-audio rung was skipped; kept
+[ALBUM] Arbor — Iris: 5 loose item(s) superseded, 4 kept
+  [SUPERSEDE] 56 <tmp>/library/Arbor/Iris/00 - Glass.m4a ← 73 <tmp>/library/Various/Hits/12 - Glass.m4a (spotify id; playlists pl1) (dry run)
+  [SUPERSEDE] 56 <tmp>/library/Arbor/Iris/00 - Glass.m4a ← 108 <tmp>/library/Basalt/Paper - Single/11 - Paper.m4a (spotify id; playlists pl0) (dry run)
+  [SUPERSEDE] 56 <tmp>/library/Arbor/Iris/00 - Glass.m4a ← 115 <tmp>/library/Basalt/Northern - Single/09 - Northern.m4a (spotify id; playlists pl1) (dry run)
+  [SUPERSEDE] 52 <tmp>/library/Arbor/Iris/00 - Harbour.m4a ← 87 <tmp>/library/Various/Hits/06 - Harbour.m4a (spotify id; playlists pl0) (dry run)
+  [SUPERSEDE] 55 <tmp>/library/Arbor/Iris/04 - Undertow.m4a ← 130 <tmp>/library/Various/Hits/01 - Undertow.m4a (spotify id; playlists pl1) (dry run)
+  [KEEP] 106 Arbor — Glass <tmp>/library/Arbor/Glass - Single/06 - Glass.m4a: filed under Glass - Single, but it has no fingerprint, so the same-audio rung was skipped; kept
+  [KEEP] 119 Arbor — Undertow <tmp>/library/Arbor/Undertow - Single/02 - Undertow.m4a: filed under Undertow - Single, but it has no fingerprint, so the same-audio rung was skipped; kept
+  [KEEP] 133 Arbor — Northern <tmp>/library/Arbor/Kestrel/01 - Northern.m4a: filed under Kestrel, but it has no fingerprint, so the same-audio rung was skipped; kept
+  [KEEP] 139 Arbor — Harbour <tmp>/library/Arbor/Harbour - Single/07 - Harbour.m4a: filed under Harbour - Single, but it has no fingerprint, so the same-audio rung was skipped; kept
+[ALBUM] Basalt — Jade: 1 loose item(s) superseded, 2 kept
+  [SUPERSEDE] 59 <tmp>/library/Basalt/Jade/02 - Paper.m4a ← 108 <tmp>/library/Basalt/Paper - Single/11 - Paper.m4a (spotify id; playlists pl0) (dry run)
+  [KEEP] 96 Basalt — Paper <tmp>/library/Various/Hits/09 - Paper.m4a: on the album, but its Spotify ID is not on the album's tracklist (a twin release's?) and no entry sits at its disc/track 1-9; it has no fingerprint, so the same-audio rung was skipped; kept
+  [KEEP] 122 Basalt — Static <tmp>/library/Basalt/Jade/02 - Static.m4a: on the album, but track 1-2 is 'Paper' (album item 59), another title; it has no fingerprint, so the same-audio rung was skipped; kept
+[ALBUM] Cinder — Kestrel: 3 loose item(s) superseded, 6 kept
+  [SUPERSEDE] 61 <tmp>/library/Cinder/Kestrel (Deluxe Edition)/00 - Harbour.m4a ← 83 <tmp>/library/Cinder/Fern/12 - Harbour.m4a (spotify id; playlists pl2) (dry run)
+  [SUPERSEDE] 65 <tmp>/library/Cinder/Kestrel/05 - Glass.m4a ← 131 <tmp>/library/Various/Hits/05 - Glass.m4a (spotify id; playlists pl2) (dry run)
+  [SUPERSEDE] 64 <tmp>/library/Cinder/Kestrel/04 - Undertow.m4a ← 143 <tmp>/library/Dune/Northern - Single/01 - Northern.m4a (spotify id; playlists pl2) (dry run)
+  [KEEP] 86 Cinder — Northern <tmp>/library/Cinder/Northern - Single/07 - Northern.m4a: filed under Northern - Single, but it has no fingerprint, so the same-audio rung was skipped; kept
+  [KEEP] 99 Cinder — Paper <tmp>/library/Various/Hits/12 - Paper.m4a: on the album, but its Spotify ID is not on the album's tracklist (a twin release's?) and no entry sits at its disc/track 1-12; it has no fingerprint, so the same-audio rung was skipped; kept
+  [KEEP] 102 Basalt — Undertow <tmp>/library/Basalt/Elm/07 - Undertow.m4a: on the album, but it has no Spotify ID; it has no fingerprint, so the same-audio rung was skipped; kept
+  [KEEP] 110 Cinder — Undertow <tmp>/library/Cinder/Undertow - Single/09 - Undertow.m4a: filed under Undertow - Single, but it has no fingerprint, so the same-audio rung was skipped; kept
+  [KEEP] 133 Arbor — Northern <tmp>/library/Arbor/Kestrel/01 - Northern.m4a: on the album, but track 1-1 is 'Harbour' (album item 61), another title; it has no fingerprint, so the same-audio rung was skipped; kept
+  [KEEP] 136 Cinder — Harbour <tmp>/library/Cinder/Harbour - Single/11 - Harbour.m4a: filed under Harbour - Single, but it has no fingerprint, so the same-audio rung was skipped; kept
+[ALBUM] Dune — Lichen: 2 loose item(s) superseded, 3 kept
+  [SUPERSEDE] 67 <tmp>/library/Dune/Lichen/01 - Harbour.m4a ← 90 <tmp>/library/Dune/Harbour - Single/07 - Harbour.m4a (spotify id; playlists pl0) (dry run)
+  [SUPERSEDE] 67 <tmp>/library/Dune/Lichen/01 - Harbour.m4a ← 94 <tmp>/library/Dune/Lichen/11 - Harbour.m4a (spotify id; playlists pl1) (dry run)
+  [KEEP] 89 Dune — Static <tmp>/library/Dune/Jade/10 - Static.m4a: filed under Jade, but it has no fingerprint, so the same-audio rung was skipped; kept
+  [KEEP] 123 Dune — Static <tmp>/library/Dune/Static - Single/08 - Static.m4a: filed under Static - Single, but it has no fingerprint, so the same-audio rung was skipped; kept
+  [KEEP] 134 Dune — Glass <tmp>/library/Dune/Birch/09 - Glass.m4a: filed under Birch, but it has no fingerprint, so the same-audio rung was skipped; kept
+Supersede backfill: 12 record(s), 1 library read(s)
+[ALBUM] Arbor — Amber (2010-01-10, album, SA0): 6 item(s) from 5 current album name(s): Amber; Amber (Deluxe Edition); Glass - Single; Harbour - Single; Hits
+[ALBUM] Arbor — Elm (2014-05-14, album, SA4): 6 item(s) from 3 current album name(s): Elm; Elm (Deluxe Edition); Hits
+[ALBUM] Arbor — Iris (2018-09-18, album, SA8): 9 item(s) from 4 current album name(s): Hits; Iris; Iris (Deluxe Edition); Paper - Single
+[ALBUM] Basalt — Birch (2011-02-11, album, SA1): 6 item(s) from 2 current album name(s): Birch; Birch (Deluxe Edition)
+[ALBUM] Basalt — Jade (2019-01-10, album, SA9): 6 item(s) from 4 current album name(s): Glass - Single; Hits; Jade; Jade (Deluxe Edition)
+[ALBUM] Basalt — Fern (2015-06-15, album, SA5): 4 item(s) from 4 current album name(s): Fern; Hits; Northern - Single; Undertow - Single
+[ALBUM] Cinder — Coral (2012-03-12, album, SA2): 6 item(s) from 4 current album name(s): Coral; Coral (Deluxe Edition); Garnet; Hits
+[ALBUM] Cinder — Garnet (2016-07-16, album, SA6): 8 item(s) from 3 current album name(s): Garnet; Hits; Northern - Single
+[COMP] Various — Hits (2005-01-01, compilation, COMP): 1 item(s) from 1 current album name(s): Kestrel
+[ALBUM] Cinder — Kestrel (2020-02-11, album, SA10): 6 item(s) from 3 current album name(s): Hits; Kestrel; Kestrel (Deluxe Edition)
+[ALBUM] Dune — Delta (2013-04-13, album, SA3): 11 item(s) from 5 current album name(s): Delta; Delta (Deluxe Edition); Glass - Single; Lichen; Northern - Single
+[ALBUM] Dune — Heron (2017-08-17, album, SA7): 8 item(s) from 5 current album name(s): Heron; Heron (Deluxe Edition); Hits; Jade; Static - Single
+[ALBUM] Dune — Lichen (2021-03-12, album, SA11): 6 item(s) from 3 current album name(s): Harbour - Single; Lichen; Tide - Single
+Items: 143 scanned, 84 with a Spotify ID, 37 with no album data (NOALBUM), 0 unchanged
+Album records: 3 release item(s) on another album go back to their record's album (HOME)
+Changes: 83 item(s) (album 29, date 54); 83 file write(s), 0 database-only; 33 file(s) move, 83 cover(s) replaced, 16 clash(es)
+Albums: 46 current album name(s) become 13 Spotify album(s)
+Singles: 3 item(s) on their album instead of a single, by ISRC; Spotify: 3 ISRC search(es) this run (0s apart), 3 ISRC(s) cached, 0 item(s) wait for a search
+[TWIN] Cinder — Garnet: SA6 (2016-07-16, 10 tracks, 8 entries, 4 items) ← SB6 (2023-01-01, 10 tracks, 2 entries, 0 items)
+Twins: 1 group(s) of same-name releases; 0 item(s) moved onto the representative, 0 wait for an ISRC search, 0 left apart (recording not on it)
+MusicBrainz: looked up 15 album(s) this run (none 8, url 7), 47 call(s); 13 album(s) cached
+Supersede: 29 loose item(s) superseded by their album copy
+Dry run: 112 item(s) would change (83 retagged, 29 superseded). Re-run with --apply to write.
+# apply
+79 Spotify track(s) placed on 21 release(s)
+PREFECT_API_URL unset — replacing without the pipeline lock
+  [HOME] 10 <tmp>/library/Basalt/Birch/00 - Northern.m4a: on SA0, but a track of its album record's Birch (SA1); goes back
+  [MB-NONE] Garnet (SA6): no MusicBrainz release; add it with https://harmony.pulsewidth.org.uk/release?url=https%3A%2F%2Fopen.spotify.com%2Falbum%2FSA6
+  [HOME] 44 <tmp>/library/Cinder/Garnet/00 - Ash.m4a: on SA4, but a track of its album record's Garnet (SA6); goes back
+  [HOME] 43 <tmp>/library/Cinder/Garnet/07 - Tide.m4a: on SA4, but a track of its album record's Garnet (SA6); goes back
+  [MB-NONE] Garnet (SA6): no MusicBrainz release; add it with https://harmony.pulsewidth.org.uk/release?url=https%3A%2F%2Fopen.spotify.com%2Falbum%2FSA6
+  [RETAG] 1 <tmp>/library/Arbor/Amber/01 - Harbour.m4a: year 0→2010, month 0→1, day 0→10, mb_albumid ''→'files-0', mb_album_via None→'files', cover
+  [RETAG] 2 <tmp>/library/Arbor/Amber/02 - Paper.m4a: year 0→2010, month 0→1, day 0→10, mb_albumid ''→'files-0', mb_album_via None→'files', cover
+  [RETAG] 3 <tmp>/library/Arbor/Amber/03 - Static.m4a: year 0→2010, month 0→1, day 0→10, mb_albumid ''→'files-0', mb_album_via None→'files', spotify_album_id None→'SA0', cover
+  [RETAG] 4 <tmp>/library/Arbor/Amber (Deluxe Edition)/00 - Undertow.m4a: album 'Amber (Deluxe Edition)'→'Amber', year 0→2010, month 0→1, day 0→10, mb_albumid ''→'files-0', mb_album_via None→'files', spotify_album_id None→'SA0', cover → <tmp>/library/Arbor/Amber/00 - Undertow.m4a
+  [RETAG] 30 <tmp>/library/Arbor/Elm/00 - Paper.m4a: year 0→2014, month 0→5, day 0→14, mb_albumid ''→'files-4', mb_album_via None→'files', spotify_album_id None→'SA4', cover
+  [RETAG] 29 <tmp>/library/Arbor/Elm/01 - Harbour.m4a: year 0→2014, month 0→5, day 0→14, mb_albumid ''→'files-4', mb_album_via None→'files', spotify_album_id 'SA0'→'SA4', cover
+  [RETAG] 32 <tmp>/library/Arbor/Elm/04 - Undertow.m4a: year 0→2014, month 0→5, day 0→14, mb_albumid ''→'files-4', mb_album_via None→'files', spotify_album_id 'SA1'→'SA4', cover
+  [RETAG] 33 <tmp>/library/Arbor/Elm/05 - Glass.m4a: year 0→2014, month 0→5, day 0→14, mb_albumid ''→'files-4', mb_album_via None→'files', spotify_album_id None→'SA4', cover
+  [RETAG] 31 <tmp>/library/Arbor/Elm (Deluxe Edition)/03 - Static.m4a: album 'Elm (Deluxe Edition)'→'Elm', year 0→2014, month 0→5, day 0→14, mb_albumid ''→'files-4', mb_album_via None→'files', cover → <tmp>/library/Arbor/Elm/03 - Static.m4a
+  [RETAG] 106 <tmp>/library/Arbor/Glass - Single/06 - Glass.m4a: album 'Glass - Single'→'Amber', year 0→2010, month 0→1, day 0→10, track 6→5, tracktotal 0→6, disc 0→1, disctotal 0→1, mb_albumid ''→'rel-SA0', mb_album_via None→'url', spotify_album_id 'SA6'→'SA0', cover → <tmp>/library/Arbor/Amber/05 - Glass.m4a
+  [RETAG] 87 <tmp>/library/Various/Hits/06 - Harbour.m4a: album 'Hits'→'Iris', albumartist 'Various'→'Arbor', year 0→2018, month 0→9, day 0→18, track 6→1, tracktotal 0→6, disc 0→1, disctotal 0→1, mb_albumid ''→'rel-SA8', mb_album_via None→'url', spotify_album_id 'COMP'→'SA8', cover → <tmp>/library/Arbor/Iris/01 - Harbour.m4a
+  [RETAG] 73 <tmp>/library/Various/Hits/12 - Glass.m4a: album 'Hits'→'Iris', albumartist 'Various'→'Arbor', year 0→2018, month 0→9, day 0→18, track 12→5, tracktotal 0→6, disc 0→1, disctotal 0→1, mb_albumid ''→'rel-SA8', mb_album_via None→'url', spotify_album_id 'SG8'→'SA8', cover → <tmp>/library/Arbor/Iris/05 - Glass.m4a
+  [RETAG] 52 <tmp>/library/Arbor/Iris/00 - Harbour.m4a: year 0→2018, month 0→9, day 0→18, mb_albumid ''→'files-8', mb_album_via None→'files', spotify_album_id None→'SA8', cover
+  [RETAG] 56 <tmp>/library/Arbor/Iris/00 - Glass.m4a: year 0→2018, month 0→9, day 0→18, mb_albumid ''→'files-8', mb_album_via None→'files', cover
+  [RETAG] 57 <tmp>/library/Arbor/Iris/00 - Northern.m4a: year 0→2018, month 0→9, day 0→18, mb_albumid ''→'files-8', mb_album_via None→'files', spotify_album_id None→'SA8', cover
+  [RETAG] 53 <tmp>/library/Arbor/Iris/02 - Paper.m4a: year 0→2018, month 0→9, day 0→18, mb_albumid ''→'files-8', mb_album_via None→'files', spotify_album_id None→'SA8', cover
+  [RETAG] 55 <tmp>/library/Arbor/Iris/04 - Undertow.m4a: year 0→2018, month 0→9, day 0→18, mb_albumid ''→'files-8', mb_album_via None→'files', spotify_album_id None→'SA8', cover
+  [RETAG] 54 <tmp>/library/Arbor/Iris (Deluxe Edition)/03 - Static.m4a: album 'Iris (Deluxe Edition)'→'Iris', year 0→2018, month 0→9, day 0→18, mb_albumid ''→'files-8', mb_album_via None→'files', spotify_album_id None→'SA8', cover → <tmp>/library/Arbor/Iris/03 - Static.m4a
+  [RETAG] 10 <tmp>/library/Basalt/Birch/00 - Northern.m4a: year 0→2011, month 0→2, day 0→11, track 0→6, disctotal 0→1, mb_album_via None→'none', spotify_album_id 'SA0'→'SA1', cover → <tmp>/library/Basalt/Birch/06 - Northern.m4a
+  [RETAG] 6 <tmp>/library/Basalt/Birch/02 - Paper.m4a: year 0→2011, month 0→2, day 0→11, disctotal 0→1, mb_album_via None→'none', cover
+  [RETAG] 7 <tmp>/library/Basalt/Birch/03 - Static.m4a: year 0→2011, month 0→2, day 0→11, disctotal 0→1, mb_album_via None→'none', cover
+  [RETAG] 13 <tmp>/library/Basalt/Birch/09 - Vesper.m4a: year 0→2011, month 0→2, day 0→11, disctotal 0→1, mb_album_via None→'none', cover
+  [RETAG] 9 <tmp>/library/Basalt/Birch (Deluxe Edition)/05 - Glass.m4a: album 'Birch (Deluxe Edition)'→'Birch', year 0→2011, month 0→2, day 0→11, disctotal 0→1, mb_album_via None→'none', spotify_album_id None→'SA1', cover → <tmp>/library/Basalt/Birch/05 - Glass.m4a
+  [RETAG] 12 <tmp>/library/Basalt/Birch (Deluxe Edition)/08 - Ash.m4a: album 'Birch (Deluxe Edition)'→'Birch', year 0→2011, month 0→2, day 0→11, disctotal 0→1, mb_album_via None→'none', spotify_album_id None→'SA1', cover → <tmp>/library/Basalt/Birch/08 - Ash.m4a
+  [RETAG] 111 <tmp>/library/Basalt/Glass - Single/10 - Glass.m4a: album 'Glass - Single'→'Jade', year 0→2019, month 0→1, day 0→10, track 10→4, tracktotal 0→6, disc 0→1, disctotal 0→1, mb_album_via None→'none', spotify_album_id None→'SA9', cover → <tmp>/library/Basalt/Jade/04 - Glass.m4a
+  [RETAG] 74 <tmp>/library/Various/Hits/05 - Undertow.m4a: album 'Hits'→'Fern', albumartist 'Various'→'Basalt', year 0→2015, month 0→6, day 0→15, track 5→4, tracktotal 0→6, disc 0→1, disctotal 0→1, mb_album_via None→'none', spotify_album_id None→'SA5', cover → <tmp>/library/Basalt/Fern/04 - Undertow.m4a
+  [RETAG] 120 <tmp>/library/Various/Hits/07 - Undertow.1.m4a: album 'Hits'→'Jade', albumartist 'Various'→'Basalt', year 0→2019, month 0→1, day 0→10, track 7→4, tracktotal 0→6, disc 0→1, disctotal 0→1, mb_album_via None→'none', spotify_album_id 'SG9'→'SA9', cover → <tmp>/library/Basalt/Jade/04 - Undertow.m4a
+  [RETAG] 92 <tmp>/library/Various/Hits/09 - Glass.m4a: album 'Hits'→'Jade', albumartist 'Various'→'Basalt', year 0→2019, month 0→1, day 0→10, track 9→5, tracktotal 0→6, disc 0→1, disctotal 0→1, mb_album_via None→'none', spotify_album_id 'SG9'→'SA9', cover → <tmp>/library/Basalt/Jade/05 - Glass.m4a
+  [RETAG] 135 <tmp>/library/Various/Hits/12 - Undertow.m4a: album 'Hits'→'Elm', albumartist 'Various'→'Arbor', year 0→2014, month 0→5, day 0→14, track 12→6, tracktotal 0→8, disc 0→1, disctotal 0→1, mb_album_via None→'none', spotify_album_id 'SA5'→'SA4', cover → <tmp>/library/Arbor/Elm/06 - Undertow.m4a
+  [RETAG] 58 <tmp>/library/Basalt/Jade/00 - Harbour.m4a: year 0→2019, month 0→1, day 0→10, mb_albumid ''→'files-9', mb_album_via None→'files', cover
+  [RETAG] 59 <tmp>/library/Basalt/Jade/02 - Paper.m4a: year 0→2019, month 0→1, day 0→10, mb_albumid ''→'files-9', mb_album_via None→'files', spotify_album_id None→'SA9', cover
+  [RETAG] 60 <tmp>/library/Basalt/Jade (Deluxe Edition)/00 - Static.m4a: album 'Jade (Deluxe Edition)'→'Jade', year 0→2019, month 0→1, day 0→10, mb_albumid ''→'files-9', mb_album_via None→'files', spotify_album_id None→'SA9', cover → <tmp>/library/Basalt/Jade/00 - Static.m4a
+  [RETAG] 115 <tmp>/library/Basalt/Northern - Single/09 - Northern.m4a: album 'Northern - Single'→'Fern', year 0→2015, month 0→6, day 0→15, track 9→6, tracktotal 0→6, disc 0→1, disctotal 0→1, mb_album_via None→'none', spotify_album_id 'SG5'→'SA5', cover → <tmp>/library/Basalt/Fern/06 - Northern.m4a
+  [RETAG] 108 <tmp>/library/Basalt/Paper - Single/11 - Paper.m4a: album 'Paper - Single'→'Iris', albumartist 'Basalt'→'Arbor', year 0→2018, month 0→9, day 0→18, track 11→5, tracktotal 0→6, disc 0→1, disctotal 0→1, mb_albumid ''→'rel-SA8', mb_album_via None→'url', spotify_album_id 'COMP'→'SA8', cover → <tmp>/library/Arbor/Iris/05 - Paper.m4a
+  [RETAG] 142 <tmp>/library/Basalt/Undertow - Single/07 - Undertow.m4a: album 'Undertow - Single'→'Fern', year 0→2015, month 0→6, day 0→15, track 7→6, tracktotal 0→6, disc 0→1, disctotal 0→1, mb_album_via None→'none', spotify_album_id 'COMP'→'SA5', cover → <tmp>/library/Basalt/Fern/06 - Undertow.m4a
+  [RETAG] 14 <tmp>/library/Cinder/Coral/00 - Harbour.m4a: year 0→2012, month 0→3, day 0→12, mb_albumid ''→'rel-SA2', mb_album_via None→'url', spotify_album_id 'SA1'→'SA2', cover
+  [RETAG] 16 <tmp>/library/Cinder/Coral/00 - Static.m4a: year 0→2012, month 0→3, day 0→12, mb_albumid ''→'rel-SA2', mb_album_via None→'url', spotify_album_id 'SA1'→'SA2', cover
+  [RETAG] 19 <tmp>/library/Cinder/Coral/00 - Northern.m4a: year 0→2012, month 0→3, day 0→12, mb_albumid ''→'rel-SA2', mb_album_via None→'url', spotify_album_id None→'SA2', cover
+  [RETAG] 17 <tmp>/library/Cinder/Coral/04 - Undertow.m4a: year 0→2012, month 0→3, day 0→12, mb_albumid ''→'rel-SA2', mb_album_via None→'url', spotify_album_id None→'SA2', cover
+  [RETAG] 18 <tmp>/library/Cinder/Coral/05 - Glass.m4a: year 0→2012, month 0→3, day 0→12, mb_albumid ''→'rel-SA2', mb_album_via None→'url', spotify_album_id None→'SA2', cover
+  [RETAG] 15 <tmp>/library/Cinder/Coral (Deluxe Edition)/02 - Paper.m4a: album 'Coral (Deluxe Edition)'→'Coral', year 0→2012, month 0→3, day 0→12, mb_albumid ''→'rel-SA2', mb_album_via None→'url', cover → <tmp>/library/Cinder/Coral/02 - Paper.m4a
+  [RETAG] 83 <tmp>/library/Cinder/Fern/12 - Harbour.m4a: albumartist 'Cinder'→'Basalt', year 0→2015, month 0→6, day 0→15, track 12→6, tracktotal 0→6, disc 0→1, disctotal 0→1, mb_album_via None→'none', spotify_album_id 'SA10'→'SA5', cover → <tmp>/library/Basalt/Fern/06 - Harbour.m4a
+  [RETAG] 140 <tmp>/library/Cinder/Garnet/03 - Orbit.m4a: year 0→2016, month 0→7, day 0→16, track 3→10, tracktotal 0→10, disc 0→1, disctotal 0→1, mb_album_via None→'none', spotify_album_id 'SG6'→'SA6', cover → <tmp>/library/Cinder/Garnet/10 - Orbit.m4a
+  [RETAG] 39 <tmp>/library/Cinder/Garnet/00 - Static.m4a: year 0→2016, month 0→7, day 0→16, track 0→3, disctotal 0→1, mb_album_via None→'none', spotify_album_id None→'SA6', cover → <tmp>/library/Cinder/Garnet/03 - Static.m4a
+  [RETAG] 44 <tmp>/library/Cinder/Garnet/00 - Ash.m4a: year 0→2016, month 0→7, day 0→16, track 0→8, disctotal 0→1, mb_album_via None→'none', spotify_album_id 'SA4'→'SA6', cover → <tmp>/library/Cinder/Garnet/08 - Ash.m4a
+  [RETAG] 38 <tmp>/library/Cinder/Garnet/02 - Paper.m4a: year 0→2016, month 0→7, day 0→16, disctotal 0→1, mb_album_via None→'none', spotify_album_id None→'SA6', cover
+  [RETAG] 41 <tmp>/library/Cinder/Garnet/05 - Glass.m4a: year 0→2016, month 0→7, day 0→16, disctotal 0→1, mb_album_via None→'none', cover
+  [RETAG] 42 <tmp>/library/Cinder/Garnet/06 - Northern.m4a: year 0→2016, month 0→7, day 0→16, disctotal 0→1, mb_album_via None→'none', spotify_album_id None→'SA6', cover
+  [RETAG] 43 <tmp>/library/Cinder/Garnet/07 - Tide.m4a: year 0→2016, month 0→7, day 0→16, disctotal 0→1, mb_album_via None→'none', spotify_album_id 'SA4'→'SA6', cover
+  [RETAG] 117 <tmp>/library/Cinder/Kestrel/02 - Paper.1.m4a: album 'Kestrel'→'Hits', albumartist 'Cinder'→'Various', year 0→2005, month 0→1, day 0→1, track 2→4, tracktotal 0→20, disc 0→1, disctotal 0→1, mb_album_via None→'none', spotify_album_id 'SA0'→'COMP', cover → <tmp>/library/Various/Hits/04 - Paper.m4a
+  [RETAG] 66 <tmp>/library/Cinder/Kestrel/00 - Northern.m4a: year 0→2020, month 0→2, day 0→11, mb_albumid ''→'rel-SA10', mb_album_via None→'url', spotify_album_id None→'SA10', cover
+  [RETAG] 62 <tmp>/library/Cinder/Kestrel/02 - Paper.m4a: year 0→2020, month 0→2, day 0→11, mb_albumid ''→'rel-SA10', mb_album_via None→'url', spotify_album_id 'SA4'→'SA10', cover
+  [RETAG] 63 <tmp>/library/Cinder/Kestrel/03 - Static.m4a: year 0→2020, month 0→2, day 0→11, mb_albumid ''→'rel-SA10', mb_album_via None→'url', spotify_album_id None→'SA10', cover
+  [RETAG] 64 <tmp>/library/Cinder/Kestrel/04 - Undertow.m4a: year 0→2020, month 0→2, day 0→11, mb_albumid ''→'rel-SA10', mb_album_via None→'url', spotify_album_id 'SA7'→'SA10', cover
+  [RETAG] 65 <tmp>/library/Cinder/Kestrel/05 - Glass.m4a: year 0→2020, month 0→2, day 0→11, mb_albumid ''→'rel-SA10', mb_album_via None→'url', spotify_album_id None→'SA10', cover
+  [RETAG] 61 <tmp>/library/Cinder/Kestrel (Deluxe Edition)/00 - Harbour.m4a: album 'Kestrel (Deluxe Edition)'→'Kestrel', year 0→2020, month 0→2, day 0→11, mb_albumid ''→'rel-SA10', mb_album_via None→'url', spotify_album_id 'SA4'→'SA10', cover → <tmp>/library/Cinder/Kestrel/00 - Harbour.m4a
+  [RETAG] 95 <tmp>/library/Dune/Delta/01 - Undertow.m4a: year 0→2013, month 0→4, day 0→13, track 1→4, tracktotal 0→10, disc 0→1, disctotal 0→1, mb_albumid ''→'rel-SA3', mb_album_via None→'url', spotify_album_id None→'SA3', cover → <tmp>/library/Dune/Delta/04 - Undertow.m4a
+  [RETAG] 21 <tmp>/library/Dune/Delta/00 - Paper.m4a: year 0→2013, month 0→4, day 0→13, mb_albumid ''→'rel-SA3', mb_album_via None→'url', spotify_album_id 'SA0'→'SA3', cover
+  [RETAG] 25 <tmp>/library/Dune/Delta/00 - Northern.m4a: year 0→2013, month 0→4, day 0→13, mb_albumid ''→'rel-SA3', mb_album_via None→'url', spotify_album_id 'SA2'→'SA3', cover
+  [RETAG] 20 <tmp>/library/Dune/Delta/01 - Harbour.m4a: year 0→2013, month 0→4, day 0→13, mb_albumid ''→'rel-SA3', mb_album_via None→'url', spotify_album_id None→'SA3', cover
+  [RETAG] 22 <tmp>/library/Dune/Delta/03 - Static.m4a: year 0→2013, month 0→4, day 0→13, mb_albumid ''→'rel-SA3', mb_album_via None→'url', spotify_album_id 'SA2'→'SA3', cover
+  [RETAG] 26 <tmp>/library/Dune/Delta/07 - Tide.m4a: year 0→2013, month 0→4, day 0→13, mb_albumid ''→'rel-SA3', mb_album_via None→'url', spotify_album_id 'SA1'→'SA3', cover
+  [RETAG] 27 <tmp>/library/Dune/Delta/08 - Ash.m4a: year 0→2013, month 0→4, day 0→13, mb_albumid ''→'rel-SA3', mb_album_via None→'url', spotify_album_id 'SA1'→'SA3', cover
+  [RETAG] 28 <tmp>/library/Dune/Delta/09 - Vesper.m4a: year 0→2013, month 0→4, day 0→13, mb_albumid ''→'rel-SA3', mb_album_via None→'url', spotify_album_id None→'SA3', cover
+  [RETAG] 24 <tmp>/library/Dune/Delta (Deluxe Edition)/00 - Glass.m4a: album 'Delta (Deluxe Edition)'→'Delta', year 0→2013, month 0→4, day 0→13, mb_albumid ''→'rel-SA3', mb_album_via None→'url', cover → <tmp>/library/Dune/Delta/00 - Glass.m4a
+  [RETAG] 23 <tmp>/library/Dune/Delta (Deluxe Edition)/04 - Undertow.m4a: album 'Delta (Deluxe Edition)'→'Delta', year 0→2013, month 0→4, day 0→13, mb_albumid ''→'rel-SA3', mb_album_via None→'url', spotify_album_id None→'SA3', cover
+  [RETAG] 45 <tmp>/library/Dune/Heron/01 - Harbour.m4a: year 0→2017, month 0→8, day 0→17, mb_albumid ''→'rel-SA7', mb_album_via None→'url', cover
+  [RETAG] 47 <tmp>/library/Dune/Heron/03 - Static.m4a: year 0→2017, month 0→8, day 0→17, mb_albumid ''→'rel-SA7', mb_album_via None→'url', cover
+  [RETAG] 48 <tmp>/library/Dune/Heron/04 - Undertow.m4a: year 0→2017, month 0→8, day 0→17, mb_albumid ''→'rel-SA7', mb_album_via None→'url', cover
+  [RETAG] 49 <tmp>/library/Dune/Heron/05 - Glass.m4a: year 0→2017, month 0→8, day 0→17, mb_albumid ''→'rel-SA7', mb_album_via None→'url', spotify_album_id None→'SA7', cover
+  [RETAG] 50 <tmp>/library/Dune/Heron/06 - Northern.m4a: year 0→2017, month 0→8, day 0→17, mb_albumid ''→'rel-SA7', mb_album_via None→'url', cover
+  [RETAG] 51 <tmp>/library/Dune/Heron/07 - Tide.m4a: year 0→2017, month 0→8, day 0→17, mb_albumid ''→'rel-SA7', mb_album_via None→'url', spotify_album_id 'SA2'→'SA7', cover
+  [RETAG] 46 <tmp>/library/Dune/Heron (Deluxe Edition)/00 - Paper.m4a: album 'Heron (Deluxe Edition)'→'Heron', year 0→2017, month 0→8, day 0→17, mb_albumid ''→'rel-SA7', mb_album_via None→'url', spotify_album_id None→'SA7', cover → <tmp>/library/Dune/Heron/00 - Paper.m4a
+  [RETAG] 81 <tmp>/library/Various/Hits/01 - Northern.m4a: album 'Hits'→'Heron', albumartist 'Various'→'Dune', year 0→2017, month 0→8, day 0→17, track 1→8, tracktotal 0→8, disc 0→1, disctotal 0→1, mb_albumid ''→'rel-SA7', mb_album_via None→'url', spotify_album_id None→'SA7', cover → <tmp>/library/Dune/Heron/08 - Northern.m4a
+  [RETAG] 138 <tmp>/library/Various/Hits/06 - Static.m4a: album 'Hits'→'Amber', albumartist 'Various'→'Arbor', year 0→2010, month 0→1, day 0→10, track 6→5, tracktotal 0→6, disc 0→1, disctotal 0→1, mb_albumid ''→'rel-SA0', mb_album_via None→'url', spotify_album_id 'COMP'→'SA0', cover → <tmp>/library/Arbor/Amber/05 - Static.m4a
+  [RETAG] 71 <tmp>/library/Dune/Lichen/00 - Glass.m4a: year 0→2021, month 0→3, day 0→12, mb_albumid ''→'rel-SA11', mb_album_via None→'url', spotify_album_id None→'SA11', cover
+  [RETAG] 67 <tmp>/library/Dune/Lichen/01 - Harbour.m4a: year 0→2021, month 0→3, day 0→12, mb_albumid ''→'rel-SA11', mb_album_via None→'url', cover
+  [RETAG] 68 <tmp>/library/Dune/Lichen/02 - Paper.m4a: year 0→2021, month 0→3, day 0→12, mb_albumid ''→'rel-SA11', mb_album_via None→'url', cover
+  [RETAG] 69 <tmp>/library/Dune/Lichen/03 - Static.m4a: year 0→2021, month 0→3, day 0→12, mb_albumid ''→'rel-SA11', mb_album_via None→'url', cover
+  [RETAG] 70 <tmp>/library/Dune/Lichen/04 - Undertow.m4a: year 0→2021, month 0→3, day 0→12, mb_albumid ''→'rel-SA11', mb_album_via None→'url', spotify_album_id None→'SA11', cover
+  [RETAG] 143 <tmp>/library/Dune/Northern - Single/01 - Northern.m4a: album 'Northern - Single'→'Garnet', albumartist 'Dune'→'Cinder', year 0→2016, month 0→7, day 0→16, track 1→3, tracktotal 0→10, disc 0→1, disctotal 0→1, mb_album_via None→'none', cover → <tmp>/library/Cinder/Garnet/03 - Northern.m4a
+  [RETAG] 97 <tmp>/library/Dune/Northern - Single/10 - Northern.m4a: album 'Northern - Single'→'Delta', year 0→2013, month 0→4, day 0→13, track 10→6, tracktotal 0→10, disc 0→1, disctotal 0→1, mb_albumid ''→'rel-SA3', mb_album_via None→'url', spotify_album_id 'COMP'→'SA3', cover → <tmp>/library/Dune/Delta/06 - Northern.m4a
+  [RETAG] 124 <tmp>/library/Dune/Tide - Single/12 - Tide.m4a: album 'Tide - Single'→'Lichen', year 0→2021, month 0→3, day 0→12, track 12→7, tracktotal 0→8, disc 0→1, disctotal 0→1, mb_albumid ''→'rel-SA11', mb_album_via None→'url', spotify_album_id 'COMP'→'SA11', cover → <tmp>/library/Dune/Lichen/07 - Tide.m4a
+[ALBUM] Arbor — Amber: 1 loose item(s) superseded, 3 kept
+  [SUPERSEDE] 1 <tmp>/library/Arbor/Amber/01 - Harbour.m4a ← 139 <tmp>/library/Arbor/Harbour - Single/07 - Harbour.m4a (spotify id; playlists pl1)
+[MERGE] keep 1 ← 139; old file → <tmp>/replaced/139-07 - Harbour.m4a
+[ALBUM] Basalt — Birch: 0 loose item(s) superseded, 3 kept
+[ALBUM] Cinder — Coral: 1 loose item(s) superseded, 3 kept
+  [SUPERSEDE] 17 <tmp>/library/Cinder/Coral/04 - Undertow.m4a ← 72 <tmp>/library/Cinder/Garnet/07 - Undertow.m4a (spotify id; playlists pl0)
+[MERGE] keep 17 ← 72; old file → <tmp>/replaced/72-07 - Undertow.m4a
+[ALBUM] Dune — Delta: 3 loose item(s) superseded, 5 kept
+  [SUPERSEDE] 23 <tmp>/library/Dune/Delta (Deluxe Edition)/04 - Undertow.m4a ← 95 <tmp>/library/Dune/Delta/04 - Undertow.m4a (spotify id; playlists pl2)
+  [MOVE] 23 <tmp>/library/Dune/Delta (Deluxe Edition)/04 - Undertow.m4a → <tmp>/library/Dune/Delta/04 - Undertow.m4a: the path its loose copy held
+  [SUPERSEDE] 25 <tmp>/library/Dune/Delta/00 - Northern.m4a ← 97 <tmp>/library/Dune/Delta/06 - Northern.m4a (spotify id; playlists pl1)
+  [SUPERSEDE] 26 <tmp>/library/Dune/Delta/07 - Tide.m4a ← 129 <tmp>/library/Dune/Lichen/02 - Tide.m4a (spotify id; playlists pl0)
+[MERGE] keep 23 ← 95; old file → <tmp>/replaced/95-04 - Undertow.m4a
+[MERGE] keep 25 ← 97; old file → <tmp>/replaced/97-06 - Northern.m4a
+[MERGE] keep 26 ← 129; old file → <tmp>/replaced/129-02 - Tide.m4a
+[ALBUM] Arbor — Elm: 0 loose item(s) superseded, 5 kept
+[ALBUM] Basalt — Fern: 0 loose item(s) superseded, 5 kept
+[ALBUM] Cinder — Garnet: 4 loose item(s) superseded, 5 kept
+  [SUPERSEDE] 42 <tmp>/library/Cinder/Garnet/06 - Northern.m4a ← 116 <tmp>/library/Various/Hits/07 - Northern.m4a (spotify id; playlists pl2)
+  [SUPERSEDE] 42 <tmp>/library/Cinder/Garnet/06 - Northern.m4a ← 132 <tmp>/library/Cinder/Garnet/01 - Northern.m4a (spotify id; playlists pl0)
+  [SUPERSEDE] 43 <tmp>/library/Cinder/Garnet/07 - Tide.m4a ← 135 <tmp>/library/Arbor/Elm/06 - Undertow.m4a (spotify id; playlists pl0)
+  [SUPERSEDE] 39 <tmp>/library/Cinder/Garnet/03 - Static.m4a ← 143 <tmp>/library/Cinder/Garnet/03 - Northern.m4a (spotify id; playlists pl2)
+[MERGE] keep 42 ← 116; old file → <tmp>/replaced/116-07 - Northern.m4a
+[MERGE] keep 42 ← 132; old file → <tmp>/replaced/132-01 - Northern.m4a
+[MERGE] keep 43 ← 135; old file → <tmp>/replaced/135-06 - Undertow.m4a
+[MERGE] keep 39 ← 143; old file → <tmp>/replaced/143-03 - Northern.m4a
+[ALBUM] Dune — Heron: 5 loose item(s) superseded, 5 kept
+  [SUPERSEDE] 51 <tmp>/library/Dune/Heron/07 - Tide.m4a ← 85 <tmp>/library/Dune/Heron/04 - Tide.m4a (spotify id; playlists pl1)
+  [SUPERSEDE] 51 <tmp>/library/Dune/Heron/07 - Tide.m4a ← 88 <tmp>/library/Various/Hits/07 - Tide.m4a (spotify id; playlists pl1)
+  [SUPERSEDE] 47 <tmp>/library/Dune/Heron/03 - Static.m4a ← 89 <tmp>/library/Dune/Jade/10 - Static.m4a (spotify id; playlists pl2)
+  [SUPERSEDE] 47 <tmp>/library/Dune/Heron/03 - Static.m4a ← 123 <tmp>/library/Dune/Static - Single/08 - Static.m4a (spotify id; playlists pl0)
+  [SUPERSEDE] 47 <tmp>/library/Dune/Heron/03 - Static.m4a ← 138 <tmp>/library/Arbor/Amber/05 - Static.m4a (spotify id; playlists pl0)
+[MERGE] keep 51 ← 85; old file → <tmp>/replaced/85-04 - Tide.m4a
+[MERGE] keep 51 ← 88; old file → <tmp>/replaced/88-07 - Tide.m4a
+[MERGE] keep 47 ← 89; old file → <tmp>/replaced/89-10 - Static.m4a
+[MERGE] keep 47 ← 123; old file → <tmp>/replaced/123-08 - Static.m4a
+[MERGE] keep 47 ← 138; old file → <tmp>/replaced/138-05 - Static.m4a
+[ALBUM] Arbor — Iris: 5 loose item(s) superseded, 2 kept
+  [SUPERSEDE] 56 <tmp>/library/Arbor/Iris/00 - Glass.m4a ← 73 <tmp>/library/Arbor/Iris/05 - Glass.m4a (spotify id; playlists pl1)
+  [SUPERSEDE] 56 <tmp>/library/Arbor/Iris/00 - Glass.m4a ← 108 <tmp>/library/Arbor/Iris/05 - Paper.m4a (spotify id; playlists pl0)
+  [SUPERSEDE] 56 <tmp>/library/Arbor/Iris/00 - Glass.m4a ← 115 <tmp>/library/Basalt/Fern/06 - Northern.m4a (spotify id; playlists pl1)
+  [SUPERSEDE] 52 <tmp>/library/Arbor/Iris/00 - Harbour.m4a ← 87 <tmp>/library/Arbor/Iris/01 - Harbour.m4a (spotify id; playlists pl0)
+  [SUPERSEDE] 55 <tmp>/library/Arbor/Iris/04 - Undertow.m4a ← 130 <tmp>/library/Various/Hits/01 - Undertow.m4a (spotify id; playlists pl1)
+[MERGE] keep 56 ← 73; old file → <tmp>/replaced/73-05 - Glass.m4a
+[MERGE] keep 56 ← 108; old file → <tmp>/replaced/108-05 - Paper.m4a
+[MERGE] keep 56 ← 115; old file → <tmp>/replaced/115-06 - Northern.m4a
+[MERGE] keep 52 ← 87; old file → <tmp>/replaced/87-01 - Harbour.m4a
+[MERGE] keep 55 ← 130; old file → <tmp>/replaced/130-01 - Undertow.m4a
+[ALBUM] Basalt — Jade: 0 loose item(s) superseded, 5 kept
+[ALBUM] Cinder — Kestrel: 2 loose item(s) superseded, 5 kept
+  [SUPERSEDE] 61 <tmp>/library/Cinder/Kestrel/00 - Harbour.m4a ← 83 <tmp>/library/Basalt/Fern/06 - Harbour.m4a (spotify id; playlists pl2)
+  [SUPERSEDE] 65 <tmp>/library/Cinder/Kestrel/05 - Glass.m4a ← 131 <tmp>/library/Various/Hits/05 - Glass.m4a (spotify id; playlists pl2)
+[MERGE] keep 61 ← 83; old file → <tmp>/replaced/83-06 - Harbour.m4a
+[MERGE] keep 65 ← 131; old file → <tmp>/replaced/131-05 - Glass.m4a
+[ALBUM] Dune — Lichen: 2 loose item(s) superseded, 2 kept
+  [SUPERSEDE] 67 <tmp>/library/Dune/Lichen/01 - Harbour.m4a ← 90 <tmp>/library/Dune/Harbour - Single/07 - Harbour.m4a (spotify id; playlists pl0)
+  [SUPERSEDE] 67 <tmp>/library/Dune/Lichen/01 - Harbour.m4a ← 94 <tmp>/library/Dune/Lichen/11 - Harbour.m4a (spotify id; playlists pl1)
+[MERGE] keep 67 ← 90; old file → <tmp>/replaced/90-07 - Harbour.m4a
+[MERGE] keep 67 ← 94; old file → <tmp>/replaced/94-11 - Harbour.m4a
+Supersede backfill: 12 record(s), 9 library read(s)
+[ALBUM] Arbor — Amber (2010-01-10, album, SA0): 6 item(s) from 5 current album name(s): Amber; Amber (Deluxe Edition); Glass - Single; Harbour - Single; Hits
+[ALBUM] Arbor — Elm (2014-05-14, album, SA4): 6 item(s) from 3 current album name(s): Elm; Elm (Deluxe Edition); Hits
+[ALBUM] Arbor — Iris (2018-09-18, album, SA8): 9 item(s) from 4 current album name(s): Hits; Iris; Iris (Deluxe Edition); Paper - Single
+[ALBUM] Basalt — Birch (2011-02-11, album, SA1): 6 item(s) from 2 current album name(s): Birch; Birch (Deluxe Edition)
+[ALBUM] Basalt — Jade (2019-01-10, album, SA9): 6 item(s) from 4 current album name(s): Glass - Single; Hits; Jade; Jade (Deluxe Edition)
+[ALBUM] Basalt — Fern (2015-06-15, album, SA5): 4 item(s) from 4 current album name(s): Fern; Hits; Northern - Single; Undertow - Single
+[ALBUM] Cinder — Coral (2012-03-12, album, SA2): 6 item(s) from 4 current album name(s): Coral; Coral (Deluxe Edition); Garnet; Hits
+[ALBUM] Cinder — Garnet (2016-07-16, album, SA6): 8 item(s) from 3 current album name(s): Garnet; Hits; Northern - Single
+[COMP] Various — Hits (2005-01-01, compilation, COMP): 1 item(s) from 1 current album name(s): Kestrel
+[ALBUM] Cinder — Kestrel (2020-02-11, album, SA10): 6 item(s) from 3 current album name(s): Hits; Kestrel; Kestrel (Deluxe Edition)
+[ALBUM] Dune — Delta (2013-04-13, album, SA3): 11 item(s) from 5 current album name(s): Delta; Delta (Deluxe Edition); Glass - Single; Lichen; Northern - Single
+[ALBUM] Dune — Heron (2017-08-17, album, SA7): 8 item(s) from 5 current album name(s): Heron; Heron (Deluxe Edition); Hits; Jade; Static - Single
+[ALBUM] Dune — Lichen (2021-03-12, album, SA11): 6 item(s) from 3 current album name(s): Harbour - Single; Lichen; Tide - Single
+Items: 143 scanned, 84 with a Spotify ID, 37 with no album data (NOALBUM), 0 unchanged
+Album records: 3 release item(s) on another album go back to their record's album (HOME)
+Changes: 83 item(s) (album 29, date 54); 83 file write(s), 0 database-only; 33 file(s) move, 83 cover(s) replaced, 16 clash(es)
+Albums: 46 current album name(s) become 13 Spotify album(s)
+Singles: 3 item(s) on their album instead of a single, by ISRC; Spotify: 0 ISRC search(es) this run (0s apart), 3 ISRC(s) cached, 0 item(s) wait for a search
+[TWIN] Cinder — Garnet: SA6 (2016-07-16, 10 tracks, 8 entries, 4 items) ← SB6 (2023-01-01, 10 tracks, 2 entries, 0 items)
+Twins: 1 group(s) of same-name releases; 0 item(s) moved onto the representative, 0 wait for an ISRC search, 0 left apart (recording not on it)
+MusicBrainz: looked up 2 album(s) this run (none 2), 56 call(s); 13 album(s) cached
+Supersede: 23 loose item(s) superseded by their album copy
+Changed 106 item(s) (83 retagged, 23 superseded)
+Moved 33 file(s); playlists regenerated: none
+# dry run after
+79 Spotify track(s) placed on 21 release(s)
+  [MB-NONE] Garnet (SA6): no MusicBrainz release; add it with https://harmony.pulsewidth.org.uk/release?url=https%3A%2F%2Fopen.spotify.com%2Falbum%2FSA6
+  [MB-NONE] Garnet (SA6): no MusicBrainz release; add it with https://harmony.pulsewidth.org.uk/release?url=https%3A%2F%2Fopen.spotify.com%2Falbum%2FSA6
+  [RETAG] 23 <tmp>/library/Dune/Delta/04 - Undertow.m4a:  (database only) (dry run)
+[ALBUM] Arbor — Amber: 0 loose item(s) superseded, 2 kept
+  [KEEP] 106 Arbor — Glass <tmp>/library/Arbor/Amber/05 - Glass.m4a: on the album, but its Spotify ID is the album's track 1-5, which no item of the release holds; no release item sits at its disc/track 1-5 or has its title; kept
+  [KEEP] 119 Arbor — Undertow <tmp>/library/Arbor/Undertow - Single/02 - Undertow.m4a: on the album, but track 1-2 is 'Paper' (album item 2), another title; it has no fingerprint, so the same-audio rung was skipped; kept
+[ALBUM] Basalt — Birch: 0 loose item(s) superseded, 3 kept
+  [KEEP] 113 Dune — Glass <tmp>/library/Dune/Glass - Single/10 - Glass.m4a: on the album, but its Spotify ID is not on the album's tracklist (a twin release's?); track 1-10 is S1x10, which no item of the release holds; it has no fingerprint, so the same-audio rung was skipped; kept
+  [KEEP] 118 Basalt — Paper <tmp>/library/Basalt/Fern/09 - Paper.m4a: on the album, but track 1-9 is 'Vesper' (album item 13), another title; it has no fingerprint, so the same-audio rung was skipped; kept
+  [KEEP] 127 Basalt — Undertow <tmp>/library/Basalt/Heron/07 - Undertow.m4a: filed under Heron, but it has no fingerprint, so the same-audio rung was skipped; kept
+[ALBUM] Cinder — Coral: 0 loose item(s) superseded, 3 kept
+  [KEEP] 86 Cinder — Northern <tmp>/library/Cinder/Northern - Single/07 - Northern.m4a: filed under Northern - Single, but it has no fingerprint, so the same-audio rung was skipped; kept
+  [KEEP] 110 Cinder — Undertow <tmp>/library/Cinder/Undertow - Single/09 - Undertow.m4a: filed under Undertow - Single, but it has no fingerprint, so the same-audio rung was skipped; kept
+  [KEEP] 136 Cinder — Harbour <tmp>/library/Cinder/Harbour - Single/11 - Harbour.m4a: on the album, but its Spotify ID is not on the album's tracklist (a twin release's?) and no entry sits at its disc/track 1-11; it has no fingerprint, so the same-audio rung was skipped; kept
+[ALBUM] Dune — Delta: 1 loose item(s) superseded, 2 kept
+  [SUPERSEDE] 26 <tmp>/library/Dune/Delta/07 - Tide.m4a ← 124 <tmp>/library/Dune/Lichen/07 - Tide.m4a (spotify id; playlists pl1) (dry run)
+  [KEEP] 114 Dune — Ash <tmp>/library/Dune/Ash - Single/03 - Ash.m4a: filed under Ash - Single, but it has no fingerprint, so the same-audio rung was skipped; kept
+  [KEEP] 134 Dune — Glass <tmp>/library/Dune/Birch/09 - Glass.m4a: on the album, but it has no Spotify ID; it has no fingerprint, so the same-audio rung was skipped; kept
+[ALBUM] Arbor — Elm: 0 loose item(s) superseded, 4 kept
+  [KEEP] 99 Cinder — Paper <tmp>/library/Various/Hits/12 - Paper.m4a: on the album, but its Spotify ID is not on the album's tracklist (a twin release's?) and no entry sits at its disc/track 1-12; it has no fingerprint, so the same-audio rung was skipped; kept
+  [KEEP] 102 Basalt — Undertow <tmp>/library/Basalt/Elm/07 - Undertow.m4a: on the album, but it has no Spotify ID; it has no fingerprint, so the same-audio rung was skipped; kept
+  [KEEP] 119 Arbor — Undertow <tmp>/library/Arbor/Undertow - Single/02 - Undertow.m4a: filed under Undertow - Single, but it has no fingerprint, so the same-audio rung was skipped; kept
+  [KEEP] 133 Arbor — Northern <tmp>/library/Arbor/Kestrel/01 - Northern.m4a: on the album, but track 1-1 is 'Harbour' (album item 29), another title; it has no fingerprint, so the same-audio rung was skipped; kept
+[ALBUM] Basalt — Fern: 0 loose item(s) superseded, 3 kept
+  [KEEP] 74 Basalt — Undertow <tmp>/library/Basalt/Fern/04 - Undertow.m4a: on the album, but its Spotify ID is the album's track 1-4, which no item of the release holds; no release item sits at its disc/track 1-4 or has its title; kept
+  [KEEP] 103 Basalt — Glass <tmp>/library/Basalt/Fern/03 - Glass.m4a: on the album, but its Spotify ID is not on the album's tracklist (a twin release's?) and no entry sits at its disc/track 1-3; no release item sits at its disc/track 1-3 or has its title; kept
+  [KEEP] 142 Basalt — Undertow <tmp>/library/Basalt/Fern/06 - Undertow.m4a: on the album, but its Spotify ID is not on the album's tracklist (a twin release's?); track 1-6 is S5x6, which no item of the release holds; no release item sits at its disc/track 1-6 or has its title; kept
+[ALBUM] Cinder — Garnet: 1 loose item(s) superseded, 5 kept
+  [SUPERSEDE] 43 <tmp>/library/Cinder/Garnet/07 - Tide.m4a ← 74 <tmp>/library/Basalt/Fern/04 - Undertow.m4a (spotify id; playlists pl2) (dry run)
+  [KEEP] 86 Cinder — Northern <tmp>/library/Cinder/Northern - Single/07 - Northern.m4a: filed under Northern - Single, but it has no fingerprint, so the same-audio rung was skipped; kept
+  [KEEP] 91 Cinder — Orbit <tmp>/library/Various/Hits/02 - Orbit.m4a: on the album, but track 1-2 is 'Paper' (album item 38), another title; it has no fingerprint, so the same-audio rung was skipped; kept
+  [KEEP] 110 Cinder — Undertow <tmp>/library/Cinder/Undertow - Single/09 - Undertow.m4a: filed under Undertow - Single, but it has no fingerprint, so the same-audio rung was skipped; kept
+  [KEEP] 136 Cinder — Harbour <tmp>/library/Cinder/Harbour - Single/11 - Harbour.m4a: filed under Harbour - Single, but it has no fingerprint, so the same-audio rung was skipped; kept
+  [KEEP] 140 Cinder — Orbit <tmp>/library/Cinder/Garnet/10 - Orbit.m4a: on the album, but its Spotify ID is the album's track 1-10, which no item of the release holds; no release item sits at its disc/track 1-10 or has its title; kept
+[ALBUM] Dune — Heron: 1 loose item(s) superseded, 4 kept
+  [SUPERSEDE] 47 <tmp>/library/Dune/Heron/03 - Static.m4a ← 106 <tmp>/library/Arbor/Amber/05 - Glass.m4a (spotify id; playlists pl1) (dry run)
+  [KEEP] 81 Dune — Northern <tmp>/library/Dune/Heron/08 - Northern.m4a: on the album, but its Spotify ID is not on the album's tracklist (a twin release's?); track 1-8 is S7x8, which no item of the release holds; it has no fingerprint, so the same-audio rung was skipped; kept
+  [KEEP] 127 Basalt — Undertow <tmp>/library/Basalt/Heron/07 - Undertow.m4a: on the album, but track 1-7 is 'Tide' (album item 51), another title; it has no fingerprint, so the same-audio rung was skipped; kept
+  [KEEP] 128 Basalt — Static <tmp>/library/Basalt/Static - Single/11 - Static.m4a: on the album, but its Spotify ID is not on the album's tracklist (a twin release's?) and no entry sits at its disc/track 1-11; it has no fingerprint, so the same-audio rung was skipped; kept
+  [KEEP] 134 Dune — Glass <tmp>/library/Dune/Birch/09 - Glass.m4a: filed under Birch, but it has no fingerprint, so the same-audio rung was skipped; kept
+[ALBUM] Arbor — Iris: 0 loose item(s) superseded, 2 kept
+  [KEEP] 119 Arbor — Undertow <tmp>/library/Arbor/Undertow - Single/02 - Undertow.m4a: filed under Undertow - Single, but it has no fingerprint, so the same-audio rung was skipped; kept
+  [KEEP] 133 Arbor — Northern <tmp>/library/Arbor/Kestrel/01 - Northern.m4a: filed under Kestrel, but it has no fingerprint, so the same-audio rung was skipped; kept
+[ALBUM] Basalt — Jade: 0 loose item(s) superseded, 5 kept
+  [KEEP] 92 Basalt — Glass <tmp>/library/Basalt/Jade/05 - Glass.m4a: on the album, but its Spotify ID is the album's track 1-5, which no item of the release holds; no release item sits at its disc/track 1-5 or has its title; kept
+  [KEEP] 96 Basalt — Paper <tmp>/library/Various/Hits/09 - Paper.m4a: on the album, but its Spotify ID is not on the album's tracklist (a twin release's?) and no entry sits at its disc/track 1-9; it has no fingerprint, so the same-audio rung was skipped; kept
+  [KEEP] 111 Basalt — Glass <tmp>/library/Basalt/Jade/04 - Glass.m4a: on the album, but its Spotify ID is not on the album's tracklist (a twin release's?); track 1-4 is S9x4, which no item of the release holds; no release item sits at its disc/track 1-4 or has its title; kept
+  [KEEP] 120 Basalt — Undertow <tmp>/library/Basalt/Jade/04 - Undertow.m4a: on the album, but its Spotify ID is the album's track 1-4, which no item of the release holds; no release item sits at its disc/track 1-4 or has its title; kept
+  [KEEP] 122 Basalt — Static <tmp>/library/Basalt/Jade/02 - Static.m4a: on the album, but track 1-2 is 'Paper' (album item 59), another title; it has no fingerprint, so the same-audio rung was skipped; kept
+[ALBUM] Cinder — Kestrel: 0 loose item(s) superseded, 5 kept
+  [KEEP] 75 Cinder — Vesper <tmp>/library/Various/Hits/05 - Vesper.m4a: on the album, but track 1-5 is 'Glass' (album item 65), another title; it has no fingerprint, so the same-audio rung was skipped; kept
+  [KEEP] 82 Basalt — Undertow <tmp>/library/Various/Hits/07 - Undertow.m4a: on the album, but its Spotify ID is not on the album's tracklist (a twin release's?) and no entry sits at its disc/track 1-7; it has no fingerprint, so the same-audio rung was skipped; kept
+  [KEEP] 86 Cinder — Northern <tmp>/library/Cinder/Northern - Single/07 - Northern.m4a: filed under Northern - Single, but it has no fingerprint, so the same-audio rung was skipped; kept
+  [KEEP] 110 Cinder — Undertow <tmp>/library/Cinder/Undertow - Single/09 - Undertow.m4a: filed under Undertow - Single, but it has no fingerprint, so the same-audio rung was skipped; kept
+  [KEEP] 136 Cinder — Harbour <tmp>/library/Cinder/Harbour - Single/11 - Harbour.m4a: filed under Harbour - Single, but it has no fingerprint, so the same-audio rung was skipped; kept
+[ALBUM] Dune — Lichen: 0 loose item(s) superseded, 2 kept
+  [KEEP] 124 Dune — Tide <tmp>/library/Dune/Lichen/07 - Tide.m4a: on the album, but its Spotify ID is the album's track 1-7, which no item of the release holds; no release item sits at its disc/track 1-7 or has its title; kept
+  [KEEP] 134 Dune — Glass <tmp>/library/Dune/Birch/09 - Glass.m4a: filed under Birch, but it has no fingerprint, so the same-audio rung was skipped; kept
+Supersede backfill: 12 record(s), 1 library read(s)
+[ALBUM] Dune — Delta (2013-04-13, album, SA3): 1 item(s) from 2 current album name(s): Delta; Glass - Single
+Items: 120 scanned, 61 with a Spotify ID, 37 with no album data (NOALBUM), 72 unchanged
+Album records: 0 release item(s) on another album go back to their record's album (HOME)
+Changes: 1 item(s) (beets-only 1); 0 file write(s), 1 database-only; 0 file(s) move, 0 cover(s) replaced, 2 clash(es)
+Albums: 0 current album name(s) become 0 Spotify album(s)
+Singles: 3 item(s) on their album instead of a single, by ISRC; Spotify: 0 ISRC search(es) this run (0s apart), 3 ISRC(s) cached, 0 item(s) wait for a search
+[TWIN] Cinder — Garnet: SA6 (2016-07-16, 10 tracks, 8 entries, 1 items) ← SB6 (2023-01-01, 10 tracks, 2 entries, 0 items)
+Twins: 1 group(s) of same-name releases; 0 item(s) moved onto the representative, 0 wait for an ISRC search, 0 left apart (recording not on it)
+MusicBrainz: looked up 2 album(s) this run (none 2), 65 call(s); 13 album(s) cached
+Supersede: 3 loose item(s) superseded by their album copy
+Dry run: 4 item(s) would change (1 retagged, 3 superseded). Re-run with --apply to write.
+# library after the apply
+<tmp>/library/Arbor/Amber/01 - Harbour.m4a Amber Arbor 1 6 1 0 2010 SA0 files-0 files None None S0x1 USA00001 keep,pl1
+<tmp>/library/Arbor/Amber/02 - Paper.m4a Amber Arbor 2 6 1 0 2010 SA0 files-0 files None None S0x2  keep
+<tmp>/library/Arbor/Amber/03 - Static.m4a Amber Arbor 3 6 1 0 2010 SA0 files-0 files None None None  keep
+<tmp>/library/Arbor/Amber/00 - Undertow.m4a Amber Arbor 0 6 1 0 2010 SA0 files-0 files None None None  keep
+<tmp>/library/Basalt/Birch/01 - Harbour.m4a Birch Basalt 1 10 1 0 0 None  None None None S1x1 USA01001 keep
+<tmp>/library/Basalt/Birch/02 - Paper.m4a Birch Basalt 2 10 1 1 2011 SA1  none None None S1x2  keep
+<tmp>/library/Basalt/Birch/03 - Static.m4a Birch Basalt 3 10 1 1 2011 SA1  none None None S1x3  keep
+<tmp>/library/Basalt/Birch/04 - Undertow.m4a Birch Basalt 4 10 1 0 0 None  None None None None USA01004 keep
+<tmp>/library/Basalt/Birch/05 - Glass.m4a Birch Basalt 5 10 1 1 2011 SA1  none None None S1x5  keep
+<tmp>/library/Basalt/Birch/06 - Northern.m4a Birch Basalt 6 10 1 1 2011 SA1  none None None S1x6,S0x2 USA01006 keep
+<tmp>/library/Basalt/Birch/07 - Tide.m4a Birch Basalt 7 10 1 0 0 None  None None None S1x7 USA01007 keep
+<tmp>/library/Basalt/Birch/08 - Ash.m4a Birch Basalt 8 10 1 1 2011 SA1  none None None S1x8 USA01008 keep
+<tmp>/library/Basalt/Birch/09 - Vesper.m4a Birch Basalt 9 10 1 1 2011 SA1  none None None S1x9  keep
+<tmp>/library/Cinder/Coral/00 - Harbour.m4a Coral Cinder 0 8 1 0 2012 SA2 rel-SA2 url None None S2x1,S1x9 USA02001 keep
+<tmp>/library/Cinder/Coral/02 - Paper.m4a Coral Cinder 2 8 1 0 2012 SA2 rel-SA2 url None None None USA02002 keep
+<tmp>/library/Cinder/Coral/00 - Static.m4a Coral Cinder 0 8 1 0 2012 SA2 rel-SA2 url None None S2x3,S1x4 USA02003 keep
+<tmp>/library/Cinder/Coral/04 - Undertow.m4a Coral Cinder 4 8 1 0 2012 SA2 rel-SA2 url None None S2x4 USA02004 keep,pl0
+<tmp>/library/Cinder/Coral/05 - Glass.m4a Coral Cinder 5 8 1 0 2012 SA2 rel-SA2 url None None None USA02005 keep
+<tmp>/library/Cinder/Coral/00 - Northern.m4a Coral Cinder 0 8 1 0 2012 SA2 rel-SA2 url None None S2x6  keep
+<tmp>/library/Dune/Delta/01 - Harbour.m4a Delta Dune 1 10 1 0 2013 SA3 rel-SA3 url None None S3x1 USA03001 keep
+<tmp>/library/Dune/Delta/00 - Paper.m4a Delta Dune 0 10 1 0 2013 SA3 rel-SA3 url None None S3x2,S0x4 USA03002 keep
+<tmp>/library/Dune/Delta/03 - Static.m4a Delta Dune 3 10 1 0 2013 SA3 rel-SA3 url None None S3x3,S2x4  keep
+<tmp>/library/Dune/Delta/04 - Undertow.m4a Delta Dune 4 10 1 0 2013 SA3 rel-SA3 url None 1 S3x4  keep,pl2
+<tmp>/library/Dune/Delta/00 - Glass.m4a Delta Dune 0 10 1 0 2013 SA3 rel-SA3 url None None None  keep
+<tmp>/library/Dune/Delta/00 - Northern.m4a Delta Dune 0 10 1 0 2013 SA3 rel-SA3 url None None S3x6,S2x6  keep,pl1
+<tmp>/library/Dune/Delta/07 - Tide.m4a Delta Dune 7 10 1 0 2013 SA3 rel-SA3 url None None S3x7,S1x4,S11x7 USA03007 keep,pl0
+<tmp>/library/Dune/Delta/08 - Ash.m4a Delta Dune 8 10 1 0 2013 SA3 rel-SA3 url None None S3x8,S1x10  keep
+<tmp>/library/Dune/Delta/09 - Vesper.m4a Delta Dune 9 10 1 0 2013 SA3 rel-SA3 url None None S3x9  keep
+<tmp>/library/Arbor/Elm/01 - Harbour.m4a Elm Arbor 1 8 1 0 2014 SA4 files-4 files None None S4x1,S0x4 USA04001 keep
+<tmp>/library/Arbor/Elm/00 - Paper.m4a Elm Arbor 0 8 1 0 2014 SA4 files-4 files None None S4x2  keep
+<tmp>/library/Arbor/Elm/03 - Static.m4a Elm Arbor 3 8 1 0 2014 SA4 files-4 files None None S4x3  keep
+<tmp>/library/Arbor/Elm/04 - Undertow.m4a Elm Arbor 4 8 1 0 2014 SA4 files-4 files None None S4x4,S1x5  keep
+<tmp>/library/Arbor/Elm/05 - Glass.m4a Elm Arbor 5 8 1 0 2014 SA4 files-4 files None None S4x5 USA04005 keep
+<tmp>/library/Basalt/Fern/01 - Harbour.m4a Fern Basalt 1 6 1 0 0 None  None None None S5x1  keep
+<tmp>/library/Basalt/Fern/00 - Paper.m4a Fern Basalt 0 6 1 0 0 None  None None None None  keep
+<tmp>/library/Basalt/Fern/00 - Static.m4a Fern Basalt 0 6 1 0 0 SA5  None None None S5x3  keep
+<tmp>/library/Cinder/Garnet/01 - Harbour.m4a Garnet Cinder 1 10 1 0 0 None  None None None S6x1  keep
+<tmp>/library/Cinder/Garnet/02 - Paper.m4a Garnet Cinder 2 10 1 1 2016 SA6  none None None S6x2 USA06002 keep
+<tmp>/library/Cinder/Garnet/03 - Static.m4a Garnet Cinder 3 10 1 1 2016 SA6  none None None S6x3,S7x6 USA06003 keep,pl2
+<tmp>/library/Cinder/Garnet/04 - Undertow.m4a Garnet Cinder 4 10 1 0 0 None  None None None None  keep
+<tmp>/library/Cinder/Garnet/05 - Glass.m4a Garnet Cinder 5 10 1 1 2016 SA6  none None None S6x5  keep
+<tmp>/library/Cinder/Garnet/06 - Northern.m4a Garnet Cinder 6 10 1 1 2016 SA6  none None None S6x6 USA06006 keep,pl2,pl0
+<tmp>/library/Cinder/Garnet/07 - Tide.m4a Garnet Cinder 7 10 1 1 2016 SA6  none None None S6x7,S4x6,S5x4  keep,pl0
+<tmp>/library/Cinder/Garnet/08 - Ash.m4a Garnet Cinder 8 10 1 1 2016 SA6  none None None S6x8,S4x8 USA06008 keep
+<tmp>/library/Dune/Heron/01 - Harbour.m4a Heron Dune 1 8 1 0 2017 SA7 rel-SA7 url None None None USA07001 keep
+<tmp>/library/Dune/Heron/00 - Paper.m4a Heron Dune 0 8 1 0 2017 SA7 rel-SA7 url None None S7x2 USA07002 keep
+<tmp>/library/Dune/Heron/03 - Static.m4a Heron Dune 3 8 1 0 2017 SA7 rel-SA7 url None None S7x3,S0x5 USA07003 keep,pl2,pl0
+<tmp>/library/Dune/Heron/04 - Undertow.m4a Heron Dune 4 8 1 0 2017 SA7 rel-SA7 url None None S7x4 USA07004 keep
+<tmp>/library/Dune/Heron/05 - Glass.m4a Heron Dune 5 8 1 0 2017 SA7 rel-SA7 url None None None USA07005 keep
+<tmp>/library/Dune/Heron/06 - Northern.m4a Heron Dune 6 8 1 0 2017 SA7 rel-SA7 url None None S7x6 USA07006 keep
+<tmp>/library/Dune/Heron/07 - Tide.m4a Heron Dune 7 8 1 0 2017 SA7 rel-SA7 url None None S7x7,S2x4  keep,pl1
+<tmp>/library/Arbor/Iris/00 - Harbour.m4a Iris Arbor 0 6 1 0 2018 SA8 files-8 files None None S8x1 USA08001 keep,pl0
+<tmp>/library/Arbor/Iris/02 - Paper.m4a Iris Arbor 2 6 1 0 2018 SA8 files-8 files None None None USA08002 keep
+<tmp>/library/Arbor/Iris/03 - Static.m4a Iris Arbor 3 6 1 0 2018 SA8 files-8 files None None S8x3 USA08003 keep
+<tmp>/library/Arbor/Iris/04 - Undertow.m4a Iris Arbor 4 6 1 0 2018 SA8 files-8 files None None S8x4  keep,pl1
+<tmp>/library/Arbor/Iris/00 - Glass.m4a Iris Arbor 0 6 1 0 2018 SA8 files-8 files None None S8x5,S9x2,S5x6 USA08005 keep,pl1,pl0
+<tmp>/library/Arbor/Iris/00 - Northern.m4a Iris Arbor 0 6 1 0 2018 SA8 files-8 files None None S8x6  keep
+<tmp>/library/Basalt/Jade/00 - Harbour.m4a Jade Basalt 0 6 1 0 2019 SA9 files-9 files None None None USA09001 keep
+<tmp>/library/Basalt/Jade/02 - Paper.m4a Jade Basalt 2 6 1 0 2019 SA9 files-9 files None None S9x2 USA09002 keep
+<tmp>/library/Basalt/Jade/00 - Static.m4a Jade Basalt 0 6 1 0 2019 SA9 files-9 files None None None USA09003 keep
+<tmp>/library/Cinder/Kestrel/00 - Harbour.m4a Kestrel Cinder 0 6 1 0 2020 SA10 rel-SA10 url None None S10x1,S4x4,S5x6 USA10001 keep,pl2
+<tmp>/library/Cinder/Kestrel/02 - Paper.m4a Kestrel Cinder 2 6 1 0 2020 SA10 rel-SA10 url None None S10x2,S4x1 USA10002 keep
+<tmp>/library/Cinder/Kestrel/03 - Static.m4a Kestrel Cinder 3 6 1 0 2020 SA10 rel-SA10 url None None S10x3 USA10003 keep
+<tmp>/library/Cinder/Kestrel/04 - Undertow.m4a Kestrel Cinder 4 6 1 0 2020 SA10 rel-SA10 url None None S10x4,S7x6 USA10004 keep
+<tmp>/library/Cinder/Kestrel/05 - Glass.m4a Kestrel Cinder 5 6 1 0 2020 SA10 rel-SA10 url None None S10x5 USA10005 keep,pl2
+<tmp>/library/Cinder/Kestrel/00 - Northern.m4a Kestrel Cinder 0 6 1 0 2020 SA10 rel-SA10 url None None S10x6 USA10006 keep
+<tmp>/library/Dune/Lichen/01 - Harbour.m4a Lichen Dune 1 8 1 0 2021 SA11 rel-SA11 url None None S11x1  keep,pl0,pl1
+<tmp>/library/Dune/Lichen/02 - Paper.m4a Lichen Dune 2 8 1 0 2021 SA11 rel-SA11 url None None None  keep
+<tmp>/library/Dune/Lichen/03 - Static.m4a Lichen Dune 3 8 1 0 2021 SA11 rel-SA11 url None None S11x3  keep
+<tmp>/library/Dune/Lichen/04 - Undertow.m4a Lichen Dune 4 8 1 0 2021 SA11 rel-SA11 url None None S11x4 USA11004 keep
+<tmp>/library/Dune/Lichen/00 - Glass.m4a Lichen Dune 0 8 1 0 2021 SA11 rel-SA11 url None None S11x5 USA11005 keep
+<tmp>/library/Basalt/Fern/04 - Undertow.m4a Fern Basalt 4 6 1 1 2015 SA5  none None None S5x4 USA05004 pl2
+<tmp>/library/Various/Hits/05 - Vesper.m4a Hits Various 5 0 0 0 0 SA10  None None None G6  pl0
+<tmp>/library/Various/Hits/09 - Undertow.m4a Hits Various 9 0 0 0 0 SG9  None None None X4 USA09004 pl1
+<tmp>/library/Various/Hits/01 - Vesper.m4a Hits Various 1 0 0 0 0 SG3  None None None None USA03009 pl2
+<tmp>/library/Basalt/Birch/03 - Paper.m4a Birch Basalt 3 0 0 0 0 SG1  None None None B1x2  pl0
+<tmp>/library/Basalt/Fern/05 - Northern.m4a Fern Basalt 5 0 0 0 0 None  None None None X7 USA05006 pl1
+<tmp>/library/Various/Hits/10 - Paper.m4a Hits Various 10 0 0 0 0 COMP  None None None C1x2 USA01002 pl2
+<tmp>/library/Dune/Heron/08 - Northern.m4a Heron Dune 8 8 1 1 2017 SA7 rel-SA7 url None None G7  pl0
+<tmp>/library/Various/Hits/07 - Undertow.m4a Hits Various 7 0 0 0 0 SA10  None None None C5x4  pl1
+<tmp>/library/Various/Hits/08 - Harbour.m4a Hits Various 8 0 0 0 0 SG10  None None None X12 USA10001 pl0
+<tmp>/library/Cinder/Northern - Single/07 - Northern.m4a Northern - Single Cinder 7 0 0 0 0 COMP  None None None C6x6 USA06006 pl2
+<tmp>/library/Various/Hits/02 - Orbit.m4a Hits Various 2 0 0 0 0 SA6  None None None G6  pl1
+<tmp>/library/Basalt/Jade/05 - Glass.m4a Jade Basalt 5 6 1 1 2019 SA9  none None None S9x5  pl2
+<tmp>/library/Dune/Delta/05 - Glass.m4a Delta Dune 5 0 0 0 0 SG3  None None None B3x5 USA03005 pl0
+<tmp>/library/Various/Hits/09 - Paper.m4a Hits Various 9 0 0 0 0 SA9  None None None B9x2  pl0
+<tmp>/library/Dune/Heron/07 - Static.m4a Heron Dune 7 0 0 0 0 SG7  None None None C7x3  pl2
+<tmp>/library/Various/Hits/12 - Paper.m4a Hits Various 12 0 0 0 0 SA4  None None None S2x2 USA02002 pl0
+<tmp>/library/Cinder/Garnet/06 - Ash.m4a Garnet Cinder 6 0 0 0 0 SG6  None None None G6  pl1
+<tmp>/library/Various/Hits/05 - Paper.m4a Hits Various 5 0 0 0 0 COMP  None None None C0x2  pl2
+<tmp>/library/Basalt/Elm/07 - Undertow.m4a Elm Basalt 7 0 0 0 0 SA4  None None None None USA01004 pl0
+<tmp>/library/Basalt/Fern/03 - Glass.m4a Fern Basalt 3 0 0 0 0 SA5  None None None X31 USA09005 pl1
+<tmp>/library/Dune/Northern - Single/07 - Northern.m4a Northern - Single Dune 7 0 0 0 0 COMP  None None None C7x6 USA07006 pl2
+<tmp>/library/Basalt/Static - Single/08 - Static.m4a Static - Single Basalt 8 0 0 0 0 SG9  None None None B9x3 USA09003 pl0
+<tmp>/library/Arbor/Amber/05 - Glass.m4a Amber Arbor 5 6 1 1 2010 SA0 rel-SA0 url None None S0x5  pl1
+<tmp>/library/Dune/Glass - Single/09 - Glass.m4a Glass - Single Dune 9 0 0 0 0 SG3  None None None X35 USA03005 pl2
+<tmp>/library/Dune/Northern - Single/12 - Northern.m4a Northern - Single Dune 12 0 0 0 0 None  None None None C7x6  pl1
+<tmp>/library/Cinder/Undertow - Single/09 - Undertow.m4a Undertow - Single Cinder 9 0 0 0 0 COMP  None None None None USA10004 pl2
+<tmp>/library/Basalt/Jade/04 - Glass.m4a Jade Basalt 4 6 1 1 2019 SA9  none None None G9  pl0
+<tmp>/library/Various/Hits/02 - Paper.m4a Hits Various 2 0 0 0 0 SG3  None None None B3x2  pl1
+<tmp>/library/Dune/Glass - Single/10 - Glass.m4a Glass - Single Dune 10 0 0 0 0 SA1  None None None S3x5  pl2
+<tmp>/library/Dune/Ash - Single/03 - Ash.m4a Ash - Single Dune 3 0 0 0 0 None  None None None X42 USA07008 pl0
+<tmp>/library/Various/Hits/04 - Paper.m4a Hits Various 4 20 1 1 2005 COMP  none None None C10x2 USA10002 pl0
+<tmp>/library/Basalt/Fern/09 - Paper.m4a Fern Basalt 9 0 0 0 0 SA1  None None None B1x2  pl1
+<tmp>/library/Arbor/Undertow - Single/02 - Undertow.m4a Undertow - Single Arbor 2 0 0 0 0 SA0  None None None X47 USA00004 pl2
+<tmp>/library/Basalt/Jade/04 - Undertow.m4a Jade Basalt 4 6 1 1 2019 SA9  none None None S9x4  pl0
+<tmp>/library/Basalt/Elm/07 - Undertow.1.m4a Elm Basalt 7 0 0 0 0 None  None None None X49 USA01004 pl1
+<tmp>/library/Basalt/Jade/02 - Static.m4a Jade Basalt 2 0 0 0 0 SA9  None None None B9x3  pl2
+<tmp>/library/Dune/Lichen/07 - Tide.m4a Lichen Dune 7 8 1 1 2021 SA11 rel-SA11 url None None S11x7  pl1
+<tmp>/library/Various/Hits/10 - Ash.m4a Hits Various 10 0 0 0 0 None  None None None None  pl2
+<tmp>/library/Various/Hits/09 - Northern.m4a Hits Various 9 0 0 0 0 COMP  None None None B4x6 USA04006 pl0
+<tmp>/library/Basalt/Heron/07 - Undertow.m4a Heron Basalt 7 0 0 0 0 SA7  None None None X55 USA05004 pl1
+<tmp>/library/Basalt/Static - Single/11 - Static.m4a Static - Single Basalt 11 0 0 0 0 SA7  None None None X56 USA09003 pl2
+<tmp>/library/Arbor/Kestrel/01 - Northern.m4a Kestrel Arbor 1 0 0 0 0 SA4  None None None B4x6  pl1
+<tmp>/library/Dune/Birch/09 - Glass.m4a Birch Dune 9 0 0 0 0 SA3  None None None None  pl2
+<tmp>/library/Cinder/Harbour - Single/11 - Harbour.m4a Harbour - Single Cinder 11 0 0 0 0 SA2  None None None G2 USA02001 pl1
+<tmp>/library/Various/Hits/01 - Undertow.1.m4a Hits Various 1 0 0 0 0 SG4  None None None B4x4 USA04004 pl2
+<tmp>/library/Cinder/Garnet/10 - Orbit.m4a Garnet Cinder 10 10 1 1 2016 SA6  none None None S6x10  pl2
+<tmp>/library/Cinder/Coral/07 - Northern.m4a Coral Cinder 7 0 0 0 0 SG2  None None None C2x6 USA02006 pl0
+<tmp>/library/Basalt/Fern/06 - Undertow.m4a Fern Basalt 6 6 1 1 2015 SA5  none None None G5  pl1
