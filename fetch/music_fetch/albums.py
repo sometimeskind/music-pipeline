@@ -1286,6 +1286,7 @@ def auto_reimport(
     before (another album, an incomplete copy, a broken download, or the
     track-level rules' ``[FAIL]``) is not grabbed again.  The last release
     leaves it, as any reset's does: it is the one the album was imported from.
+    Unless a person blocklisted it (:func:`reset_record`, homelab#2750).
 
     Only in ``on``, at most ``auto_reimports_per_day`` in a rolling 24 hours,
     and only while the grab budget has room for the resets not yet grabbed.
@@ -2408,7 +2409,10 @@ def reset_record(record: dict, reimport: bool = False, keep_blocklist: bool = Fa
     """:func:`reset_album` on one *record*: also the album tick's automatic
     reimport of a mixed album (:func:`auto_reimport`, #288), which passes
     *keep_blocklist* so a reimport clears only the last release (#305).  The
-    GUIDs in *broken* stay on the blocklist whatever else is cleared."""
+    GUIDs in *broken* stay on the blocklist whatever else is cleared, and so
+    do the ones a person blocklisted (:func:`blocklist.hand_guids`, homelab#2750),
+    whoever calls."""
+    broken = {*broken, *blocklist.hand_guids(record)}
     guid = (record.get("candidate") or {}).get("guid")
     if guid in record.get("blocklist", []) and guid not in broken:
         record["blocklist"].remove(guid)
@@ -2542,7 +2546,8 @@ def reset_main() -> None:
     parser.add_argument("--reimport", action="store_true",
                         help="start over from one release: clear the attempts and the blocklist, except a broken "
                              "download or any failure but a wrong release: another album, an incomplete copy or "
-                             "files that aren't tracks (homelab#2661), grab it although the library has its "
+                             "files that aren't tracks (homelab#2661), or a release blocklisted by hand "
+                             "(homelab#2750), grab it although the library has its "
                              "tracks, and on import retire the copies whose recording it holds, and "
                              "an old release that holds under half of the new one's titles (homelab#2662)")
     parser.add_argument("--apply", action="store_true", help="write the album store (default: dry run)")

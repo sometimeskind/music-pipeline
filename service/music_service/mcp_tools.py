@@ -416,6 +416,35 @@ def _track_only(body: dict, _: Albums) -> dict:
     return {"track": track_ref(body.get("track"))}
 
 
+def release_ref(value) -> str:
+    """A release as an album's history names it (homelab#2750): its GUID or exact title, as given but trimmed."""
+    if not isinstance(value, str) or not value.strip():
+        raise BadRequest("release must be the release's GUID or exact title")
+    release = value.strip()
+    if len(release) > MAX_TEXT or any(c in release for c in "\r\n\t\x00"):
+        raise BadRequest(f"release must be one line of at most {MAX_TEXT} characters")
+    return release
+
+
+def _blocklist(body: dict, albums: Albums) -> dict:
+    _only(body, "album", "release", "reason")
+    return {"album": resolve_album(body.get("album"), albums), "release": release_ref(body.get("release")),
+            "reason": _text(body, "reason", required=True)}
+
+
+def _unblocklist(body: dict, albums: Albums) -> dict:
+    _only(body, "album", "release")
+    return {"album": resolve_album(body.get("album"), albums), "release": release_ref(body.get("release"))}
+
+
+def _blocklist_argv(args: dict, apply: bool) -> list[list[str]]:
+    # --reason=R, so a reason starting with "-" stays the option's value; the album and release follow "--".
+    if "reason" in args:
+        return [_apply(["music-album-blocklist", "add", f"--reason={args['reason']}"], apply, args["album"],
+                       args["release"])]
+    return [_apply(["music-album-blocklist", "remove"], apply, args["album"], args["release"])]
+
+
 def _overrides(command: str, *flags: str) -> Callable[[dict, bool], list[list[str]]]:
     """``music-overrides <command>`` with *flags* (``--name=value`` from the args), then the positional args."""
     positional = {"search": ("album", "words"), "clear-search": ("album",), "hold": ("album",),
@@ -603,6 +632,9 @@ TOOLS: dict[str, Tool] = {t.name: t for t in [
                                   a["album"])],
          ("albums", "pipeline")),
     Tool("requeue_albums", WRITE, _requeue_albums, _requeue_argv, ("albums", "pipeline")),
+    # One release on one album's blocklist by hand, or off it (homelab#2750): the album store, as reset_album.
+    Tool("blocklist_release", WRITE, _blocklist, _blocklist_argv, ("albums", "pipeline")),
+    Tool("unblocklist_release", WRITE, _unblocklist, _blocklist_argv, ("albums", "pipeline")),
     Tool("merge_items", WRITE, _merge_items,
          lambda a, apply: [_apply(["music-audit-dupes", "--merge", str(k), str(d)], apply) for k, d in a["pairs"]],
          ("pipeline",)),

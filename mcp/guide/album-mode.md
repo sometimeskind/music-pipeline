@@ -96,6 +96,15 @@ rescues a file until the purge. The import's event (`album_history`) says which 
   slot stays empty: the release is the album.
 - **Keep a hand-curated album out** of automatic reimports: `hold_album` with the reason
   (`release_album` undoes it). `reset_album` still works on a held album.
+- **A wrong release the matcher accepts** (a plain title such as `Artist-Album.1987.FLAC` that
+  held another album) would be grabbed again by a reimport whenever it ranks first: no override
+  word or size rule tells it from a right one. Blocklist it first with `blocklist_release` (the
+  album, the release's GUID or exact title from `album_history`'s grab or `get_album`'s
+  `candidate`, and the reason), dry run, then apply. The entry blocks every copy of its title on
+  any indexer and no reset clears it, the last candidate included. Then `reset_album` with
+  `reimport=true`: its dry run lists the entry under "Stays on the blocklist", and the next tick
+  grabs another release or logs `[STAYS]` with why nothing else matched. `check_release` on the
+  title then says the blocklist refuses it. `unblocklist_release` takes the entry off again.
 - **Old copies:** `audit_releases` with `replaced_query='<artist — album>'` lists the album's
   files in `quarantine/replaced/` as `[REPLACED]` (the library holds the recording) or
   `[ONLYCOPY]`. Superseded copies are purged automatically after 14 days. Only copies never
@@ -205,8 +214,10 @@ at import, where a release holding none of the album's titles is `[WRONG]`, and 
 To say whether a release matches, or to propose an override, run `check_release` with the album
 and the release title, and with `words` for an override. It is the tick's own matcher: it answers
 accepted, or the rule that refused the title and why. Give the release's size in bytes when you
-have it: without it the size rule isn't checked and the output says so. It covers the matcher only,
-not the blocklist, not whether the indexer has the release, and not how an accepted release ranks.
+have it: without it the size rule isn't checked and the output says so. It also says whether the
+album's blocklist refuses the title, and by which entry and kind (a wrong release, one blocklisted
+by hand, a title dead on two indexers). It doesn't cover the releases other albums took, whether
+the indexer has the release, or how an accepted release ranks.
 
 An override leaves the matcher no artist, and its dry run says so. Every word must be in a title
 (`a`, `and` and `the` excepted), so a year or a word only some releases carry refuses the others:

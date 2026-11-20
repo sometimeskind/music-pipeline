@@ -33,9 +33,11 @@ IDs. An album key is the album's row in the album store, an integer such as 1734
 operator's one-time rekey, homelab#2478, it was the Spotify album ID); find_albums and get_album
 show it, requeue_albums takes it or any of the album's Spotify album IDs, and it is never a
 Spotify ID itself. An album query (find_albums, get_album, check_release,
-reset_album, restore_kept, the override and hold tools, remove_from_later's albums) is the key, any of the album's Spotify IDs, its
+reset_album, restore_kept, the override, hold and blocklist tools, remove_from_later's albums) is the key, any of the album's Spotify IDs, its
 release group, the exact "artist — album", or a part matching one album; a query matching
-several returns "ambiguous" with the candidates and does nothing. A track (pin_track,
+several returns "ambiguous" with the candidates and does nothing. A release (blocklist_release,
+unblocklist_release) is its GUID or exact title, as album_history's grab or get_album's
+candidate and blocklisted show it. A track (pin_track,
 unpin_track, unlink_spotify_id) is a Spotify track ID or URL. An album is requested (request_album) by its
 MusicBrainz release group, an MBID or musicbrainz.org URL, and taken off Later
 (remove_from_later) by release group or by album query; search_releases finds a release group
@@ -52,7 +54,7 @@ that outlasts the inline wait returns a job_id: poll get_job. recheck_recordings
 the run ID, and apply_recheck applies the finished run.
 
 Tiers. Read tools anyone signed in may use. Write tools (reset_album, requeue_albums,
-merge_items, replace_item, unlink_spotify_id, set_recording, fingerprint_items, keep_quarantined, restore_kept,
+blocklist_release, unblocklist_release, merge_items, replace_item, unlink_spotify_id, set_recording, fingerprint_items, keep_quarantined, restore_kept,
 retire_item, embed_covers,
 canon_albums, backfill_album_ids, clear_bad_isrcs, clear_release_tracks,
 apply_recheck,
@@ -162,7 +164,8 @@ def build_server(
         """One album: its key, its primary Spotify album ID, the stored record (status,
         attempts, blocklist…), its beets album and item IDs, and its items. Ambiguous: the candidates.
         blocklisted lists each blocklist entry with its release title, size and why it is there, read
-        from the events; a reason of "unknown" means no event holds it (they began 2026-10-29)."""
+        from the events; a reason of "unknown" means no event holds it (they began 2026-10-29). An
+        entry blocklisted by hand is read from the record (blocklisted_by_hand), so it never is."""
         return await call("get_album", lambda c: pipeline.get(c, "/album", query=query))
 
     @mcp.tool(annotations={"readOnlyHint": True})
@@ -455,8 +458,9 @@ def build_server(
         """The tick's own matcher on one release title for one album: accepted, or the rule that
         refused it and why, with the search the tick would run and whether a stored override applied.
         With words, what that override would really do. Use it before saying a release would or
-        wouldn't match, and before proposing an override. It covers the matcher only: no indexer call,
-        not the blocklist, and not how an accepted release ranks."""
+        wouldn't match, and before proposing an override. It also says whether the album's blocklist
+        refuses the title, and by which entry and kind. No indexer call, not the releases other albums
+        took, and not how an accepted release ranks."""
         body: dict = {"album": album, "title": title}
         if size_bytes is not None:
             body["size_bytes"] = size_bytes
@@ -513,6 +517,38 @@ def build_server(
         if since:
             body["since"] = since
         return await run("requeue_albums", body, write=True)
+
+    @mcp.tool(annotations={"destructiveHint": False})
+    async def blocklist_release(
+        album: AlbumQuery,
+        release: Annotated[str, Field(description="the release's GUID or exact title, as album_history's grab or "
+                                                  "get_album's candidate shows it", min_length=1, max_length=500)],
+        reason: Annotated[str, Field(description="why, kept in its event and shown by get_album's blocklisted",
+                                     min_length=1, max_length=500)],
+        apply: Apply = False,
+    ) -> dict:
+        """music-album-blocklist add: put one release the album grabbed on its blocklist by hand, for a
+        wrong release the matcher accepts (a plain title holding another album). It blocks every copy
+        of its title on any indexer, and no reset clears it, reimport=true and the last candidate
+        included. Blocklisting the release the album holds changes nothing until a reset: then
+        reset_album with reimport=true grabs another release, or logs [STAYS]. The dry run names the
+        release and the reason; a release the album's history lacks, or one in flight, is refused.
+        The apply records a blocklisted event. unblocklist_release undoes it."""
+        body = {"album": album, "release": release, "reason": reason, "apply": apply}
+        return await run("blocklist_release", body, write=True)
+
+    @mcp.tool(annotations={"destructiveHint": False})
+    async def unblocklist_release(
+        album: AlbumQuery,
+        release: Annotated[str, Field(description="the GUID or exact title of a release blocklisted by hand, as "
+                                                  "get_album's blocklisted shows it", min_length=1, max_length=500)],
+        apply: Apply = False,
+    ) -> dict:
+        """music-album-blocklist remove: take a release blocklisted by hand off the album's blocklist.
+        Only such an entry: a reset clears a wrong release, and nothing clears a dead download. The
+        dry run says whether the matcher accepts the release, so whether a search may grab it again.
+        The apply records an unblocklisted event."""
+        return await run("unblocklist_release", {"album": album, "release": release, "apply": apply}, write=True)
 
     @mcp.tool(annotations={"destructiveHint": True})
     async def merge_items(

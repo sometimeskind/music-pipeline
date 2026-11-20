@@ -14,9 +14,13 @@ Without ``--size`` the size rule can't be judged, and the output says so: the
 release is given the bottom of the album's range, which that rule passes whatever
 order the rules run in.
 
-The matcher is all it runs.  The blocklist and the releases other albums took go
-by GUID, which a title doesn't have, and an accepted release still has to outrank
-the others.  Read-only: the album store, no indexer call, no writes, no events.
+It also reads the album's blocklist (homelab#2750): an entry blocks a title when
+it blocks every copy of its own (a wrong release, one blocklisted by hand, a title
+dead twice) and the two are one release (:func:`~music_fetch.usenet.repost_name`),
+as the tick bars them.  An entry that blocks only its GUID is named, as another
+indexer's copy of its title may still be grabbed.  The releases other albums took
+aren't checked, and an accepted release still has to outrank the others.
+Read-only: the album store and its events, no indexer call, no writes, no events.
 """
 
 from __future__ import annotations
@@ -25,8 +29,8 @@ import argparse
 import dataclasses
 import logging
 
-from music_fetch import albums
-from music_fetch.usenet import Rejection, Release, edition, normalise, rejection, size_range
+from music_fetch import albums, blocklist
+from music_fetch.usenet import Rejection, Release, edition, normalise, rejection, repost_name, size_range
 
 logger = logging.getLogger(__name__)
 
@@ -47,6 +51,20 @@ class Check:
     size: int | None
     low: int
     high: int
+    listed: list[dict] = dataclasses.field(default_factory=list)
+    """The album's blocklist (:func:`albums.blocklist_entries`)."""
+
+    @property
+    def blocked_by(self) -> list[dict]:
+        """The entries that refuse this title, as the tick's ``barred`` does: every copy of their title."""
+        release = Release(guid="", title=self.title, size=0, indexer_id=0, download_url="", categories=[])
+        return [e for e in self.listed if e["every_copy"] and release in blocklist.blocked([e])]
+
+    @property
+    def same_title(self) -> list[dict]:
+        """The entries of this title that block only their own GUID."""
+        name = repost_name(self.title)
+        return [e for e in self.listed if not e["every_copy"] and e["title"] and repost_name(e["title"]) == name]
 
     @property
     def size_judged(self) -> bool:
@@ -55,9 +73,10 @@ class Check:
 
 
 def check(key: str, record: dict, title: str, overrides: dict[str, str], size: int | None = None,
-          words: str = "") -> Check:
+          words: str = "", listed: list[dict] | None = None) -> Check:
     """The matcher's verdict on *title* for the album, with *overrides* (by album
-    key) as the tick reads them, or the override *words* in their place."""
+    key) as the tick reads them, or the override *words* in their place, and
+    the blocklist *listed* (default: the album's, from the event store)."""
     search = albums.plan(key, record, {key: words} if words else overrides)
     tracks = albums.track_count(record)
     matching = albums.match_args(record, search)
@@ -65,7 +84,9 @@ def check(key: str, record: dict, title: str, overrides: dict[str, str], size: i
     release = Release(guid="", title=title, size=low if size is None else size, indexer_id=0, download_url="",
                       categories=[])
     why = rejection(release, search.artist, search.album, tracks, **matching)
-    return Check(key, record, title, search, albums.override_words(key, record, overrides), words, why, size, low, high)
+    listed = albums.blocklist_entries(key, record) if listed is None else listed
+    return Check(key, record, title, search, albums.override_words(key, record, overrides), words, why, size, low, high,
+                 listed)
 
 
 def _megabytes(n: int) -> str:
@@ -73,6 +94,12 @@ def _megabytes(n: int) -> str:
 
 
 def _verdict(c: Check) -> str:
+    if c.blocked_by:
+        return f"refused by the blocklist (below); the matcher alone: {_matcher(c)}"
+    return _matcher(c)
+
+
+def _matcher(c: Check) -> str:
     if c.why:
         return f"refused by {c.why}. The matcher stops at the first rule a title fails, so later rules weren't run"
     return "accepted" if c.size_judged or not c.high else "accepted on the title; size not checked"
@@ -115,6 +142,19 @@ def _size(c: Check) -> str:
     return f"not checked: {'the title was refused first' if c.size is not None else 'no size given'}; {fits}"
 
 
+def _blocklist(c: Check) -> str:
+    if c.blocked_by:
+        return "refuses it: " + "; ".join(blocklist.describe(e) for e in c.blocked_by)
+    if c.same_title:
+        return ("doesn't refuse it, but holds a copy of it that blocks only its own GUID, so another indexer's copy "
+                "may be grabbed: " + "; ".join(blocklist.describe(e) for e in c.same_title))
+    if not c.listed:
+        return "empty"
+    untitled = sum(1 for e in c.listed if not e["title"])
+    return (f"doesn't refuse it ({len(c.listed)} entr{'y' if len(c.listed) == 1 else 'ies'}"
+            + (f", {untitled} with no title recorded, which block only their GUID" if untitled else "") + ")")
+
+
 def log_check(c: Check) -> None:
     """The verdict, what it was run on, then what it doesn't cover."""
     logger.info('[CHECK] %s: %s — %s (%s): "%s"', c.key, c.record.get("artist"), c.record.get("name"),
@@ -130,9 +170,9 @@ def log_check(c: Check) -> None:
     if c.record.get("edition") is not None:
         logger.info("Edition: an incomplete copy is in the library, so the tick takes only its edition (%s); this "
                     "title's is (%s)", " ".join(c.record["edition"]) or "plain", " ".join(sorted(edition(c.title))) or "plain")
-    logger.info("Not covered: the blocklist and releases other albums took (they go by GUID, or by the title a grab "
-                "recorded), and whether the indexer has this release. An accepted release still has to outrank the "
-                "others")
+    logger.info("Blocklist: %s", _blocklist(c))
+    logger.info("Not covered: releases other albums took (they go by GUID, or by the title a grab recorded), and "
+                "whether the indexer has this release. An accepted release still has to outrank the others")
 
 
 def run(album: str, title: str, size: int | None = None, words: str = "") -> Check:

@@ -74,7 +74,7 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
-from music_fetch import events, state
+from music_fetch import blocklist, events, state
 
 logger = logging.getLogger(__name__)
 
@@ -220,7 +220,8 @@ def _track_id(track: list) -> object:
 
 
 def merge_into(survivor: dict, other: Mapping) -> None:
-    """Fold *other*'s Spotify IDs, names, playlists' tracks, blocklist, attempts and origin into *survivor*."""
+    """Fold *other*'s Spotify IDs, names, playlists' tracks, blocklist (its hand
+    entries too), attempts and origin into *survivor*."""
     survivor["spotify_album_ids"] = _union(survivor.get("spotify_album_ids"), other.get("spotify_album_ids"))
     survivor["names"] = _union(survivor.get("names"), other.get("names"))
     playlists = survivor.setdefault("playlists", {})
@@ -230,6 +231,9 @@ def merge_into(survivor: dict, other: Mapping) -> None:
         have.extend(t for t in tracks if _track_id(t) not in seen)
     if other.get("blocklist"):
         survivor["blocklist"] = _union(survivor.get("blocklist"), other.get("blocklist"))
+    if other.get(blocklist.HAND_FIELD):
+        # What a person blocklisted stays whole (homelab#2750); the survivor's own entry of a GUID wins.
+        survivor[blocklist.HAND_FIELD] = {**other[blocklist.HAND_FIELD], **(survivor.get(blocklist.HAND_FIELD) or {})}
     if other.get("attempts"):
         survivor["attempts"] = max(survivor.get("attempts") or 0, other["attempts"])
     origin = min((survivor.get("origin") or state.ALBUM, other.get("origin") or state.ALBUM), key=ORIGIN_RANK.get)
