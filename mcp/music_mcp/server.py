@@ -696,16 +696,16 @@ def build_server(
             list[str] | None,
             Field(description="only these albums, by album query (key, Spotify album ID or URL, release group, "
                               "'artist — album', or a part matching one album): their retags, moves, covers and "
-                              "the loose copies their release supersedes, in seconds; leave it out for the whole "
-                              "library", max_length=25),
+                              "the loose copies their release supersedes; leave it out for the whole library",
+                  max_length=25),
         ] = None,
         apply: Apply = False,
     ) -> dict:
         """music-canon-albums: give albums that split in two (one without a cover) one
         canonical album identity. With albums, only those albums (an ambiguous or unknown query
-        returns "ambiguous" or "not_found" and does nothing); without, the whole library, in the
-        queue for minutes. Its apply runs the dry run again first: get_guide's workflow says what
-        to expect."""
+        returns "ambiguous" or "not_found" and does nothing), in about a minute; without, the
+        whole library, in the queue for minutes. Its apply runs the dry run again first:
+        get_guide's workflow says what to expect."""
         body = {"refresh": refresh, "search_budget": search_budget, "mb_budget": mb_budget, "albums": albums or [],
                 "apply": apply}
         return await run("canon_albums", body, write=True)
