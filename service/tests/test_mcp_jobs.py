@@ -186,6 +186,117 @@ def test_a_failed_lookup_that_loses_a_link_still_changes_the_hash(caplog):
     assert output_hash(lost) != output_hash(linked)
 
 
+# canon_albums (homelab#3025): a dry run's lines, and the apply's re-run of it, which reads what the
+# dry run cached, while imports land.
+RETAG = "  [RETAG] 7 /root/Music/library/Muse/Absolution/04 - Hysteria.m4a: spotify_album_id ''→'ABS' (dry run)"
+WOULD = "Dry run: 1 item(s) would change (1 retagged, 0 superseded). Re-run with --apply to write."
+
+
+@pytest.mark.parametrize("dry, again", [
+    (["Read keep: 312 track(s)", "Read later: 40 track(s)"], ["Using the playlist pages read 12 min ago"]),
+    (["Using the playlist pages read 3 min ago"], ["Using the playlist pages read 18 min ago"]),
+    (["  [MB-URL] Absolution (ABS) → 2c4a6b0e", "  [MB-URL] ABS: MusicBrainz links its twin release ABS2",
+      "  [MB-ISRC] Origin (ORI) → 9f1e", "  [MB-UPC] Drones (DRO) → 77aa",
+      "  [MB-NONE] Demos (DEM): no MusicBrainz release; add it with https://harmony.pulsewidth.org.uk/DEM"], []),
+    (["1840 Spotify track(s) placed on 960 release(s)"], ["1844 Spotify track(s) placed on 961 release(s)"]),
+    (["Items: 35680 scanned, 35000 with a Spotify ID, 12 with no album data (NOALBUM), 35000 unchanged"],
+     ["Items: 35812 scanned, 35130 with a Spotify ID, 12 with no album data (NOALBUM), 35132 unchanged"]),
+    (["MusicBrainz: looked up 3 album(s) this run (isrc 1, url 2), 9 call(s); 2101 album(s) cached"],
+     ["MusicBrainz: looked up 0 album(s) this run (none), 0 call(s); 2104 album(s) cached"]),
+    (["Singles: 4 item(s) on their album instead of a single, by ISRC; Spotify: 12 ISRC search(es) this run "
+      "(2s apart), 4088 ISRC(s) cached, 0 item(s) wait for a search"],
+     ["Singles: 4 item(s) on their album instead of a single, by ISRC; Spotify: 0 ISRC search(es) this run "
+      "(2s apart, stopped by a rate limit), 4100 ISRC(s) cached, 0 item(s) wait for a search"]),
+    (["  [MB-WAIT] Absolution (ABS): MusicBrainz lookup failed, retried next run: HTTP Error 503: Busy"],
+     ["  [MB-WAIT] Absolution (ABS): MusicBrainz lookup failed, retried next run: The read operation timed out"]),
+    (["  [SP-WAIT] ISRC GBAHT0300056: Spotify search failed, retried next run: HTTP Error 500"],
+     ["  [SP-WAIT] ISRC GBAHT0300056: Spotify search failed, retried next run: Read timed out. (read timeout=10)"]),
+    (["  [SP-WAIT] Spotify is rate-limiting, no more ISRC searches this run: retry after 3600 s"],
+     ["  [SP-WAIT] Spotify is rate-limiting, no more ISRC searches this run: retry after 120 s"]),
+    (["Supersede backfill: 2123 record(s), 1 library read(s) in 16607.1s"],
+     ["Supersede backfill: 2125 record(s), 1 library read(s) in 41.3s"]),
+])
+def test_what_canons_dry_run_reads_and_caches_is_not_part_of_the_dry_run_hash(dry, again):
+    """The dry run took five hours and its apply's re-run never matched it (homelab#3025)."""
+    stamp = "[2026-11-20T05:31:00+0000] "
+    assert output_hash([*(stamp + line for line in dry), RETAG, WOULD]) == output_hash([*again, RETAG, WOULD])
+
+
+@pytest.mark.parametrize("dry, again", [
+    # The items placed on their album, and those left waiting for a search, are what the apply does.
+    (["Singles: 4 item(s) on their album instead of a single, by ISRC; Spotify: 12 ISRC search(es) this run "
+      "(2s apart), 4088 ISRC(s) cached, 0 item(s) wait for a search"],
+     ["Singles: 5 item(s) on their album instead of a single, by ISRC; Spotify: 12 ISRC search(es) this run "
+      "(2s apart), 4088 ISRC(s) cached, 0 item(s) wait for a search"]),
+    (["Singles: 4 item(s) on their album instead of a single, by ISRC; Spotify: 12 ISRC search(es) this run "
+      "(2s apart), 4088 ISRC(s) cached, 0 item(s) wait for a search"],
+     ["Singles: 4 item(s) on their album instead of a single, by ISRC; Spotify: 12 ISRC search(es) this run "
+      "(2s apart), 4088 ISRC(s) cached, 3 item(s) wait for a search"]),
+    # A lookup or a search that failed leaves its album or item waiting: which one is compared.
+    (["  [MB-WAIT] Absolution (ABS): MusicBrainz lookup failed, retried next run: HTTP Error 503"], []),
+    (["  [MB-WAIT] Absolution (ABS): MusicBrainz lookup failed, retried next run: HTTP Error 503"],
+     ["  [MB-WAIT] Origin (ORI): MusicBrainz lookup failed, retried next run: HTTP Error 503"]),
+    (["  [MB-WAIT] Absolution (ABS): Spotify is rate-limiting; barcode rung retried next run"], []),
+    (["  [SP-WAIT] ISRC GBAHT0300056: Spotify search failed, retried next run: HTTP Error 500"],
+     ["  [SP-WAIT] ISRC GBAHT0300057: Spotify search failed, retried next run: HTTP Error 500"]),
+    (["  [SP-WAIT] Spotify is rate-limiting, no more ISRC searches this run: retry after 3600 s"], []),
+    # What the apply writes, and what the dry run lists for the user, stay compared.
+    (["Changes: 1 item(s) (album 1); 1 file write(s), 0 database-only; 0 file(s) move, 0 cover(s) replaced, "
+      "0 clash(es)"], ["Changes: 2 item(s) (album 2); 2 file write(s), 0 database-only; 0 file(s) move, "
+                       "0 cover(s) replaced, 0 clash(es)"]),
+    (["  [WAIT] 9 /root/Music/library/x.m4a: single Hysteria, its ISRC GBAHT0300056 not searched yet (dry run)"], []),
+    (["[ALBUM] Muse — Absolution: 1 loose item(s) superseded, 0 kept"],
+     ["[ALBUM] Muse — Absolution: 1 loose item(s) superseded, 1 kept"]),
+    (["  [KEEP] 12 Muse — Hysteria /root/Music/library/y.m4a: on the album, but it has no Spotify ID; kept"], []),
+    (["Supersede: 1 loose item(s) superseded by their album copy"],
+     ["Supersede: 2 loose item(s) superseded by their album copy"]),
+    (["Album records: 0 release item(s) on another album go back to their record's album (HOME)"],
+     ["Album records: 1 release item(s) on another album go back to their record's album (HOME)"]),
+])
+def test_what_canons_apply_would_do_stays_in_the_dry_run_hash(dry, again):
+    assert output_hash([*dry, RETAG, WOULD]) != output_hash([*again, RETAG, WOULD])
+
+
+def test_canons_real_output_hashes_alike_when_only_the_reads_and_caches_differ(caplog, monkeypatch):
+    """The lines as canon and supersede log them, so a reworded line can't slip out of the patterns."""
+    import time
+    from types import SimpleNamespace
+
+    from music_fetch import config, spotdl_ops, state
+    from music_scan import canon, supersede
+
+    songs = {"keep": [{"name": "Hysteria"}] * 3}
+    monkeypatch.setattr(state, "save_doc", lambda *a, **kw: None)
+    monkeypatch.setattr(config, "load_playlists", lambda path: [SimpleNamespace(name="keep", url="u")])
+    monkeypatch.setattr(spotdl_ops, "SpotifyPlaylists",
+                        lambda cookies: SimpleNamespace(songs=lambda url: songs["keep"]))
+
+    def output(cached_at: float | None, scanned: int, looked_up: int, searches: int, singles: int = 4) -> list[str]:
+        monkeypatch.setattr(state, "load_doc",
+                            lambda name: None if cached_at is None else {"read_at": cached_at, "playlists": songs})
+        plan = canon.Plan(scanned=scanned, with_id=scanned - 5, unchanged=scanned, singles=singles)
+        resolver = SimpleNamespace(looked_up=looked_up, rungs={"url": looked_up} if looked_up else {},
+                                   mb=SimpleNamespace(calls=2 * looked_up),
+                                   cache=dict.fromkeys(range(2100 + looked_up)))
+        albums = SimpleNamespace(calls=searches, interval=2.0, limited=False,
+                                 cache=dict.fromkeys(range(4000 + searches)))
+        lib = SimpleNamespace(all_items=list)
+        caplog.clear()
+        with caplog.at_level("INFO", logger="music_scan"):
+            canon.read_pages()
+            supersede.backfill(lib, dict.fromkeys(map(str, range(scanned // 10)), {}), apply=False)
+            canon.report(plan, resolver, albums)
+        return list(caplog.messages)
+
+    dry = output(None, 35680, 3, 12)
+    again = output(time.time() - 14 * 60, 35812, 0, 0)
+    assert _says(dry, "Read keep: 3 track(s)") and _says(again, "Using the playlist pages read 14 min ago")
+    assert _says(dry, "Supersede backfill: 3568 record(s)") and _says(again, "Items: 35812 scanned")
+    assert _says(dry, "MusicBrainz: looked up 3 album(s)") and _says(dry, "12 ISRC search(es)")
+    assert output_hash(dry) == output_hash(again)
+    assert output_hash(output(None, 35680, 3, 12, singles=5)) != output_hash(dry)
+
+
 def test_a_finished_job_records_an_mcp_job_event(make, monkeypatch):
     from music_service import mcp_jobs
 

@@ -88,6 +88,30 @@ _MB_FAILED = re.compile(r"^MusicBrainz lookup of (?:recording|ISRC) \S+ failed: 
 # "Album IDs: 1349 imported album(s) read, 2 empty entr(ies) to link, …": the number read rises
 # with every import, and says nothing of what the apply writes; the rest of the line is compared.
 _ALBUMS_READ = re.compile(r"^Album IDs: \d+ imported album\(s\) read, ")
+# canon_albums (homelab#3025): its dry run fills the day's caches (the playlist pages, MusicBrainz
+# releases, Spotify ISRC searches), so the apply's re-run of it reads them and prints otherwise.
+# What a page, a lookup or a search means for an item is that item's [RETAG] or [WAIT] line.
+# "Using the playlist pages read 12 min ago", or "Read <playlist>: 312 track(s)" when read now
+# (of the write tools only canon reads playlist pages).
+_PAGES = re.compile(r"^(?:Using the playlist pages read .* ago|Read .+: \d+ track\(s\))$")
+# "  [MB-URL] <album> (<id>) → <release>", [MB-ISRC], [MB-UPC], [MB-NONE]: a lookup the dry run
+# made and cached, which the re-run doesn't make.
+_MB_FOUND = re.compile(r"^\s*\[MB-(?:URL|ISRC|UPC|NONE)\] ")
+# "1840 Spotify track(s) placed on 960 release(s)", "Items: 35812 scanned, …", "MusicBrainz:
+# looked up 3 album(s) this run …; 2104 album(s) cached": what was read and what the caches
+# held, which rise with every import and with the dry run's own lookups.
+_CANON_COUNTS = re.compile(r"^(?:\d+ Spotify track\(s\) placed on \d+ release\(s\)$|Items: \d+ scanned, |"
+                           r"MusicBrainz: looked up )")
+# "Singles: 4 item(s) …; Spotify: 12 ISRC search(es) this run (2s apart), 4100 ISRC(s) cached, 0 item(s)
+# wait for a search": the searches and the cache are dropped, the items moved and waiting compared.
+_ISRC_SEARCHES = re.compile(r"(?<=; )Spotify: \d+ ISRC search\(es\) this run \([^)]*\), \d+ ISRC\(s\) cached, ")
+# "  [MB-WAIT] <album>: MusicBrainz lookup failed, retried next run: <error>", "  [SP-WAIT] ISRC <code>:
+# Spotify search failed, retried next run: <error>": what failed stays compared (its album or item
+# is left waiting), the error's wording, which differs on every run, is dropped.
+_WAIT_ERROR = re.compile(r"^(\s*\[(?:MB|SP)-WAIT\] .*?(?:, retried next run|, no more ISRC searches this run)): .*$")
+# "Supersede backfill: 2125 record(s), 1 library read(s) in 41.3s": its time and counts.
+_BACKFILL = re.compile(r"^Supersede backfill: \d+ record\(s\), \d+ library read\(s\) in [\d.]+s$")
+_DROPPED = (_ONLY_TIMESTAMP, _MB_RETRY, _MB_FAILED, _PAGES, _MB_FOUND, _CANON_COUNTS)
 _PROGRESS = re.compile(r"^(?:\[(?P<at>\d{4}-\d{2}-\d{2}T[^\]]*)\]\s?)?(?P<line>\[PROGRESS\] (?P<done>\d+)/(?P<total>\d+).*)$")
 
 
@@ -107,13 +131,23 @@ def _parse(t: str | None) -> datetime | None:
     return datetime.fromisoformat(t.replace("Z", "+00:00")) if t else None
 
 
+def _compared(line: str) -> str | None:
+    """*line* as the hash compares it, or None when it isn't compared."""
+    line = _LOG_PREFIX.sub("", line)
+    if any(p.match(line) for p in _DROPPED):
+        return None
+    line = _ALBUMS_READ.sub("Album IDs: ", line)
+    line = _ISRC_SEARCHES.sub("Spotify: ", line)
+    line = _WAIT_ERROR.sub(r"\1", line)
+    return "Supersede backfill" if _BACKFILL.match(line) else line
+
+
 def output_hash(lines: list[str]) -> str:
-    """The hash an apply compares: each line without its log timestamp or the albums
-    backfill read, and no line that is only a timestamp, a MusicBrainz retry or backfill's
-    failed lookup."""
-    kept = [_ALBUMS_READ.sub("Album IDs: ", _LOG_PREFIX.sub("", line)) for line in lines]
-    kept = [line for line in kept
-            if not _ONLY_TIMESTAMP.match(line) and not _MB_RETRY.match(line) and not _MB_FAILED.match(line)]
+    """The hash an apply compares: each line without its log timestamp, and without what
+    differs between runs that would write the same (the albums backfill read, canon's cache
+    and search counts, a lookup's error); no line that is only a timestamp, a MusicBrainz
+    retry, backfill's failed lookup, or canon's page reads, cached lookups and input counts."""
+    kept = [line for line in map(_compared, lines) if line is not None]
     return "sha256:" + hashlib.sha256("\n".join(kept).encode()).hexdigest()
 
 
