@@ -118,15 +118,87 @@ def _album_key(item) -> tuple[str, str]:
             str(item.get("album") or "").casefold())
 
 
-def _id_rung(loose, album) -> str | None:
-    ids = item_spotify_ids(album) - set(split_list(album.get("words_ids")))
-    if ids & item_spotify_ids(loose):
+@dataclasses.dataclass(frozen=True)
+class _Ids:
+    """What the ID rung compares of one item, read once (homelab#3025)."""
+
+    spotify: frozenset[str]
+    words: frozenset[str]  # tag_album_ids' links by title words (#255)
+    isrcs: frozenset[str]
+    mb_trackid: str | None
+    length: object
+
+    @classmethod
+    def of(cls, item) -> "_Ids":
+        return cls(frozenset(item_spotify_ids(item)), frozenset(split_list(item.get("words_ids"))),
+                   frozenset(item_isrcs(item)), item.get("mb_trackid"), item.length)
+
+    @property
+    def linked(self) -> frozenset[str]:
+        """The Spotify IDs an album item's ID rung matches on: its own, not those by title words."""
+        return self.spotify - self.words
+
+
+def _rung(loose: _Ids, album: _Ids) -> str | None:
+    if album.linked & loose.spotify:
         return "spotify id"
-    if item_isrcs(album) & item_isrcs(loose):
+    if album.isrcs & loose.isrcs:
         return "isrc"
-    if same_mb_recording(album.get("mb_trackid"), album.length, loose.get("mb_trackid"), loose.length):
+    if same_mb_recording(album.mb_trackid, album.length, loose.mb_trackid, loose.length):
         return "recording id"
     return None
+
+
+def _id_rung(loose, album) -> str | None:
+    return _rung(_Ids.of(loose), _Ids.of(album))
+
+
+class Index:
+    """The library as :func:`plan` asks it, read once (homelab#3025).
+
+    A plan used to walk the whole library for each release, reading every
+    item's IDs again for each of the release's items: hours on a library of
+    35,000 items.  This reads each item once, and files the items that can be
+    loose (not ``via=usenet``) under every key a rung looks them up by: their
+    Spotify IDs, ISRCs and recording ID (the ID rung), their Spotify album (the
+    rungs on the album) and, for the one item of its album in the library, its
+    base title (the same-audio rung off the album, #328).  A plan then looks at
+    only the items one of its release's keys reaches, in item ID order as
+    before; any other item no rung could match, so it was skipped silently.
+    Build a new one once the library changed (an apply's merges)."""
+
+    def __init__(self, items) -> None:
+        from music_scan.dupes import _base_title  # noqa: PLC0415
+
+        self.items = sorted(items, key=lambda i: i.id)
+        # Off the album, only a one-track album's item is a candidate: a best-of keeps its tracks (#328).
+        self.albums = Counter(_album_key(i) for i in self.items)
+        self.ids: dict[int, _Ids] = {}
+        self._by: dict[tuple[str, str], list] = {}
+        for item in self.items:
+            if item.get("via") == "usenet":
+                continue
+            ids = self.ids[item.id] = _Ids.of(item)
+            keys = ([("spotify", s) for s in ids.spotify] + [("isrc", c) for c in ids.isrcs]
+                    + ([("recording", ids.mb_trackid)] if ids.mb_trackid else []))
+            if album_id := item.get("spotify_album_id"):
+                keys.append(("album", album_id))
+            if not item.get("album_record") and self.albums[_album_key(item)] == 1 and (title := _base_title(item)):
+                keys.append(("title", title))
+            for key in keys:
+                self._by.setdefault(key, []).append(item)
+
+    def candidates(self, release_ids: list[_Ids], album_id: str | None, titles) -> list:
+        """The items a rung of a release with *release_ids*, filed under Spotify
+        album *album_id*, with base *titles*, could match, in item ID order."""
+        keys = [("album", album_id)] if album_id is not None else []
+        for ids in release_ids:
+            keys += [("spotify", s) for s in ids.linked] + [("isrc", c) for c in ids.isrcs]
+            if ids.mb_trackid:
+                keys.append(("recording", ids.mb_trackid))
+        keys += [("title", t) for t in titles if t]
+        found = {i.id: i for key in keys for i in self._by.get(key, ())}
+        return [found[k] for k in sorted(found)]
 
 
 def _isrcs(item) -> set[str]:
@@ -221,12 +293,13 @@ def _same_audio(loose, release: list, titled: dict, frames_of, on_album: bool) -
     return None, None, f"no release item has its audio ({'; '.join(vetoes)})"
 
 
-def plan(release: list, library: list, tracks_count: int, tracks=(),
+def plan(release: list, library: list | Index, tracks_count: int, tracks=(),
          decoder=None, frames_of=None) -> tuple[list[Pair], list[Kept]]:
     """``(pairs, kept)``: which *library* items each item of *release* (one
     import's usenet items) supersedes, and the loose items on its album no
     rung matched (and those off it a same-titled release item vetoed).
-    *tracks* are the album's tracklist entries (:class:`PlaylistTrack`
+    *library* is the items, or an :class:`Index` of them shared across
+    calls.  *tracks* are the album's tracklist entries (:class:`PlaylistTrack`
     lists); *decoder* decodes fingerprints
     (:func:`music_scan.dupes.decode` by default), or *frames_of* reads them
     from a cache shared across calls.  Leaves the items as they were."""
@@ -236,24 +309,26 @@ def plan(release: list, library: list, tracks_count: int, tracks=(),
     titled: dict[str, list] = {}
     for album in sorted(release, key=lambda i: i.id):
         titled.setdefault(dupes._base_title(album), []).append(album)
-    library = list(library)
-    # Off the album, only a one-track album's item is a candidate: a best-of keeps its tracks (#328).
-    albums = Counter(_album_key(i) for i in library)
+    index = library if isinstance(library, Index) else Index(library)
+    albums = index.albums
     mine = {i.id for i in release}
     tracklist = _Tracklist(release, tracks)
     album_id = _album_id(release)
+    # Each release item's IDs, read once; a loose item tries them in release order, first hit wins.
+    release_ids = [(album, _Ids.of(album)) for album in release]
     # Positional rung: the release's items with no Spotify ID, by their own numbering.
     numbered = {_slot(i): i for i in release
                 if tracks_count and not item_spotify_ids(i) and i.tracktotal == tracks_count}
     pairs: dict[int, Pair] = {}
     kept = []
-    for loose in sorted(library, key=lambda i: i.id):
+    for loose in index.candidates([ids for _, ids in release_ids], album_id, titled):
         if loose.id in mine or loose.get("via") == "usenet":
             continue
         on_album = album_id is not None and loose.get("spotify_album_id") == album_id
         match, how = None, None
-        for album in release:
-            how = _id_rung(loose, album)
+        loose_ids = index.ids[loose.id]
+        for album, ids in release_ids:
+            how = _rung(loose_ids, ids)
             if how:
                 match = album
                 break
@@ -380,8 +455,10 @@ def _releases(items: list, records: dict[str, dict]) -> dict[str, list]:
 def backfill(lib, records: dict[str, dict], apply: bool, replaced_dir: Path | None = None) -> list[Pair]:
     """Supersede for every album record's successful release; with *apply*, merge.
 
-    The library is read once, and again only after a merge changed it: a read
-    takes ~2 s in the pod, and once per record it took over an hour (homelab#2521)."""
+    The library is read and indexed once, and again only after a merge changed
+    it: a read takes ~2 s in the pod, and once per record it took over an hour
+    (homelab#2521); a plan that walked the whole library per record took hours
+    more (homelab#3025)."""
     from music_fetch.albums import album_tracks  # noqa: PLC0415
 
     from music_scan import dupes  # noqa: PLC0415
@@ -389,6 +466,7 @@ def backfill(lib, records: dict[str, dict], apply: bool, replaced_dir: Path | No
     start = time.monotonic()
     reads = 1
     items = lib.all_items()
+    index = Index(items)
     releases = _releases(items, records)
     # Keyed by item ID: a merge removes loose items and leaves the album item's fingerprint as it was.
     frames_of = dupes.frames_reader(dupes.decode)
@@ -397,7 +475,7 @@ def backfill(lib, records: dict[str, dict], apply: bool, replaced_dir: Path | No
         release = releases.get(key)
         if not release:
             continue
-        pairs, kept = plan(release, items, record.get("tracks_count") or 0, album_tracks(record),
+        pairs, kept = plan(release, index, record.get("tracks_count") or 0, album_tracks(record),
                            frames_of=frames_of)
         if pairs or kept:
             logger.info("[ALBUM] %s — %s: %d loose item(s) superseded, %d kept", record.get("artist"),
@@ -406,6 +484,7 @@ def backfill(lib, records: dict[str, dict], apply: bool, replaced_dir: Path | No
         if apply and apply_pairs(pairs, replaced_dir):
             reads += 1
             items = lib.all_items()
+            index = Index(items)
             releases = _releases(items, records)
         done += pairs
     logger.info("Supersede backfill: %d record(s), %d library read(s) in %.1fs", len(records), reads,

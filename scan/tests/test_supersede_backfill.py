@@ -1,9 +1,11 @@
 """Supersede's backfill over a generated library (homelab#3025).
 
-A whole-library ``music-canon-albums`` spends hours in its supersede phase, since
-each record's plan walks the whole library.  This pins what the backfill decides
-(its pairs, rungs and lines, in order) on a library varied enough to reach every
-rung, veto and tie, so that a faster plan can be shown to decide the same.
+A whole-library ``music-canon-albums`` spent hours in its supersede phase, since
+each record's plan walked the whole library.  These tests pin what the backfill
+decides (its pairs, rungs and lines, in order) on a library varied enough to
+reach every rung, veto and tie (the golden file was written by the
+implementation before the :class:`~music_scan.supersede.Index`), and that its
+cost grows with the library, not with records times the library.
 
 Items carry no audio: the fingerprints come from a fake decoder, and an apply's
 files are empty.  Regenerate the golden file, only for a change meant to alter
@@ -269,3 +271,39 @@ def test_backfill_over_a_generated_library_decides_as_before(tmp_path, lib, fake
         pytest.skip("golden file written")
     assert text == GOLDEN.read_text()
 
+
+def _filler(lib, root: Path, n: int, start: int = 0) -> None:
+    """*n* spotdl items no rung relates to any release: other IDs, titles and albums."""
+    used: set = set()
+    for k in range(start, start + n):
+        _add(lib, root, GRAB - timedelta(days=3), used, title=f"Filler {k}", album=f"Filler Album {k % 10}",
+             albumartist="Nobody", artist="Nobody", spotify_album_id=f"FA{k % 10}", spotify_ids=f"F{k}",
+             isrc=f"ZZAAA26{k:05d}", mb_trackid=f"filler-{k}", via="spotdl", sources="pl0", track=k % 12 + 1,
+             length=180.0, acoustid_fingerprint="fp0c")
+
+
+def test_backfill_reads_each_item_a_bounded_number_of_times(tmp_path, lib, fake_audio, monkeypatch):
+    """homelab#3025: each record's plan read every item's fields again, so a
+    whole-library dry run took 641 s at 8,000 items and 16,607 s at 35,500.
+    The reads an extra item costs no longer depend on how many records there are."""
+    from beets.library import Item
+
+    from music_scan import supersede
+
+    records = build(lib, tmp_path / "library", seed=1, albums=20, loose=80)
+    reads = []
+    for name in ("get", "__getitem__"):
+        real = getattr(Item, name)
+        monkeypatch.setattr(Item, name, lambda self, *a, _real=real, **kw: reads.append(1) or _real(self, *a, **kw))
+
+    def count() -> int:
+        reads.clear()
+        supersede.backfill(lib, records, apply=False)
+        return len(reads)
+
+    _filler(lib, tmp_path / "library", 100)
+    small = count()
+    _filler(lib, tmp_path / "library", 400, start=100)
+    large = count()
+    # About 15 reads per item (the index, the claim, the sort); the plan per record read ~50 per record.
+    assert (large - small) / 400 < 30
