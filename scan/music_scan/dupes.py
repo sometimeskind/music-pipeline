@@ -31,7 +31,12 @@ Two tiers, grouped transitively:
 Fingerprints are compared only between items that share an artist word rather
 than every pair; the count still grows with the square of an artist word's
 items, and a full run on ~32k items takes about half an hour.  It logs
-``[PROGRESS]`` lines per phase and through the fingerprint comparisons.
+``[PROGRESS]`` lines per phase and through the fingerprint comparisons.  The run
+keeps every item's decoded fingerprint, as 4-byte arrays (:func:`compact`), and
+compares a pair that shares several artist words in the first of their buckets
+only, keeping no set of the pairs compared.  As lists and with that set, the audit
+took 1.8 GB over the library read on a synthetic 36k-item library, and the pod's
+first whole-library run was OOM-killed beside an album tick (homelab#3036).
 
 On album playlists the album is the unit (#279): one recording legitimately
 sits on two whole albums (a greatest-hits and the studio album), or twice on
@@ -115,9 +120,11 @@ import os
 import re
 import shutil
 import struct
+import sys
 import time
+from array import array
 from collections import defaultdict
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from itertools import combinations
 from pathlib import Path
 
@@ -185,11 +192,27 @@ def decode(fp: str) -> list[int]:
     return [f & 0xFFFFFFFF for f in frames]
 
 
-def _pack(frames: list[int]) -> int:
-    return int.from_bytes(struct.pack(f"<{len(frames)}I", *frames), "little")
+# An array of 4-byte unsigned ints: how :func:`frames_reader` keeps a decoded fingerprint.
+_FRAME_TYPE = next(code for code in "IL" if array(code).itemsize == 4)
+_NO_FRAMES = array(_FRAME_TYPE)
 
 
-def bit_error_rate(a: list[int], b: list[int]) -> float:
+def compact(frames: Sequence[int]) -> array:
+    """*frames* as an ``array`` of 4-byte unsigned ints: 4 bytes a sub-fingerprint where a
+    list of ints takes about 40 (an 8-byte pointer and a 32-byte int object).  A whole
+    audit holds every item's frames, ~950 each: on a synthetic library of 36k items the
+    cache held 1296 MB as lists and holds 135 MB so (homelab#3036)."""
+    return array(_FRAME_TYPE, frames)
+
+
+def _pack(frames: Sequence[int], start: int, n: int) -> int:
+    """The *n* sub-fingerprints of *frames* from *start* as one little-endian integer."""
+    if isinstance(frames, array) and frames.itemsize == 4 and sys.byteorder == "little":
+        return int.from_bytes(memoryview(frames)[start:start + n].cast("B"), "little")
+    return int.from_bytes(struct.pack(f"<{n}I", *frames[start:start + n]), "little")
+
+
+def bit_error_rate(a: Sequence[int], b: Sequence[int]) -> float:
     """The lowest share of differing bits between *a* and *b* over the shifts tried."""
     best = 1.0
     for shift in range(-MAX_SHIFT, MAX_SHIFT + 1):
@@ -197,7 +220,7 @@ def bit_error_rate(a: list[int], b: list[int]) -> float:
         n = min(WINDOW, len(a) - sa, len(b) - sb)
         if n < MIN_FRAMES:
             continue
-        diff = _pack(a[sa:sa + n]) ^ _pack(b[sb:sb + n])
+        diff = _pack(a, sa, n) ^ _pack(b, sb, n)
         best = min(best, diff.bit_count() / (32 * n))
     return best
 
@@ -223,25 +246,27 @@ def _artist_words(item) -> set[str]:
     return {w for w in words(names) if len(w) > 1 and w not in _ARTIST_STOP}
 
 
-def frames_reader(decoder: Callable[[str], list[int]] = decode) -> Callable[[object], list[int]]:
+def frames_reader(decoder: Callable[[str], list[int]] = decode) -> Callable[[object], array]:
     """A cached item → sub-fingerprints reader: empty for an item with no
-    ``acoustid_fingerprint`` or an unreadable one (logged)."""
-    frames: dict[int, list[int]] = {}
+    ``acoustid_fingerprint`` or an unreadable one (logged).  The cache keeps each
+    item's frames :func:`compact` for the reader's life, which for the audit is
+    the whole library (homelab#3036)."""
+    frames: dict[int, array] = {}
 
-    def frames_of(item) -> list[int]:
+    def frames_of(item) -> array:
         if item.id not in frames:
             fp = item.get("acoustid_fingerprint")
             try:
-                frames[item.id] = decoder(fp) if fp else []
+                frames[item.id] = compact(decoder(fp)) if fp else _NO_FRAMES
             except Exception as exc:  # noqa: BLE001 — one bad fingerprint must not stop the audit
                 logger.warning("  item %s: unreadable fingerprint (%s)", item.id, exc)
-                frames[item.id] = []
+                frames[item.id] = _NO_FRAMES
         return frames[item.id]
 
     return frames_of
 
 
-def audio_match(a, b, frames_of: Callable[[object], list[int]]) -> tuple[str, str] | None:
+def audio_match(a, b, frames_of: Callable[[object], Sequence[int]]) -> tuple[str, str] | None:
     """``(tier, evidence)`` when *a* and *b* are an AcoustID match (a shared
     ``acoustid_id``, or fingerprints within :data:`MATCH_BER`), else ``None``.
     The tier is :data:`CERTAIN` with lengths within :data:`LENGTH_SLACK` and the
@@ -345,28 +370,35 @@ def find_dupes(items: list, decoder: Callable[[str], list[int]] = decode,
             id_uncertain += 1
     progress.log("%d item(s); %d pair(s) share an ID, %d of them uncertain", len(items), len(shared), id_uncertain)
 
-    # AcoustID, between items sharing an artist word.
+    # AcoustID, between items sharing an artist word.  A pair sharing several words is
+    # met in each of their buckets and compared in the first only: a set of the pairs
+    # compared held 296 MB on a synthetic 36k-item library (homelab#3036).
     by_word: dict[str, list] = defaultdict(list)
+    words_of: dict[int, set[str]] = {}
     for item in items:
         if item.get("acoustid_fingerprint") or item.get("acoustid_id"):
-            for w in _artist_words(item):
+            words_of[item.id] = _artist_words(item)
+            for w in words_of[item.id]:
                 by_word[w].append(item)
+    rank = {w: n for n, w in enumerate(by_word)}
     frames_of = frames_reader(decoder)
     planned = sum(len(bucket) * (len(bucket) - 1) // 2 for bucket in by_word.values())
     progress.log("audio: up to %d pair(s) to compare, between items sharing an artist word", planned)
     step, done, next_log = max(1, planned // PROGRESS_STEPS), 0, max(1, planned // PROGRESS_STEPS)
 
-    compared: set[tuple[int, int]] = set()
-    for bucket in by_word.values():
+    compared = 0
+    for word, bucket in by_word.items():
         for a, b in combinations(bucket, 2):
             done += 1
             if done >= next_log and done < planned:
                 progress.log("audio: %d%% (%d/%d pair(s))", 100 * done // planned, done, planned)
                 next_log += step
-            pair = (min(a.id, b.id), max(a.id, b.id))
-            if pair in compared or certain.find(a.id) == certain.find(b.id):
+            if certain.find(a.id) == certain.find(b.id):
                 continue
-            compared.add(pair)
+            common = words_of[a.id] & words_of[b.id]
+            if len(common) > 1 and min(rank[w] for w in common) != rank[word]:
+                continue  # an earlier bucket had the pair; groups only grow, so it was judged there
+            compared += 1
             if (match := audio_match(a, b, frames_of)) is None:
                 continue
             tier, why = match
@@ -374,7 +406,7 @@ def find_dupes(items: list, decoder: Callable[[str], list[int]] = decode,
                 join(a, b, why)
             else:
                 uncertain_edges.append((a.id, b.id, why))
-    progress.log("audio: done, %d pair(s) compared", len(compared))
+    progress.log("audio: done, %d pair(s) compared", compared)
 
     # Title + artist.
     distinct = 0
