@@ -701,27 +701,85 @@ def _schedule_retry(why: str, delay: int, count: str) -> None:
 # ---------------------------------------------------------------------------
 
 
-def _album_request_recordings(lib, fill=None):
+class _TickLibrary:
+    """The album tick's one read of the library, shared by its hooks (homelab#3051).
+
+    Each hook used to read the whole library on its first call and keep it
+    for the rest of the tick: up to five reads at once, about 340 MB each on
+    a library of 36,600 items, so a tick took 1.6 GB and OOM-killed the pod
+    beside a long job.  Now the hooks share one read, and each index over it
+    (:meth:`get`) is built once.
+
+    :meth:`drop` forgets them all when an import changed the library, as
+    ``have``'s own read was dropped before; the next hook that asks reads
+    the library again.  The tick's own writes (``have``'s links, the
+    AcoustID fill) change the shared items in place and store them, so a
+    later hook sees them as a read of its own would have."""
+
+    def __init__(self, lib) -> None:
+        self.lib = lib
+        self._items: list | None = None
+        self._built: dict[str, object] = {}
+
+    def items(self) -> list:
+        if self._items is None:
+            self._items = list(self.lib.all_items())
+        return self._items
+
+    def get(self, name: str, build):
+        """``build(items)`` over the read, built once until :meth:`drop`."""
+        if name not in self._built:
+            self._built[name] = build(self.items())
+        return self._built[name]
+
+    def drop(self) -> None:
+        self._items = None
+        self._built.clear()
+
+
+def _item_index(items):
+    from music_scan.identity import ItemIndex  # noqa: PLC0415
+
+    return ItemIndex(items)
+
+
+def _items_by_album(items) -> dict[str, list]:
+    from music_scan.playlists import by_album_id  # noqa: PLC0415
+
+    # Never empty, as each hook's own copy wasn't: it marked the library read.
+    return by_album_id(items) or {"": []}
+
+
+def _items_by_stamp(items) -> dict[str, list]:
+    from music_scan.playlists import by_stamp  # noqa: PLC0415
+
+    return by_stamp(items) or {"": []}
+
+
+def _resolves(shared: _TickLibrary):
+    """Whether a store song is in the library, by Spotify ID or ISRC
+    (``want_albums.resolves_by``'s test), over the tick's one index."""
+    return lambda song: shared.get("index", _item_index).match_song(song, words=False)[0] is not None
+
+
+def _album_request_recordings(lib, fill=None, shared: _TickLibrary | None = None):
     """The tick's ``recordings`` hook (homelab#2478): the MusicBrainz recordings
     of the library items stamped with an album record's key, an album
     request's fallback tracks among them, and of those on one of its Spotify
     albums (an album playlist's copies, from before the stage 3 cutover made
-    it a request's).  The library is read once a tick.
+    it a request's).  The library is read once a tick (*shared*, the tick's
+    :class:`_TickLibrary`).
 
     With *fill* (``request_fill.Filler``, homelab#2589), those items without a
     recording ID that AcoustID places on a track the request still lacks hold
     it too: *fill* stores the recording on each, with its event."""
     from music_scan.music_pipeline import FALLBACK_RECORDING  # noqa: PLC0415
-    from music_scan.playlists import by_album_id, by_stamp  # noqa: PLC0415
 
-    stamped: dict[str, list] = {}
-    on_album: dict[str, list] = {}
+    shared = shared or _TickLibrary(lib)
 
     def recordings(key: str, record: dict) -> set[str]:
-        if not stamped:
-            items = list(lib.all_items())
-            stamped.update(by_stamp(items) or {"": []})
-            on_album.update(by_album_id(items))
+        stamped = shared.get("by_stamp", _items_by_stamp)
+        on_album = shared.get("by_album_id", _items_by_album)
         items = [*stamped.get(key, ()), *(i for sid in record.get("spotify_album_ids") or ()
                                           for i in on_album.get(sid, ()))]
         held = {r for i in items for r in (i.get(FALLBACK_RECORDING), i.get("mb_trackid")) if r}
@@ -766,12 +824,13 @@ def _after_album_import() -> None:
         get_run_logger().exception("Album import: the Navidrome rescan failed; the next scan asks again")
 
 
-def _album_library_hooks(lib):
+def _album_library_hooks(lib, shared: _TickLibrary | None = None):
     """have / missing / complete callbacks over one open beets library.
 
-    ``have`` caches the whole library for a tick; ``complete`` imports a
-    finished download and drops the cache, since the import changed the
-    library.  ``have`` is true when the library holds the album whole (#268),
+    ``have`` reads the whole library once a tick (*shared*, the tick's
+    :class:`_TickLibrary`); ``complete`` imports a finished download and
+    drops the read, since the import changed the library.  ``have`` is true
+    when the library holds the album whole (#268),
     each track resolved by Spotify ID or ISRC as the store view resolves it
     (homelab#1914: ``sources`` is not membership); it tags the tracks with the
     playlist (#187).  ``missing`` lists the tracks the library lacks, tagging
@@ -780,24 +839,17 @@ def _album_library_hooks(lib):
     import music_fetch.albums as albums  # noqa: PLC0415
     from music_scan.identity import ItemIndex  # noqa: PLC0415
 
-    from music_scan.playlists import by_album_id, by_stamp  # noqa: PLC0415
-
-    keys: dict[str | None, ItemIndex] = {}  # None: the whole library
-    albums_by_id: dict[str, list] = {}
-    albums_by_stamp: dict[str, list] = {}
+    shared = shared or _TickLibrary(lib)
     none = ItemIndex([])
 
     def indexes(playlist: str) -> tuple[ItemIndex, ItemIndex]:
         # No playlist index: an entry resolves to any item by ID or ISRC.
-        if None not in keys:
-            keys[None] = ItemIndex(lib.all_items())
-        return none, keys[None]
+        return none, shared.get("index", _item_index)
 
     def have(key: str, record: dict) -> bool:
         library = indexes(next(iter(record.get("playlists", {})), ""))[1]
-        if not albums_by_id:
-            albums_by_id.update(by_album_id(library.items) or {"": []})
-            albums_by_stamp.update(by_stamp(library.items))
+        albums_by_id = shared.get("by_album_id", _items_by_album)
+        albums_by_stamp = shared.get("by_stamp", _items_by_stamp)
         if not scan.have_album(lambda pl: indexes(pl)[0], library, albums_by_id, key, record, albums_by_stamp):
             return False
         # Links the items found outside the playlist: a write (#506).
@@ -957,71 +1009,71 @@ def _album_library_hooks(lib):
                                  place=place)
         if imported:
             _after_album_import()
-        keys.clear()
-        albums_by_id.clear()
+        shared.drop()
         return status
 
     return have, missing, complete
 
 
-def _album_mixed_hook(lib):
+def _album_mixed_hook(lib, shared: _TickLibrary | None = None):
     """``mixed(key, record)`` over one open beets library: why the record's
     album is mixed from several releases (``release.mixed_reasons``, #288).
-    Reads the library once, when first called.  The album's items are those
+    Reads the library once a tick (*shared*, the tick's :class:`_TickLibrary`)
+    and the stores once, when first called.  The album's items are those
     on its primary Spotify album, never on its key (a row id, homelab#2478)."""
     from music_fetch.state import primary_spotify  # noqa: PLC0415
     from music_scan import release  # noqa: PLC0415
-    from music_scan.playlists import by_album_id  # noqa: PLC0415
 
-    on_album: dict[str, list] = {}
+    shared = shared or _TickLibrary(lib)
     listed: list = []
 
     def mixed(key: str, record: dict) -> list[str]:
-        if not on_album:
-            on_album.update(by_album_id(lib.all_items()) or {"": []})
+        on_album = shared.get("by_album_id", _items_by_album)
+        if not listed:
             listed.append(scan.store_listings())
         return release.mixed_reasons(key, record, on_album.get(primary_spotify(record) or "", []), listed[0])
 
     return mixed
 
 
-def _album_wants_hook(lib):
+def _album_wants_hook(lib, shared: _TickLibrary | None = None):
     """``wants(playlist)`` over one open beets library: every album of a
     spotdl playlist's want list (``want_albums.group``, #324), with the
     position of its first wanted track; the feed applies the threshold
     across playlists.  The want list is the nightly's before backoff and
-    before album mode's own hold, which it feeds.  Reads the library once,
-    when first called."""
+    before album mode's own hold, which it feeds.  Reads the library once a
+    tick (*shared*, the tick's :class:`_TickLibrary`) and the held URLs
+    once, when first called."""
     from music_fetch import store  # noqa: PLC0415
     from music_scan import want_albums  # noqa: PLC0415
     from music_scan.held import held_urls  # noqa: PLC0415
-    from music_scan.identity import ItemIndex  # noqa: PLC0415
 
+    shared = shared or _TickLibrary(lib)
     cache: dict = {}
 
     def wants(name: str) -> list[tuple[str, int, list[dict]]]:
         if not cache:
-            index = ItemIndex(lib.all_items())
-            cache.update(resolves=lambda song: index.match_song(song, words=False)[0] is not None,
-                         held=held_urls(scan.QUARANTINE, scan.SPOTDL_DIR))
+            cache.update(held=held_urls(scan.QUARANTINE, scan.SPOTDL_DIR))
         playlist = store.load(name)
         if playlist is None:
             return []
-        report = want_albums.group(name, playlist.songs, cache["resolves"], cache["held"])
+        report = want_albums.group(name, playlist.songs, _resolves(shared), cache["held"])
         return [(a.key, a.first, a.wanted) for a in report.albums]
 
     return wants
 
 
-def _album_library_feed_hook(lib):
+def _album_library_feed_hook(lib, shared: _TickLibrary | None = None):
     """``library()`` over one open beets library: every Spotify album the
     library's items and the stores' tracks reference
-    (``want_albums.library_view``, homelab#2403), for the library-wide feed."""
+    (``want_albums.library_view``, homelab#2403), for the library-wide feed.
+    The items are the tick's one read (*shared*, its :class:`_TickLibrary`)."""
     from music_scan import want_albums  # noqa: PLC0415
 
+    shared = shared or _TickLibrary(lib)
+
     def library() -> list[tuple[str, int, int, bool, dict[str, list[dict]]]]:
-        items = list(lib.all_items())
-        view, _ = want_albums.library_view(items, want_albums.read_stores(), want_albums.resolves_by(items))
+        view, _ = want_albums.library_view(shared.items(), want_albums.read_stores(), _resolves(shared))
         return [(a.key, a.refs, a.tracks, a.whole, a.on) for a in view]
 
     return library
@@ -1051,7 +1103,9 @@ def album_tick_task(settings) -> None:
     # One rate-limited MusicBrainz for the request fallback and Later's automatic requests (homelab#2535).
     musicbrainz = album_requests.musicbrainz()
     with MusicLibrary(scan.LIBRARY_DB) as lib:
-        have, missing, complete = _album_library_hooks(lib)
+        # One read of the library for every hook (homelab#3051).
+        shared = _TickLibrary(lib)
+        have, missing, complete = _album_library_hooks(lib, shared)
         albums.tick(
             playlists,
             SpotifyPlaylists(ingest.COOKIE_FILE),
@@ -1061,12 +1115,12 @@ def album_tick_task(settings) -> None:
             settings,
             on_completion=complete,
             missing=missing,
-            mixed=_album_mixed_hook(lib),
+            mixed=_album_mixed_hook(lib, shared),
             want_playlists=want_playlists,
-            wants=_album_wants_hook(lib),
-            library=_album_library_feed_hook(lib),
+            wants=_album_wants_hook(lib, shared),
+            library=_album_library_feed_hook(lib, shared),
             request_songs=functools.partial(album_requests.release_songs, musicbrainz),
-            recordings=_album_request_recordings(lib, _request_fill(lib)),
+            recordings=_album_request_recordings(lib, _request_fill(lib), shared),
             later_get=musicbrainz,
             stranded_lookup=stranded.musicbrainz_lookup(musicbrainz),
         )
