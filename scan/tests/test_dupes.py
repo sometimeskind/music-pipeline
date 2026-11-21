@@ -88,6 +88,37 @@ def test_bit_error_rate_needs_enough_overlap() -> None:
     assert bit_error_rate(_frames(1, 10), _frames(1, 10)) == 1.0
 
 
+@pytest.mark.parametrize("a,b", [("same-a", "same-b"), ("same-a", "shifted"), ("same-a", "other"),
+                                 ("lookalike", "shifted"), ("other", "lookalike")])
+def test_compact_frames_score_as_the_lists_do(a, b) -> None:
+    """homelab#3036: the reader keeps frames as 4-byte arrays; a score must not change."""
+    lists = bit_error_rate(FPS[a], FPS[b])
+    assert bit_error_rate(dupes.compact(FPS[a]), dupes.compact(FPS[b])) == lists
+    assert bit_error_rate(dupes.compact(FPS[a]), FPS[b]) == lists
+
+
+def test_the_fingerprint_store_holds_about_4_bytes_a_frame() -> None:
+    """homelab#3036: a whole audit keeps every item's decoded fingerprint (~950 frames)
+    for the run.  As a list of ints that was about 40 bytes a frame (a pointer and an int
+    object), and the pod was OOM-killed; compact it is 4."""
+    import tracemalloc
+
+    frames, count = 950, 200
+    items = [FakeItem(i, f"Song {i}", acoustid_fingerprint=str(i)) for i in range(1, count + 1)]
+    frames_of = dupes.frames_reader(lambda fp: _frames(int(fp), frames))
+    tracemalloc.start()
+    try:
+        before = tracemalloc.get_traced_memory()[0]
+        for item in items:
+            assert len(frames_of(item)) == frames
+        held = tracemalloc.get_traced_memory()[0] - before
+    finally:
+        tracemalloc.stop()
+    per_frame = held / (count * frames)
+    assert per_frame < 6, f"the store holds {per_frame:.1f} bytes a frame"
+    assert frames_of(items[0]) == dupes.compact(_frames(1, frames))  # cached, and the same frames
+
+
 # --- certain tier -------------------------------------------------------------
 
 @pytest.mark.parametrize("field,a,b", [
@@ -246,6 +277,22 @@ def test_fingerprints_are_compared_only_between_items_sharing_an_artist_word() -
     a = FakeItem(1, "Song", artist="Somebody", acoustid_fingerprint="same-a")
     b = FakeItem(2, "Tune", artist="Else", acoustid_fingerprint="same-b")
     assert _tiers([a, b])[:2] == ([], [])
+
+
+def test_a_pair_sharing_several_artist_words_is_compared_once(monkeypatch) -> None:
+    """homelab#3036: the pair is met in each shared word's bucket; it is judged in the
+    first, without a set of every pair compared (2.7M on a 36k-item library)."""
+    calls = []
+    real = dupes.audio_match
+    monkeypatch.setattr(dupes, "audio_match",
+                        lambda a, b, frames_of: calls.append((a.id, b.id)) or real(a, b, frames_of))
+    # wrong audio: matched, uncertain, so the pair stays unjoined in the second bucket
+    wealth = FakeItem(1, "Wealth", artist="Talk Talk Orchestra", acoustid_fingerprint="same-a")
+    eden = FakeItem(2, "Eden", artist="Talk Talk Orchestra", acoustid_fingerprint="same-b")
+    other = FakeItem(3, "Other", artist="Orchestra", acoustid_fingerprint="other")
+    certain, uncertain, _, _, groups = _tiers([wealth, eden, other])
+    assert sorted(calls) == [(1, 2), (1, 3), (2, 3)]
+    assert certain == [] and uncertain == [[1, 2]] and len(groups[0].evidence) == 1
 
 
 def test_groups_are_transitive() -> None:
