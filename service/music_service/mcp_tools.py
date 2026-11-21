@@ -547,10 +547,23 @@ def _remove_later_argv(args: dict, apply: bool) -> list[list[str]]:
     return [_apply(["music-later", "remove", *through, *albums], apply, *args["release_groups"])]
 
 
-def _canon_albums(body: dict, _: Albums) -> dict:
-    _only(body, "refresh", "search_budget", "mb_budget")
+# A scoped canon_albums is for a few albums (homelab#3025); the whole library is the unscoped call.
+CANON_MAX_ALBUMS = 25
+
+
+def _canon_albums(body: dict, albums: Albums) -> dict:
+    _only(body, "refresh", "search_budget", "mb_budget", "albums")
+    # homelab#3025: album queries, each resolved to its one album (an ambiguous or unknown one does nothing).
+    queries = body.get("albums")
+    if queries is None:
+        queries = []
+    if not isinstance(queries, list):
+        raise BadRequest("albums must be a list of album queries, or left out for the whole library")
+    if len(queries) > CANON_MAX_ALBUMS:
+        raise BadRequest(f"{len(queries)} albums: at most {CANON_MAX_ALBUMS} a call; "
+                         "leave albums out for the whole library")
     return {"refresh": _bool(body, "refresh"), "search_budget": _budget(body, "search_budget"),
-            "mb_budget": _budget(body, "mb_budget")}
+            "mb_budget": _budget(body, "mb_budget"), "albums": sorted({resolve_album(q, albums) for q in queries})}
 
 
 def _canon_argv(args: dict, apply: bool) -> list[list[str]]:
@@ -561,6 +574,8 @@ def _canon_argv(args: dict, apply: bool) -> list[list[str]]:
         argv += ["--search-budget", str(args["search_budget"])]
     if args["mb_budget"] is not None:
         argv += ["--mb-budget", str(args["mb_budget"])]
+    # --album=KEY: a key that starts with "-" (a local album's) stays the option's value.
+    argv += [f"--album={key}" for key in args.get("albums") or ()]
     return [_apply(argv, apply)]
 
 
