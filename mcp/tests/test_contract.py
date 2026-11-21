@@ -159,6 +159,7 @@ async def test_a_read_caller_runs_the_audits(pipeline_url):
     async with Client(server(pipeline_url, PILOT)) as c:
         for tool, args in [("audit_want_albums", {}), ("audit_dupes", {}), ("audit_lengths", {"silence": True}), ("audit_titles", {}),
                            ("audit_artists", {}), ("audit_grabs", {}), ("audit_zero_wanted", {}), ("audit_case_twins", {}),
+                           ("audit_swapped_ids", {}),
                            ("compare_items", {"ids": [18521, 534]}),
                            ("check_release", {"album": "pastel", "title": "Nina Simone-Pastel Blues-FLAC"}),
                            ("audit_releases", {"replaced_query": ""}), ("audit_releases", {"usenet": True})]:
